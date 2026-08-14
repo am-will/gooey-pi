@@ -36,6 +36,31 @@ async function closeHermeticApp(target: ElectronApplication | undefined): Promis
   await closeEvent
 }
 
+interface CapturedClosePrompt {
+  message: string
+  detail?: string
+  buttons: string[]
+}
+
+/** Records the async close confirmations and answers Cancel until `__closeResponse` says otherwise. */
+async function stubCloseDialog(target: ElectronApplication): Promise<void> {
+  await target.evaluate(({ dialog }) => {
+    const scope = globalThis as { __closePrompts?: unknown[]; __closeResponse?: number }
+    scope.__closePrompts = []
+    scope.__closeResponse = 0
+    const closeDialog = dialog as unknown as { showMessageBox: (...args: unknown[]) => Promise<{ response: number }> }
+    closeDialog.showMessageBox = (...args) => {
+      const options = (args.length > 1 ? args[1] : args[0]) as { message: string; detail?: string; buttons?: string[] }
+      scope.__closePrompts?.push({ message: options.message, detail: options.detail, buttons: options.buttons ?? [] })
+      return Promise.resolve({ response: scope.__closeResponse ?? 0 })
+    }
+  })
+}
+
+function closePrompts(target: ElectronApplication): Promise<CapturedClosePrompt[]> {
+  return target.evaluate(() => (globalThis as { __closePrompts?: unknown[] }).__closePrompts ?? []) as Promise<CapturedClosePrompt[]>
+}
+
 function createHermeticFixture(activeSession = false): { userData: string; home: string; project: string; executable: string; ompExecutable: string; piExecutable: string; cuaExecutable: string; sessionFile: string } {
   fixtureRoot = mkdtempSync(join(tmpdir(), 'prime-work-e2e-'))
   const userData = join(fixtureRoot, 'user-data')
@@ -209,10 +234,11 @@ if (args[0] === 'status') {
 fs.writeFileSync(${JSON.stringify(join(fixtureRoot, 'prime-runtime-args.json'))}, JSON.stringify(args))
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
 let pendingPrompt
+let streaming = false
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const command = JSON.parse(line)
   if (command.type === 'get_state') {
-    send({ type: 'response', id: command.id, command: command.type, success: true, data: { sessionId: 'fixture-session', sessionFile, isStreaming: false, thinkingLevel: 'medium', model: { provider: 'fixture', id: 'fixture-model', name: 'Fixture Model' } } })
+    send({ type: 'response', id: command.id, command: command.type, success: true, data: { sessionId: 'fixture-session', sessionFile, isStreaming: streaming, thinkingLevel: 'medium', model: { provider: 'fixture', id: 'fixture-model', name: 'Fixture Model' } } })
   } else if (command.type === 'get_session_stats') {
     send({ type: 'response', id: command.id, command: command.type, success: true, data: { contextUsage: { tokens: 12000, contextWindow: 100000, percent: 12 } } })
   } else if (command.type === 'list_schedules') {
@@ -224,6 +250,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     pendingPrompt = command
     if (typeof command.message === 'string' && command.message.includes('stay busy')) {
       fs.writeFileSync(${JSON.stringify(join(fixtureRoot, 'prompt-args.json'))}, JSON.stringify(command))
+      streaming = true
       send({ type: 'agent_start' })
       send({ type: 'response', id: command.id, command: command.type, success: true, data: {} })
       return
@@ -432,7 +459,7 @@ function hermeticEnvironment(home: string, executable: string, ompExecutable: st
     PI_BINARY: piExecutable,
     CUA_DRIVER_PATH: cuaExecutable,
   }
-  for (const key of ['USER', 'LOGNAME', '__CF_USER_TEXT_ENCODING']) if (process.env[key]) env[key] = process.env[key]
+  for (const key of ['USER', 'LOGNAME', '__CF_USER_TEXT_ENCODING', 'DISPLAY', 'XAUTHORITY']) if (process.env[key]) env[key] = process.env[key]
   return env
 }
 
@@ -2025,6 +2052,37 @@ test.describe('Prime Work desktop smoke', () => {
       return calls
     })
     expect(dialogCalls).toBe(0)
+    await closed
+    app = undefined
+  })
+
+  test('asks before closing and quits after confirmation while an agent runs', async () => {
+    await page.locator('.session-row-wrap').filter({ hasText: 'Hermetic desktop fixture' }).locator('.session-row').click()
+    const composer = page.getByRole('combobox', { name: 'Message Prime' })
+    await composer.fill('stay busy while I close the window')
+    await composer.press('Enter')
+    await expect(page.getByRole('button', { name: 'Stop Prime' })).toBeVisible()
+    await stubCloseDialog(app!)
+
+    const runningPrompt = {
+      message: 'Close GooeyPi while an agent is running?',
+      detail: 'An agent run is still in progress and will be stopped.',
+      buttons: ['Cancel', 'Close GooeyPi'],
+    }
+    await app!.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.close() })
+    await expect.poll(() => closePrompts(app!)).toEqual([runningPrompt])
+    await expect(page.locator('.app-shell')).toBeVisible()
+
+    // Quit routes through the same confirmation instead of bypassing it.
+    await app!.evaluate(({ app: electronApp }) => { electronApp.quit() })
+    await expect.poll(() => closePrompts(app!)).toEqual([runningPrompt, runningPrompt])
+    await expect(page.locator('.app-shell')).toBeVisible()
+
+    const closed = app!.waitForEvent('close', { timeout: 45_000 })
+    await app!.evaluate(({ app: electronApp }) => {
+      (globalThis as { __closeResponse?: number }).__closeResponse = 1
+      electronApp.quit()
+    })
     await closed
     app = undefined
   })
