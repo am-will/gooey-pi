@@ -9,7 +9,7 @@ const electron = vi.hoisted(() => ({
     requestSingleInstanceLock: vi.fn(() => false),
   },
   BrowserWindow: class {},
-  dialog: { showMessageBoxSync: vi.fn() },
+  dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
   Menu: { buildFromTemplate: vi.fn((_template: Array<{ label: string; click(): void }>) => ({ popup: vi.fn() })) },
   protocol: { registerSchemesAsPrivileged: vi.fn() },
   session: {},
@@ -17,7 +17,8 @@ const electron = vi.hoisted(() => ({
 
 vi.mock('electron', () => electron)
 
-import { confirmAppClose, hardenRenderer, loadInitialRenderer, mainWindowChromeOptions, settleShutdown } from '../../electron/main/index'
+import { activeShutdownWork, confirmAppClose, hardenRenderer, loadInitialRenderer, mainWindowChromeOptions, settleShutdown, shutdownPrompt } from '../../electron/main/index'
+import type { RuntimeInfo } from '../../src/types/api'
 import type { BrowserWindow } from 'electron'
 
 type Handler = (...args: never[]) => void
@@ -36,24 +37,62 @@ describe('application window lifecycle', () => {
     })
   })
 
-  it('defaults to cancel and warns that automations stop when GooeyPi closes', () => {
-    const window = {} as BrowserWindow
-    electron.dialog.showMessageBoxSync.mockReturnValueOnce(0)
+  it('asks nothing when no agent run or schedule is active', () => {
+    const idle: RuntimeInfo = { runtimeId: 'a', harness: 'prime', cwd: '/tmp', isStreaming: false }
 
-    expect(confirmAppClose(window)).toBe(false)
-    expect(electron.dialog.showMessageBoxSync).toHaveBeenCalledWith(window, {
+    expect(activeShutdownWork([idle], false)).toEqual({ runningAgents: 0, activeSchedules: false })
+    expect(shutdownPrompt(activeShutdownWork([idle], false))).toBeNull()
+    expect(shutdownPrompt(activeShutdownWork([], false))).toBeNull()
+  })
+
+  it('names the work at risk for streaming, compacting, queued, and scheduled state', () => {
+    const base = { harness: 'prime' as const, cwd: '/tmp', isStreaming: false }
+    const actions = { queuedCount: 0, steering: [], followUps: [] }
+    const runtimes: RuntimeInfo[] = [
+      { ...base, runtimeId: 'a', isStreaming: true },
+      { ...base, runtimeId: 'b', isCompacting: true },
+      { ...base, runtimeId: 'c', sessionActions: { ...actions, active: { kind: 'turn', phase: 'running' } } },
+      { ...base, runtimeId: 'd', sessionActions: { ...actions, queuedCount: 2 } },
+      { ...base, runtimeId: 'e', sessionActions: actions },
+    ]
+
+    expect(activeShutdownWork(runtimes, true)).toEqual({ runningAgents: 4, activeSchedules: true })
+    expect(shutdownPrompt({ runningAgents: 4, activeSchedules: true })).toEqual({
+      message: 'Close GooeyPi while an agent is running?',
+      detail: '4 agent runs are still in progress and will be stopped. Scheduled automations will not run while GooeyPi is closed.',
+    })
+    expect(shutdownPrompt({ runningAgents: 1, activeSchedules: false })).toEqual({
+      message: 'Close GooeyPi while an agent is running?',
+      detail: 'An agent run is still in progress and will be stopped.',
+    })
+    expect(shutdownPrompt({ runningAgents: 0, activeSchedules: true })).toEqual({
+      message: 'Close GooeyPi?',
+      detail: 'Scheduled automations will not run while GooeyPi is closed.',
+    })
+  })
+
+  it('defaults to cancel and uses the non-blocking dialog', async () => {
+    const window = { isDestroyed: () => false } as unknown as BrowserWindow
+    const prompt = { message: 'Close GooeyPi?', detail: 'Scheduled automations will not run while GooeyPi is closed.' }
+    electron.dialog.showMessageBox.mockResolvedValueOnce({ response: 0 })
+
+    await expect(confirmAppClose(window, prompt)).resolves.toBe(false)
+    expect(electron.dialog.showMessageBox).toHaveBeenCalledWith(window, {
       type: 'warning',
       buttons: ['Cancel', 'Close GooeyPi'],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
       title: 'GooeyPi',
-      message: 'Are you sure?',
-      detail: 'Automations will not run if GooeyPi is closed.',
+      ...prompt,
     })
 
-    electron.dialog.showMessageBoxSync.mockReturnValueOnce(1)
-    expect(confirmAppClose(window)).toBe(true)
+    electron.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 })
+    await expect(confirmAppClose(window, prompt)).resolves.toBe(true)
+
+    electron.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 })
+    await expect(confirmAppClose(null, prompt)).resolves.toBe(true)
+    expect(electron.dialog.showMessageBox).toHaveBeenLastCalledWith(expect.objectContaining(prompt))
   })
 
   it('quits when the last window closes', () => {

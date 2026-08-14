@@ -1,4 +1,5 @@
 import { Check, Laptop, Moon, Sun } from 'lucide-react'
+import type { KeyboardEvent } from 'react'
 import type { InterfaceFontScale, ThemeMode } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 import { SettingsToggle } from './SettingsToggle'
@@ -15,7 +16,25 @@ const fontScales: Array<{ value: InterfaceFontScale; label: string }> = [
   { value: 115, label: 'Larger' },
 ]
 
+/** Arrow/Home/End movement inside a radio group selects as it moves. */
+function nextScaleIndex(key: string, current: number, count: number): number | null {
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (current + 1) % count
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (current - 1 + count) % count
+  if (key === 'Home') return 0
+  if (key === 'End') return count - 1
+  return null
+}
+
 export function AppearanceSettings({ settings, onUpdate }: SettingsSectionProps) {
+  const selectedScale = Math.max(0, fontScales.findIndex((option) => option.value === settings.interfaceFontScale))
+  const onScaleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const next = nextScaleIndex(event.key, selectedScale, fontScales.length)
+    if (next === null) return
+    event.preventDefault()
+    const target = event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]
+    target?.focus()
+    void onUpdate({ interfaceFontScale: fontScales[next].value })
+  }
   return (
     <>
       <header><h1>Appearance</h1><p>Keep the workspace comfortable in any environment.</p></header>
@@ -36,13 +55,14 @@ export function AppearanceSettings({ settings, onUpdate }: SettingsSectionProps)
         <h2>Text size</h2>
         <div className="settings-row settings-row--text-size">
           <span><strong>Interface text</strong><small>Increase readability while keeping the workspace proportions intact.</small></span>
-          <div className="text-size-options" role="radiogroup" aria-label="Interface text size">
-            {fontScales.map((option) => (
+          <div className="text-size-options" role="radiogroup" aria-label="Interface text size" onKeyDown={onScaleKeyDown}>
+            {fontScales.map((option, index) => (
               <button
                 type="button"
                 key={option.value}
                 role="radio"
                 aria-checked={settings.interfaceFontScale === option.value}
+                tabIndex={index === selectedScale ? 0 : -1}
                 className={settings.interfaceFontScale === option.value ? 'is-active' : ''}
                 onClick={() => { void onUpdate({ interfaceFontScale: option.value }) }}
               >

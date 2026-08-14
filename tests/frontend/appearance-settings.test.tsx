@@ -33,4 +33,32 @@ describe('AppearanceSettings', () => {
     act(() => options[2].click())
     expect(update).toHaveBeenCalledWith({ interfaceFontScale: 115 })
   })
+
+  it('exposes one tab stop and selects the interface size with arrow, Home, and End keys', () => {
+    const update = vi.fn()
+    act(() => root.render(<AppearanceSettings settings={DEFAULT_SETTINGS} onUpdate={update} />))
+
+    const group = container.querySelector<HTMLDivElement>('[role="radiogroup"]')!
+    const options = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    expect(options.map((option) => option.tabIndex)).toEqual([-1, 0, -1])
+
+    const press = (key: string) => {
+      act(() => { group.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
+    }
+
+    press('ArrowRight')
+    expect(update).toHaveBeenLastCalledWith({ interfaceFontScale: 115 })
+    expect(document.activeElement).toBe(options[2])
+
+    press('ArrowLeft')
+    expect(update).toHaveBeenLastCalledWith({ interfaceFontScale: 105 })
+    expect(document.activeElement).toBe(options[0])
+
+    press('Home')
+    expect(update).toHaveBeenLastCalledWith({ interfaceFontScale: 105 })
+
+    press('End')
+    expect(update).toHaveBeenLastCalledWith({ interfaceFontScale: 115 })
+    expect(update).toHaveBeenCalledTimes(4)
+  })
 })

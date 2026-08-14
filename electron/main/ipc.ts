@@ -40,6 +40,8 @@ interface Services {
   omp: HarnessServices
   /** Pi-harness counterparts; always constructed, even when the pi CLI is absent. */
   pi: HarnessServices
+  /** Applies the persisted interface scale to every live app renderer. */
+  applyInterfaceZoom?(scale: number): void
 }
 
 interface HarnessServices {
@@ -367,12 +369,12 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('plugins:refresh', (_event, harness) => pluginsFor(requireHarness(harness)).refresh())
 
   handle('settings:get', () => services.settings.get())
-  handle('settings:update', async (event, patch) => {
+  handle('settings:update', async (_event, patch) => {
     const previous = services.settings.get()
     const patchRecord = requireRecord(patch, 'settings patch')
     if (patchRecord.computerUseEnabled === true && !previous.computerUseEnabled) await services.cuaDriver.requireAvailable()
     const settings = await services.settings.update(patch)
-    event.sender.setZoomFactor(settings.interfaceFontScale / 100)
+    if (settings.interfaceFontScale !== previous.interfaceFontScale) services.applyInterfaceZoom?.(settings.interfaceFontScale)
     if (settings.askUserEnabled !== previous.askUserEnabled || settings.browserEnabled !== previous.browserEnabled || settings.computerUseEnabled !== previous.computerUseEnabled) {
       await Promise.all([
         services.agents.requestRuntimeEnvironmentRefresh(),

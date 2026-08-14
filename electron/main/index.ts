@@ -4,7 +4,7 @@ import { extname, join, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { BROWSER_PARTITION, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent } from '../../src/types/api'
+import { BROWSER_PARTITION, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
 import { BrowserDownloadGuard } from './browser-downloads'
@@ -56,6 +56,8 @@ let agentBrowser: AgentBrowserService | null = null
 let agentBrowserBridge: AgentBrowserBridge | null = null
 let agentCollaborationBridge: AgentCollaborationBridge | null = null
 let shutdownStarted = false
+let shutdownApproved = false
+let confirmingShutdown = false
 let trustedRendererUrl = ''
 let windowCreation: Promise<BrowserWindow | null> | null = null
 const keepTestWindowsHidden = process.env.PRIME_WORK_E2E_HIDE_WINDOWS === '1'
@@ -185,17 +187,93 @@ export async function loadInitialRenderer(window: InitialRendererWindow, rendere
   }
 }
 
-export function confirmAppClose(window: BrowserWindow): boolean {
-  return dialog.showMessageBoxSync(window, {
-    type: 'warning',
+/** Work that would be lost by quitting: in-flight agent turns and armed schedules. */
+export interface ActiveShutdownWork {
+  runningAgents: number
+  activeSchedules: boolean
+}
+
+export interface ShutdownPrompt {
+  message: string
+  detail: string
+}
+
+export function activeShutdownWork(runtimes: readonly RuntimeInfo[], hasActiveSchedules: boolean): ActiveShutdownWork {
+  const running = runtimes.filter((runtime) => runtime.isStreaming
+    || runtime.isCompacting === true
+    || runtime.sessionActions?.active !== undefined
+    || (runtime.sessionActions?.queuedCount ?? 0) > 0)
+  return { runningAgents: running.length, activeSchedules: hasActiveSchedules }
+}
+
+/** Null when nothing is active, which is the signal to close without a prompt. */
+export function shutdownPrompt(work: ActiveShutdownWork): ShutdownPrompt | null {
+  const details: string[] = []
+  if (work.runningAgents > 0) {
+    details.push(work.runningAgents === 1
+      ? 'An agent run is still in progress and will be stopped.'
+      : `${work.runningAgents} agent runs are still in progress and will be stopped.`)
+  }
+  if (work.activeSchedules) details.push('Scheduled automations will not run while GooeyPi is closed.')
+  if (details.length === 0) return null
+  return {
+    message: work.runningAgents > 0 ? 'Close GooeyPi while an agent is running?' : 'Close GooeyPi?',
+    detail: details.join(' '),
+  }
+}
+
+export async function confirmAppClose(window: BrowserWindow | null, prompt: ShutdownPrompt): Promise<boolean> {
+  const options = {
+    type: 'warning' as const,
     buttons: ['Cancel', 'Close GooeyPi'],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
     title: 'GooeyPi',
-    message: 'Are you sure?',
-    detail: 'Automations will not run if GooeyPi is closed.',
-  }) === 1
+    ...prompt,
+  }
+  const { response } = window && !window.isDestroyed()
+    ? await dialog.showMessageBox(window, options)
+    : await dialog.showMessageBox(options)
+  return response === 1
+}
+
+function pendingShutdownPrompt(): ShutdownPrompt | null {
+  const runtimes = [...(agents?.list() ?? []), ...(ompAgents?.list() ?? []), ...(piAgents?.list() ?? [])]
+  return shutdownPrompt(activeShutdownWork(runtimes, automation?.hasActiveSchedules() ?? false))
+}
+
+/**
+ * The one confirmation path for both ✕ and Quit: the dialog is async so agent
+ * RPC, IPC, and schedule ticks keep running while it is open, and the approved
+ * flag lets the programmatic quit through without re-asking.
+ */
+function requestShutdown(window: BrowserWindow | null, prompt: ShutdownPrompt): void {
+  confirmingShutdown = true
+  void confirmAppClose(window, prompt).then((approved) => {
+    if (!approved) return
+    shutdownApproved = true
+    app.quit()
+  }).catch((error: unknown) => {
+    console.error(`GooeyPi close confirmation failed: ${boundedErrorMessage(error)}`)
+  }).finally(() => { confirmingShutdown = false })
+}
+
+export function interfaceZoomFactor(): number {
+  return (store?.getSettings().interfaceFontScale ?? 110) / 100
+}
+
+/**
+ * App windows only: embedded browser guests and their views keep their own
+ * zoom, so the app scale is applied through the window list rather than to
+ * every webContents in the process.
+ */
+function applyInterfaceZoom(scale: number): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue
+    const contents = window.webContents
+    if (!contents.isDestroyed()) contents.setZoomFactor(scale / 100)
+  }
 }
 
 export function mainWindowChromeOptions(platform: NodeJS.Platform = process.platform): BrowserWindowConstructorOptions {
@@ -230,7 +308,7 @@ async function createWindow(): Promise<BrowserWindow | null> {
     ...mainWindowChromeOptions(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      zoomFactor: (store?.getSettings().interfaceFontScale ?? 110) / 100,
+      zoomFactor: interfaceZoomFactor(),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -245,7 +323,11 @@ async function createWindow(): Promise<BrowserWindow | null> {
   const rendererId = renderer.id
   hardenRenderer(window)
   renderer.on('did-finish-load', () => {
-    if (!renderer.isDestroyed() && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)) ipc?.authorize(renderer)
+    if (renderer.isDestroyed()) return
+    // A reload resets the zoom factor, so the persisted scale is re-applied
+    // on every load rather than only at window creation.
+    renderer.setZoomFactor(interfaceZoomFactor())
+    if (isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)) ipc?.authorize(renderer)
   })
   renderer.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
     if (isMainFrame && !isTrustedRendererUrl(url, trustedRendererUrl)) ipc?.revoke(rendererId)
@@ -258,7 +340,11 @@ async function createWindow(): Promise<BrowserWindow | null> {
     if (!keepTestWindowsHidden && rendererLoaded && !shutdownStarted && !window.isDestroyed() && mainWindow === window) window.show()
   })
   window.on('close', (event) => {
-    if (!shutdownStarted && !confirmAppClose(window)) event.preventDefault()
+    if (shutdownStarted || shutdownApproved) return
+    const prompt = pendingShutdownPrompt()
+    if (!prompt) return
+    event.preventDefault()
+    if (!confirmingShutdown) requestShutdown(window, prompt)
   })
   window.on('closed', () => {
     ipc?.revoke(rendererId)
@@ -795,6 +881,7 @@ async function bootstrap(): Promise<void> {
     meta, refreshHarnesses, projects, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,
     omp: { projects: ompProjects, sessions: ompSessions, agents: ompManager, catalog: ompCatalog, plugins: ompPlugins },
     pi: { projects: piProjects, sessions: piSessions, agents: piManager, catalog: piCatalog, plugins: piPlugins },
+    applyInterfaceZoom,
   }, trustedRendererUrl)
   // Both managers share the one renderer forwarding path: envelopes carry the
   // runtimeId and RuntimeInfo carries the harness, so the renderer can route.
@@ -886,6 +973,14 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', (event) => {
   if (shutdownStarted) return
+  if (!shutdownApproved) {
+    const prompt = pendingShutdownPrompt()
+    if (prompt) {
+      event.preventDefault()
+      if (!confirmingShutdown) requestShutdown(mainWindow, prompt)
+      return
+    }
+  }
   event.preventDefault()
   shutdownStarted = true
 

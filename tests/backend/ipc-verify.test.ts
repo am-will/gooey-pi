@@ -47,6 +47,7 @@ function services(): Record<string, unknown> {
     pets: { list: vi.fn(async () => [{ id: 'orb' }]), sprite: vi.fn(async () => 'data:image/webp;base64,pet') },
     omp: harnessStub(),
     pi: harnessStub(),
+    applyInterfaceZoom: vi.fn(),
   }
 }
 
@@ -109,20 +110,37 @@ describe('registerIpc verify gate', () => {
     registration.dispose()
   })
 
-  it('applies a validated interface scale only after the settings update succeeds', async () => {
+  it('applies a validated interface scale to every renderer only after the settings update succeeds', async () => {
     const event = fakeEvent()
     const update = vi.fn(async () => ({ interfaceFontScale: 115, askUserEnabled: true }))
-    stubs.settings = { get: () => ({ askUserEnabled: true }), update }
+    const applyInterfaceZoom = stubs.applyInterfaceZoom as ReturnType<typeof vi.fn>
+    stubs.settings = { get: () => ({ interfaceFontScale: 110, askUserEnabled: true }), update }
     registration.authorize(event.sender as never)
 
     await expect(handlers.get('settings:update')!(event, { interfaceFontScale: 115 })).resolves.toEqual({ interfaceFontScale: 115, askUserEnabled: true })
     expect(update).toHaveBeenCalledWith({ interfaceFontScale: 115 })
-    expect(event.sender.setZoomFactor).toHaveBeenCalledWith(1.15)
+    expect(applyInterfaceZoom).toHaveBeenCalledWith(115)
+    expect(event.sender.setZoomFactor).not.toHaveBeenCalled()
 
-    event.sender.setZoomFactor.mockClear()
+    applyInterfaceZoom.mockClear()
     update.mockRejectedValueOnce(new TypeError('Invalid interface font scale'))
     await expect(handlers.get('settings:update')!(event, { interfaceFontScale: 125 })).rejects.toThrow('Invalid interface font scale')
-    expect(event.sender.setZoomFactor).not.toHaveBeenCalled()
+    expect(applyInterfaceZoom).not.toHaveBeenCalled()
+    registration.dispose()
+  })
+
+  it('leaves renderer zoom untouched for settings patches that do not change the scale', async () => {
+    const event = fakeEvent()
+    const applyInterfaceZoom = stubs.applyInterfaceZoom as ReturnType<typeof vi.fn>
+    stubs.settings = {
+      get: () => ({ interfaceFontScale: 110, askUserEnabled: true }),
+      update: vi.fn(async () => ({ interfaceFontScale: 110, askUserEnabled: true })),
+    }
+    registration.authorize(event.sender as never)
+
+    await handlers.get('settings:update')!(event, { theme: 'dark' })
+
+    expect(applyInterfaceZoom).not.toHaveBeenCalled()
     registration.dispose()
   })
 
