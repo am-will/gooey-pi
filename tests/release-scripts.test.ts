@@ -354,11 +354,12 @@ describe('release preflight', () => {
     expect(workflow).toContain('--verify-tag')
     expect(workflow).toContain('--fail-on-no-commits')
     expect(workflow).toContain('--generate-notes')
-    // always() keeps the aggregate gate from being skipped - and so from
-    // silently satisfying a required status check - when a packaging job fails.
-    expect(workflow).toMatch(
-      /release-packages:\n {4}needs: \[validate, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: >-\n {6}always\(\) && needs\.validate\.result == 'success' && needs\.package\.result == 'success' && needs\.package-linux\.result == 'success' &&\n {6}\(needs\.package-windows\.result == 'success' \|\| needs\.package-windows\.result == 'skipped'\)\n {4}runs-on: ubuntu-22\.04\n {4}permissions:\n {6}contents: write/,
-    )
+    // always() keeps the aggregate job from being skipped; the first step
+    // fails explicitly when a prerequisite failed or was cancelled.
+    expect(workflow).toMatch(/release-packages:\n {4}needs: \[validate, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: always\(\)\n {4}runs-on: ubuntu-22\.04/)
+    expect(workflow).toContain('Fail if a release prerequisite did not succeed')
+    expect(workflow).toContain('needs.validate.result != \'success\'')
+    expect(workflow).toContain('exit 1')
   })
 
   test('pins every release job to one commit SHA resolved by validate', () => {
