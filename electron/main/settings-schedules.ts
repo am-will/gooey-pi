@@ -31,6 +31,7 @@ export class SettingsService {
       reduceMotion: (value) => requireBoolean(value, 'reduceMotion'),
       showReasoningSummaries: (value) => requireBoolean(value, 'showReasoningSummaries'),
       showToolCalls: (value) => requireBoolean(value, 'showToolCalls'),
+      harnessUpdateChecks: (value) => requireBoolean(value, 'harnessUpdateChecks'),
       telemetry: (value) => requireBoolean(value, 'telemetry'),
       askUserEnabled: (value) => requireBoolean(value, 'askUserEnabled'),
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),

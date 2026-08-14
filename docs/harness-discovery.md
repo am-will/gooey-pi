@@ -17,6 +17,10 @@ Candidates are deduplicated and must be executable. GooeyPi then runs a bounded 
 
 The relevant upstream install layouts are documented by [Pi](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md), [OMP](https://github.com/can1357/oh-my-pi), [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent#readme), [npm](https://docs.npmjs.com/files/folders.html), [Bun](https://bun.sh/docs/installation), [pnpm](https://pnpm.io/settings/other#globalbindir), [mise](https://mise.jdx.dev/dev-tools/shims.html), and [Volta](https://docs.volta.sh/guide/getting-started).
 
+## Update checks
+
+When **Check for harness updates** is enabled (Settings → Harness, on by default), GooeyPi periodically compares the discovered Pi version against the `latest` field of `https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest`. A newer version shows on the Runtime card and raises a one-time toast per version. The Update button runs `pi update --self` — pi's own updater, with the discovered executable and a fixed argv — then re-runs discovery so the published version reflects the new binary. OMP and Prime Agent have no registry mapping yet and are reported as unsupported. Disabling the toggle stops all registry traffic.
+
 ## Windows and WSL boundaries
 
 OMP's native Windows installer writes `%LOCALAPPDATA%\omp\omp.exe`, which is checked explicitly so Refresh works even when the running GUI still has the old `Path` snapshot. Native `pi.exe` releases are discoverable through `Path` or an explicit override.

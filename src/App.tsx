@@ -20,6 +20,7 @@ import { useAgentBrowserTabs } from '@/hooks/useAgentBrowserTabs'
 import { useAgentEvents } from '@/hooks/useAgentEvents'
 import { useAppSettings } from '@/hooks/useAppSettings'
 import { useAppUpdates } from '@/hooks/useAppUpdates'
+import { useHarnessUpdates } from '@/hooks/useHarnessUpdates'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import { useBrowserAnnotations } from '@/hooks/useBrowserAnnotations'
 import { useExtensionUi } from '@/hooks/useExtensionUi'
@@ -103,6 +104,18 @@ export default function App() {
     setToast(errorMessage(error))
   }, [])
   const appUpdates = useAppUpdates(bridge, reportError)
+  const harnessUpdates = useHarnessUpdates(bridge, reportError)
+  const notifiedHarnessUpdatesRef = useRef<Partial<Record<HarnessId, string>>>({})
+  useEffect(() => {
+    if (!harnessUpdates.states) return
+    for (const harness of HARNESS_IDS) {
+      const state = harnessUpdates.states[harness]
+      if (state.phase !== 'available' || !state.latestVersion) continue
+      if (notifiedHarnessUpdatesRef.current[harness] === state.latestVersion) continue
+      notifiedHarnessUpdatesRef.current[harness] = state.latestVersion
+      setToast(`${HARNESS_AGENT_NAMES[harness]} ${state.latestVersion} is available. Update in Settings → Harness.`)
+    }
+  }, [harnessUpdates.states])
   useEffect(() => {
     window.localStorage.setItem('prime-work.cleared-session-attention', JSON.stringify(clearedAttention))
   }, [clearedAttention])

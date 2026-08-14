@@ -1,12 +1,15 @@
 import { Bot, Keyboard, RefreshCw, ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { HARNESS_IDS, OMP_APPROVAL_MODES, type HarnessId, type OmpApprovalMode } from '@/types/api'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '@/lib/harness'
 import { detectRendererPlatform, shortcutLabel } from '@/lib/platform-shortcuts'
+import { useHarnessUpdates } from '@/hooks/useHarnessUpdates'
 import type { SettingsMetaSectionProps } from './contracts'
 import { DraftSettingField } from './DraftSettingField'
 import { SettingsToggle } from './SettingsToggle'
+
+const hasBridge = () => typeof window !== 'undefined' && typeof window.prime !== 'undefined'
 
 const APPROVAL_MODE_LABELS: Record<OmpApprovalMode, string> = {
   'inherit': 'Inherit omp config',
@@ -20,6 +23,9 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
   const detectedHarnesses = HARNESS_IDS.filter((harness) => Boolean(meta?.harnesses[harness].path))
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState('')
+  const [updateError, setUpdateError] = useState('')
+  const reportUpdateError = useCallback((error: unknown) => setUpdateError(errorMessage(error)), [])
+  const harnessUpdates = useHarnessUpdates(hasBridge() ? window.prime : null, reportUpdateError)
   const platform = meta?.platform ?? detectRendererPlatform()
   const oppositeActionShortcut = shortcutLabel(platform, ['Primary', 'Enter'])
   const newLineShortcut = shortcutLabel(platform, ['Shift', 'Enter'])
@@ -62,9 +68,11 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
           </button>
         </div>
         {refreshError ? <p className="settings-error" role="alert">{refreshError}</p> : null}
+        {updateError ? <p className="settings-error" role="alert">{updateError}</p> : null}
         {HARNESS_IDS.map((harness) => {
           const name = HARNESS_AGENT_NAMES[harness]
           const status = meta?.harnesses[harness]
+          const updateState = settings.harnessUpdateChecks ? harnessUpdates.states?.[harness] : undefined
           return (
             <div className="runtime-card" key={harness}>
               <span className={status?.path ? 'is-online' : ''}><Bot size={17} /></span>
@@ -73,10 +81,38 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
                 <small>{status?.path ?? `Install ${name}, then refresh harnesses.`}</small>
               </div>
               {status?.version ? <code>v{status.version}</code> : null}
+              {updateState?.phase === 'available' ? (
+                <button type="button" className="button button--compact" onClick={() => {
+                  setUpdateError('')
+                  void harnessUpdates.update(harness).then(async (result) => {
+                    if (result?.phase === 'error') setUpdateError(result.message ?? `The ${name} update failed.`)
+                    // The main process already re-ran discovery; pull the
+                    // refreshed meta so the version badge updates.
+                    await onRefreshHarnesses()
+                  })
+                }}>Update to v{updateState.latestVersion}</button>
+              ) : updateState?.phase === 'updating' ? (
+                <button type="button" className="button button--compact" disabled>Updating…</button>
+              ) : updateState?.phase === 'error' && updateState.message ? (
+                <small className="settings-error">{updateState.message}</small>
+              ) : null}
             </div>
           )
         })}
         <p className="settings-group__description">Discovery checks a saved override first, then the harness environment variable, bundled files, PATH, and standard install directories. Refreshing updates future sessions without restarting GooeyPi.</p>
+        <SettingsToggle
+          checked={settings.harnessUpdateChecks}
+          onChange={(harnessUpdateChecks) => {
+            void (async () => {
+              await onUpdate({ harnessUpdateChecks })
+              // The check reads the persisted toggle, so it must run after the
+              // settings update lands.
+              await harnessUpdates.check(true)
+            })()
+          }}
+          label="Check for harness updates"
+          description="Compares the installed Pi version against its npm registry entry and offers a one-click update through pi's own updater. OMP and Prime Agent are not yet supported."
+        />
         {HARNESS_IDS.map((harness) => <DraftSettingField
           key={harness}
           id={`runtime-path-${harness}`}

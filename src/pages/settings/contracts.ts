@@ -31,6 +31,7 @@ export const SETTINGS_FIELD_SECTIONS = {
   messageEnterAction: 'agent',
   runtimePaths: 'agent',
   enabledHarnesses: 'agent',
+  harnessUpdateChecks: 'agent',
   telemetry: 'privacy',
   askUserEnabled: 'agent',
   browserEnabled: 'agent',

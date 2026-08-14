@@ -42,6 +42,20 @@ export interface AppUpdateState {
   message?: string
 }
 
+export type HarnessUpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'updating' | 'error' | 'disabled' | 'unsupported'
+
+/**
+ * Registry update status for one harness executable. Unlike AppUpdateState,
+ * the installed binary belongs to the harness: GooeyPi only compares versions
+ * and delegates the actual update to the harness's own updater command.
+ */
+export interface HarnessUpdateState {
+  phase: HarnessUpdatePhase
+  installedVersion?: string
+  latestVersion?: string
+  message?: string
+}
+
 export interface ProjectRecord {
   id: string
   /** Agent harness this project grant belongs to; grants never cross harnesses. */
@@ -405,6 +419,8 @@ export interface AppSettings {
   runtimePaths: Record<HarnessId, string>
   /** Legacy visibility preference retained for state compatibility; executable detection is authoritative. */
   enabledHarnesses: HarnessId[]
+  /** Periodically compare installed harness versions against their package registry and offer in-app updates. */
+  harnessUpdateChecks: boolean
   telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
@@ -655,6 +671,12 @@ export interface PrimeWorkApi {
     check(): Promise<AppUpdateState>
     install(): Promise<boolean>
     onChanged(callback: (state: AppUpdateState) => void): () => void
+  }
+  harnessUpdates: {
+    getState(): Promise<Record<HarnessId, HarnessUpdateState>>
+    check(force?: boolean): Promise<Record<HarnessId, HarnessUpdateState>>
+    update(harness: HarnessId): Promise<HarnessUpdateState>
+    onChanged(callback: (states: Record<HarnessId, HarnessUpdateState>) => void): () => void
   }
   projects: {
     list(harness?: HarnessId): Promise<ProjectRecord[]>

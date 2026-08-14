@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   interfaceFontScale: 110,
   activeHarness: 'omp',
   ompApprovalMode: 'inherit',
+  harnessUpdateChecks: true,
   petEnabled: true,
   petId: 'orb',
   petSize: 75,

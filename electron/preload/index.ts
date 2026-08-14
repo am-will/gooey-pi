@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AppUpdateState, PrimeEventEnvelope, PrimeWorkApi, ProviderAuthEvent, ScheduleChangeEvent, SessionChangeEvent, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
+import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AppUpdateState, HarnessId, HarnessUpdateState, PrimeEventEnvelope, PrimeWorkApi, ProviderAuthEvent, ScheduleChangeEvent, SessionChangeEvent, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
 
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
   if (typeof callback !== 'function') throw new TypeError('callback must be a function')
@@ -22,6 +22,12 @@ const api: PrimeWorkApi = {
     check: () => ipcRenderer.invoke('updates:check'),
     install: () => ipcRenderer.invoke('updates:install'),
     onChanged: (callback) => subscribe<AppUpdateState>('updates:changed', callback),
+  },
+  harnessUpdates: {
+    getState: () => ipcRenderer.invoke('harness-updates:get-state'),
+    check: (force) => ipcRenderer.invoke('harness-updates:check', force),
+    update: (harness) => ipcRenderer.invoke('harness-updates:update', harness),
+    onChanged: (callback) => subscribe<Record<HarnessId, HarnessUpdateState>>('harness-updates:changed', callback),
   },
   projects: {
     list: (harness) => ipcRenderer.invoke('projects:list', harness),

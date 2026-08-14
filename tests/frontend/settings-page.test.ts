@@ -159,6 +159,7 @@ describe('settings field ownership', () => {
       messageEnterAction: 'agent',
       runtimePaths: 'agent',
       enabledHarnesses: 'agent',
+      harnessUpdateChecks: 'agent',
       telemetry: 'privacy',
       askUserEnabled: 'agent',
       browserEnabled: 'agent',
