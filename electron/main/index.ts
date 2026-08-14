@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, protocol, safeStorage, session, shell, webContents } from 'electron'
 import type { BrowserWindowConstructorOptions } from 'electron'
-import { extname, join, resolve } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -97,7 +97,10 @@ function registerRendererProtocol(): void {
       const decoded = decodeURIComponent(url.pathname)
       if (!decoded.startsWith('/') || decoded.includes('\0') || decoded.includes('\\')) return new Response('Not found', { status: 404 })
       const candidate = resolve(rendererRoot, `.${decoded === '/' ? '/index.html' : decoded}`)
-      if (candidate !== rendererRoot && !candidate.startsWith(`${rendererRoot}/`)) return new Response('Not found', { status: 404 })
+      if (candidate !== rendererRoot) {
+        const rel = relative(rendererRoot, candidate)
+        if (rel.startsWith('..') || isAbsolute(rel)) return new Response('Not found', { status: 404 })
+      }
       const body = await readFile(candidate)
       return new Response(body, { headers: {
         'Content-Type': rendererContentTypes[extname(candidate).toLowerCase()] ?? 'application/octet-stream',
