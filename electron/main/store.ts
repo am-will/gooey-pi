@@ -48,6 +48,7 @@ export function defaultSettings(): AppSettings {
     runtimePaths: { prime: '', omp: '', pi: '' },
     enabledHarnesses: ['omp', 'prime', 'pi'],
     harnessUpdateChecks: true,
+    lastSeenHarnessNotes: { prime: '', omp: '', pi: '' },
     telemetry: false,
     askUserEnabled: false,
     browserEnabled: true,
@@ -122,6 +123,10 @@ function parseProject(value: unknown): PersistedProject | null {
   }
 }
 
+function parseSeenVersion(value: unknown): string {
+  return typeof value === 'string' && /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(value) ? value : ''
+}
+
 function parseSettings(value: unknown, legacyState = false): AppSettings {
   const defaults = defaultSettings()
   if (!isRecord(value)) return defaults
@@ -162,6 +167,13 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     runtimePaths,
     enabledHarnesses: usableHarnesses,
     harnessUpdateChecks: typeof value.harnessUpdateChecks === 'boolean' ? value.harnessUpdateChecks : defaults.harnessUpdateChecks,
+    lastSeenHarnessNotes: isRecord(value.lastSeenHarnessNotes)
+      ? {
+          prime: parseSeenVersion(value.lastSeenHarnessNotes.prime),
+          omp: parseSeenVersion(value.lastSeenHarnessNotes.omp),
+          pi: parseSeenVersion(value.lastSeenHarnessNotes.pi),
+        }
+      : defaults.lastSeenHarnessNotes,
     telemetry: typeof value.telemetry === 'boolean' ? value.telemetry : defaults.telemetry,
     askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
     browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,

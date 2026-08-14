@@ -4,6 +4,7 @@
 .modal__header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; border-bottom: 1px solid var(--border); }
 .modal__header h2 { margin: 0; font-size: 14px; font-weight: 560; }
 .modal__body { padding: 16px; color: var(--text-secondary); font-size: 12px; }
+.modal__body .whats-new { max-height: min(60vh, 520px); overflow-y: auto; }
 .modal__body > p:first-child { margin-top: 0; }
 .modal__body > p:last-child { margin-bottom: 0; }
 .modal__footer { min-height: 53px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 9px 12px; border-top: 1px solid var(--border); background: var(--surface-subtle); }

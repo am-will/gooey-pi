@@ -32,6 +32,17 @@ export class SettingsService {
       showReasoningSummaries: (value) => requireBoolean(value, 'showReasoningSummaries'),
       showToolCalls: (value) => requireBoolean(value, 'showToolCalls'),
       harnessUpdateChecks: (value) => requireBoolean(value, 'harnessUpdateChecks'),
+      lastSeenHarnessNotes: (value) => {
+        if (!isRecord(value)) throw new TypeError('lastSeenHarnessNotes must be an object')
+        rejectUnknownKeys(value, HARNESS_IDS, 'lastSeenHarnessNotes')
+        const seen = {} as AppSettings['lastSeenHarnessNotes']
+        for (const harness of HARNESS_IDS) {
+          const version = requireString(value[harness], `lastSeenHarnessNotes.${harness}`, { max: 64 })
+          if (version && !/^[0-9][0-9A-Za-z.+-]{0,63}$/.test(version)) throw new TypeError(`lastSeenHarnessNotes.${harness} is not a valid version`)
+          seen[harness] = version
+        }
+        return seen
+      },
       telemetry: (value) => requireBoolean(value, 'telemetry'),
       askUserEnabled: (value) => requireBoolean(value, 'askUserEnabled'),
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),

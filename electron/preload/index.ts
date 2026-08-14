@@ -27,6 +27,7 @@ const api: PrimeWorkApi = {
     getState: () => ipcRenderer.invoke('harness-updates:get-state'),
     check: (force) => ipcRenderer.invoke('harness-updates:check', force),
     update: (harness) => ipcRenderer.invoke('harness-updates:update', harness),
+    changelog: (harness, sinceVersion) => ipcRenderer.invoke('harness-updates:changelog', harness, sinceVersion),
     onChanged: (callback) => subscribe<Record<HarnessId, HarnessUpdateState>>('harness-updates:changed', callback),
   },
   projects: {

@@ -1,9 +1,10 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { HarnessId, HarnessStatus } from '../../src/types/api'
-import { HarnessUpdateService, isNewerVersion, type HarnessUpdateServiceOptions, type RegistryFetcher } from '../../electron/main/harness-updates'
+import { readInstalledChangelog, sliceChangelog } from '../../electron/main/harness-changelog'
+import { HarnessUpdateService, isNewerVersion, PI_CHANGELOG_PACKAGE, type HarnessUpdateServiceOptions, type RegistryFetcher } from '../../electron/main/harness-updates'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -30,9 +31,26 @@ function registryAnswer(version: string): RegistryFetcher {
   return async () => JSON.stringify({ name: '@earendil-works/pi-coding-agent', version })
 }
 
+/** Fake omp: `update --check` prints the given report; `update` touches a marker file. */
+function fakeOmp(checkReport: string, markerFile?: string, checkExitCode = 0): string {
+  const executable = join(tempDir(), 'fake-omp.cjs')
+  writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv[2] !== 'update') process.exit(9)
+if (process.argv[3] === '--check') {
+  process.stdout.write(${JSON.stringify(checkReport)}, () => process.exit(${checkExitCode}))
+} else {
+  ${markerFile ? `require('node:fs').writeFileSync(${JSON.stringify(markerFile)}, 'ran')` : ''}
+  process.exit(0)
+}
+`)
+  chmodSync(executable, 0o755)
+  return executable
+}
+
 interface ServiceSetup {
   enabled?: boolean
   piStatus?: HarnessStatus
+  ompStatus?: HarnessStatus
   fetchRegistry?: RegistryFetcher
   refreshHarnesses?: () => Promise<unknown>
   overrides?: Partial<HarnessUpdateServiceOptions>
@@ -40,11 +58,15 @@ interface ServiceSetup {
 
 function service(setup: ServiceSetup = {}) {
   let enabled = setup.enabled ?? true
-  let piStatus = setup.piStatus ?? { path: null, version: null }
+  const statuses: Record<HarnessId, HarnessStatus> = {
+    prime: { path: null, version: null },
+    omp: setup.ompStatus ?? { path: null, version: null },
+    pi: setup.piStatus ?? { path: null, version: null },
+  }
   const fetchCalls: string[] = []
   const instance = new HarnessUpdateService({
     enabled: () => enabled,
-    harnessStatus: (harness: HarnessId) => harness === 'pi' ? piStatus : { path: null, version: null },
+    harnessStatus: (harness: HarnessId) => statuses[harness],
     refreshHarnesses: setup.refreshHarnesses ?? (async () => undefined),
     fetchRegistry: async (url, limits) => {
       fetchCalls.push(url)
@@ -56,7 +78,8 @@ function service(setup: ServiceSetup = {}) {
     instance,
     fetchCalls,
     setEnabled: (value: boolean) => { enabled = value },
-    setPiStatus: (value: HarnessStatus) => { piStatus = value },
+    setPiStatus: (value: HarnessStatus) => { statuses.pi = value },
+    setOmpStatus: (value: HarnessStatus) => { statuses.omp = value },
   }
 }
 
@@ -77,6 +100,7 @@ describe('Harness update service', () => {
     const states = await ahead.instance.check()
     expect(states.pi).toMatchObject({ phase: 'available', installedVersion: '0.82.1', latestVersion: '0.84.1' })
     expect(states.omp.phase).toBe('unsupported')
+    expect(states.omp.message).toContain('not installed')
     expect(states.prime.phase).toBe('unsupported')
 
     const current = service({ piStatus: { path: '/usr/bin/pi', version: '0.84.1' } })
@@ -147,7 +171,7 @@ describe('Harness update service', () => {
     expect(await failing.instance.update('pi')).toMatchObject({ phase: 'error' })
 
     const unsupported = service()
-    await expect(unsupported.instance.update('omp')).rejects.toThrow(/not supported/)
+    await expect(unsupported.instance.update('prime')).rejects.toThrow(/not supported/)
 
     const disabled = service({ enabled: false })
     await expect(disabled.instance.update('pi')).rejects.toThrow(/disabled/)
@@ -155,6 +179,89 @@ describe('Harness update service', () => {
     const upToDate = service({ piStatus: { path: '/usr/bin/pi', version: '0.84.1' } })
     await upToDate.instance.check(true)
     await expect(upToDate.instance.update('pi')).rejects.toThrow(/No harness update is available/)
+  })
+
+  it('lets omp report its own availability through update --check', async () => {
+    const available = service({ ompStatus: { path: fakeOmp('Current version: 17.0.2\nNew version available: 17.3.3\n'), version: 'omp/17.0.2' } })
+    expect((await available.instance.check(true)).omp).toMatchObject({ phase: 'available', installedVersion: '17.0.2', latestVersion: '17.3.3' })
+
+    const current = service({ ompStatus: { path: fakeOmp('Current version: 17.3.3\n'), version: 'omp/17.3.3' } })
+    expect((await current.instance.check(true)).omp).toMatchObject({ phase: 'up-to-date', installedVersion: '17.3.3' })
+
+    const garbled = service({ ompStatus: { path: fakeOmp('unexpected words\n'), version: null } })
+    const garbledState = (await garbled.instance.check(true)).omp
+    expect(garbledState.phase).toBe('error')
+    expect(garbledState.message).toMatch(/unrecognized format/)
+
+    const failing = service({ ompStatus: { path: fakeOmp('boom', undefined, 3), version: null } })
+    expect((await failing.instance.check(true)).omp.phase).toBe('error')
+    // Four sequential subprocess spawns need headroom under full-suite load.
+  }, 20_000)
+
+  it('runs omp update through omp itself and republishes the refreshed state', async () => {
+    const markerFile = join(tempDir(), 'omp-updated')
+    const executable = fakeOmp('Current version: 17.0.2\nNew version available: 17.3.3\n', markerFile)
+    const upgraded = fakeOmp('Current version: 17.3.3\n')
+    const setup = service({
+      ompStatus: { path: executable, version: 'omp/17.0.2' },
+      refreshHarnesses: async () => { setup.setOmpStatus({ path: upgraded, version: 'omp/17.3.3' }) },
+    })
+    await setup.instance.check(true)
+    const result = await setup.instance.update('omp')
+
+    expect(existsSync(markerFile)).toBe(true)
+    expect(result).toMatchObject({ phase: 'up-to-date', installedVersion: '17.3.3' })
+  }, 20_000)
+
+  it('reads the pi changelog from the installed package behind the executable symlink', async () => {
+    const root = tempDir()
+    const packageDir = join(root, 'lib', 'node_modules', '@earendil-works', 'pi-coding-agent')
+    mkdirSync(join(packageDir, 'dist'), { recursive: true })
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: PI_CHANGELOG_PACKAGE, version: '0.84.1' }))
+    writeFileSync(join(packageDir, 'CHANGELOG.md'), '# Changelog\n\n## [0.84.1] - 2026-08-07\n\n- New thing\n\n## [0.84.0] - 2026-08-06\n\n- Older thing\n')
+    writeFileSync(join(packageDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n')
+    symlinkSync(join(packageDir, 'dist', 'cli.js'), join(root, 'bin', 'pi'))
+
+    expect(await readInstalledChangelog(join(root, 'bin', 'pi'), PI_CHANGELOG_PACKAGE)).toContain('New thing')
+    expect(await readInstalledChangelog(join(root, 'bin', 'pi'), 'some-other-package')).toBeNull()
+    expect(await readInstalledChangelog(join(root, 'missing'), PI_CHANGELOG_PACKAGE)).toBeNull()
+
+    const setup = service({
+      piStatus: { path: join(root, 'bin', 'pi'), version: '0.84.1' },
+    })
+    const notes = await setup.instance.changelog('pi', '0.84.0')
+    expect(notes).toMatchObject({ toVersion: '0.84.1' })
+    expect(notes?.markdown).toContain('New thing')
+    expect(notes?.markdown).not.toContain('Older thing')
+
+    expect(await setup.instance.changelog('omp')).toBeNull()
+    await expect(setup.instance.changelog('pi', '../../etc/passwd')).rejects.toThrow(/not a valid version/)
+  })
+
+  it('slices changelog sections between versions with sane fallbacks', () => {
+    const markdown = [
+      '# Changelog', '',
+      '## [0.84.1] - 2026-08-07', '', 'newest', '',
+      '## [0.84.0] - 2026-08-06', '', 'middle', '',
+      '## [0.82.1] - 2026-07-30', '', 'oldest', '',
+    ].join('\n')
+
+    const range = sliceChangelog(markdown, '0.84.1', '0.82.1')
+    expect(range?.toVersion).toBe('0.84.1')
+    expect(range?.markdown).toContain('newest')
+    expect(range?.markdown).toContain('middle')
+    expect(range?.markdown).not.toContain('oldest')
+
+    // No last-seen version: only the installed release's section.
+    const single = sliceChangelog(markdown, '0.84.0')
+    expect(single?.markdown).toContain('middle')
+    expect(single?.markdown).not.toContain('newest')
+    expect(single?.markdown).not.toContain('oldest')
+
+    // Changelog older than the installed build has nothing to show.
+    expect(sliceChangelog(markdown, '0.99.0')).toBeNull()
+    expect(sliceChangelog('no headings here', '0.84.1')).toBeNull()
   })
 
   it('checks on the initial timer and interval only through injected timers', async () => {

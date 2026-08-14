@@ -193,6 +193,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('harness-updates:get-state', () => services.harnessUpdates.getState())
   handle('harness-updates:check', (_event, force) => services.harnessUpdates.check(force === true))
   handle('harness-updates:update', (_event, harness) => services.harnessUpdates.update(requireHarness(harness)))
+  handle('harness-updates:changelog', (_event, harness, sinceVersion) => services.harnessUpdates.changelog(requireHarness(harness), sinceVersion))
 
   handle('projects:list', (_event, harness) => projectsFor(requireHarness(harness)).list())
   handle('projects:list-files', (_event, root, harness) => projectsFor(requireHarness(harness)).listFiles(root))

@@ -19,7 +19,16 @@ The relevant upstream install layouts are documented by [Pi](https://github.com/
 
 ## Update checks
 
-When **Check for harness updates** is enabled (Settings → Harness, on by default), GooeyPi periodically compares the discovered Pi version against the `latest` field of `https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest`. A newer version shows on the Runtime card and raises a one-time toast per version. The Update button runs `pi update --self` — pi's own updater, with the discovered executable and a fixed argv — then re-runs discovery so the published version reflects the new binary. OMP and Prime Agent have no registry mapping yet and are reported as unsupported. Disabling the toggle stops all registry traffic.
+When **Check for harness updates** is enabled (Settings → Harness, on by default), GooeyPi looks for newer harness builds on a slow interval:
+
+- **Pi** is compared against the `latest` field of `https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest`, because pi has no check-only command.
+- **OMP** answers for itself: GooeyPi runs `omp update --check` and parses its two version lines, so OMP stays authoritative about its own updates. (The npm package named `oh-my-pi` is unrelated.)
+
+A newer version shows on the Runtime card and raises a one-time toast per version. The Update button runs the harness's own updater (`pi update --self`, `omp update`) with the discovered executable and a fixed argv, then re-runs discovery so the published version reflects the new binary. Prime Agent has no mapping yet and is reported as unsupported. Disabling the toggle stops both the registry fetch and the omp check.
+
+After a pi update — or whenever the installed pi version has release notes the user has not seen — a **What's new** view renders the relevant sections of the `CHANGELOG.md` inside pi's installed npm package. The file is read locally, never fetched. OMP ships as a standalone binary without a changelog, so its card links to the GitHub releases page instead.
+
+GooeyPi deliberately stops at invoking each harness's own updater. It never selects install methods, installs absent harnesses, or updates automatically.
 
 ## Windows and WSL boundaries
 

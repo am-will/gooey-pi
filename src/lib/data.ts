@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   activeHarness: 'omp',
   ompApprovalMode: 'inherit',
   harnessUpdateChecks: true,
+  lastSeenHarnessNotes: { prime: '', omp: '', pi: '' },
   petEnabled: true,
   petId: 'orb',
   petSize: 75,

@@ -56,6 +56,12 @@ export interface HarnessUpdateState {
   message?: string
 }
 
+/** Release-note sections read from the harness's own installed changelog; the markdown is untrusted harness content. */
+export interface HarnessChangelog {
+  markdown: string
+  toVersion: string
+}
+
 export interface ProjectRecord {
   id: string
   /** Agent harness this project grant belongs to; grants never cross harnesses. */
@@ -421,6 +427,8 @@ export interface AppSettings {
   enabledHarnesses: HarnessId[]
   /** Periodically compare installed harness versions against their package registry and offer in-app updates. */
   harnessUpdateChecks: boolean
+  /** Last harness version whose release notes the user has seen; '' means none seen yet. */
+  lastSeenHarnessNotes: Record<HarnessId, string>
   telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
@@ -676,6 +684,7 @@ export interface PrimeWorkApi {
     getState(): Promise<Record<HarnessId, HarnessUpdateState>>
     check(force?: boolean): Promise<Record<HarnessId, HarnessUpdateState>>
     update(harness: HarnessId): Promise<HarnessUpdateState>
+    changelog(harness: HarnessId, sinceVersion?: string): Promise<HarnessChangelog | null>
     onChanged(callback: (states: Record<HarnessId, HarnessUpdateState>) => void): () => void
   }
   projects: {

@@ -160,6 +160,7 @@ describe('settings field ownership', () => {
       runtimePaths: 'agent',
       enabledHarnesses: 'agent',
       harnessUpdateChecks: 'agent',
+      lastSeenHarnessNotes: 'agent',
       telemetry: 'privacy',
       askUserEnabled: 'agent',
       browserEnabled: 'agent',
