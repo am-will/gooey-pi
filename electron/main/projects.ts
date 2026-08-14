@@ -14,6 +14,11 @@ function inferredId(path: string): string {
   return `inferred-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`
 }
 
+/** Filesystem roots too broad to grant as a project: the root directory and the home directory. */
+function isBroadRoot(path: string): boolean {
+  return path === resolve('/') || path === resolve(homedir())
+}
+
 interface VerifiedFolderIdentity {
   path: string
   identity: FolderIdentity
@@ -261,7 +266,7 @@ export class ProjectService {
       let canonical: string
       try { canonical = await requireExistingDirectory(projectPath, 'session project path') } catch { continue }
       if (represented.has(canonical) || dismissed.has(canonical)) continue
-      if (canonical === resolve('/') || canonical === resolve(homedir())) continue
+      if (isBroadRoot(canonical)) continue
       represented.add(canonical)
       const projectSessions = sessions.filter((session) => sessionProjectPaths.get(session) === canonical)
       const timestamps = projectSessions.map((session) => session.updatedAt).sort()
@@ -296,8 +301,12 @@ export class ProjectService {
     }
   }
 
-  private async persistWorktree(path: string, identity: FolderIdentity): Promise<ProjectRecord> {
-    if (path === resolve('/') || path === resolve(homedir())) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
+  /**
+   * Grants `path` to this harness: undismisses it, refreshes or creates the
+   * owning persisted project, publishes the authorization, and returns the
+   * enriched record. `knownSessions` reuses an already-loaded session list.
+   */
+  private async grantProjectFolder(path: string, identity: FolderIdentity, knownSessions?: readonly SessionRecord[]): Promise<ProjectRecord> {
     this.removalRoots.delete(path)
     const now = new Date().toISOString()
     const project = await this.store.update((state): PersistedProject => {
@@ -325,8 +334,13 @@ export class ProjectService {
     })
     this.authorizationRevision += 1
     this.authorizedRoots.set(path, identity)
-    const sessions = await this.sessionProvider()
+    const sessions = knownSessions ?? await this.sessionProvider()
     return { ...project, sessionCount: sessions.filter((session) => resolve(session.projectPath) === path).length, gitBranch: await this.branchProvider(path) }
+  }
+
+  private async persistWorktree(path: string, identity: FolderIdentity): Promise<ProjectRecord> {
+    if (isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
+    return this.grantProjectFolder(path, identity)
   }
 
   async openWorktree(cwdValue: unknown, pathValue: unknown): Promise<ProjectRecord> {
@@ -354,7 +368,7 @@ export class ProjectService {
     const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return null
     const targetPath = resolve(requireString(result.filePath, 'worktree path', { min: 1, max: 4096 }))
-    if (targetPath === resolve('/') || targetPath === resolve(homedir())) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
+    if (isBroadRoot(targetPath)) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
     await createGitWorktree(cwd, targetPath, branch)
     return this.openWorktree(cwd, targetPath)
   }
@@ -366,40 +380,12 @@ export class ProjectService {
       : await dialog.showOpenDialog({ title: 'Add project folder', properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || result.filePaths.length !== 1) return null
     const { path, identity } = await this.captureFolderIdentity(result.filePaths[0])
-    this.removalRoots.delete(path)
-    const now = new Date().toISOString()
-    const project = await this.store.update((state): PersistedProject => {
-      state.dismissedProjectPaths = state.dismissedProjectPaths.filter((item) => resolve(item) !== path)
-      const existing = this.ownProjects(state.projects).find((item) => resolve(item.path) === path || item.folders.some((folder) => resolve(folder) === path))
-      if (existing) {
-        existing.lastOpenedAt = now
-        existing.folderIdentities = { ...existing.folderIdentities, [path]: identity }
-        return existing
-      }
-      const created: PersistedProject = {
-        id: randomUUID(),
-        harness: this.harness,
-        name: basename(path) || path,
-        path,
-        folders: [path],
-        primaryFolder: path,
-        pinned: false,
-        createdAt: now,
-        lastOpenedAt: now,
-        folderIdentities: { [path]: identity },
-      }
-      state.projects.push(created)
-      return created
-    })
-    this.authorizationRevision += 1
-    this.authorizedRoots.set(path, identity)
-    const sessions = await this.sessionProvider()
-    return { ...project, sessionCount: sessions.filter((session) => resolve(session.projectPath) === path).length, gitBranch: await this.branchProvider(path) }
+    return this.grantProjectFolder(path, identity)
   }
 
   async grantInferred(pathValue: unknown): Promise<ProjectRecord> {
     const { path, identity } = await this.captureFolderIdentity(String(pathValue))
-    if (path === resolve('/') || path === resolve(homedir())) throw new TypeError('Broad filesystem roots cannot be inferred as projects')
+    if (isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be inferred as projects')
     this.removalRoots.delete(path)
     const sessions = await this.sessionProvider()
     let discovered = false
@@ -409,22 +395,7 @@ export class ProjectService {
       } catch { /* Ignore stale session project paths. */ }
     }
     if (!discovered) throw new TypeError('Project path was not discovered from a Prime session')
-    const now = new Date().toISOString()
-    const project = await this.store.update((state): PersistedProject => {
-      state.dismissedProjectPaths = state.dismissedProjectPaths.filter((item) => resolve(item) !== path)
-      const existing = this.ownProjects(state.projects).find((item) => resolve(item.path) === path || item.folders.some((folder) => resolve(folder) === path))
-      if (existing) {
-        existing.lastOpenedAt = now
-        existing.folderIdentities = { ...existing.folderIdentities, [path]: identity }
-        return existing
-      }
-      const created: PersistedProject = { id: randomUUID(), harness: this.harness, name: basename(path) || path, path, folders: [path], primaryFolder: path, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: { [path]: identity } }
-      state.projects.push(created)
-      return created
-    })
-    this.authorizationRevision += 1
-    this.authorizedRoots.set(path, identity)
-    return { ...project, sessionCount: sessions.filter((session) => resolve(session.projectPath) === path).length, gitBranch: await this.branchProvider(path) }
+    return this.grantProjectFolder(path, identity, sessions)
   }
 
   async remove(idValue: unknown): Promise<boolean> {
@@ -446,7 +417,7 @@ export class ProjectService {
       for (const pathValue of [...new Set(sessions.map((session) => session.projectPath).filter(Boolean))]) {
         try {
           const path = await requireExistingDirectory(pathValue, 'session project path')
-          if (inferredId(path) === id && path !== resolve('/') && path !== resolve(homedir())) { inferredPath = path; break }
+          if (inferredId(path) === id && !isBroadRoot(path)) { inferredPath = path; break }
         } catch { /* Not a removable inferred project. */ }
       }
     }
