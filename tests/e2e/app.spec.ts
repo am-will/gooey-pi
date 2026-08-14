@@ -2012,31 +2012,19 @@ test.describe('Prime Work desktop smoke', () => {
     expect(prompt.message).not.toContain('Terminal buffer')
   })
 
-  test('asks before closing and quits after confirmation', async () => {
-    const warning = await app!.evaluate(({ BrowserWindow, dialog }) => {
-      let captured: { message: string; detail?: string; buttons: string[] } | undefined
-      const closeDialog = dialog as unknown as { showMessageBoxSync: (...args: unknown[]) => number }
-      closeDialog.showMessageBoxSync = (...args) => {
-        const options = args[1] as { message: string; detail?: string; buttons?: string[] }
-        captured = { message: options.message, detail: options.detail, buttons: options.buttons ?? [] }
-        return 0
+  test('closes immediately when no agent or schedule is active', async () => {
+    const closed = app!.waitForEvent('close', { timeout: 45_000 })
+    const dialogCalls = await app!.evaluate(({ BrowserWindow, dialog }) => {
+      let calls = 0
+      const closeDialog = dialog as unknown as { showMessageBox: (...args: unknown[]) => Promise<unknown> }
+      closeDialog.showMessageBox = () => {
+        calls += 1
+        return Promise.resolve({ response: 0 })
       }
       BrowserWindow.getAllWindows()[0]?.close()
-      return captured
+      return calls
     })
-    expect(warning).toEqual({
-      message: 'Are you sure?',
-      detail: 'Automations will not run if GooeyPi is closed.',
-      buttons: ['Cancel', 'Close GooeyPi'],
-    })
-    await expect(page.locator('.app-shell')).toBeVisible()
-
-    const closed = app!.waitForEvent('close', { timeout: 45_000 })
-    await app!.evaluate(({ BrowserWindow, dialog }) => {
-      const closeDialog = dialog as unknown as { showMessageBoxSync: (...args: unknown[]) => number }
-      closeDialog.showMessageBoxSync = () => 1
-      BrowserWindow.getAllWindows()[0]?.close()
-    })
+    expect(dialogCalls).toBe(0)
     await closed
     app = undefined
   })
