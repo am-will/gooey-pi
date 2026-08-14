@@ -187,7 +187,10 @@ function runModelProbe(executable: string, options: { timeoutMs: number; maxOutp
         ? `pi was terminated by ${signal} without answering the model catalog probe`
         : `pi exited with status ${code ?? -1} without answering the model catalog probe`)))
     })
-    child.stdin?.end(`${JSON.stringify({ id: PROBE_REQUEST_ID, type: PROBE_COMMAND })}\n`)
+    // Stdin stays open after the request: pi treats EOF as client-disconnect
+    // and can shut down before processing a request that arrived in the same
+    // flush. Every settle path terminates the child, so nothing lingers.
+    child.stdin?.write(`${JSON.stringify({ id: PROBE_REQUEST_ID, type: PROBE_COMMAND })}\n`)
   })
 }
 

@@ -186,9 +186,25 @@ process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_a
   })
 
   it('rejects a pi that exits without ever answering the probe', async () => {
-    const service = new PiModelCatalogService(fakePi("process.stdout.write('not json {{\\n')"))
+    // Exit explicitly after the flush: the probe holds stdin open, so a fake
+    // that merely stops writing would idle until the timeout instead.
+    const service = new PiModelCatalogService(fakePi("process.stdout.write('not json {{\\n', () => process.exit(0))"))
     await expect(service.catalog(true)).rejects.toThrow(/without answering the model catalog probe/)
     await expect(service.catalog()).rejects.toThrow(/without answering/)
+  })
+
+  it('keeps stdin open so a pi that exits on EOF can still answer the probe', async () => {
+    // Real pi (0.82.x) treats stdin EOF as client-disconnect and shuts down
+    // cleanly before processing a request that arrived in the same flush. This
+    // fake answers only after a delay, and exits the moment stdin ends.
+    const service = new PiModelCatalogService(fakePi(`
+process.stdin.on('end', () => process.exit(0))
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_available_models', success: true, data: ${JSON.stringify(sampleCatalog)} }) + '\\n')
+}, 200)
+`))
+    const catalog = await service.catalog(true)
+    expect(catalog.models).toHaveLength(4)
   })
 
   it('rejects a matching response with an unexpected data shape', async () => {
