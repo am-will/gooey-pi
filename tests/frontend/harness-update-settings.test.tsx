@@ -50,7 +50,7 @@ afterEach(() => {
 function installBridge(pi: HarnessUpdateState, options: { changelog?: HarnessChangelog | null; omp?: HarnessUpdateState } = {}) {
   const harnessUpdates = {
     getState: vi.fn(async () => ({ ...updateStates(pi), ...(options.omp ? { omp: options.omp } : {}) })),
-    check: vi.fn(async () => updateStates(pi)),
+    check: vi.fn(async () => ({ ...updateStates(pi), ...(options.omp ? { omp: options.omp } : {}) })),
     update: vi.fn(async () => ({ phase: 'up-to-date', installedVersion: '0.84.1', latestVersion: '0.84.1' } satisfies HarnessUpdateState)),
     changelog: vi.fn(async () => options.changelog ?? null),
     onChanged: vi.fn(() => () => undefined),
@@ -142,6 +142,16 @@ describe('Harness update settings', () => {
 
     await act(async () => { findButton('Update to v17.3.3')!.click() })
     expect(harnessUpdates.update).toHaveBeenCalledWith('omp')
+  })
+
+  it('shows a checking indicator while the check is in flight', async () => {
+    const { harnessUpdates } = installBridge({ phase: 'checking', installedVersion: '0.82.1' })
+    await render(DEFAULT_SETTINGS)
+
+    // Opening the section starts a (cached) check rather than showing stale state.
+    expect(harnessUpdates.check).toHaveBeenCalledWith(false)
+    expect(container.textContent).toContain('Checking for updates…')
+    expect(findButton('Update to')).toBeUndefined()
   })
 
   it('shows the bounded per-harness error state instead of an update button', async () => {

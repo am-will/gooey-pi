@@ -102,6 +102,7 @@
 .runtime-card > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; color: var(--danger); background: var(--danger-soft); }
 .runtime-card > span.is-online { color: var(--success); background: var(--success-soft); }
 .runtime-card > div { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.runtime-card__checking { display: inline-flex; align-items: center; gap: 5px; color: var(--text-tertiary); white-space: nowrap; }
 .runtime-card strong { font-size: 12px; font-weight: 540; }
 .runtime-card small { overflow: hidden; color: var(--text-tertiary); font: 9.5px/1.4 "SFMono-Regular", Menlo, monospace; white-space: nowrap; text-overflow: ellipsis; }
 .runtime-card code { font-size: 9.5px; }

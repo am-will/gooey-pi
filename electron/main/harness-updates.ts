@@ -181,6 +181,13 @@ export class HarnessUpdateService {
     if (!force && Date.now() - this.checkedAt < (this.options.checkTtlMs ?? CHECK_TTL_MS)) {
       return Promise.resolve(this.getState())
     }
+    // Publish the in-flight phase so the renderer can show progress instead
+    // of a result popping in; only harnesses that will actually be probed flip.
+    for (const harness of HARNESS_IDS) {
+      if (UPDATE_DESCRIPTORS[harness] && this.options.harnessStatus(harness).path) {
+        this.publish(harness, { ...this.states[harness], phase: 'checking' })
+      }
+    }
     this.checkPromise = Promise.all(
       HARNESS_IDS.map((harness) => this.checkHarness(harness)),
     ).then((states) => {

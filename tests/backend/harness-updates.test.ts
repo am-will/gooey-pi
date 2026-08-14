@@ -162,7 +162,7 @@ describe('Harness update service', () => {
     expect(existsSync(markerFile)).toBe(true)
     expect(refreshed).toBe(true)
     expect(result).toMatchObject({ phase: 'up-to-date', installedVersion: '0.84.1', latestVersion: '0.84.1' })
-    expect(events).toEqual(['idle', 'available', 'updating', 'up-to-date'])
+    expect(events).toEqual(['checking', 'available', 'updating', 'up-to-date'])
   })
 
   it('publishes a bounded error when the updater fails and refuses updates that make no sense', async () => {

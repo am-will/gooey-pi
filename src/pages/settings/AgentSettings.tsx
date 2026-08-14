@@ -1,5 +1,5 @@
 import { Bot, ExternalLink, Keyboard, RefreshCw, ShieldCheck } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { HARNESS_IDS, OMP_APPROVAL_MODES, type HarnessChangelog, type HarnessId, type OmpApprovalMode } from '@/types/api'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '@/lib/harness'
@@ -45,6 +45,11 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
     if (whatsNew) void onUpdate({ lastSeenHarnessNotes: { ...settings.lastSeenHarnessNotes, pi: whatsNew.toVersion } })
     setWhatsNew(null)
   }, [whatsNew, onUpdate, settings.lastSeenHarnessNotes])
+  // Opening the section triggers a (TTL-cached) check so the cards show live
+  // progress instead of a stale result popping in.
+  useEffect(() => {
+    if (settings.harnessUpdateChecks) void harnessUpdates.check(false)
+  }, [settings.harnessUpdateChecks, harnessUpdates.check])
   const platform = meta?.platform ?? detectRendererPlatform()
   const oppositeActionShortcut = shortcutLabel(platform, ['Primary', 'Enter'])
   const newLineShortcut = shortcutLabel(platform, ['Shift', 'Enter'])
@@ -128,6 +133,8 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
                 <button type="button" className="button button--compact" disabled>Updating…</button>
               ) : updateState?.phase === 'error' && updateState.message ? (
                 <small className="settings-error">{updateState.message}</small>
+              ) : status?.path && (updateState?.phase === 'checking' || updateState?.phase === 'idle') ? (
+                <small className="runtime-card__checking" role="status"><RefreshCw className="spin" size={12} />Checking for updates…</small>
               ) : null}
             </div>
           )
