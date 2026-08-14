@@ -46,6 +46,45 @@ describe('extension UI request parsing', () => {
     expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'confirm-1', method: 'confirm', title: 'Continue?', message: 'This will deploy.' })).toMatchObject({ method: 'confirm', id: 'confirm-1', title: 'Continue?', message: 'This will deploy.' })
     expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'input-1', method: 'input', title: 'Name', placeholder: 'Project name' })).toMatchObject({ method: 'input', id: 'input-1', title: 'Name', placeholder: 'Project name' })
   })
+
+  it('rejects requests that are not extension UI requests or lack an id, title, or method', () => {
+    expect(parseExtensionUiRequest({ type: 'message_end', id: 'x', method: 'input', title: 'Name' })).toBeUndefined()
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', method: 'input', title: 'Name' })).toBeUndefined()
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'input', title: '   ' })).toBeUndefined()
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', title: 'Name', method: 7 })).toBeUndefined()
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', title: 'Name', method: 'progress' })).toBeUndefined()
+  })
+
+  it('drops out-of-range timeouts instead of the whole request', () => {
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'input', title: 'Name', timeout: 0 })).toEqual({ method: 'input', id: 'x', title: 'Name', placeholder: undefined, timeout: undefined })
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'input', title: 'Name', timeout: 25 * 60 * 60 * 1_000 })).toMatchObject({ timeout: undefined })
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'input', title: 'Name', timeout: '30000' })).toMatchObject({ timeout: undefined })
+  })
+
+  it('treats an unusable questionnaire marker as a plain option', () => {
+    const request = (marker: string) => parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'select', title: 'Pick', options: [marker, 'Stable'] })
+    expect(request('__prime_ask_user__group-1:0')).toMatchObject({ options: ['__prime_ask_user__group-1:0', 'Stable'] })
+    expect(request('__prime_ask_user__:0:2')).toMatchObject({ options: ['__prime_ask_user__:0:2', 'Stable'] })
+    expect(request('__prime_ask_user__group 1:0:2')).toMatchObject({ options: ['__prime_ask_user__group 1:0:2', 'Stable'] })
+    expect(request('__prime_ask_user__group-1:1:1')).toMatchObject({ options: ['__prime_ask_user__group-1:1:1', 'Stable'] })
+    expect(request('__prime_ask_user__group-1:0:6')).toMatchObject({ options: ['__prime_ask_user__group-1:0:6', 'Stable'] })
+    expect(request('__prime_ask_user__group-1:0.5:2')).toMatchObject({ options: ['__prime_ask_user__group-1:0.5:2', 'Stable'] })
+  })
+
+  it('rejects a questionnaire marker with no visible options left', () => {
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'select', title: 'Pick', options: ['__prime_ask_user__group-1:0:2'] })).toBeUndefined()
+  })
+
+  it('rejects a confirm request without a message and an input request with an unusable placeholder', () => {
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'confirm', title: 'Continue?' })).toBeUndefined()
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'x', method: 'input', title: 'Name', placeholder: 42 })).toBeUndefined()
+  })
+
+  it('accepts an editor request with a bounded prefill', () => {
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit the plan', prefill: 'step one' })).toEqual({ method: 'editor', id: 'editor-1', title: 'Edit the plan', prefill: 'step one' })
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit the plan' })).toEqual({ method: 'editor', id: 'editor-1', title: 'Edit the plan', prefill: undefined })
+    expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit the plan', prefill: 'x'.repeat(32_001) })).toBeUndefined()
+  })
 })
 
 
