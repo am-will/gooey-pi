@@ -351,7 +351,9 @@ export class JsonStateStore {
           renameSync(filePath, `${filePath}.corrupt-${Date.now()}`)
         }
       } catch { /* The valid in-memory fallback remains usable. */ }
-      this.queue = this.persist(this.state).catch(() => undefined)
+      this.queue = this.persist(this.state).catch((failure: unknown) => {
+        console.error(`GooeyPi desktop state could not be rewritten after the reset: ${failure instanceof Error ? failure.message : String(failure)}`)
+      })
     }
   }
 

@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, type MouseEvent } from 'rea
 import type { Components } from 'react-markdown'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { openExternalUrl } from '@/lib/desktop-actions'
 
 interface MarkdownTextProps {
   text: string
@@ -18,7 +19,11 @@ function openMarkdownLink(event: MouseEvent<HTMLAnchorElement>, href?: string): 
   }
   if (!/^(https?:|mailto:)/i.test(href)) return
   if (window.prime) {
-    void window.prime.app.openExternal(href)
+    void openExternalUrl(window.prime.app, href).then((failure) => {
+      // Transcript links have no toast surface of their own; the refusal still
+      // has to leave a trace instead of looking like a dead link.
+      if (failure) console.error('Opening a transcript link failed:', failure)
+    })
     return
   }
   window.open(href, '_blank', 'noopener,noreferrer')

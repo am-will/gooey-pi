@@ -8,6 +8,18 @@ import { requireRecord, requireString } from '../validation'
 export const PREVIEW_TAB_ID = 'preview'
 import { cursorMarkerScript, elementAtPointScript, evaluateScript, pageInfoScript, readPageScript, refPointScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
 
+/**
+ * Toolbar navigation and post-attach restoration are fire-and-forget because
+ * their callers answer synchronously, so a failed load has no promise left to
+ * reject into; a replaced navigation (ERR_ABORTED) is normal, anything else is
+ * a real load failure worth a trace.
+ */
+function logNavigationFailure(url: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes('ERR_ABORTED')) return
+  console.warn(`GooeyPi browser could not load ${url}: ${message}`)
+}
+
 const MAX_TABS_PER_SESSION = 6
 const MAX_TABS_TOTAL = 24
 const ATTACH_TIMEOUT_MS = 15_000
@@ -201,7 +213,7 @@ export class AgentBrowserService {
     else if (action === 'url') {
       const url = requireString(urlValue, 'url', { min: 1, max: 2048, trim: true })
       if (!isAllowedTabUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
-      guest.loadURL(url).catch(() => undefined)
+      guest.loadURL(url).catch((error: unknown) => logNavigationFailure(url, error))
     } else throw new TypeError('action must be back, forward, reload, or url')
     return true
   }
@@ -224,7 +236,7 @@ export class AgentBrowserService {
     // A recreated webview (renderer reload) starts at about:blank; restore the
     // tab's last known location so the registry stays authoritative.
     if (tab.url && tab.url !== 'about:blank' && guest.getURL() !== tab.url) {
-      guest.loadURL(tab.url).catch(() => undefined)
+      guest.loadURL(tab.url).catch((error: unknown) => logNavigationFailure(tab.url, error))
     }
     for (const waiter of tab.attachWaiters.splice(0)) {
       clearTimeout(waiter.timer)

@@ -56,12 +56,14 @@ export function useAgentBrowserTabs({ bridge, reportError }: UseAgentBrowserTabs
   const attach = useCallback((tabId: string, webContentsId: number) => {
     if (bridge) void bridge.browser.attachTab(tabId, webContentsId).catch(() => undefined)
   }, [bridge])
+  // Selecting and closing are deliberate clicks, so a rejection is a real
+  // failure the user needs to see rather than a mount-order race.
   const select = useCallback((tabId: string) => {
-    if (bridge) void bridge.browser.selectTab(tabId).catch(() => undefined)
-  }, [bridge])
+    if (bridge) void bridge.browser.selectTab(tabId).catch(reportError)
+  }, [bridge, reportError])
   const close = useCallback((tabId: string) => {
-    if (bridge) void bridge.browser.closeTab(tabId).catch(() => undefined)
-  }, [bridge])
+    if (bridge) void bridge.browser.closeTab(tabId).catch(reportError)
+  }, [bridge, reportError])
 
   return { tabs, pointerEvent, activityEvent, attach, select, close }
 }

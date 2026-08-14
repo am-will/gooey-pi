@@ -156,11 +156,17 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('app:get-meta', () => services.meta)
   handle('app:refresh-harnesses', () => services.refreshHarnesses())
   handle('app:open-external', async (_event, url) => {
-    try { await shell.openExternal(requireWebUrl(url, { mailto: true }), { activate: true }); return true } catch { return false }
+    try { await shell.openExternal(requireWebUrl(url, { mailto: true }), { activate: true }); return true } catch (error) {
+      console.warn('Rejected app:open-external:', error instanceof Error ? error.message : error)
+      return false
+    }
   })
   handle('app:reveal-path', async (_event, path) => {
     let requested: string
-    try { requested = await requireExistingPath(path) } catch { return false }
+    try { requested = await requireExistingPath(path) } catch (error) {
+      console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
+      return false
+    }
     const authorizations: Array<() => Promise<string> | string> = [
       () => services.projects.authorizePath(requested),
       () => services.sessions.requireSessionPath(requested),
@@ -183,6 +189,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
         return false
       }
     }
+    console.warn('Rejected app:reveal-path: no authorization domain covers the path')
     return false
   })
   handle('updates:get-state', () => services.updates.getState())

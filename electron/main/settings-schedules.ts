@@ -167,6 +167,9 @@ export class SettingsService {
         session.defaultSession.clearStorageData(), session.defaultSession.clearCache(), session.defaultSession.clearAuthCache(),
       ])
       return true
-    } catch { return false }
+    } catch (error) {
+      console.warn('Browser data reset failed:', error instanceof Error ? error.message : error)
+      return false
+    }
   }
 }
