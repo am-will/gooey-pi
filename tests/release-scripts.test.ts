@@ -328,7 +328,7 @@ describe('release preflight', () => {
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/win/**/latest*.yml')
     expect(releaseWorkflow).toMatch(/needs: \[validate, package, package-linux, package-windows\]/)
-    expect(releaseWorkflow).toContain("needs.package-windows.result == 'skipped'")
+    expect(releaseWorkflow).toContain("needs.package-windows.result != 'skipped'")
     expect(releaseWorkflow).toContain('--platforms "$platforms"')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/*.pacman')
     expect(releaseWorkflow).toContain('sudo apt-get install --yes libarchive-tools')
@@ -358,7 +358,7 @@ describe('release preflight', () => {
     // fails explicitly when a prerequisite failed or was cancelled.
     expect(workflow).toMatch(/release-packages:\n {4}needs: \[validate, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: always\(\)\n {4}runs-on: ubuntu-22\.04/)
     expect(workflow).toContain('Fail if a release prerequisite did not succeed')
-    expect(workflow).toContain('needs.validate.result != \'success\'')
+    expect(workflow).toContain("needs.validate.result != 'success'")
     expect(workflow).toContain('exit 1')
   })
 
