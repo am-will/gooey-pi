@@ -27,22 +27,53 @@ export function parseReleasePlatforms(value = RELEASE_PLATFORMS.join(',')) {
   return platforms
 }
 
-export function expectedGitHubReleaseAssets(version, platforms = RELEASE_PLATFORMS) {
+/**
+ * The single source of truth for release asset naming: published GitHub Release
+ * name to the name electron-builder produced (and CI downloaded). Only the macOS
+ * DMGs are renamed for the public download page; every other asset publishes
+ * under its produced name. Asset selection, the missing-asset report, and the
+ * updater-feed URL rewriting are all driven by this map, so a rename that
+ * reorders sorting cannot mispair entries.
+ *
+ * tests/release-scripts.test.ts derives the produced names from the
+ * electron-builder configuration and fails when this map drifts from them.
+ */
+export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS) {
   const assets = {
-    mac: [`GooeyPi-${version}-m-chip.dmg`, `GooeyPi-${version}-arm64.zip`, `GooeyPi-${version}-intel-chip.dmg`, `GooeyPi-${version}-x64.zip`],
-    linux: [
-      `GooeyPi-${version}-linux-arm64.AppImage`,
-      `GooeyPi-${version}-linux-arm64.deb`,
-      `GooeyPi-${version}-linux-aarch64.pacman`,
-      `GooeyPi-${version}-linux-aarch64.rpm`,
-      `GooeyPi-${version}-linux-x86_64.AppImage`,
-      `GooeyPi-${version}-linux-amd64.deb`,
-      `GooeyPi-${version}-linux-x64.pacman`,
-      `GooeyPi-${version}-linux-x86_64.rpm`,
+    mac: [
+      [`GooeyPi-${version}-m-chip.dmg`, `GooeyPi-${version}-arm64.dmg`],
+      [`GooeyPi-${version}-intel-chip.dmg`, `GooeyPi-${version}-x64.dmg`],
+      [`GooeyPi-${version}-arm64.zip`],
+      [`GooeyPi-${version}-x64.zip`],
     ],
-    win: [`GooeyPi-${version}-win-x64.exe`, `GooeyPi-${version}-win-x64.zip`],
+    linux: [
+      [`GooeyPi-${version}-linux-arm64.AppImage`],
+      [`GooeyPi-${version}-linux-arm64.deb`],
+      [`GooeyPi-${version}-linux-aarch64.pacman`],
+      [`GooeyPi-${version}-linux-aarch64.rpm`],
+      [`GooeyPi-${version}-linux-x86_64.AppImage`],
+      [`GooeyPi-${version}-linux-amd64.deb`],
+      [`GooeyPi-${version}-linux-x64.pacman`],
+      [`GooeyPi-${version}-linux-x86_64.rpm`],
+    ],
+    win: [[`GooeyPi-${version}-win-x64.exe`], [`GooeyPi-${version}-win-x64.zip`]],
   }
-  return platforms.flatMap((platform) => [...assets[platform], ...UPDATE_METADATA_BY_PLATFORM[platform]]).sort()
+  const entries = platforms
+    .flatMap((platform) => [...assets[platform], ...UPDATE_METADATA_BY_PLATFORM[platform].map((name) => [name])])
+    .map(([published, downloaded = published]) => /** @type {[string, string]} */ ([published, downloaded]))
+    .sort(([left], [right]) => compareNames(left, right))
+  const names = new Map(entries)
+  if (names.size !== entries.length) throw new Error('Release asset names contain duplicate published names')
+  if (new Set(names.values()).size !== names.size) throw new Error('Release asset names contain duplicate downloaded names')
+  return names
+}
+
+function compareNames(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+export function expectedGitHubReleaseAssets(version, platforms = RELEASE_PLATFORMS) {
+  return [...releaseAssetNames(version, platforms).keys()]
 }
 
 function parseUpdateMetadata(path, expectedVersion) {
@@ -51,18 +82,33 @@ function parseUpdateMetadata(path, expectedVersion) {
   if (value.version !== expectedVersion) throw new Error(`Update metadata version does not match ${expectedVersion}: ${path}`)
   if (!Array.isArray(value.files) || !value.files.length) throw new Error(`Update metadata has no files: ${path}`)
   for (const file of value.files) {
-    if (!file || typeof file !== 'object' || typeof file.url !== 'string' || !file.url || typeof file.sha512 !== 'string' || !file.sha512) {
-      throw new Error(`Update metadata contains an invalid file: ${path}`)
-    }
+    if (!file || typeof file !== 'object' || typeof file.url !== 'string' || !file.url) throw new Error(`Update metadata contains an invalid file: ${path}`)
+    // electron-updater downloads by size and verifies by sha512, so a missing or
+    // non-positive size and an empty digest are unusable even when every
+    // manifest agrees on them.
+    if (typeof file.sha512 !== 'string' || !file.sha512) throw new Error(`Update metadata file ${file.url} has no sha512: ${path}`)
+    if (typeof file.size !== 'number' || !Number.isFinite(file.size) || file.size <= 0) throw new Error(`Update metadata file ${file.url} has an invalid size: ${path}`)
   }
   return value
+}
+
+// Old electron-updater clients follow the top-level legacy `path`/`sha512`
+// instead of the `files` list, so those fields - and every other
+// electron-builder field such as `releaseDate` - are taken from one deliberately
+// chosen manifest: the one describing the primary (x64) architecture, which is
+// the build a legacy client can always run. Without this rule the legacy fields
+// would come from whichever artifact directory happened to sort first.
+const PRIMARY_ARCHITECTURE_PATTERN = /-(?:x64|x86_64|amd64)\.[A-Za-z]+$/
+
+function isPrimaryArchitectureAsset(url) {
+  return typeof url === 'string' && PRIMARY_ARCHITECTURE_PATTERN.test(url)
 }
 
 export function mergeUpdateMetadata(paths, expectedVersion) {
   if (!paths.length) throw new Error('Update metadata is missing')
   const manifests = paths
     .slice()
-    .sort()
+    .sort(compareNames)
     .map((path) => parseUpdateMetadata(path, expectedVersion))
   const files = new Map()
   for (const manifest of manifests)
@@ -71,21 +117,20 @@ export function mergeUpdateMetadata(paths, expectedVersion) {
       if (previous && (previous.sha512 !== file.sha512 || previous.size !== file.size)) throw new Error(`Update metadata disagrees for ${file.url}`)
       files.set(file.url, file)
     }
-  const mergedFiles = [...files.values()].sort((left, right) => left.url.localeCompare(right.url))
-  const preferredUrl = manifests.map((manifest) => manifest.path).find((path) => files.has(path))
-  const primary = files.get(preferredUrl) ?? mergedFiles[0]
+  const mergedFiles = [...files.values()].sort((left, right) => compareNames(left.url, right.url))
+  const primaryManifest =
+    manifests.find((manifest) => isPrimaryArchitectureAsset(manifest.path)) ?? manifests.find((manifest) => manifest.files.some((file) => isPrimaryArchitectureAsset(file.url))) ?? manifests[0]
+  const legacyFile = files.get(primaryManifest.path) ?? primaryManifest.files.find((file) => isPrimaryArchitectureAsset(file.url)) ?? primaryManifest.files[0]
   return {
-    ...manifests[0],
+    ...primaryManifest,
     files: mergedFiles,
-    path: primary.url,
-    sha512: primary.sha512,
+    path: legacyFile.url,
+    sha512: legacyFile.sha512,
   }
 }
 
 export function expectedDownloadedReleaseAssets(version, platforms = RELEASE_PLATFORMS) {
-  return expectedGitHubReleaseAssets(version, platforms).map((name) =>
-    name.replace(`GooeyPi-${version}-m-chip.dmg`, `GooeyPi-${version}-arm64.dmg`).replace(`GooeyPi-${version}-intel-chip.dmg`, `GooeyPi-${version}-x64.dmg`),
-  )
+  return [...releaseAssetNames(version, platforms).values()]
 }
 
 function listFiles(directory, found = []) {
@@ -110,16 +155,15 @@ export async function prepareGitHubRelease({ inputDirectory, outputDirectory, ta
   if (existsSync(outputDirectory) && readdirSync(outputDirectory).length) throw new Error(`GitHub Release output directory must be empty: ${outputDirectory}`)
   mkdirSync(outputDirectory, { recursive: true })
 
-  const expected = expectedGitHubReleaseAssets(release.version, platforms)
-  const downloaded = expectedDownloadedReleaseAssets(release.version, platforms)
-  const expectedSet = new Set(downloaded)
-  const publishedNameByDownloadedName = new Map(downloaded.map((name, index) => [name, expected[index]]))
+  const names = releaseAssetNames(release.version, platforms)
+  const downloadedNames = new Set(names.values())
+  const publishedNameByDownloadedName = new Map([...names].map(([published, downloaded]) => [downloaded, published]))
   const updateMetadataNames = new Set(Object.values(UPDATE_METADATA_BY_PLATFORM).flat())
   const selected = new Map()
   const metadata = new Map()
   for (const path of listFiles(inputDirectory)) {
     const name = basename(path)
-    if (!expectedSet.has(name)) continue
+    if (!downloadedNames.has(name)) continue
     if (updateMetadataNames.has(name)) {
       const candidates = metadata.get(name) ?? []
       candidates.push(path)
@@ -129,21 +173,21 @@ export async function prepareGitHubRelease({ inputDirectory, outputDirectory, ta
     if (selected.has(name)) throw new Error(`Downloaded release artifacts contain duplicate files named ${name}`)
     selected.set(name, path)
   }
-  const missing = expected.filter((name, index) => !selected.has(downloaded[index]) && !metadata.has(name))
+  const missing = [...names].filter(([published, downloaded]) => !selected.has(downloaded) && !metadata.has(published)).map(([published]) => published)
   if (missing.length) throw new Error(`Downloaded release artifacts are incomplete; missing ${missing.join(', ')}`)
 
   const checksumLines = []
-  for (const [index, name] of expected.entries()) {
+  for (const [name, downloadedName] of names) {
     const destination = join(outputDirectory, name)
     const metadataPaths = metadata.get(name)
     if (metadataPaths) {
       const manifest = mergeUpdateMetadata(metadataPaths, release.version)
       for (const file of manifest.files) {
-        if (file.url !== basename(file.url) || !expectedSet.has(file.url) || updateMetadataNames.has(file.url)) {
+        if (file.url !== basename(file.url) || !downloadedNames.has(file.url) || updateMetadataNames.has(file.url)) {
           throw new Error(`Update metadata references an unpublished release asset: ${file.url}`)
         }
       }
-      if (manifest.path !== undefined && !expectedSet.has(manifest.path)) {
+      if (manifest.path !== undefined && !downloadedNames.has(manifest.path)) {
         throw new Error(`Update metadata references an unpublished release asset: ${manifest.path}`)
       }
       // The CI artifacts retain electron-builder's architecture filenames, but
@@ -156,12 +200,12 @@ export async function prepareGitHubRelease({ inputDirectory, outputDirectory, ta
         ...(manifest.path === undefined ? {} : { path: publishedNameByDownloadedName.get(manifest.path) }),
       }
       writeFileSync(destination, dump(publishedManifest, { lineWidth: -1, noRefs: true, sortKeys: false }))
-    } else copyFileSync(selected.get(downloaded[index]), destination)
+    } else copyFileSync(selected.get(downloadedName), destination)
     if (lstatSync(destination).size === 0) throw new Error(`Release asset is empty: ${name}`)
     checksumLines.push(`${await sha256(destination)}  ${name}`)
   }
   writeFileSync(join(outputDirectory, 'SHA256SUMS.txt'), `${checksumLines.join('\n')}\n`)
-  return { ...release, assets: expected, checksumFile: 'SHA256SUMS.txt' }
+  return { ...release, assets: [...names.keys()], checksumFile: 'SHA256SUMS.txt' }
 }
 
 export function invokedAsScript() {

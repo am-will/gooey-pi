@@ -44,12 +44,51 @@ function assertExpectedArtifacts(outputDirectory, target) {
   return files
 }
 
-export function assertValidAuthenticode(path, spawn = spawnSync) {
-  const command =
-    "$signature = Get-AuthenticodeSignature -LiteralPath $env:GOOEYPI_SIGNED_FILE; if ($signature.Status -ne 'Valid') { Write-Error ('Authenticode status: ' + $signature.Status + '; ' + $signature.StatusMessage); exit 1 }"
-  const result = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+/**
+ * A valid Authenticode status only proves that some certificate the runner
+ * trusts signed the file, so public Windows packaging additionally requires the
+ * expected signer identity in `GOOEYPI_WINDOWS_CERT_SUBJECT` (exact certificate
+ * subject) and/or `GOOEYPI_WINDOWS_CERT_THUMBPRINT` (SHA-1 thumbprint). Neither
+ * configured means the release cannot state who signed it, so verification
+ * fails closed instead of silently accepting any trusted signer; see
+ * docs/security.md.
+ */
+export function expectedAuthenticodeSigner(env = process.env) {
+  const subject = (env.GOOEYPI_WINDOWS_CERT_SUBJECT ?? '').trim()
+  const thumbprint = (env.GOOEYPI_WINDOWS_CERT_THUMBPRINT ?? '').replace(/[\s:]/g, '').toUpperCase()
+  if (thumbprint && !/^[0-9A-F]{40}$/.test(thumbprint)) throw new Error('GOOEYPI_WINDOWS_CERT_THUMBPRINT must be a 40-character SHA-1 certificate thumbprint')
+  if (!subject && !thumbprint) {
+    throw new Error('Windows Authenticode verification requires the expected signer: set repository variable GOOEYPI_WINDOWS_CERT_SUBJECT and/or GOOEYPI_WINDOWS_CERT_THUMBPRINT')
+  }
+  return { subject, thumbprint }
+}
+
+const AUTHENTICODE_VERIFICATION_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  'try {',
+  '  $signature = Get-AuthenticodeSignature -LiteralPath $env:GOOEYPI_SIGNED_FILE',
+  "  if ($signature.Status -ne 'Valid') { throw ('Authenticode status: ' + $signature.Status + '; ' + $signature.StatusMessage) }",
+  '  $certificate = $signature.SignerCertificate',
+  "  if ($null -eq $certificate) { throw 'Authenticode signature has no signer certificate' }",
+  "  if ($env:GOOEYPI_WINDOWS_CERT_SUBJECT -and $certificate.Subject -ne $env:GOOEYPI_WINDOWS_CERT_SUBJECT) { throw ('Unexpected Authenticode signer subject: ' + $certificate.Subject) }",
+  "  if ($env:GOOEYPI_WINDOWS_CERT_THUMBPRINT -and $certificate.Thumbprint.ToUpperInvariant() -ne $env:GOOEYPI_WINDOWS_CERT_THUMBPRINT) { throw ('Unexpected Authenticode signer thumbprint: ' + $certificate.Thumbprint) }",
+  '} catch {',
+  "  Write-Output ('Authenticode verification failed: ' + $_.Exception.Message)",
+  '  exit 1',
+  '}',
+  'exit 0',
+].join('\n')
+
+export function assertValidAuthenticode(path, spawn = spawnSync, env = process.env) {
+  const signer = expectedAuthenticodeSigner(env)
+  const result = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', AUTHENTICODE_VERIFICATION_SCRIPT], {
     encoding: 'utf8',
-    env: { ...process.env, GOOEYPI_SIGNED_FILE: path },
+    env: {
+      ...env,
+      GOOEYPI_SIGNED_FILE: path,
+      GOOEYPI_WINDOWS_CERT_SUBJECT: signer.subject,
+      GOOEYPI_WINDOWS_CERT_THUMBPRINT: signer.thumbprint,
+    },
   })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`Invalid Authenticode signature for ${path}: ${(result.stderr || result.stdout || 'verification failed').trim()}`)

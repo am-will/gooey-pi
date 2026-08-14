@@ -31,6 +31,10 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-22.04
+    # Every downstream job checks out this commit SHA instead of the tag, so a
+    # tag moved mid-run cannot make two jobs build different commits.
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -42,8 +46,14 @@ jobs:
           cache: npm
       - name: Validate tag and package versions
         run: node scripts/release/validate-release-tag.mjs --tag "$RELEASE_TAG"
+      # fetch-depth: 0 above is what populates refs/remotes/origin/*; the check
+      # is evaluated against main's tip at run time, so a commit that is on main
+      # when the release starts can still be rewritten out of main afterwards.
       - name: Require the tagged commit to be on main
         run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - name: Pin the release to the resolved commit SHA
+        id: resolve
+        run: echo "sha=$(git rev-parse HEAD^{commit})" >> "$GITHUB_OUTPUT"
 
   quality:
     needs: validate
@@ -51,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -65,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -100,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -161,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -196,7 +206,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -208,11 +218,17 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+      # Authenticode verification asserts who signed, not merely that some
+      # trusted chain signed: set the repository variables
+      # GOOEYPI_WINDOWS_CERT_SUBJECT and/or GOOEYPI_WINDOWS_CERT_THUMBPRINT (see
+      # docs/security.md). Windows packaging fails closed when neither is set.
       - name: Build, Authenticode-sign, and verify Windows packages
         run: npm run package:win -- --skip-verify
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          GOOEYPI_WINDOWS_CERT_SUBJECT: ${{ vars.GOOEYPI_WINDOWS_CERT_SUBJECT }}
+          GOOEYPI_WINDOWS_CERT_THUMBPRINT: ${{ vars.GOOEYPI_WINDOWS_CERT_THUMBPRINT }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gooeypi-public-windows
@@ -223,8 +239,14 @@ jobs:
           if-no-files-found: error
 
   release-packages:
-    needs: [package, package-linux, package-windows]
-    if: always() && needs.package.result == 'success' && needs.package-linux.result == 'success' && (needs.package-windows.result == 'success' || needs.package-windows.result == 'skipped')
+    needs: [validate, package, package-linux, package-windows]
+    # always() keeps this aggregate gate from being skipped - and therefore from
+    # silently satisfying a required status check - when a packaging job fails or
+    # is cancelled; the result checks then fail it unless every needed job
+    # succeeded (package-windows may legitimately be skipped).
+    if: >-
+      always() && needs.validate.result == 'success' && needs.package.result == 'success' && needs.package-linux.result == 'success' &&
+      (needs.package-windows.result == 'success' || needs.package-windows.result == 'skipped')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -233,13 +255,16 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_REF }}
+          ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+      # This job holds contents/attestations write, so it installs only the
+      # runtime dependency tree the release script needs (js-yaml) instead of the
+      # full dev toolchain.
       - name: Install release script dependencies
-        run: npm ci --ignore-scripts
+        run: npm ci --omit=dev --ignore-scripts
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: gooeypi-public-*
@@ -261,6 +286,13 @@ jobs:
             exit 1
           fi
           if [ "$existing" = 'true' ]; then
+            gh release view "$RELEASE_TAG" --json assets > draft-release.json
+            node scripts/release/prune-draft-release-assets.mjs --assets draft-release.json --expected release-assets > stale-assets.txt
+            while IFS= read -r stale; do
+              [ -n "$stale" ] || continue
+              echo "Deleting stale draft asset: $stale"
+              gh release delete-asset "$RELEASE_TAG" "$stale" --yes
+            done < stale-assets.txt
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
             gh release edit "$RELEASE_TAG" --verify-tag --draft=false --latest
           else

@@ -12,6 +12,17 @@ export const BUNDLE_SIZE_BUDGETS = Object.freeze({
   rendererJsCssBytes: 2.25 * MIB,
 })
 
+/**
+ * Ceilings for one packaged macOS build: `asarBytes` the packed app.asar,
+ * `appBytes` the regular-file bytes inside GooeyPi.app, and `dmgBytes`/
+ * `zipBytes` the compressed distributables users download (Electron runtime,
+ * unpacked native addons, and the bundled agent included).
+ *
+ * Raising a budget is deliberate: record the measured new size and the
+ * dependency or feature that caused the growth in the pull request, and raise it
+ * only to the next multiple of 5 MiB above that measurement so unexplained
+ * download-size creep still fails the release build.
+ */
 export const PACKAGE_SIZE_BUDGETS = Object.freeze({
   asarBytes: 220 * MIB,
   appBytes: 480 * MIB,
