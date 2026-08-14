@@ -80,6 +80,7 @@
   "build": {
     "appId": "app.gooeypi.desktop",
     "productName": "GooeyPi",
+    "npmRebuild": false,
     "asar": {
       "smartUnpack": false
     },
