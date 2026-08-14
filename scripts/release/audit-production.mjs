@@ -10,11 +10,20 @@ function runProductionAudit() {
   const result = spawnSync(invocation.file, invocation.args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, shell: invocation.shell })
   if (result.error) throw result.error
   if (!result.stdout?.trim()) throw new Error(`npm audit produced no output${result.stderr ? `: ${result.stderr.trim()}` : ''}`)
+  let report
   try {
-    return JSON.parse(result.stdout)
+    report = JSON.parse(result.stdout)
   } catch {
     throw new Error(`npm audit did not produce JSON${result.stderr ? `: ${result.stderr.trim()}` : ''}`)
   }
+  if (!report || typeof report !== 'object' || Array.isArray(report)) throw new Error('npm audit produced an invalid report shape')
+  if ('error' in report) {
+    const error = report.error
+    const detail = error && typeof error === 'object' && 'summary' in error ? error.summary : String(error)
+    throw new Error(`npm audit failed: ${detail}`)
+  }
+  if (!Object.prototype.hasOwnProperty.call(report, 'vulnerabilities')) throw new Error('npm audit report has no vulnerabilities section')
+  return report
 }
 
 try {
