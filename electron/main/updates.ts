@@ -42,10 +42,31 @@ export function manualUpdateNotification(state: AppUpdateState): ManualUpdateNot
     message: 'GooeyPi Update Check Failed',
     detail: state.message,
   }
+  if (state.phase === 'unsupported') return {
+    type: 'info',
+    message: 'GooeyPi Updates Unavailable',
+    detail: state.message ?? 'Automatic updates are available in installed builds.',
+  }
   const available = state.phase === 'available' || state.phase === 'downloading' || state.phase === 'downloaded'
   return {
     type: 'info',
     message: available ? 'GooeyPi Update Available' : 'No GooeyPi Update Available',
+  }
+}
+
+/** Coalesces manual "Check for Updates…" clicks so concurrent clicks cannot queue dialogs. */
+export function createManualUpdateCheck(
+  check: () => Promise<AppUpdateState>,
+  notify: (notification: ManualUpdateNotification) => void | Promise<void>,
+): () => void {
+  let inFlight = false
+  return () => {
+    if (inFlight) return
+    inFlight = true
+    void check()
+      .then((state) => notify(manualUpdateNotification(state)))
+      .catch((error) => notify({ type: 'error', message: 'GooeyPi Update Check Failed', detail: errorMessage(error) }))
+      .finally(() => { inFlight = false })
   }
 }
 
@@ -61,6 +82,8 @@ export class UpdateService {
   private checkPromise: Promise<AppUpdateState> | null = null
   private downloadPromise: Promise<boolean> | null = null
   private installAfterDownload = false
+  /** Version of the discovered update, kept independent of the last published phase. */
+  private discoveredVersion: string | undefined
   private interval: ReturnType<typeof globalThis.setInterval> | null = null
   private initialTimer: ReturnType<typeof globalThis.setTimeout> | null = null
   private readonly setIntervalFn: typeof globalThis.setInterval
@@ -77,19 +100,26 @@ export class UpdateService {
     updater.autoDownload = false
     updater.autoInstallOnAppQuit = false
     updater.on('checking-for-update', () => this.publish({ phase: 'checking' }))
-    updater.on('update-available', (info) => this.publish({ phase: 'available', version: info.version }))
+    updater.on('update-available', (info) => {
+      this.discoveredVersion = info.version
+      this.publish({ phase: 'available', version: info.version })
+    })
     updater.on('download-progress', (progress) => this.publish({
       phase: 'downloading',
-      version: this.state.version,
       percent: Math.max(0, Math.min(100, Math.round(progress.percent))),
     }))
     updater.on('update-downloaded', (info) => {
+      this.discoveredVersion = info.version
+      this.stopScheduledChecks()
       this.publish({ phase: 'downloaded', version: info.version })
       if (!this.installAfterDownload) return
       this.installAfterDownload = false
       this.updater.quitAndInstall(false, true)
     })
-    updater.on('update-not-available', (info) => this.publish({ phase: 'not-available', version: info.version }))
+    updater.on('update-not-available', (info) => {
+      this.discoveredVersion = undefined
+      this.publish({ phase: 'not-available', version: info.version })
+    })
     updater.on('error', (error) => {
       this.installAfterDownload = false
       this.publish({ phase: 'error', message: errorMessage(error) })
@@ -100,18 +130,19 @@ export class UpdateService {
     if (!this.options.enabled || this.interval || this.initialTimer) return
     this.initialTimer = this.setTimeoutFn(() => {
       this.initialTimer = null
-      void this.check()
+      this.runScheduledCheck()
     }, this.options.initialCheckDelayMs ?? INITIAL_CHECK_DELAY_MS)
     this.initialTimer.unref?.()
-    this.interval = this.setIntervalFn(() => { void this.check() }, this.options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS)
+    this.interval = this.setIntervalFn(() => { this.runScheduledCheck() }, this.options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS)
     this.interval.unref?.()
   }
 
+  isEnabled(): boolean {
+    return this.options.enabled
+  }
+
   dispose(): void {
-    if (this.interval) this.clearIntervalFn(this.interval)
-    if (this.initialTimer) clearTimeout(this.initialTimer)
-    this.interval = null
-    this.initialTimer = null
+    this.stopScheduledChecks()
     this.sink = null
   }
 
@@ -139,15 +170,17 @@ export class UpdateService {
 
   downloadAndInstall(): Promise<boolean> {
     if (!this.options.enabled) return Promise.resolve(false)
+    if (this.downloadPromise) return this.downloadPromise
     if (this.state.phase === 'downloaded') {
       this.updater.quitAndInstall(false, true)
       return Promise.resolve(true)
     }
     if (this.state.phase !== 'available') return Promise.resolve(false)
-    if (this.downloadPromise) return this.downloadPromise
 
     this.installAfterDownload = true
-    this.publish({ phase: 'downloading', version: this.state.version, percent: 0 })
+    // Progress stays undefined until the first download-progress event so the
+    // renderer can show a busy state instead of a stuck 0%.
+    this.publish({ phase: 'downloading' })
     this.downloadPromise = this.updater.downloadUpdate()
       .then(() => true)
       .catch((error) => {
@@ -159,8 +192,24 @@ export class UpdateService {
     return this.downloadPromise
   }
 
+  private runScheduledCheck(): void {
+    if (this.state.phase === 'downloaded') {
+      this.stopScheduledChecks()
+      return
+    }
+    void this.check()
+  }
+
+  private stopScheduledChecks(): void {
+    if (this.interval) this.clearIntervalFn(this.interval)
+    if (this.initialTimer) clearTimeout(this.initialTimer)
+    this.interval = null
+    this.initialTimer = null
+  }
+
   private publish(state: AppUpdateState): void {
-    this.state = state
+    const version = state.version ?? this.discoveredVersion
+    this.state = version ? { ...state, version } : state
     this.sink?.(this.getState())
   }
 }

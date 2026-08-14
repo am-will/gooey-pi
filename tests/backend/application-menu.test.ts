@@ -43,6 +43,17 @@ describe('application update menu', () => {
     }
   })
 
+  it('disables Check for Updates when the build has no update service', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const template = buildApplicationMenuTemplate({ platform, appName: 'GooeyPi', updatesEnabled: false, checkForUpdates: vi.fn() })
+      const owner = platform === 'darwin' ? template[0] : template.at(-1)
+      const updateItem = submenu(owner).find((item) => item.label === 'Check for Updates…')
+      expect(updateItem?.enabled).toBe(false)
+    }
+    const enabled = buildApplicationMenuTemplate({ platform: 'linux', appName: 'GooeyPi', checkForUpdates: vi.fn() })
+    expect(submenu(enabled.at(-1)).find((item) => item.label === 'Check for Updates…')?.enabled).toBe(true)
+  })
+
   it('installs the native application menu', () => {
     const checkForUpdates = vi.fn()
     installApplicationMenu({ platform: 'linux', appName: 'GooeyPi', checkForUpdates })

@@ -25,8 +25,9 @@ export function useAppUpdates(bridge: PrimeWorkApi | null, reportError: (error: 
   const act = useCallback(async () => {
     if (!bridge) return
     try {
+      // The onChanged subscription is the single writer for main-process state.
       if (state.phase === 'available' || state.phase === 'downloaded') await bridge.updates.downloadAndInstall()
-      else setState(await bridge.updates.check())
+      else await bridge.updates.check()
     } catch (error) {
       reportError(error)
     }

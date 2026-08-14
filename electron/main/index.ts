@@ -36,7 +36,7 @@ import { JsonStateStore } from './store'
 import { TerminalService } from './terminal'
 import { VoiceService, voiceSecretStorageStatus } from './voice'
 import { isAllowedRendererAudioPermission } from './voice-permissions'
-import { getAutoUpdater, manualUpdateNotification, UpdateService } from './updates'
+import { createManualUpdateCheck, getAutoUpdater, UpdateService } from './updates'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'prime-work', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 
@@ -827,17 +827,15 @@ async function bootstrap(): Promise<void> {
   })
   installApplicationMenu({
     appName: 'GooeyPi',
-    checkForUpdates: () => {
-      void updates.check().then(async (state) => {
-        const notification = manualUpdateNotification(state)
-        await dialog.showMessageBox({
-          type: notification.type,
-          title: 'GooeyPi',
-          message: notification.message,
-          detail: notification.detail,
-        })
+    updatesEnabled: updates.isEnabled(),
+    checkForUpdates: createManualUpdateCheck(() => updates.check(), async (notification) => {
+      await dialog.showMessageBox({
+        type: notification.type,
+        title: 'GooeyPi',
+        message: notification.message,
+        detail: notification.detail,
       })
-    },
+    }),
   })
   await ensureWindow()
   updates.start()

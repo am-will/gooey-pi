@@ -85,6 +85,7 @@
 .sidebar-update--downloading .sidebar-update__icon { border-color: transparent; background: conic-gradient(var(--prime) var(--update-progress), var(--prime-soft) 0); }
 .sidebar-update--downloading .sidebar-update__icon::before { content: ''; position: absolute; inset: 2px; border-radius: inherit; background: var(--sidebar); }
 .sidebar-update--downloading .sidebar-update__icon > svg { position: relative; z-index: 1; }
+.sidebar-update--indeterminate .sidebar-update__icon { border-color: color-mix(in srgb, var(--prime) 24%, transparent); background: var(--prime-soft); animation: update-pulse 1.4s ease-in-out infinite; }
 .sidebar-update--downloaded .sidebar-update__icon { color: white; background: var(--prime); box-shadow: 0 0 0 3px var(--prime-soft); }
 .sidebar-update--error .sidebar-update__icon { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 25%, transparent); background: var(--danger-soft); }
 .sidebar-update:disabled { cursor: default; }

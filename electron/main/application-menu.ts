@@ -2,13 +2,16 @@ import { app, Menu, type MenuItemConstructorOptions } from 'electron'
 
 interface ApplicationMenuOptions {
   checkForUpdates(): void
+  /** Manual checks are only possible in builds where the update service runs. */
+  updatesEnabled?: boolean
   platform?: NodeJS.Platform
   appName?: string
 }
 
-function updateMenuItem(checkForUpdates: () => void): MenuItemConstructorOptions {
+function updateMenuItem(checkForUpdates: () => void, enabled: boolean): MenuItemConstructorOptions {
   return {
     label: 'Check for Updates…',
+    enabled,
     click: () => checkForUpdates(),
   }
 }
@@ -16,6 +19,7 @@ function updateMenuItem(checkForUpdates: () => void): MenuItemConstructorOptions
 export function buildApplicationMenuTemplate(options: ApplicationMenuOptions): MenuItemConstructorOptions[] {
   const platform = options.platform ?? process.platform
   const appName = options.appName ?? app.name
+  const updatesEnabled = options.updatesEnabled ?? true
   const standardMenus: MenuItemConstructorOptions[] = [
     { role: 'fileMenu' },
     { role: 'editMenu' },
@@ -28,7 +32,7 @@ export function buildApplicationMenuTemplate(options: ApplicationMenuOptions): M
       label: appName,
       submenu: [
         { role: 'about' },
-        updateMenuItem(options.checkForUpdates),
+        updateMenuItem(options.checkForUpdates, updatesEnabled),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -43,7 +47,7 @@ export function buildApplicationMenuTemplate(options: ApplicationMenuOptions): M
 
   return [...standardMenus, {
     role: 'help',
-    submenu: [updateMenuItem(options.checkForUpdates)],
+    submenu: [updateMenuItem(options.checkForUpdates, updatesEnabled)],
   }]
 }
 
