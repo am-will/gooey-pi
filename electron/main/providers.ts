@@ -60,6 +60,12 @@ export async function resolveMcpOAuthDiscovery(serverUrl: string): Promise<{ url
   if (!metadataMatch) return { url: serverUrl }
 
   const metadataUrl = requireWebUrl(metadataMatch[1])
+  // RFC 9728 places protected-resource metadata on the resource server's own origin; refusing
+  // anything else keeps a hostile challenge from pointing discovery at an unrelated host.
+  if (new URL(metadataUrl).origin !== new URL(serverUrl).origin) {
+    console.warn(`Ignoring cross-origin OAuth protected-resource metadata advertised by ${new URL(serverUrl).origin}`)
+    return { url: serverUrl }
+  }
   const response = await fetch(metadataUrl, {
     method: 'GET',
     redirect: 'error',

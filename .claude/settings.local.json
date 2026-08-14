@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(git -C /Users/am.will/Applications/prime diff HEAD -- electron/main/agent-rpc/runtime.ts)",
-      "Bash(git -C /Users/am.will/Applications/prime diff HEAD -- electron/main/terminal.ts electron/main/process-utils.ts)"
-    ]
-  }
-}
