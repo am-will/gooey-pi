@@ -22,4 +22,4 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - name: Audit production dependencies for high and critical advisories
-        run: npm audit --omit dev --audit-level=high
+        run: npm run audit:production

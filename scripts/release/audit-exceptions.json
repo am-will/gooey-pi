@@ -1,0 +1,11 @@
+{
+  "comment": "Advisories that npm audit --omit dev may report without failing the build. Every entry needs an expiry so an unfixable advisory cannot silently become permanent; see docs/security.md, 'Dependency pinning and supply chain'.",
+  "exceptions": [
+    {
+      "advisory": "GHSA-jmr9-qjv8-65gv",
+      "package": "extract-zip",
+      "expires": "2026-11-13",
+      "reason": "extract-zip has no patched release; it reaches us only through prime-agent's harness download path, which unpacks release archives fetched over HTTPS from the pinned publisher. Re-check for a fixed version, or vendor a patched tarball, before the expiry."
+    }
+  ]
+}

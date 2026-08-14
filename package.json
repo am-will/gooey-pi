@@ -29,6 +29,7 @@
     "release:verify": "npm run release:verify:package && npm run test:e2e:hermetic",
     "release:verify:package": "npm run typecheck && npm run check && npm run test:coverage && npm run build:bundle && npm run release:bundle-size",
     "release:bundle-size": "node scripts/release/verify-bundle-size.mjs",
+    "audit:production": "node scripts/release/audit-production.mjs",
     "package:mac": "node scripts/release/package.mjs --public --platform mac",
     "package:mac:local-qa": "node scripts/release/package.mjs --qa --platform mac",
     "package:linux": "node scripts/release/package.mjs --public --platform linux",

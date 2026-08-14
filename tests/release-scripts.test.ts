@@ -26,6 +26,7 @@ import { assertBundleSizeBudgets, assertPackageSizeBudgets, BUNDLE_SIZE_BUDGETS,
 import { assertReleaseTag } from '../scripts/release/validate-release-tag.mjs'
 // after-pack.cjs is CommonJS; the interop layer exposes module.exports properties as named exports.
 import { executablePath } from '../scripts/release/after-pack.cjs'
+import { collectAuditAdvisories, describeAuditEvaluation, evaluateAuditReport, parseAuditExceptions, readAuditExceptions } from '../scripts/release/audit-exceptions.mjs'
 import {
   assertValidAuthenticode,
   assertUnpackedNativeLayout as assertCrossPlatformUnpackedNativeLayout,
@@ -907,6 +908,84 @@ describe('non-registry dependency pins', () => {
     for (const { path, integrity } of vendored) {
       const digest = `sha512-${createHash('sha512').update(readFileSync(path)).digest('base64')}`
       expect(digest, `vendored tarball bytes drifted from pin: ${path}`).toBe(integrity)
+    }
+  })
+})
+
+const AUDIT_EXCEPTION_REASON = 'no patched release exists upstream yet'
+const auditReport = (advisories: Array<{ package: string; advisory: string; severity: string }>) => ({
+  vulnerabilities: Object.fromEntries(
+    advisories.map((entry) => [
+      entry.package,
+      {
+        name: entry.package,
+        severity: entry.severity,
+        via: [{ source: 1, name: entry.package, title: `${entry.package} flaw`, url: `https://github.com/advisories/${entry.advisory}`, severity: entry.severity }],
+      },
+    ]),
+  ),
+})
+
+describe('production dependency audit', () => {
+  const advisory = { package: 'extract-zip', advisory: 'GHSA-jmr9-qjv8-65gv', severity: 'high' }
+  const exception = parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, expires: '2099-01-01', reason: AUDIT_EXCEPTION_REASON }] }))
+  const now = Date.parse('2026-08-14T00:00:00Z')
+
+  test('reports only high and critical advisories, ignoring back-references to other packages', () => {
+    const report = {
+      vulnerabilities: {
+        ...auditReport([advisory, { package: 'left-pad', advisory: 'GHSA-2222-2222-2222', severity: 'moderate' }]).vulnerabilities,
+        'prime-agent': { name: 'prime-agent', severity: 'high', via: ['extract-zip'] },
+      },
+    }
+
+    expect(collectAuditAdvisories(report)).toEqual([{ advisory: advisory.advisory, package: 'extract-zip', severity: 'high', title: 'extract-zip flaw' }])
+  })
+
+  test('accepts a listed advisory while still failing on an unlisted one', () => {
+    const unlisted = { package: 'tar-fs', advisory: 'GHSA-3333-3333-3333', severity: 'critical' }
+    const evaluation = evaluateAuditReport(auditReport([advisory, unlisted]), exception, now)
+
+    expect(evaluation.accepted).toHaveLength(1)
+    expect(evaluation.unexpected).toMatchObject([{ advisory: unlisted.advisory, package: 'tar-fs' }])
+    expect(describeAuditEvaluation(evaluation)).toMatchObject({ ok: false })
+    expect(describeAuditEvaluation(evaluation).message).toContain(unlisted.advisory)
+  })
+
+  test('fails once an accepted advisory passes its expiry so it cannot become permanent', () => {
+    const expiring = parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, expires: '2026-08-13', reason: AUDIT_EXCEPTION_REASON }] }))
+    const evaluation = evaluateAuditReport(auditReport([advisory]), expiring, now)
+
+    expect(evaluation.expired).toMatchObject([{ advisory: advisory.advisory }])
+    expect(describeAuditEvaluation(evaluation).message).toContain('expired on 2026-08-13')
+  })
+
+  test('fails on a stale exception so a fixed advisory stops being suppressed', () => {
+    const evaluation = evaluateAuditReport({ vulnerabilities: {} }, exception, now)
+
+    expect(evaluation.stale).toHaveLength(1)
+    expect(describeAuditEvaluation(evaluation).message).toContain('no longer matches any advisory')
+  })
+
+  test('passes with a clean report and names every accepted advisory in the summary', () => {
+    const evaluation = describeAuditEvaluation(evaluateAuditReport(auditReport([advisory]), exception, now))
+
+    expect(evaluation.ok).toBe(true)
+    expect(evaluation.message).toContain(`${advisory.advisory} in extract-zip until 2099-01-01`)
+  })
+
+  test('rejects an exception that lacks a reason or a parseable expiry', () => {
+    expect(() => parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, expires: '2099-01-01', reason: 'nope' }] }))).toThrow(/reason/)
+    expect(() => parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, expires: 'someday', reason: AUDIT_EXCEPTION_REASON }] }))).toThrow(/expires/)
+    expect(() => parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, advisory: 'CVE-2024-1', expires: '2099-01-01', reason: AUDIT_EXCEPTION_REASON }] }))).toThrow(/GHSA/)
+  })
+
+  test('the checked-in exception list is valid and every entry still expires in the future', () => {
+    const exceptions = readAuditExceptions()
+
+    expect(exceptions.length).toBeGreaterThan(0)
+    for (const entry of exceptions) {
+      expect(entry.expiresAt, `audit exception for ${entry.advisory} has expired; re-check for a fix`).toBeGreaterThan(Date.now())
     }
   })
 })
