@@ -60,9 +60,9 @@ function installBridge(pi: HarnessUpdateState, options: { changelog?: HarnessCha
   return { harnessUpdates, app }
 }
 
-async function render(settings: AppSettings, onUpdate = vi.fn(), onRefreshHarnesses = vi.fn(async () => undefined)) {
+async function render(settings: AppSettings, onUpdate = vi.fn(), onRefreshHarnesses = vi.fn(async () => undefined), metaOverride: AppMeta = meta) {
   await act(async () => {
-    root.render(<AgentSettings settings={settings} meta={meta} onUpdate={onUpdate} onRefreshHarnesses={onRefreshHarnesses} />)
+    root.render(<AgentSettings settings={settings} meta={metaOverride} onUpdate={onUpdate} onRefreshHarnesses={onRefreshHarnesses} />)
   })
   return { onUpdate, onRefreshHarnesses }
 }
@@ -126,6 +126,28 @@ describe('Harness update settings', () => {
     installBridge({ phase: 'up-to-date', installedVersion: '0.82.1', latestVersion: '0.82.1' })
     await render({ ...DEFAULT_SETTINGS, lastSeenHarnessNotes: { prime: '', omp: '', pi: '0.82.1' } })
     expect(findButton('What’s new')).toBeUndefined()
+  })
+
+  it('explains that a bundled prime-agent updates with GooeyPi', async () => {
+    const bundledMessage = 'This copy is bundled with GooeyPi and updates with GooeyPi releases.'
+    const { harnessUpdates } = installBridge({ phase: 'up-to-date', installedVersion: '0.84.1' })
+    harnessUpdates.getState.mockResolvedValue({
+      ...updateStates({ phase: 'up-to-date', installedVersion: '0.84.1' }),
+      prime: { phase: 'unsupported', installedVersion: '0.7.0', message: bundledMessage },
+    })
+    harnessUpdates.check.mockResolvedValue({
+      ...updateStates({ phase: 'up-to-date', installedVersion: '0.84.1' }),
+      prime: { phase: 'unsupported', installedVersion: '0.7.0', message: bundledMessage },
+    })
+    const bundledMeta: AppMeta = {
+      ...meta,
+      harnesses: { ...meta.harnesses, prime: { path: '/Applications/GooeyPi.app/Contents/Resources/agent/prime-agent', version: '0.7.0' } },
+    }
+    // Mark prime notes as seen so only the bundled message occupies the card.
+    await render({ ...DEFAULT_SETTINGS, lastSeenHarnessNotes: { prime: '0.7.0', omp: '', pi: '' } }, vi.fn(), vi.fn(async () => undefined), bundledMeta)
+
+    expect(container.textContent).toContain(bundledMessage)
+    expect(findButton('Update to')).toBeUndefined()
   })
 
   it('offers omp updates with an external release-notes link', async () => {

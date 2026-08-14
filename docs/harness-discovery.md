@@ -23,10 +23,11 @@ When **Check for harness updates** is enabled (Settings → Harness, on by defau
 
 - **Pi** is compared against the `latest` field of `https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest`, because pi has no check-only command.
 - **OMP** answers for itself: GooeyPi runs `omp update --check` and parses its two version lines, so OMP stays authoritative about its own updates. (The npm package named `oh-my-pi` is unrelated.)
+- **Prime Agent** is compared against the `stable` release-channel file on its official download bucket — the same file `install.sh` and `prime-agent update` resolve. Only the bare version string is read; release bytes are never fetched. A prime-agent bundled inside GooeyPi's resources is excluded: that copy updates with GooeyPi releases, and its card says so.
 
-A newer version shows on the Runtime card and raises a one-time toast per version. The Update button runs the harness's own updater (`pi update --self`, `omp update`) with the discovered executable and a fixed argv, then re-runs discovery so the published version reflects the new binary. Prime Agent has no mapping yet and is reported as unsupported. Disabling the toggle stops both the registry fetch and the omp check.
+A newer version shows on the Runtime card and raises a one-time toast per version. The Update button runs the harness's own updater (`pi update --self`, `omp update`, `prime-agent update`) with the discovered executable and a fixed argv, then re-runs discovery so the published version reflects the new binary. Disabling the toggle stops every check.
 
-After a pi update — or whenever the installed pi version has release notes the user has not seen — a **What's new** view renders the relevant sections of the `CHANGELOG.md` inside pi's installed npm package. The file is read locally, never fetched. OMP ships as a standalone binary without a changelog, so its card links to the GitHub releases page instead.
+After a pi or prime-agent update — or whenever the installed version has release notes the user has not seen — a **What's new** view renders the relevant sections of the `CHANGELOG.md` inside the harness's installed npm package. The file is read locally, never fetched. OMP ships as a standalone binary without a changelog, so its card links to the GitHub releases page instead.
 
 GooeyPi deliberately stops at invoking each harness's own updater. It never selects install methods, installs absent harnesses, or updates automatically.
 

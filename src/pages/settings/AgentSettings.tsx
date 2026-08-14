@@ -29,20 +29,20 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState('')
   const [updateError, setUpdateError] = useState('')
-  const [whatsNew, setWhatsNew] = useState<HarnessChangelog | null>(null)
+  const [whatsNew, setWhatsNew] = useState<{ harness: HarnessId; notes: HarnessChangelog } | null>(null)
   const reportUpdateError = useCallback((error: unknown) => setUpdateError(errorMessage(error)), [])
   const bridge = hasBridge() ? window.prime : null
   const harnessUpdates = useHarnessUpdates(bridge, reportUpdateError)
-  const openWhatsNew = useCallback(async (sinceVersion?: string) => {
+  const openWhatsNew = useCallback(async (harness: HarnessId, sinceVersion?: string) => {
     if (!bridge) return
     try {
-      const notes = await bridge.harnessUpdates.changelog('pi', sinceVersion || undefined)
-      if (notes) setWhatsNew(notes)
-      else setUpdateError('No release notes were found in the installed Pi package.')
+      const notes = await bridge.harnessUpdates.changelog(harness, sinceVersion || undefined)
+      if (notes) setWhatsNew({ harness, notes })
+      else setUpdateError(`No release notes were found in the installed ${HARNESS_AGENT_NAMES[harness]} package.`)
     } catch (error) { setUpdateError(errorMessage(error)) }
   }, [bridge])
   const closeWhatsNew = useCallback(() => {
-    if (whatsNew) void onUpdate({ lastSeenHarnessNotes: { ...settings.lastSeenHarnessNotes, pi: whatsNew.toVersion } })
+    if (whatsNew) void onUpdate({ lastSeenHarnessNotes: { ...settings.lastSeenHarnessNotes, [whatsNew.harness]: whatsNew.notes.toVersion } })
     setWhatsNew(null)
   }, [whatsNew, onUpdate, settings.lastSeenHarnessNotes])
   // Opening the section triggers a (TTL-cached) check so the cards show live
@@ -97,8 +97,9 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
           const name = HARNESS_AGENT_NAMES[harness]
           const status = meta?.harnesses[harness]
           const updateState = settings.harnessUpdateChecks ? harnessUpdates.states?.[harness] : undefined
-          const hasUnseenNotes = harness === 'pi' && Boolean(status?.version && SAFE_VERSION.test(status.version))
-            && settings.lastSeenHarnessNotes.pi !== status?.version
+          // OMP ships as a standalone binary without a packaged changelog.
+          const hasUnseenNotes = harness !== 'omp' && Boolean(status?.version && SAFE_VERSION.test(status.version))
+            && settings.lastSeenHarnessNotes[harness] !== status?.version
           return (
             <div className="runtime-card" key={harness}>
               <span className={status?.path ? 'is-online' : ''}><Bot size={17} /></span>
@@ -108,7 +109,7 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
               </div>
               {status?.version ? <code>v{status.version}</code> : null}
               {hasUnseenNotes ? (
-                <button type="button" className="button button--compact" onClick={() => { void openWhatsNew(settings.lastSeenHarnessNotes.pi) }}>What’s new</button>
+                <button type="button" className="button button--compact" onClick={() => { void openWhatsNew(harness, settings.lastSeenHarnessNotes[harness]) }}>What’s new</button>
               ) : null}
               {updateState?.phase === 'available' ? (
                 <>
@@ -125,7 +126,7 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
                       // The main process already re-ran discovery; pull the
                       // refreshed meta so the version badge updates.
                       await onRefreshHarnesses()
-                      if (harness === 'pi' && result && result.phase !== 'error') await openWhatsNew(previousVersion)
+                      if (harness !== 'omp' && result && result.phase !== 'error') await openWhatsNew(harness, previousVersion)
                     })
                   }}>Update to v{updateState.latestVersion}</button>
                 </>
@@ -135,6 +136,8 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
                 <small className="settings-error">{updateState.message}</small>
               ) : status?.path && (updateState?.phase === 'checking' || updateState?.phase === 'idle') ? (
                 <small className="runtime-card__checking" role="status"><RefreshCw className="spin" size={12} />Checking for updates…</small>
+              ) : status?.path && updateState?.phase === 'unsupported' && updateState.message ? (
+                <small className="runtime-card__checking">{updateState.message}</small>
               ) : null}
             </div>
           )
@@ -151,7 +154,7 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
             })()
           }}
           label="Check for harness updates"
-          description="Offers one-click updates through each harness's own updater: Pi is compared against its npm registry entry, OMP answers through omp update --check. Prime Agent is not yet supported."
+          description="Offers one-click updates through each harness's own updater. Pi is compared against its npm registry entry, OMP answers through omp update --check, and Prime Agent resolves the same stable release channel its installer uses."
         />
         {HARNESS_IDS.map((harness) => <DraftSettingField
           key={harness}
@@ -188,8 +191,8 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
         <div className="info-row"><ShieldCheck size={15} /><div><strong>Workspace access</strong><small>The active agent only receives the project folders attached to a session.</small></div></div>
       </section>
       {whatsNew ? (
-        <Modal title={`What’s new in Pi ${whatsNew.toVersion}`} onClose={closeWhatsNew}>
-          <div className="whats-new"><MarkdownText text={whatsNew.markdown} /></div>
+        <Modal title={`What’s new in ${HARNESS_AGENT_NAMES[whatsNew.harness]} ${whatsNew.notes.toVersion}`} onClose={closeWhatsNew}>
+          <div className="whats-new"><MarkdownText text={whatsNew.notes.markdown} /></div>
         </Modal>
       ) : null}
     </>

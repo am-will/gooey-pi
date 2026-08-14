@@ -51,6 +51,7 @@ interface ServiceSetup {
   enabled?: boolean
   piStatus?: HarnessStatus
   ompStatus?: HarnessStatus
+  primeStatus?: HarnessStatus
   fetchRegistry?: RegistryFetcher
   refreshHarnesses?: () => Promise<unknown>
   overrides?: Partial<HarnessUpdateServiceOptions>
@@ -59,7 +60,7 @@ interface ServiceSetup {
 function service(setup: ServiceSetup = {}) {
   let enabled = setup.enabled ?? true
   const statuses: Record<HarnessId, HarnessStatus> = {
-    prime: { path: null, version: null },
+    prime: setup.primeStatus ?? { path: null, version: null },
     omp: setup.ompStatus ?? { path: null, version: null },
     pi: setup.piStatus ?? { path: null, version: null },
   }
@@ -68,6 +69,7 @@ function service(setup: ServiceSetup = {}) {
     enabled: () => enabled,
     harnessStatus: (harness: HarnessId) => statuses[harness],
     refreshHarnesses: setup.refreshHarnesses ?? (async () => undefined),
+    isBundledExecutable: () => false,
     fetchRegistry: async (url, limits) => {
       fetchCalls.push(url)
       return (setup.fetchRegistry ?? registryAnswer('0.84.1'))(url, limits)
@@ -80,6 +82,7 @@ function service(setup: ServiceSetup = {}) {
     setEnabled: (value: boolean) => { enabled = value },
     setPiStatus: (value: HarnessStatus) => { statuses.pi = value },
     setOmpStatus: (value: HarnessStatus) => { statuses.omp = value },
+    setPrimeStatus: (value: HarnessStatus) => { statuses.prime = value },
   }
 }
 
@@ -170,8 +173,8 @@ describe('Harness update service', () => {
     await failing.instance.check(true)
     expect(await failing.instance.update('pi')).toMatchObject({ phase: 'error' })
 
-    const unsupported = service()
-    await expect(unsupported.instance.update('prime')).rejects.toThrow(/not supported/)
+    const idle = service()
+    await expect(idle.instance.update('prime')).rejects.toThrow(/No harness update is available/)
 
     const disabled = service({ enabled: false })
     await expect(disabled.instance.update('pi')).rejects.toThrow(/disabled/)
@@ -262,6 +265,50 @@ describe('Harness update service', () => {
     // Changelog older than the installed build has nothing to show.
     expect(sliceChangelog(markdown, '0.99.0')).toBeNull()
     expect(sliceChangelog('no headings here', '0.84.1')).toBeNull()
+  })
+
+  it('resolves prime-agent availability from its installer release channel', async () => {
+    const channel = (body: string): RegistryFetcher => async (url) => url.includes('r2.dev') ? body : JSON.stringify({ version: '0.84.1' })
+
+    const ahead = service({ primeStatus: { path: '/usr/bin/prime-agent', version: '0.7.0' }, fetchRegistry: channel('v0.7.2\n') })
+    expect((await ahead.instance.check(true)).prime).toMatchObject({ phase: 'available', installedVersion: '0.7.0', latestVersion: '0.7.2' })
+    expect(ahead.fetchCalls).toContain('https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/stable')
+
+    const current = service({ primeStatus: { path: '/usr/bin/prime-agent', version: '0.7.2' }, fetchRegistry: channel('v0.7.2\n') })
+    expect((await current.instance.check(true)).prime.phase).toBe('up-to-date')
+
+    const hostile = service({ primeStatus: { path: '/usr/bin/prime-agent', version: '0.7.0' }, fetchRegistry: channel('<html>bucket error</html>') })
+    expect((await hostile.instance.check(true)).prime.phase).toBe('error')
+  })
+
+  it('reports a bundled prime-agent as updating with GooeyPi and never probes it', async () => {
+    const setup = service({
+      primeStatus: { path: '/Applications/GooeyPi.app/Contents/Resources/agent/prime-agent', version: '0.7.0' },
+      overrides: { isBundledExecutable: (path: string) => path.includes('/Resources/') },
+    })
+    const state = (await setup.instance.check(true)).prime
+    expect(state.phase).toBe('unsupported')
+    expect(state.message).toContain('bundled with GooeyPi')
+    expect(setup.fetchCalls.every((url) => !url.includes('r2.dev'))).toBe(true)
+    await expect(setup.instance.update('prime')).rejects.toThrow(/No harness update is available/)
+  })
+
+  it('serves the prime-agent changelog from its installed package', async () => {
+    const root = tempDir()
+    const packageDir = join(root, 'versions', '0.7.0', 'node_modules', 'prime-agent')
+    mkdirSync(join(packageDir, 'dist'), { recursive: true })
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'prime-agent', version: '0.7.0' }))
+    writeFileSync(join(packageDir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n- Pending\n\n## [0.7.0] - 2026-08-05\n\n- Prime thing\n')
+    writeFileSync(join(packageDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n')
+    symlinkSync(join(packageDir, 'dist', 'cli.js'), join(root, 'bin', 'prime-agent'))
+
+    const setup = service({ primeStatus: { path: join(root, 'bin', 'prime-agent'), version: '0.7.0' } })
+    const notes = await setup.instance.changelog('prime')
+    expect(notes).toMatchObject({ toVersion: '0.7.0' })
+    expect(notes?.markdown).toContain('Prime thing')
+    // The [Unreleased] block has no version heading and never leaks into a slice.
+    expect(notes?.markdown).not.toContain('Pending')
   })
 
   it('checks on the initial timer and interval only through injected timers', async () => {

@@ -1,3 +1,4 @@
+import { sep } from 'node:path'
 import { HARNESS_IDS, type HarnessId, type HarnessStatus, type HarnessUpdateState } from '../../src/types/api'
 import { readInstalledChangelog, sliceChangelog, type ChangelogSlice } from './harness-changelog'
 import { runProcess } from './process-utils'
@@ -14,25 +15,48 @@ const UPDATE_MAX_OUTPUT_BYTES = 1024 * 1024
 const SAFE_VERSION = /^v?([0-9][0-9A-Za-z.+-]{0,63})$/
 
 /**
- * How one harness is checked and updated. Two strategies exist: pi has no
- * check-only command, so its version is compared against its npm registry
- * entry; omp reports its own availability through `omp update --check`, so
- * the harness stays authoritative and GooeyPi only parses the answer. Either
- * way the update itself always runs the harness's own updater command, so
- * install-method detection, credentials, and file ownership stay with the
- * harness exactly as if the user had run the command in a terminal.
+ * How one harness learns about newer builds and updates. Availability comes
+ * from whatever source that harness's own tooling treats as authoritative:
+ * pi has no check-only command, so its npm registry entry is compared; omp
+ * answers for itself through `omp update --check`; prime-agent resolves the
+ * same `stable` channel file its official installer and `prime-agent update`
+ * use. The update itself always runs the harness's own updater command, so
+ * install-method detection, checksum verification, credentials, and file
+ * ownership stay with the harness exactly as if the user had run the command
+ * in a terminal.
  */
-type HarnessUpdateDescriptor =
-  | { kind: 'npm-registry'; npmPackage: string; updateArgs: readonly string[] }
-  | { kind: 'harness-check'; checkArgs: readonly string[]; updateArgs: readonly string[] }
+interface HarnessUpdateDescriptor {
+  updateArgs: readonly string[]
+  /** npm package whose installed CHANGELOG.md backs the What's-new view; absent for standalone binaries. */
+  changelogPackage?: string
+  latest:
+    | { kind: 'npm-registry'; npmPackage: string }
+    | { kind: 'release-channel'; url: string }
+    | { kind: 'harness-check'; checkArgs: readonly string[] }
+}
 
 const UPDATE_DESCRIPTORS: Partial<Record<HarnessId, HarnessUpdateDescriptor>> = {
-  pi: { kind: 'npm-registry', npmPackage: '@earendil-works/pi-coding-agent', updateArgs: ['update', '--self'] },
-  omp: { kind: 'harness-check', checkArgs: ['update', '--check'], updateArgs: ['update'] },
+  pi: {
+    updateArgs: ['update', '--self'],
+    changelogPackage: '@earendil-works/pi-coding-agent',
+    latest: { kind: 'npm-registry', npmPackage: '@earendil-works/pi-coding-agent' },
+  },
+  omp: {
+    updateArgs: ['update'],
+    latest: { kind: 'harness-check', checkArgs: ['update', '--check'] },
+  },
+  prime: {
+    updateArgs: ['update'],
+    changelogPackage: 'prime-agent',
+    latest: { kind: 'release-channel', url: 'https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/stable' },
+  },
 }
 
 /** The pi package whose installed CHANGELOG.md backs the What's-new view. */
 export const PI_CHANGELOG_PACKAGE = '@earendil-works/pi-coding-agent'
+
+/** Harnesses whose runtime cards may offer a What's-new view. */
+export const CHANGELOG_HARNESSES = ['pi', 'prime'] as const
 
 export type RegistryFetcher = (url: string, limits: { timeoutMs: number; maxBytes: number }) => Promise<string>
 
@@ -93,6 +117,8 @@ export interface HarnessUpdateServiceOptions {
   fetchRegistry?: RegistryFetcher
   runUpdateProcess?: typeof runProcess
   readChangelog?: typeof readInstalledChangelog
+  /** A bundled harness executable updates with GooeyPi itself, never separately. */
+  isBundledExecutable?: (executablePath: string) => boolean
   checkIntervalMs?: number
   initialCheckDelayMs?: number
   checkTtlMs?: number
@@ -123,6 +149,7 @@ export class HarnessUpdateService {
   private readonly fetchRegistry: RegistryFetcher
   private readonly runUpdateProcess: typeof runProcess
   private readonly readChangelog: typeof readInstalledChangelog
+  private readonly isBundledExecutable: (executablePath: string) => boolean
   private readonly setIntervalFn: typeof globalThis.setInterval
   private readonly clearIntervalFn: typeof globalThis.clearInterval
   private readonly setTimeoutFn: typeof globalThis.setTimeout
@@ -131,6 +158,8 @@ export class HarnessUpdateService {
     this.fetchRegistry = options.fetchRegistry ?? fetchRegistryDocument
     this.runUpdateProcess = options.runUpdateProcess ?? runProcess
     this.readChangelog = options.readChangelog ?? readInstalledChangelog
+    this.isBundledExecutable = options.isBundledExecutable
+      ?? ((executablePath) => typeof process.resourcesPath === 'string' && executablePath.startsWith(`${process.resourcesPath}${sep}`))
     this.setIntervalFn = options.setInterval ?? globalThis.setInterval
     this.clearIntervalFn = options.clearInterval ?? globalThis.clearInterval
     this.setTimeoutFn = options.setTimeout ?? globalThis.setTimeout
@@ -184,7 +213,8 @@ export class HarnessUpdateService {
     // Publish the in-flight phase so the renderer can show progress instead
     // of a result popping in; only harnesses that will actually be probed flip.
     for (const harness of HARNESS_IDS) {
-      if (UPDATE_DESCRIPTORS[harness] && this.options.harnessStatus(harness).path) {
+      const path = this.options.harnessStatus(harness).path
+      if (UPDATE_DESCRIPTORS[harness] && path && !this.isBundledExecutable(path)) {
         this.publish(harness, { ...this.states[harness], phase: 'checking' })
       }
     }
@@ -241,7 +271,8 @@ export class HarnessUpdateService {
    * is untrusted renderer input.
    */
   async changelog(harness: HarnessId, rawSinceVersion?: unknown): Promise<ChangelogSlice | null> {
-    if (harness !== 'pi') return null
+    const changelogPackage = UPDATE_DESCRIPTORS[harness]?.changelogPackage
+    if (!changelogPackage) return null
     let sinceVersion: string | undefined
     if (rawSinceVersion !== undefined) {
       const match = typeof rawSinceVersion === 'string' ? rawSinceVersion.match(SAFE_VERSION) : null
@@ -251,7 +282,7 @@ export class HarnessUpdateService {
     const status = this.options.harnessStatus(harness)
     const installed = status.version?.match(SAFE_VERSION)
     if (!status.path || !installed) return null
-    const markdown = await this.readChangelog(status.path, PI_CHANGELOG_PACKAGE)
+    const markdown = await this.readChangelog(status.path, changelogPackage)
     return markdown ? sliceChangelog(markdown, installed[1], sinceVersion) : null
   }
 
@@ -260,14 +291,20 @@ export class HarnessUpdateService {
     if (!descriptor) return { phase: 'unsupported' }
     const status = this.options.harnessStatus(harness)
     if (!status.path) return { phase: 'unsupported', message: 'The harness is not installed.' }
-    if (descriptor.kind === 'harness-check') return this.checkThroughHarness(status.path, descriptor)
+    if (this.isBundledExecutable(status.path)) {
+      return { phase: 'unsupported', installedVersion: status.version ?? undefined, message: 'This copy is bundled with GooeyPi and updates with GooeyPi releases.' }
+    }
+    const latest = descriptor.latest
+    if (latest.kind === 'harness-check') return this.checkThroughHarness(status.path, latest.checkArgs)
     if (!status.version) return { phase: 'error', message: 'The installed version could not be determined.' }
     try {
-      const latest = await this.fetchLatestVersion(descriptor.npmPackage)
+      const latestVersion = latest.kind === 'npm-registry'
+        ? await this.fetchLatestVersion(latest.npmPackage)
+        : await this.fetchChannelVersion(latest.url)
       return {
-        phase: isNewerVersion(latest, status.version) ? 'available' : 'up-to-date',
+        phase: isNewerVersion(latestVersion, status.version) ? 'available' : 'up-to-date',
         installedVersion: status.version,
-        latestVersion: latest,
+        latestVersion,
       }
     } catch (error) {
       return { phase: 'error', installedVersion: status.version, message: boundedMessage(error) }
@@ -275,9 +312,9 @@ export class HarnessUpdateService {
   }
 
   /** Runs the harness's own check command (`omp update --check`) and parses its two version lines; the output is untrusted. */
-  private async checkThroughHarness(executable: string, descriptor: Extract<HarnessUpdateDescriptor, { kind: 'harness-check' }>): Promise<HarnessUpdateState> {
+  private async checkThroughHarness(executable: string, checkArgs: readonly string[]): Promise<HarnessUpdateState> {
     try {
-      const result = await this.runUpdateProcess(executable, [...descriptor.checkArgs], {
+      const result = await this.runUpdateProcess(executable, [...checkArgs], {
         timeoutMs: HARNESS_CHECK_TIMEOUT_MS,
         maxBytes: HARNESS_CHECK_MAX_OUTPUT_BYTES,
       })
@@ -306,6 +343,14 @@ export class HarnessUpdateService {
       : undefined
     const match = typeof version === 'string' ? version.match(SAFE_VERSION) : null
     if (!match) throw new Error('The package registry answered without a usable version')
+    return match[1]
+  }
+
+  /** A release channel file (prime-agent's `stable`) carries one bare version string; anything else is rejected. */
+  private async fetchChannelVersion(url: string): Promise<string> {
+    const body = await this.fetchRegistry(url, { timeoutMs: REGISTRY_TIMEOUT_MS, maxBytes: MAX_REGISTRY_BYTES })
+    const match = body.trim().match(SAFE_VERSION)
+    if (!match) throw new Error('The release channel answered without a usable version')
     return match[1]
   }
 
