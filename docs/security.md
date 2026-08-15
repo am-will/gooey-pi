@@ -2,6 +2,8 @@
 
 Prime Work separates remote presentation from privileged local execution.
 
+For vulnerability intake and response expectations, follow the repository's [vulnerability-reporting policy](../.github/SECURITY.md). Do not put suspected vulnerability details in a public issue, discussion, or pull request.
+
 - The React renderer has no Node integration, is sandboxed and context-isolated, and communicates through a frozen narrow preload API. Packaged assets are served by a path-contained, MIME-fixed, CSP-protected `prime-work://app/` handler, allowing Electron's extra `file://` privileges fuse to remain disabled.
 - Microphone permission is granted only to the exact authorized main renderer and only for audio; video, subframe checks, and every remote browser guest remain denied. Voice provider keys and optional self-hosted bearer tokens are encrypted with Electron `safeStorage` in a separate mode-0600 file, never returned across IPC, and may instead come from process environment variables. Persistent storage is fail-closed: macOS uses Keychain, Windows uses DPAPI, and Linux must provide a real desktop secret store such as GNOME Keyring/libsecret or KWallet; Electron's unprotected `basic_text` fallback and an unknown or unavailable backend are rejected with actionable setup guidance, and saved ciphertext is not decrypted or used until secure storage is available. When persistent secure storage is unavailable, a newly pasted key may be used for the current app session: after the save IPC completes it is held only in main-process memory, is never added to the secret file, returned by status IPC, or logged by the voice service, and is discarded when the app process exits. Self-hosted transcription uses a user-configured OpenAI-compatible endpoint: plain HTTP is restricted to loopback, remote hosts require HTTPS or an SSH tunnel, URL credentials/query/fragment data and redirects are rejected, and the optional token is attached only as a bearer header. Audio uploads, SDP, provider responses, local executable/model paths, tool arguments, and tool outputs are bounded and validated in the main process. Voice local context exposes OS time-zone and locale metadata plus a time-zone-derived approximate location hint; it does not request precise location permission. Each Realtime session is pinned to the harness selected when the orb opens: project discovery, model discovery, and task launch are restricted to that harness, and switching harnesses closes the orb. Voice model discovery returns only available models from providers currently visible in the GUI; hidden or disabled providers never enter fuzzy matching, and the selected model plus nearest supported reasoning level are revalidated by the runtime manager before the prompt. The Realtime orchestrator can start work only in an existing explicit project grant and only after the model emits `start_task`; the prompt is dispatched immediately without a second desktop confirmation.
 - Every IPC call must come from the authorized main frame at the exact packaged renderer URL (or an explicitly validated loopback development URL). Authorization is revoked on navigation, renderer loss, close, and shutdown; outbound agent events repeat the exact URL check.
@@ -26,6 +28,30 @@ Prime Work separates remote presentation from privileged local execution.
 Prime Agent packages, tools, terminals, configured MCP bridges, and the optional TryCUA driver execute with the user's OS permissions. GooeyPi never bundles or silently installs TryCUA: Computer Use is disabled by default, enabling it requires a runnable `cua-driver`, and new sessions receive only the detected absolute executable path plus GooeyPi's bundled non-MCP integration guidance. The toggle does not write MCP configuration. The desktop boundary protects the renderer and remote browser; it is not an OS sandbox for intentionally launched capabilities. Review projects, commands, and third-party integrations before granting access.
 
 Public macOS distribution requires an external Developer ID Application identity plus Apple notarization and stapling. Signed Windows releases are opt-in until Authenticode credentials are configured; when enabled, Windows packaging fails closed unless an Authenticode identity is injected and verifies the packaged application, AppX/MSIX package, and NSIS installer before publication. An explicitly enabled unsigned beta path may publish the same Windows artifacts for testing, but those files are not trust-ready and will trigger SmartScreen or enterprise policy warnings. Verification asserts the expected signer, not merely a trusted one: the maintainer must set repository variable `GOOEYPI_WINDOWS_CERT_SUBJECT` (the certificate subject, matched exactly, e.g. `CN=Example Ltd, O=Example Ltd, C=GB`) and/or `GOOEYPI_WINDOWS_CERT_THUMBPRINT` (the certificate's 40-character SHA-1 thumbprint; spaces and colons are ignored, case-insensitive) alongside the `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD` secrets. Both may be set, in which case both must match. A configured value that does not match the signing certificate fails the packaging job loudly; when neither is configured, public Windows packaging fails closed with an explicit message rather than accepting any certificate chain the runner happens to trust. GitHub Releases are built only from an existing semantic version tag whose version matches both package manifests and whose commit is on `main`; the final publishing job receives `contents: write` only after every enabled native package and verification job succeeds. Every published installer/archive is covered by `SHA256SUMS.txt` and a GitHub build-provenance attestation. Linux packages should additionally use repository signing metadata if package repositories are introduced. Local builds are not represented as trust-ready packages.
+
+## Vulnerability reporting and maintainer activation
+
+GitHub recognizes `.github/SECURITY.md` as this repository's reporting policy. Adding this file does not enable private vulnerability reporting. That setting belongs to the upstream repository and requires an owner, security manager, or administrator.
+
+After the policy reaches `main`, an upstream administrator must enable **Settings → Security → Advanced Security → Private vulnerability reporting**, or run the equivalent authenticated command:
+
+```bash
+gh api --method PUT repos/am-will/gooey-pi/private-vulnerability-reporting
+```
+
+The resolving pull request should remain explicit about that separate action. Once its exact head is green, leave this maintainer-facing comment if the setting has not already been verified:
+
+> @am-will Maintainer action required: please enable private vulnerability reporting for `am-will/gooey-pi`, then confirm the live status endpoint returns `true`.
+
+After merge and enablement, verify the upstream state rather than inferring it from this documentation change:
+
+```bash
+gh api --method GET repos/am-will/gooey-pi/private-vulnerability-reporting --jq '.enabled'
+gh api --method GET repos/am-will/gooey-pi/contents/.github/SECURITY.md --jq '.html_url'
+gh api --method GET repos/am-will/gooey-pi/community/profile --jq '{health_percentage, updated_at}'
+```
+
+The first command must print `true`. The second must resolve the policy on `main`. Record the community-profile metadata, then confirm **Security policy** is marked as added under **Insights → Community Standards** and that [the rendered policy](https://github.com/am-will/gooey-pi/security/policy) is available. Finally, open the repository's **Security → Advisories** page and confirm **Report a vulnerability** is offered to an external reporter. Do not state that private reporting is enabled until the status endpoint returns `true`; a `404` or an authorization error is not proof of either state and requires an administrator to verify it.
 
 ## Dependency pinning and supply chain
 

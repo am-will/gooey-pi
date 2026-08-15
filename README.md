@@ -161,7 +161,7 @@ GooeyPi is built around local projects and local harness sessions. It does not r
 
 Remote pages open in a separate browser profile with Node access disabled. Project paths and desktop actions are checked in the main process, and third-party capabilities still run with your operating-system permissions. Review packages, commands, MCP servers, and projects before allowing them to act.
 
-See [docs/security.md](docs/security.md) for the full security model.
+For suspected vulnerabilities, follow the [security policy](.github/SECURITY.md) and do not post sensitive details publicly. See [docs/security.md](docs/security.md) for the full technical security model.
 
 ## Development checks
 
