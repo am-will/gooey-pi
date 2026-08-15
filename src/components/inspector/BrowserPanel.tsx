@@ -105,6 +105,7 @@ export function BrowserPanel({ home, onOpenExternal, annotations, agentTabs = []
   const slotRef = useRef<HTMLDivElement | null>(null)
   const onAgentSlotRectRef = useRef(onAgentSlotRect)
   onAgentSlotRectRef.current = onAgentSlotRect
+  const lastAgentSlotRectRef = useRef<AgentSlotRect | null | undefined>(undefined)
   const [previewWebContentsId, setPreviewWebContentsId] = useState<number | null>(null)
   const onPreviewContextRef = useRef(onPreviewContext)
   onPreviewContextRef.current = onPreviewContext
@@ -130,15 +131,29 @@ export function BrowserPanel({ home, onOpenExternal, annotations, agentTabs = []
   // shown. Position can shift without a resize (sidebar toggle), so a slow
   // poll backs up the observer.
   useEffect(() => {
+    const publish = (next: AgentSlotRect | null) => {
+      const previous = lastAgentSlotRectRef.current
+      const unchanged = next === null
+        ? previous === null
+        : previous !== null
+          && previous !== undefined
+          && previous.left === next.left
+          && previous.top === next.top
+          && previous.width === next.width
+          && previous.height === next.height
+      if (unchanged) return
+      lastAgentSlotRectRef.current = next
+      onAgentSlotRectRef.current?.(next)
+    }
     if (!showAgentTab) {
-      onAgentSlotRectRef.current?.(null)
+      publish(null)
       return
     }
     const report = () => {
       const slot = slotRef.current
       if (!slot) return
       const rect = slot.getBoundingClientRect()
-      onAgentSlotRectRef.current?.({ left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) })
+      publish({ left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) })
     }
     report()
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(report)
@@ -149,7 +164,7 @@ export function BrowserPanel({ home, onOpenExternal, annotations, agentTabs = []
       observer?.disconnect()
       window.removeEventListener('resize', report)
       window.clearInterval(interval)
-      onAgentSlotRectRef.current?.(null)
+      publish(null)
     }
   }, [showAgentTab])
 

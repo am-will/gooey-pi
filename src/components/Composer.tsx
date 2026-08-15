@@ -1,6 +1,6 @@
 import { ArrowUp, AtSign, Brain, Check, ChevronDown, Clock3, Command, Edit3, FolderGit2, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties } from 'react'
 import type {
   BrowserAnnotation,
   GitWorktree,
@@ -21,7 +21,7 @@ import type {
   VoiceTranscriptionProvider,
 } from '@/types/api'
 import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
-import { appendCapabilityRouting, findCapabilityMentions } from '@/lib/capability-mentions'
+import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
 import { takeComposerDraft } from '@/lib/composer-draft'
@@ -192,7 +192,6 @@ export const Composer = memo(function Composer({
   const worktreeMenuId = useId()
   const worktreeMenuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const mentionHighlightRef = useRef<HTMLDivElement>(null)
   const acceptedMentionRef = useRef<{ start: number; text: string } | null>(null)
   const submittingRef = useRef(false)
   const pendingImagesRef = useRef(0)
@@ -201,23 +200,6 @@ export const Composer = memo(function Composer({
   annotationsRef.current = annotations
   const mountedRef = useRef(true)
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills])
-  const capabilityMentions = useMemo(() => findCapabilityMentions(value, enabledSkills), [enabledSkills, value])
-  const sessionMentions = useMemo(() => findSessionMentions(value, sessions, sessionReferenceIds), [sessionReferenceIds, sessions, value])
-  const highlightedValue = useMemo(() => {
-    const mentions = [...sessionMentions, ...capabilityMentions]
-      .sort((left, right) => left.start - right.start)
-      .filter((mention, index, all) => index === 0 || mention.start >= all[index - 1].end)
-    if (!mentions.length) return value
-    const parts: ReactNode[] = []
-    let cursor = 0
-    for (const mention of mentions) {
-      if (mention.start > cursor) parts.push(value.slice(cursor, mention.start))
-      parts.push(<mark key={`${mention.start}:${mention.end}`}>{mention.text}</mark>)
-      cursor = mention.end
-    }
-    if (cursor < value.length) parts.push(value.slice(cursor))
-    return parts
-  }, [capabilityMentions, sessionMentions, value])
 
   useEffect(() => {
     const mentionMatch = /(?:^|\s)@([^@\n]*)$/.exec(value)
@@ -550,10 +532,6 @@ export const Composer = memo(function Composer({
       ) : null}
       <div className={`composer ${busy || submitting ? 'composer--busy' : ''}`}>
         <div className="composer-input">
-          <div ref={mentionHighlightRef} className="composer-input__highlight" aria-hidden="true">
-            {highlightedValue}
-            {value.endsWith('\n') ? '\n ' : null}
-          </div>
           <textarea
             ref={textareaRef}
             value={value}
@@ -567,11 +545,6 @@ export const Composer = memo(function Composer({
             aria-controls={menu ? menuId : undefined}
             aria-activedescendant={menu && suggestions.length ? `${menuId}-option-${activeSuggestion}` : undefined}
             onChange={(event) => setValue(event.target.value)}
-            onScroll={(event) => {
-              if (!mentionHighlightRef.current) return
-              mentionHighlightRef.current.scrollTop = event.currentTarget.scrollTop
-              mentionHighlightRef.current.scrollLeft = event.currentTarget.scrollLeft
-            }}
             onPaste={(event) => {
               const files = [...event.clipboardData.items]
                 .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
