@@ -8,6 +8,7 @@ import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
+import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
 import { installCrashGuards } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
@@ -56,11 +57,13 @@ let agentScheduleBridges: AgentScheduleBridge[] = []
 let agentBrowser: AgentBrowserService | null = null
 let agentBrowserBridge: AgentBrowserBridge | null = null
 let agentCollaborationBridge: AgentCollaborationBridge | null = null
+let backgroundMode: MacBackgroundController | null = null
 let shutdownStarted = false
 let shutdownApproved = false
 let confirmingShutdown = false
 let trustedRendererUrl = ''
 let windowCreation: Promise<BrowserWindow | null> | null = null
+let startInBackground = false
 const keepTestWindowsHidden = process.env.PRIME_WORK_E2E_HIDE_WINDOWS === '1'
 
 installCrashGuards({
@@ -381,10 +384,14 @@ async function createWindow(): Promise<BrowserWindow | null> {
   let readyToShow = false
   window.once('ready-to-show', () => {
     readyToShow = true
-    if (!keepTestWindowsHidden && rendererLoaded && !shutdownStarted && !window.isDestroyed() && mainWindow === window) window.show()
+    if (!keepTestWindowsHidden && !backgroundMode?.isBackgrounded() && rendererLoaded && !shutdownStarted && !window.isDestroyed() && mainWindow === window) window.show()
   })
   window.on('close', (event) => {
     if (shutdownStarted || shutdownApproved) return
+    if (backgroundMode?.handleWindowClose(window)) {
+      event.preventDefault()
+      return
+    }
     const prompt = pendingShutdownPrompt()
     if (!prompt) return
     event.preventDefault()
@@ -408,7 +415,7 @@ async function createWindow(): Promise<BrowserWindow | null> {
     return null
   }
   rendererLoaded = true
-  if (!keepTestWindowsHidden && readyToShow) window.show()
+  if (!keepTestWindowsHidden && !backgroundMode?.isBackgrounded() && readyToShow) window.show()
   return window
 }
 
@@ -503,7 +510,7 @@ export async function settleShutdown(
   }
 }
 
-function requestWindow(reason: 'activation' | 'second instance'): void {
+function requestWindow(reason: 'activation' | 'second instance' | 'menu bar'): void {
   void ensureWindow().then((window) => {
     if (!window || shutdownStarted || window.isDestroyed()) return
     if (keepTestWindowsHidden) return
@@ -515,11 +522,23 @@ function requestWindow(reason: 'activation' | 'second instance'): void {
   })
 }
 
+function revealApplication(reason: 'activation' | 'second instance'): void {
+  if (backgroundMode) backgroundMode.open()
+  else requestWindow(reason)
+}
+
 async function bootstrap(): Promise<void> {
   const userDataPath = app.getPath('userData')
   configureGooeyPiAgentMessageSigning(loadOrCreateGooeyPiAgentMessageKey(join(userDataPath, 'agent-message-signing.key')))
   const stateStore = await openDesktopStateStore(userDataPath)
   store = stateStore
+  backgroundMode = new MacBackgroundController({
+    iconPath: appIconPath(),
+    getSettings: () => stateStore.getSettings(),
+    onOpen: () => requestWindow('menu bar'),
+    onQuit: () => app.quit(),
+    startInBackground,
+  })
   const discovery = new HarnessDiscoveryService(() => stateStore.getSettings().runtimePaths)
   const initialHarnesses = await discovery.refresh()
   await reconcileActiveHarness(stateStore, initialHarnesses)
@@ -657,7 +676,12 @@ async function bootstrap(): Promise<void> {
     },
   })
   downloads = new BrowserDownloadGuard(isAllowedBrowserUrl, app.getPath('downloads'))
-  const settings = new SettingsService(stateStore, (shell) => terminals!.validateShell(shell), () => downloads?.cancelAll(true))
+  const settings = new SettingsService(
+    stateStore,
+    (shell) => terminals!.validateShell(shell),
+    () => downloads?.cancelAll(true),
+    (previous, next) => backgroundMode?.applySettings(previous, next),
+  )
   const cuaDriver = new CuaDriverService()
   await cuaDriver.status()
   const voice = new VoiceService({
@@ -998,6 +1022,7 @@ async function bootstrap(): Promise<void> {
       })
     }),
   })
+  backgroundMode.start()
   await ensureWindow()
   updates.start()
 }
@@ -1006,7 +1031,13 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 else void app.whenReady().then(async () => {
   registerRendererProtocol()
-  if (process.platform === 'darwin') app.dock?.setIcon(appIconPath())
+  let wasOpenedAtLogin = false
+  if (process.platform === 'darwin' && app.isPackaged) {
+    try { wasOpenedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin } catch { /* The explicit flag remains available if the OS lookup fails. */ }
+  }
+  startInBackground = shouldStartInBackground(process.argv, wasOpenedAtLogin)
+  if (startInBackground) app.setActivationPolicy('accessory')
+  else if (process.platform === 'darwin') app.dock?.setIcon(appIconPath())
   const browserSession = session.defaultSession
   browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const mediaTypes = permission === 'media' && 'mediaTypes' in details ? details.mediaTypes : undefined
@@ -1029,10 +1060,10 @@ else void app.whenReady().then(async () => {
   }
   await bootstrap()
   app.on('second-instance', () => {
-    if (!shutdownStarted) requestWindow('second instance')
+    if (!shutdownStarted) revealApplication('second instance')
   })
   app.on('activate', () => {
-    if (!shutdownStarted && BrowserWindow.getAllWindows().length === 0) requestWindow('activation')
+    if (!shutdownStarted && (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible())) revealApplication('activation')
   })
 }).catch((error: unknown) => {
   const failureDialog = startupFailureDialog(error)
@@ -1042,7 +1073,7 @@ else void app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  app.quit()
+  if (!backgroundMode?.handleAllWindowsClosed()) app.quit()
 })
 
 app.on('before-quit', (event) => {
@@ -1051,7 +1082,7 @@ app.on('before-quit', (event) => {
     const prompt = pendingShutdownPrompt()
     if (prompt) {
       event.preventDefault()
-      if (!confirmingShutdown) requestShutdown(mainWindow, prompt)
+      if (!confirmingShutdown) requestShutdown(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null, prompt)
       return
     }
   }
@@ -1061,6 +1092,7 @@ app.on('before-quit', (event) => {
   const registration = ipc
   ipc = null
   registration?.dispose()
+  backgroundMode?.dispose()
   updateService?.dispose()
   agents?.beginShutdown()
   ompAgents?.beginShutdown()

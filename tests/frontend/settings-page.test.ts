@@ -149,6 +149,8 @@ describe('settings field ownership', () => {
       sidebarOpen: 'general',
       inspectorOpen: 'general',
       showFileChangesPopup: 'general',
+      keepRunningInBackground: 'general',
+      launchAtLogin: 'general',
       terminalOpen: 'terminal',
       defaultInspectorTab: 'general',
       browserHome: 'browser',

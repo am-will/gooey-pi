@@ -5,7 +5,12 @@ import type { JsonStateStore } from './store'
 import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
 export class SettingsService {
-  constructor(private readonly store: JsonStateStore, private readonly validateShell: (shell: unknown) => string, private readonly cancelBrowserDownloads: () => void = () => undefined) {}
+  constructor(
+    private readonly store: JsonStateStore,
+    private readonly validateShell: (shell: unknown) => string,
+    private readonly cancelBrowserDownloads: () => void = () => undefined,
+    private readonly onDidUpdate: (previous: AppSettings, next: AppSettings) => void | Promise<void> = () => undefined,
+  ) {}
 
   get(): AppSettings { return this.store.getSettings() }
 
@@ -30,6 +35,8 @@ export class SettingsService {
       sidebarOpen: (value) => requireBoolean(value, 'sidebarOpen'),
       inspectorOpen: (value) => requireBoolean(value, 'inspectorOpen'),
       showFileChangesPopup: (value) => requireBoolean(value, 'showFileChangesPopup'),
+      keepRunningInBackground: (value) => requireBoolean(value, 'keepRunningInBackground'),
+      launchAtLogin: (value) => requireBoolean(value, 'launchAtLogin'),
       terminalOpen: (value) => requireBoolean(value, 'terminalOpen'),
       browserAskForDownloads: (value) => requireBoolean(value, 'browserAskForDownloads'),
       reduceMotion: (value) => requireBoolean(value, 'reduceMotion'),
@@ -140,11 +147,15 @@ export class SettingsService {
       if (raw[key] !== undefined) patch[key] = validators[key](raw[key])
     }
     for (const key of keys) applyField(key)
-    return this.store.update((state) => {
+    let previous: AppSettings | undefined
+    const next = await this.store.update((state) => {
+      previous = structuredClone(state.settings)
       const next = { ...state.settings, ...patch }
       Object.assign(state.settings, next)
       return state.settings
     })
+    await this.onDidUpdate(previous!, next)
+    return next
   }
 
   private voiceModel(value: unknown, label: string): string {

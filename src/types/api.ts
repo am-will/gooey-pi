@@ -410,6 +410,10 @@ export interface AppSettings {
   sidebarOpen: boolean
   inspectorOpen: boolean
   showFileChangesPopup: boolean
+  /** Keep the desktop process available for scheduled work after its window closes. */
+  keepRunningInBackground: boolean
+  /** Ask the operating system to launch GooeyPi when the user signs in. */
+  launchAtLogin: boolean
   terminalOpen: boolean
   defaultInspectorTab: InspectorTab
   browserHome: string

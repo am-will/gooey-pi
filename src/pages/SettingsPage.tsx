@@ -78,7 +78,7 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onU
 
   const content = (() => {
     switch (section) {
-      case 'general': return <GeneralSettings settings={settings} onUpdate={onUpdate} />
+      case 'general': return <GeneralSettings settings={settings} onUpdate={onUpdate} platform={platform} />
       case 'appearance': return <AppearanceSettings settings={settings} onUpdate={onUpdate} />
       case 'agent': return <AgentSettings settings={settings} meta={meta} onUpdate={onUpdate} onRefreshHarnesses={onRefreshHarnesses} />
       case 'providers': return <ProvidersSettings harness={settings.activeHarness} catalog={providerCatalog} onRefresh={onRefreshProviders} onSaveApiKey={onSaveProviderApiKey} onLogout={onLogoutProvider} onSetEnabled={onSetProviderEnabled} onSetAllEnabled={onSetAllProvidersEnabled} onSetAllDisabled={onSetAllProvidersDisabled} onSetModelEnabled={onSetModelEnabled} onStartOAuth={onStartProviderOAuth} onOpenDocs={onOpenDocs} />

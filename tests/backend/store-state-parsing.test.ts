@@ -149,6 +149,21 @@ describe('persisted settings parsing', () => {
     expect(settings.activeHarness).toBe('omp')
   })
 
+  it('defaults background behavior off and preserves valid opt-in values', () => {
+    expect(loadState({ version: 4, settings: {} }).settings).toMatchObject({
+      keepRunningInBackground: false,
+      launchAtLogin: false,
+    })
+    expect(loadState({ version: 4, settings: { keepRunningInBackground: true, launchAtLogin: true } }).settings).toMatchObject({
+      keepRunningInBackground: true,
+      launchAtLogin: true,
+    })
+    expect(loadState({ version: 4, settings: { keepRunningInBackground: 'yes', launchAtLogin: 1 } }).settings).toMatchObject({
+      keepRunningInBackground: false,
+      launchAtLogin: false,
+    })
+  })
+
   it('filters disabled provider and model identifiers to their documented shapes', () => {
     const { settings } = loadState({
       version: 3,

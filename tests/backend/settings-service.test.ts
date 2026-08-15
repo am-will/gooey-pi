@@ -9,10 +9,10 @@ import { SettingsService } from '../../electron/main/settings-schedules'
 import { JsonStateStore } from '../../electron/main/store'
 
 const dirs: string[] = []
-function makeService(validateShell: (shell: unknown) => string = () => '/bin/zsh') {
+function makeService(validateShell: (shell: unknown) => string = () => '/bin/zsh', onDidUpdate?: ConstructorParameters<typeof SettingsService>[3]) {
   const dir = mkdtempSync(join(tmpdir(), 'prime-work-settings-'))
   dirs.push(dir)
-  return new SettingsService(new JsonStateStore(join(dir, 'state.json')), validateShell)
+  return new SettingsService(new JsonStateStore(join(dir, 'state.json')), validateShell, undefined, onDidUpdate)
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
@@ -26,6 +26,8 @@ describe('SettingsService.update', () => {
       sidebarOpen: false,
       inspectorOpen: true,
       showFileChangesPopup: false,
+      keepRunningInBackground: true,
+      launchAtLogin: true,
       terminalOpen: true,
       defaultInspectorTab: 'changes',
       browserHome: 'https://example.test/',
@@ -63,7 +65,7 @@ describe('SettingsService.update', () => {
       voiceRealtimeVoice: 'cedar',
     })
     expect(next).toMatchObject({
-      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, terminalOpen: true,
+      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, keepRunningInBackground: true, launchAtLogin: true, terminalOpen: true,
       defaultInspectorTab: 'changes', browserHome: 'https://example.test/',
       browserAskForDownloads: false, terminalShell: '/bin/zsh', reduceMotion: true,
       showReasoningSummaries: false, showToolCalls: false, messageEnterAction: 'steer',
@@ -100,6 +102,8 @@ describe('SettingsService.update', () => {
     await expect(service.update({ enabledHarnesses: [] })).rejects.toThrow(/At least one harness/)
     await expect(service.update({ enabledHarnesses: ['prime', 'codex'] })).rejects.toThrow(/is invalid/)
     await expect(service.update({ sidebarOpen: 'yes' })).rejects.toThrow(/must be a boolean/)
+    await expect(service.update({ keepRunningInBackground: 'yes' })).rejects.toThrow(/must be a boolean/)
+    await expect(service.update({ launchAtLogin: 1 })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ askUserEnabled: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ browserHome: 'javascript:alert(1)' })).rejects.toThrow(/scheme/)
     await expect(service.update({ disabledProviders: ['../evil'] })).rejects.toThrow(/provider ID/)
@@ -164,5 +168,14 @@ describe('SettingsService.update', () => {
     expect(next.terminalShell).toBe('/bin/bash')
     validateShell.mockImplementation(() => { throw new TypeError('shell is not allowed') })
     await expect(service.update({ terminalShell: '/tmp/evil' })).rejects.toThrow(/not allowed/)
+  })
+
+  it('reports the persisted previous and next settings to lifecycle integrations', async () => {
+    const onDidUpdate = vi.fn()
+    const service = makeService(undefined, onDidUpdate)
+    const before = service.get()
+    const next = await service.update({ keepRunningInBackground: true })
+    expect(onDidUpdate).toHaveBeenCalledWith(before, next)
+    expect(next.keepRunningInBackground).toBe(true)
   })
 })

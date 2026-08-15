@@ -11,8 +11,10 @@ const electron = vi.hoisted(() => ({
   BrowserWindow: class {},
   dialog: { showMessageBoxSync: vi.fn() },
   Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
+  nativeImage: { createFromPath: vi.fn() },
   protocol: { registerSchemesAsPrivileged: vi.fn() },
   session: {},
+  Tray: class {},
 }))
 
 vi.mock('electron', () => electron)

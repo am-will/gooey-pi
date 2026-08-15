@@ -54,6 +54,7 @@ You only need one harness to get started:
 - Pick the project or existing session, model, reasoning level, timezone, and Fast mode.
 - Run a schedule immediately, pause or resume it, and inspect the result and run history.
 - Manage Prime heartbeats alongside GooeyPi schedules when Prime Agent exposes them.
+- On macOS, opt in under **Settings → General** to keep scheduled work running from the menu bar after closing the window, and optionally launch GooeyPi in the background at login. The packaged app also accepts `--background` to start without opening its window.
 
 ### Add capabilities
 
