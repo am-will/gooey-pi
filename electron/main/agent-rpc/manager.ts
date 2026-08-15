@@ -26,6 +26,7 @@ export class AgentRpcManager {
   private eventSink: (envelope: PrimeEventEnvelope) => void = () => undefined
   private runtimeEnvironmentProvider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv = () => ({})
   private runtimeStartListener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void = () => undefined
+  private runtimeEndListener: (environment: NodeJS.ProcessEnv, info?: RuntimeInfo) => void = () => undefined
   private runtimeAdmission: Promise<void> = Promise.resolve()
   private closed = false
 
@@ -51,6 +52,11 @@ export class AgentRpcManager {
   /** Called once per successfully started runtime with the environment it was spawned with, so capability bridges can bind their claims to the runtime's session. */
   setRuntimeStartListener(listener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void): void {
     this.runtimeStartListener = listener
+  }
+
+  /** Called once when ownership of a spawned environment ends, including starts that fail before a runtime can be created. */
+  setRuntimeEndListener(listener: (environment: NodeJS.ProcessEnv, info?: RuntimeInfo) => void): void {
+    this.runtimeEndListener = listener
   }
 
   beginShutdown(): void { this.closed = true }
@@ -93,37 +99,45 @@ export class AgentRpcManager {
     this.requireOpen()
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
     const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive })
-    const args = this.adapter.buildStartArgs({
-      cwd,
-      sessionPath,
-      providerId: selectedModel?.provider,
-      modelId,
-      thinking,
-      approvalMode: this.approvalMode(),
-      environment: runtimeEnvironment,
-    })
-    const runtime = await this.admitRuntime(() => {
-      const created = new RpcRuntime(
-        executable,
-        args,
-        cwd,
-        (event) => this.eventSink(event),
-        (closed) => {
-          this.startingRuntimes.delete(closed.runtimeId)
-          this.runtimes.delete(closed.runtimeId)
-          this.runtimeEnvironmentRevisions.delete(closed.runtimeId)
-        },
-        runtimeEnvironment,
-        {},
-        this.adapter,
-      )
-      // Record the environment generation before admission resolves so a
-      // concurrent settings refresh cannot mistake this child for a new one.
-      this.runtimeEnvironmentRevisions.set(created.runtimeId, runtimeEnvironmentRevision)
-      return created
-    })
-    if (runtimeEnvironmentRevision < this.runtimeEnvironmentRevision) void this.retireWhenIdle(runtime)
+    let runtime: RpcRuntime | undefined
+    let environmentEnded = false
+    const notifyRuntimeEnd = (info?: RuntimeInfo): void => {
+      if (environmentEnded) return
+      environmentEnded = true
+      try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
+    }
     try {
+      const args = this.adapter.buildStartArgs({
+        cwd,
+        sessionPath,
+        providerId: selectedModel?.provider,
+        modelId,
+        thinking,
+        approvalMode: this.approvalMode(),
+        environment: runtimeEnvironment,
+      })
+      runtime = await this.admitRuntime(() => {
+        const created = new RpcRuntime(
+          executable,
+          args,
+          cwd,
+          (event) => this.eventSink(event),
+          (closed) => {
+            this.startingRuntimes.delete(closed.runtimeId)
+            this.runtimes.delete(closed.runtimeId)
+            this.runtimeEnvironmentRevisions.delete(closed.runtimeId)
+            notifyRuntimeEnd(closed.snapshot())
+          },
+          runtimeEnvironment,
+          {},
+          this.adapter,
+        )
+        // Record the environment generation before admission resolves so a
+        // concurrent settings refresh cannot mistake this child for a new one.
+        this.runtimeEnvironmentRevisions.set(created.runtimeId, runtimeEnvironmentRevision)
+        return created
+      })
+      if (runtimeEnvironmentRevision < this.runtimeEnvironmentRevision) void this.retireWhenIdle(runtime)
       await runtime.handshake()
       await this.decorate(runtime)
       if (runtime.snapshot().fastModeSupported && options.fast === true) await runtime.setServiceTier('priority', true)
@@ -131,13 +145,18 @@ export class AgentRpcManager {
       this.startingRuntimes.delete(runtime.runtimeId)
       return runtime.snapshot()
     } catch (error) {
-      // Release the runtime slot explicitly: the close-event cleanup may never
-      // fire if the child cannot be reaped, and a failed start must not remain
-      // in the resident-process catalog.
-      this.startingRuntimes.delete(runtime.runtimeId)
-      this.runtimes.delete(runtime.runtimeId)
-      this.runtimeEnvironmentRevisions.delete(runtime.runtimeId)
-      await runtime.stop()
+      if (runtime) {
+        // Release the runtime slot explicitly: the close-event cleanup may never
+        // fire if the child cannot be reaped, and a failed start must not remain
+        // in the resident-process catalog.
+        this.startingRuntimes.delete(runtime.runtimeId)
+        this.runtimes.delete(runtime.runtimeId)
+        this.runtimeEnvironmentRevisions.delete(runtime.runtimeId)
+        await runtime.stop().catch(() => false)
+      }
+      // Admission/constructor failures have no close event; failed handshakes
+      // can also leave an unreapable child. The once guard joins all paths.
+      notifyRuntimeEnd(runtime?.snapshot())
       throw error
     }
   }

@@ -32,7 +32,7 @@ import { configureGooeyPiAgentMessageSigning, loadOrCreateGooeyPiAgentMessageKey
 import { SessionService } from './sessions'
 import { ompSessionServiceOptions } from './sessions/omp'
 import { piSessionServiceOptions } from './sessions/pi'
-import { JsonStateStore } from './store'
+import { type JsonStateStore, openDesktopStateStore, StateCompatibilityError, StateMigrationError } from './store'
 import { TerminalService } from './terminal'
 import { VoiceService, voiceSecretStorageStatus } from './voice'
 import { isAllowedRendererAudioPermission } from './voice-permissions'
@@ -422,9 +422,24 @@ function ensureWindow(): Promise<BrowserWindow | null> {
   return creation
 }
 
-function boundedErrorMessage(error: unknown): string {
+function boundedErrorMessage(error: unknown, maxLength = 512): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replace(/[\r\n\t]+/g, ' ').slice(0, 512) || 'Unknown error'
+  return message.replace(/[\r\n\t]+/g, ' ').slice(0, maxLength) || 'Unknown error'
+}
+
+export interface StartupFailureDialog {
+  title: string
+  detail: string
+}
+
+export function startupFailureDialog(error: unknown): StartupFailureDialog | null {
+  if (error instanceof StateMigrationError) {
+    return { title: 'GooeyPi state migration failed', detail: boundedErrorMessage(error, 2_048) }
+  }
+  if (error instanceof StateCompatibilityError) {
+    return { title: 'GooeyPi update required', detail: boundedErrorMessage(error, 2_048) }
+  }
+  return null
 }
 
 /** Filesystem locations of the three shared capability extensions injected into extension-based harnesses. */
@@ -437,22 +452,23 @@ export interface CapabilityExtensionPaths {
 /**
  * Runtime environment for the extension-injected harnesses (OMP and pi, which
  * share pi's ancestral extension API): the capability-broker variables from
- * the schedule and browser bridges minus the Prime-only --skill paths, plus
- * the three PRIME_WORK_*_EXTENSION_PATH variables the harness adapters turn
+ * the schedule bridge and lazily enabled browser bridge minus the Prime-only
+ * --skill paths, plus the three PRIME_WORK_*_EXTENSION_PATH variables the harness adapters turn
  * into --extension argv. Both harnesses must receive the identical surface.
  */
 export function extensionRuntimeEnvironment(
   scheduleBridgeEnvironment: NodeJS.ProcessEnv,
-  browserBridgeEnvironment: NodeJS.ProcessEnv,
+  browserBridgeEnvironment: () => NodeJS.ProcessEnv,
   extensionPaths: CapabilityExtensionPaths,
   askUserEnabled = true,
   browserEnabled = true,
 ): NodeJS.ProcessEnv {
   const { PRIME_WORK_SCHEDULE_SKILL_PATH: _scheduleSkill, ...scheduleEnvironment } = scheduleBridgeEnvironment
-  const { PRIME_WORK_BROWSER_SKILL_PATH: _browserSkill, ...browserEnvironment } = browserBridgeEnvironment
+  const browserEnvironment = browserEnabled ? browserBridgeEnvironment() : {}
+  const { PRIME_WORK_BROWSER_SKILL_PATH: _browserSkill, ...runtimeBrowserEnvironment } = browserEnvironment
   return {
     ...scheduleEnvironment,
-    ...(browserEnabled ? browserEnvironment : {}),
+    ...runtimeBrowserEnvironment,
     PRIME_WORK_SCHEDULE_EXTENSION_PATH: extensionPaths.schedule,
     PRIME_WORK_BROWSER_EXTENSION_PATH: browserEnabled ? extensionPaths.browser : undefined,
     PRIME_WORK_ASK_USER_EXTENSION_PATH: askUserEnabled ? extensionPaths.askUser : undefined,
@@ -501,7 +517,7 @@ function requestWindow(reason: 'activation' | 'second instance'): void {
 async function bootstrap(): Promise<void> {
   const userDataPath = app.getPath('userData')
   configureGooeyPiAgentMessageSigning(loadOrCreateGooeyPiAgentMessageKey(join(userDataPath, 'agent-message-signing.key')))
-  const stateStore = new JsonStateStore(join(userDataPath, 'prime-work-state.json'))
+  const stateStore = await openDesktopStateStore(userDataPath)
   store = stateStore
   const discovery = new HarnessDiscoveryService(() => stateStore.getSettings().runtimePaths)
   const initialHarnesses = await discovery.refresh()
@@ -860,6 +876,18 @@ async function bootstrap(): Promise<void> {
   await Promise.all([browserBridge.start(), collaborationBridge.start()])
   agentBrowserBridge = browserBridge
   agentCollaborationBridge = collaborationBridge
+  const revokeRuntimeCapabilities = (environment: NodeJS.ProcessEnv, runtimeScheduleBridge: AgentScheduleBridge): void => {
+    const claims: Array<[string, { revoke(token: string | undefined): boolean }, string | undefined]> = [
+      ['schedule', runtimeScheduleBridge, environment.PRIME_WORK_SCHEDULE_TOKEN],
+      ['browser', browserBridge, environment.PRIME_WORK_BROWSER_TOKEN],
+      ['collaboration', collaborationBridge, environment.GOOEYPI_COLLABORATION_TOKEN],
+    ]
+    for (const [name, bridge, token] of claims) {
+      try { bridge.revoke(token) } catch (error) {
+        console.error(`GooeyPi failed to revoke ${name} runtime capability: ${boundedErrorMessage(error)}`)
+      }
+    }
+  }
   agents.setRuntimeEnvironmentProvider((scope) => ({
     ...scheduleBridge.environmentFor(scope),
     ...(stateStore.getSettings().browserEnabled ? browserBridge.environmentFor(scope) : {}),
@@ -873,6 +901,7 @@ async function bootstrap(): Promise<void> {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
     collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
   })
+  agents.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, scheduleBridge))
   // OMP runtimes get the same capability-scoped brokers through OMP-flavored
   // extensions. OMP has no --skill flag, so their tool descriptions carry the
   // app-specific usage guidance while OMP's own skills stay discovery-based.
@@ -882,7 +911,7 @@ async function bootstrap(): Promise<void> {
     askUser: ompAskUserExtensionPath,
   }
   ompManager.setRuntimeEnvironmentProvider((scope) => ({
-    ...extensionRuntimeEnvironment(ompScheduleBridge.environmentFor(scope), browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
+    ...extensionRuntimeEnvironment(ompScheduleBridge.environmentFor(scope), () => browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
     ...collaborationBridge.environmentFor({ ...scope, harness: 'omp' }),
     GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
     GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
@@ -891,10 +920,11 @@ async function bootstrap(): Promise<void> {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
     collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
   })
+  ompManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, ompScheduleBridge))
   // Pi runtimes receive the identical capability surface: pi's extension API
   // is the ancestor of OMP's, so the omp-work-* files are shared by design.
   piManager.setRuntimeEnvironmentProvider((scope) => ({
-    ...extensionRuntimeEnvironment(piScheduleBridge.environmentFor(scope), browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
+    ...extensionRuntimeEnvironment(piScheduleBridge.environmentFor(scope), () => browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
     ...collaborationBridge.environmentFor({ ...scope, harness: 'pi' }),
     GOOEYPI_PI_FAST_MODE_EXTENSION_PATH: piFastModeExtensionPath,
     GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
@@ -904,6 +934,7 @@ async function bootstrap(): Promise<void> {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
     collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
   })
+  piManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, piScheduleBridge))
   if (shutdownStarted) return
   const meta: AppMeta = {
     version: app.getVersion(),
@@ -1005,6 +1036,8 @@ else void app.whenReady().then(async () => {
     if (!shutdownStarted && BrowserWindow.getAllWindows().length === 0) requestWindow('activation')
   })
 }).catch((error: unknown) => {
+  const failureDialog = startupFailureDialog(error)
+  if (failureDialog) dialog.showErrorBox(failureDialog.title, failureDialog.detail)
   if (!shutdownStarted) console.error(`GooeyPi failed to start: ${boundedErrorMessage(error)}`)
   app.quit()
 })
