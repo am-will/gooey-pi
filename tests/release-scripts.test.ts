@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
+import { installAppDependencies } from '../scripts/release/install-app-deps.mjs'
 import {
   artifactArchitectures,
   assertArchitectureCoverage,
@@ -1022,6 +1023,11 @@ describe('cross-platform packaging repair', () => {
 
   test('resolves release-script commands to Windows-safe spawns', () => {
     expect(resolveCommandInvocation('node', ['scripts/release/verify.mjs'])).toEqual({ file: process.execPath, args: ['scripts/release/verify.mjs'], shell: false })
+    const electronInstaller = resolveCommandInvocation('install-electron', [])
+    expect(electronInstaller.file).toBe(process.execPath)
+    expect(electronInstaller.args).toHaveLength(1)
+    expect(electronInstaller.args[0]).toMatch(/node_modules[\\/]electron[\\/]install\.js$/)
+    expect(electronInstaller.shell).toBe(false)
     const builder = resolveCommandInvocation('electron-builder', ['install-app-deps'])
     expect(builder.file).toBe(process.execPath)
     expect(builder.shell).toBe(false)
@@ -1034,6 +1040,22 @@ describe('cross-platform packaging repair', () => {
     expect(npmViaLifecycle).toEqual({ file: process.execPath, args: ['C:/npm/npm-cli.js', 'run', 'release:verify'], shell: false })
     expect(resolveCommandInvocation('npm', ['ci'], 'win32', {})).toEqual({ file: 'npm.cmd', args: ['ci'], shell: true })
     expect(resolveCommandInvocation('npm', ['ci'], 'darwin', {})).toEqual({ file: 'npm', args: ['ci'], shell: false })
+  })
+
+  test('installs Electron before rebuilding native app dependencies', () => {
+    const calls: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> = []
+    const run = (command: string, args: string[], options: { env?: NodeJS.ProcessEnv } = {}) => {
+      calls.push({ command, args, env: options.env ?? {} })
+    }
+
+    installAppDependencies(run, { TASK_MARKER: 'kept' }, 'darwin')
+
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: 'install-electron', args: [] },
+      { command: 'electron-builder', args: ['install-app-deps'] },
+    ])
+    expect(calls[0].env).toBe(calls[1].env)
+    expect(calls[0].env).toMatchObject({ TASK_MARKER: 'kept', PYTHON: '/usr/bin/python3' })
   })
 })
 
