@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { Transcript } from '../../src/components/Transcript'
+import { replayPrimeEvents } from '../../src/lib/events/reduce'
 import type { TranscriptMessage } from '../../src/types/api'
 
 vi.mock('../../src/components/ui', async () => {
@@ -13,11 +14,12 @@ vi.mock('../../src/components/ui', async () => {
 const git = { isRepo: false, files: [] }
 const noop = () => undefined
 
-function render(messages: TranscriptMessage[], active = false): string {
+function render(messages: TranscriptMessage[], active = false, showTools = true): string {
   return renderToStaticMarkup(createElement(Transcript, {
     messages,
     git,
     active,
+    showTools,
     onOpenChanges: noop,
     onSuggestion: noop,
   }))
@@ -46,25 +48,66 @@ describe('transcript rendering', () => {
   })
 
   it.each([
-    ['a running tool', 'read_file', { path: 'package.json' }],
-    ['an ask_user wait', 'ask_user', { question: 'Which release channel?' }],
-  ])('announces Working when reasoning transitions to %s', (_description, name, args) => {
+    ['a running tool', true, 'read_file', { path: 'package.json' }],
+    ['a hidden running tool', false, 'read_file', { path: 'package.json' }],
+    ['an ask_user wait', true, 'ask_user', { question: 'Which release channel?' }],
+    ['a hidden ask_user wait', false, 'ask_user', { question: 'Which release channel?' }],
+  ])('announces Working when reasoning transitions to %s', (_description, showTools, name, args) => {
     const html = render([{
-      id: 'active',
-      role: 'assistant',
-      timestamp: 1_000,
-      startedAt: 1_000,
-      streaming: true,
-      parts: [
-        { type: 'thinking', text: 'Checking the workspace now.' },
-        { type: 'toolCall', id: 'tool-1', name, args },
-      ],
-    }])
+      id: 'active', role: 'assistant', timestamp: 1_000, streaming: true,
+      parts: [{ type: 'thinking', text: 'Checking the workspace.' }, { type: 'toolCall', id: 'tool-1', name, args }],
+    }], false, showTools)
 
     expect(html).toContain('activity-line--reasoning')
-    expect(html).toContain('activity-line--tool')
+    expect(html.includes('activity-line--tool')).toBe(showTools)
     expect(html).toContain('role="status"><span>Working</span>')
-    expect(html).not.toContain('role="status"><span>Thinking</span>')
+  })
+
+  it.each([[true, 'Working'], [false, 'Thinking']] as const)(
+    'uses visible activity when showTools=%s for a completed generic tool',
+    (showTools, status) => {
+      const html = render([{
+        id: 'active', role: 'assistant', timestamp: 1_000, streaming: true,
+        parts: [
+          { type: 'thinking', text: 'Plan ready.' },
+          { type: 'toolCall', id: 'tool-1', name: 'read_file' },
+          { type: 'toolResult', name: 'read_file', text: 'done' },
+        ],
+      }], false, showTools)
+      expect(html).toContain(`role="status"><span>${status}</span>`)
+    },
+  )
+
+  it('keeps a hidden tool Working through partial updates, then restores visible reasoning', () => {
+    const updating = replayPrimeEvents([], [
+      { type: 'agent_start' },
+      { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Plan ready.' } },
+      { type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read_file' },
+      { type: 'tool_execution_update', toolCallId: 'tool-1', toolName: 'read_file', partialResult: 'halfway' },
+    ])
+    expect(render(updating, false, false)).toContain('role="status"><span>Working</span>')
+
+    const finished = replayPrimeEvents(updating, [
+      { type: 'tool_execution_end', toolCallId: 'tool-1', toolName: 'read_file', result: 'done' },
+    ])
+    expect(render(finished, false, false)).toContain('role="status"><span>Thinking</span>')
+  })
+
+  it('keeps late results at their call site and follows newer reasoning or narrative', () => {
+    const reasoning = replayPrimeEvents([], [
+      { type: 'agent_start' },
+      { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'First thought.' } },
+      { type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read_file' },
+      { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'New thought.' } },
+      { type: 'tool_execution_end', toolCallId: 'tool-1', toolName: 'read_file', result: 'done' },
+    ])
+    expect(reasoning[0].parts.map((part) => part.type)).toEqual(['thinking', 'toolCall', 'toolResult', 'thinking'])
+    expect(render(reasoning)).toContain('role="status"><span>Thinking</span>')
+
+    const narrative = replayPrimeEvents(reasoning, [
+      { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Final answer.' } },
+    ])
+    expect(render(narrative, false, false)).toContain('role="status"><span>Working</span>')
   })
 
   it('keeps external active work readable until the whole agent turn is done', () => {
