@@ -4,6 +4,7 @@ import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, type AppSettings, type HarnessId, type ProjectRecord, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { normalizeScheduleRunHistory } from './schedules/retention'
 import { isRecord } from './validation'
 
 export interface FolderIdentity {
@@ -336,7 +337,7 @@ function parseSchedule(value: unknown, preHarnessState: boolean): AutomationSche
   const harness = parseHarness(value.harness, preHarnessState)
   if (!target || !timing || !execution || !harness || !SCHEDULE_STATUSES.has(String(value.status))) return null
   if ((value.createdBy !== 'user' && value.createdBy !== 'agent') || !validDate(value.createdAt) || !validDate(value.updatedAt)) return null
-  const runs = Array.isArray(value.runs) ? value.runs.map(parseScheduleRun).filter((run): run is ScheduleRunRecord => run !== null).slice(-50) : []
+  const runs = Array.isArray(value.runs) ? value.runs.map(parseScheduleRun).filter((run): run is ScheduleRunRecord => run !== null) : []
   return {
     schemaVersion: 1,
     id: value.id,
@@ -361,10 +362,11 @@ const MAX_ARCHIVED_SESSIONS = 5_000
 const MAX_DISMISSED_PROJECT_PATHS = 1_024
 const MAX_STATE_FILE_BYTES = 64 * 1024 * 1024
 
-/** Entries append chronologically, so trimming from the front keeps the most recent. */
+/** Normalize every persisted collection against its deterministic retention invariant. */
 function capUnboundedCollections(state: DesktopState): void {
   if (state.archivedSessions.length > MAX_ARCHIVED_SESSIONS) state.archivedSessions = state.archivedSessions.slice(-MAX_ARCHIVED_SESSIONS)
   if (state.dismissedProjectPaths.length > MAX_DISMISSED_PROJECT_PATHS) state.dismissedProjectPaths = state.dismissedProjectPaths.slice(-MAX_DISMISSED_PROJECT_PATHS)
+  normalizeScheduleRunHistory(state.schedules)
 }
 
 function parseStateVersion(value: Record<string, unknown>, statePath: string): SupportedDesktopStateVersion {

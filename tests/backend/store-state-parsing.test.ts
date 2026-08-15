@@ -281,18 +281,15 @@ describe('persisted schedule parsing', () => {
     expect(loadState({ version: 3, schedules: [{ ...validSchedule, runs: 'none' }] }).schedules[0].runs).toEqual([])
   })
 
-  it('caps stored runs and schedules', () => {
+  it('caps stored schedules', () => {
     const { schedules } = loadState({
       version: 3,
       schedules: Array.from({ length: 501 }, (_, index) => ({
         ...validSchedule,
         id: `schedule-${index}`,
-        runs: Array.from({ length: 51 }, (_, runIndex) => ({ ...validRun, id: `run-${runIndex}` })),
       })),
     })
     expect(schedules).toHaveLength(500)
     expect(schedules[0].id).toBe('schedule-0')
-    expect(schedules[0].runs).toHaveLength(50)
-    expect(schedules[0].runs[0].id).toBe('run-1')
   })
 })
