@@ -334,17 +334,26 @@ describe('agent event frame queue', () => {
   const messageText = (state: ReturnType<typeof useWorkspaceRuntime>) => (state.messages[0]?.parts[0] as { text?: string } | undefined)?.text ?? ''
 
   it('cancels the pending animation frame before a synchronous flush', async () => {
+    const pendingFrame = 417
+    const rafSpy = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => pendingFrame)
     const cancelSpy = vi.spyOn(globalThis, 'cancelAnimationFrame')
-    const read = vi.fn().mockResolvedValue([message('loaded:')])
-    const workspace = mountWorkspace(read)
-    await act(async () => { workspace.render(); await Promise.resolve(); await Promise.resolve() })
-    const state = workspace.state()
-    await act(async () => { state.attachRuntime(runtime, 0) })
-    await act(async () => { state.queueAgentEvent(delta('live')) })
-    const cancelledBefore = cancelSpy.mock.calls.length
-    await act(async () => { state.reconcileTranscriptForEvent(runtime.runtimeId, { type: 'agent_end' }); await Promise.resolve() })
-    expect(cancelSpy.mock.calls.length).toBeGreaterThan(cancelledBefore)
-    expect(messageText(workspace.state())).toBe('loaded:')
+    try {
+      const read = vi.fn().mockResolvedValue([message('loaded:')])
+      const workspace = mountWorkspace(read)
+      await act(async () => { workspace.render(); await Promise.resolve(); await Promise.resolve() })
+      const state = workspace.state()
+      await act(async () => { state.attachRuntime(runtime, 0) })
+      await act(async () => { state.queueAgentEvent(delta('live')) })
+      expect(rafSpy).toHaveBeenCalledTimes(1)
+
+      await act(async () => { state.reconcileTranscriptForEvent(runtime.runtimeId, { type: 'agent_end' }); await Promise.resolve() })
+
+      expect(cancelSpy).toHaveBeenCalledWith(pendingFrame)
+      expect(messageText(workspace.state())).toBe('loaded:')
+    } finally {
+      cancelSpy.mockRestore()
+      rafSpy.mockRestore()
+    }
   })
 
   it('falls back to an authoritative read on the next visibilitychange after the queue bound is exceeded', async () => {
