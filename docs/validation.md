@@ -8,7 +8,7 @@ This page explains how to reproduce and interpret GooeyPi's validation gates. It
 |---|---|
 | Pull-request, `main`, and manual CI | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) |
 | Tagged public releases | [`.github/workflows/release.yml`](../.github/workflows/release.yml) |
-| Scheduled production-dependency audit | [`.github/workflows/audit.yml`](../.github/workflows/audit.yml) |
+| Production-dependency gates | PR heads and `main`: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); pinned releases: [`.github/workflows/release.yml`](../.github/workflows/release.yml); weekly/manual disclosure checks: [`.github/workflows/audit.yml`](../.github/workflows/audit.yml) |
 | Aggregate commands and toolchain policy | [`package.json`](../package.json) and [`.nvmrc`](../.nvmrc) |
 | Resolved dependency graph | [`package-lock.json`](../package-lock.json) |
 | Dependency-install lifecycle | [`package.json`](../package.json) and [`install-app-deps.mjs`](../scripts/release/install-app-deps.mjs) |
@@ -41,6 +41,7 @@ The [CI workflow](../.github/workflows/ci.yml) runs on pull requests, pushes to 
 
 | Job | When it runs | What a pass establishes |
 |---|---|---|
+| `production-audit` (`Production dependency audit`) | Pull request, `main`, manual dispatch | The exact PR head or branch commit has no unexpected, expired, or stale high/critical production-advisory state under the checked-in exception policy. |
 | `quality` | Pull request, `main`, manual dispatch | TypeScript checks; configured lint and format checks; the coverage suite and thresholds; production bundle creation; bundle-size budgets; coverage artifact upload. |
 | `hermetic-e2e` | Pull request, `main`, manual dispatch | The built application passes the Playwright Electron suite on the pinned macOS runner without relying on developer state. Failure artifacts are uploaded when available. |
 | `windows-state-migration` | Pull request, `main`, manual dispatch | The state migration suite passes on a real `windows-2022` runner, including the production-platform fresh-install, migration, restart, and update path. Simulating `platform: 'win32'` on another OS is useful unit coverage but is not a substitute for this job. |
@@ -74,16 +75,16 @@ Packaging is native: run each platform command on its matching operating system 
 
 ## Dependency audit policy
 
-The [dependency-audit workflow](../.github/workflows/audit.yml) runs weekly and on manual dispatch. It uses the repository toolchain and executes `npm run audit:production` against the production dependency graph. This scheduled job supplies advisory coverage for vendored package forms that Dependabot cannot parse.
+The exception-aware audit is a dedicated `Production dependency audit` job in both [pull-request CI](../.github/workflows/ci.yml) and the [release workflow](../.github/workflows/release.yml). CI checks out the exact PR head, while release verification checks out the commit SHA resolved and pinned by its validation job; every package and publication path depends explicitly on that result. Repository maintainers should configure this status as a required check on `main` after it appears on a pull request.
 
-Ordinary PR CI validates the exception file and its expiry rules, but it does not replace the live registry-backed audit. Use the scheduled or manually dispatched audit workflow when making a current dependency-advisory claim.
+The separate [dependency-audit workflow](../.github/workflows/audit.yml) remains scheduled weekly and supports manual dispatch. It uses the same repository toolchain and `npm run audit:production` evaluator, supplying continuous coverage for newly disclosed advisories in vendored package forms that Dependabot cannot parse.
 
 The project gate and raw npm output answer different questions:
 
 - `npm audit --omit=dev` is the underlying registry report for the production lock graph. Its output and exit status are diagnostic and can change as the advisory database changes.
 - `npm run audit:production` parses that report and fails on every unaccepted **high** or **critical** advisory.
 - [`audit-exceptions.json`](../scripts/release/audit-exceptions.json) can accept an exact advisory/package pair only with a reason and expiry. The gate also fails expired exceptions and stale exceptions that no longer match the report.
-- The ordinary release-script tests check exception structure and expiry, so an elapsed acceptance is visible in PR CI as well as in the weekly audit.
+- The release-script tests check exception structure and expiry, and each live PR/release/weekly gate evaluates unexpected, expired, and stale exceptions against npm's current report.
 
 The fix for [issue #30](https://github.com/am-will/gooey-pi/issues/30) hardened both the ordinary and Prime-bundled production extractor paths and removed the traversal exception that was needed at the time. That historical removal does not establish the current advisory state: inspect [`audit-exceptions.json`](../scripts/release/audit-exceptions.json) and run the audit for the exact commit under review. Adding or extending an exception is a security-sensitive change governed by the [dependency pinning and supply-chain policy](security.md#dependency-pinning-and-supply-chain).
 
@@ -94,6 +95,7 @@ The [release workflow](../.github/workflows/release.yml) runs for a semantic-ver
 | Release job | Responsibility |
 |---|---|
 | `validate` | Enforce the repository toolchain, validate tag/package versions and `main` ancestry, and expose the exact release SHA. |
+| `production-audit` (`Production dependency audit`) | Apply the live exception-aware production audit to the exact SHA exposed by `validate`; every package and publication path depends on this result. |
 | `quality` | Run `release:verify:package` for that SHA. |
 | `hermetic-e2e` | Build and run the Electron E2E suite for that SHA. |
 | `package` | Build both native macOS architectures. Credential preflight is fail-closed; public verification checks the signing identity, required microphone entitlements on the app and every Electron helper, the notarization staple on each packaged app, Gatekeeper, artifact integrity, fuses, native layout/architecture, and package budgets. |
