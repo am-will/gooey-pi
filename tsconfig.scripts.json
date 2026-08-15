@@ -12,5 +12,5 @@
     "strict": false,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.mjs", "scripts/**/*.cjs"]
+  "include": ["scripts/**/*.ts", "scripts/**/*.mjs", "scripts/**/*.cjs"]
 }

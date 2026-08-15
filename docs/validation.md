@@ -14,6 +14,7 @@ This page explains how to reproduce and interpret GooeyPi's validation gates. It
 | Dependency-install lifecycle | [`package.json`](../package.json) and [`install-app-deps.mjs`](../scripts/release/install-app-deps.mjs) |
 | Package and post-package guarantees | [`scripts/release/package.mjs`](../scripts/release/package.mjs), [`verify-package.mjs`](../scripts/release/verify-package.mjs), and [`verify-cross-platform-package.mjs`](../scripts/release/verify-cross-platform-package.mjs) |
 | Audit policy and accepted risk | [`docs/security.md`](security.md), [`audit-production.mjs`](../scripts/release/audit-production.mjs), and [`audit-exceptions.json`](../scripts/release/audit-exceptions.json) |
+| Safety-critical coverage membership and exclusions | [`docs/coverage.md`](coverage.md), [`coverage-inventory.ts`](../scripts/release/coverage-inventory.ts), and [`vitest.config.ts`](../vitest.config.ts) |
 
 Read these files at the commit being validated. Job names, test inventory, dependency versions, budgets, and artifact matrices can change; copying their current values into a permanent pass/fail table would create another stale snapshot.
 

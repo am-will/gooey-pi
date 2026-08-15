@@ -973,9 +973,10 @@ describe('fuse hardening configuration', () => {
 })
 
 describe('coverage configuration', () => {
-  test('includes every extracted plugin module without weakening thresholds', () => {
+  test('loads the fail-closed inventory without weakening thresholds', () => {
     const config = readFileSync('vitest.config.ts', 'utf8')
-    expect(config).toContain("'electron/main/plugins/**/*.ts'")
+    expect(config).toContain("from './scripts/release/coverage-inventory'")
+    expect(config).toContain('include: coverageInventory.includePatterns')
     expect(config).toContain('statements: 65')
     expect(config).toContain('branches: 50')
     expect(config).toContain('functions: 70')
