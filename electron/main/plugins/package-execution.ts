@@ -2,7 +2,13 @@ import { existsSync, realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { ProcessOutcome } from '../../../src/types/api'
 import { processOutcome, runProcess } from '../process-utils'
-import { requireString, stripAnsi } from '../validation'
+import { isLoopbackHostname, requireString, stripAnsi } from '../validation'
+
+function requireSecurePackageTransport(url: URL): void {
+  if (url.protocol === 'git:') throw new TypeError('git:// package sources are not allowed; use HTTPS or SSH')
+  // Match the existing self-hosted voice contract: plaintext HTTP is local-only.
+  if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) throw new TypeError('Remote package sources must use HTTPS or SSH; plain HTTP is allowed only on this computer')
+}
 
 export function validatePackageSource(value: unknown, options: { allowOmpMarketplaceTarget?: boolean } = {}): string {
   const source = requireString(value, 'package source', { min: 1, max: 2_048, trim: true })
@@ -12,20 +18,17 @@ export function validatePackageSource(value: unknown, options: { allowOmpMarketp
     if (!/^npm:(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+(?:@[^\s]+)?$/i.test(source)) throw new TypeError('Invalid npm package source')
     return source
   }
-  if (source.startsWith('git:')) {
+  if (source.startsWith('git:') && !source.startsWith('git://')) {
     const spec = source.slice(4)
     const protocolUrl = /^(?:https?|ssh|git):\/\//i.test(spec)
     const sshShorthand = /^git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+(?:@[A-Za-z0-9._/-]+)?$/.test(spec)
     const hostShorthand = /^[A-Za-z0-9.-]+\/[A-Za-z0-9._~/-]+(?:@[A-Za-z0-9._/-]+)?$/.test(spec)
     if (!protocolUrl && !sshShorthand && !hostShorthand) throw new TypeError('Invalid git package source')
     if (protocolUrl) {
-      try {
-        const url = new URL(spec)
-        if ((url.protocol === 'http:' || url.protocol === 'https:') && (url.username || url.password)) throw new TypeError('Package URL credentials are not allowed')
-      } catch (error) {
-        if (error instanceof TypeError && error.message === 'Package URL credentials are not allowed') throw error
-        throw new TypeError('Invalid git package URL')
-      }
+      let url: URL
+      try { url = new URL(spec) } catch { throw new TypeError('Invalid git package URL') }
+      if ((url.protocol === 'http:' || url.protocol === 'https:') && (url.username || url.password)) throw new TypeError('Package URL credentials are not allowed')
+      requireSecurePackageTransport(url)
     }
     return source
   }
@@ -33,6 +36,7 @@ export function validatePackageSource(value: unknown, options: { allowOmpMarketp
     let url: URL
     try { url = new URL(source.replace(/@([^/@]+)$/, '%40$1')) } catch { throw new TypeError('Invalid package URL') }
     if ((url.protocol === 'http:' || url.protocol === 'https:') && (url.username || url.password)) throw new TypeError('Package URL credentials are not allowed')
+    requireSecurePackageTransport(url)
     return source
   }
   if (isAbsolute(source)) {
