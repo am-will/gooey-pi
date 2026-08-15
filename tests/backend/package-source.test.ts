@@ -1,16 +1,47 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { PluginService } from '../../electron/main/plugins'
 import { validatePackageSource } from '../../electron/main/plugins/package-execution'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 describe('validatePackageSource', () => {
-  it('accepts well-formed npm, secure git, and HTTPS sources', () => {
-    expect(validatePackageSource('npm:example-package')).toBe('npm:example-package')
-    expect(validatePackageSource('npm:@scope/pkg@1.2.3')).toBe('npm:@scope/pkg@1.2.3')
+  it.each([
+    'npm:example-package',
+    'npm:Legacy_Package',
+    'npm:@scope/pkg',
+    'npm:example-package@latest',
+    'npm:example-package@next-1',
+    'npm:@scope/pkg@1.2.3',
+    'npm:@scope/pkg@1.2.3-beta.1+build.5',
+    'npm:example-package@^1.2.3',
+    'npm:example-package@1.2 - 2.3',
+    'npm:example-package@>=1.2.3 <2 || >=3.0.0',
+    'npm:example-package@*',
+  ])('accepts npm registry selector %s', (source) => {
+    expect(validatePackageSource(source)).toBe(source)
+  })
+
+  it.each([
+    'npm:pkg@http://',
+    'npm:pkg@HTTP://example.test/pkg.tgz',
+    'npm:pkg@https://example.test/pkg.tgz',
+    'npm:pkg@git://',
+    'npm:pkg@GiT://example.test/owner/repo.git',
+    'npm:pkg@git+http://',
+    'npm:pkg@GIT+HTTP://example.test/owner/repo.git',
+    'npm:pkg@file:../pkg',
+    'npm:pkg@LiNk:../pkg',
+    'npm:pkg@workspace:*',
+    'npm:alias@npm:pkg@^1.0.0',
+  ])('rejects nested non-registry npm target %s', (source) => {
+    expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
+  })
+
+  it('accepts well-formed secure git and HTTPS sources', () => {
     expect(validatePackageSource('git:github.com/owner/repo')).toBe('git:github.com/owner/repo')
     expect(validatePackageSource('git:git@github.com:owner/repo')).toBe('git:git@github.com:owner/repo')
     expect(validatePackageSource('git:ssh://git@github.com/owner/repo.git')).toBe('git:ssh://git@github.com/owner/repo.git')
@@ -68,5 +99,22 @@ describe('validatePackageSource', () => {
     dirs.push(dir)
     expect(validatePackageSource(dir)).toBe(realpathSync(dir))
     expect(() => validatePackageSource(join(dir, 'missing'))).toThrow(/does not exist/)
+  })
+})
+
+describe('PluginService package source validation', () => {
+  it.each(['prime', 'pi', 'omp'] as const)('does not launch the %s executable for a nested npm URL', async (harness) => {
+    const root = mkdtempSync(join(tmpdir(), 'prime-work-package-service-'))
+    dirs.push(root)
+    const agentDir = join(root, 'agent')
+    const executable = join(root, `${harness}.cjs`)
+    const launched = join(root, 'launched')
+    mkdirSync(agentDir)
+    writeFileSync(executable, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(launched)}, '')\n`)
+    chmodSync(executable, 0o755)
+    const service = new PluginService(executable, async (path) => path, { agentDir, harness })
+
+    await expect(service.install('npm:pkg@HtTp://example.test/pkg.tgz')).rejects.toThrow(/Invalid npm package source/)
+    expect(existsSync(launched)).toBe(false)
   })
 })
