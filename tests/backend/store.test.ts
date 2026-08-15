@@ -590,6 +590,66 @@ describe('JsonStateStore', () => {
     expect(events).toEqual(['legacy-rename', 'directory-open', 'directory-sync', 'directory-close'])
   })
 
+  it('keeps the legacy authority when publishing v4 cannot fsync its directory', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    writeFileSync(legacyPath, legacyRaw)
+    const directorySyncError = Object.assign(new Error('injected directory I/O failure'), { code: 'EIO' })
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      open: async (openedPath, flags, mode) => {
+        if (openedPath !== dir || flags !== 'r') return open(openedPath, flags, mode)
+        return {
+          writeFile: async () => { throw new Error('unexpected directory write') },
+          sync: async () => { throw directorySyncError },
+          close: async () => undefined,
+        }
+      },
+    }, legacyPath)
+
+    await expect(store.ready()).rejects.toThrow(/directory could not be synchronized.*I\/O failure/i)
+    await expect(store.update((state) => { state.archivedSessions.push('/must-not-write') })).rejects.toThrow(/directory could not be synchronized/i)
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
+    expect(readdirSync(dir).some((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))).toBe(false)
+  })
+
+  it('restores the legacy filename when its retirement directory fsync fails', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const currentRaw = JSON.stringify({ version: 4, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    writeFileSync(currentPath, currentRaw)
+    writeFileSync(legacyPath, legacyRaw)
+    let syncAttempts = 0
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      open: async (openedPath, flags, mode) => {
+        if (openedPath !== dir || flags !== 'r') return open(openedPath, flags, mode)
+        return {
+          writeFile: async () => { throw new Error('unexpected directory write') },
+          sync: async () => {
+            syncAttempts += 1
+            if (syncAttempts === 1) throw Object.assign(new Error('injected retirement sync failure'), { code: 'EIO' })
+          },
+          close: async () => undefined,
+        }
+      },
+    }, legacyPath)
+
+    await expect(store.ready()).rejects.toThrow(/retirement was not durable.*legacy filename was restored/i)
+    await expect(store.update((state) => { state.archivedSessions.push('/must-not-write') })).rejects.toThrow(/retirement was not durable/i)
+    expect(readFileSync(currentPath, 'utf8')).toBe(currentRaw)
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
+    expect(readdirSync(dir).filter((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))).toEqual([])
+
+    const retried = await openDesktopStateStore(dir)
+    expect(existsSync(legacyPath)).toBe(false)
+    await retried.beginShutdown()
+  })
+
   it('keeps only bounded absolute runtime path overrides without changing the active harness', () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')

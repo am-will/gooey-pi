@@ -470,7 +470,7 @@ export class JsonStateStore {
 
   private scheduleInitialization(persistState: boolean, retireLegacy: boolean, failurePrefix: string): void {
     const initialization = (async () => {
-      if (persistState) await this.persist(this.state)
+      if (persistState) await this.persist(this.state, true)
       if (retireLegacy) await this.retireLegacyState()
     })()
     this.readyPromise = initialization
@@ -485,14 +485,28 @@ export class JsonStateStore {
     const backupPath = `${this.legacyFilePath}.migrated-v4-${Date.now()}-${randomUUID()}`
     try {
       await this.fileSystem.rename(this.legacyFilePath, backupPath)
-      await this.syncParentDirectory(this.legacyFilePath)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw new Error(`Legacy desktop state could not be retired before startup: ${error instanceof Error ? error.message : String(error)}`)
     }
+    try {
+      await this.syncParentDirectory(this.legacyFilePath, true)
+    } catch (error) {
+      let rollbackFailure: unknown
+      try {
+        await this.fileSystem.rename(backupPath, this.legacyFilePath)
+        await this.syncParentDirectory(this.legacyFilePath, true)
+      } catch (failure) {
+        rollbackFailure = failure
+      }
+      const rollback = rollbackFailure
+        ? `; restoring the legacy filename also failed: ${rollbackFailure instanceof Error ? rollbackFailure.message : String(rollbackFailure)}`
+        : '; the legacy filename was restored for a safe retry'
+      throw new Error(`Legacy desktop state retirement was not durable: ${error instanceof Error ? error.message : String(error)}${rollback}`)
+    }
   }
 
-  private async persist(state: DesktopState): Promise<void> {
+  private async persist(state: DesktopState, requireDirectorySync = false): Promise<void> {
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
     try {
       const file = await this.fileSystem.open(temp, 'w', 0o600)
@@ -505,7 +519,7 @@ export class JsonStateStore {
 
       await this.fileSystem.rename(temp, this.filePath)
 
-      await this.syncParentDirectory(this.filePath)
+      await this.syncParentDirectory(this.filePath, requireDirectorySync)
     } finally {
       await this.fileSystem.unlink(temp).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -513,11 +527,18 @@ export class JsonStateStore {
     }
   }
 
-  private async syncParentDirectory(path: string): Promise<void> {
+  private async syncParentDirectory(path: string, required = false): Promise<void> {
     try {
       const directory = await this.fileSystem.open(dirname(path), 'r')
       try { await directory.sync() } finally { await directory.close() }
-    } catch { /* Some filesystems do not allow fsync on a directory. */ }
+    } catch (error) {
+      if (required) {
+        throw new Error(`Desktop state directory could not be synchronized: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      // Ordinary updates retain the pre-v4 best-effort behavior on filesystems
+      // that cannot open or sync directory handles. Authority migration passes
+      // `required` and fails readiness instead of claiming false durability.
+    }
   }
 }
 
