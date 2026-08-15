@@ -287,6 +287,16 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     ].join('\\n') + '\\n')
     send({ type: 'agent_end' })
     send({ type: 'response', id: prompt.id, command: prompt.type, success: true, data: {} })
+    setTimeout(() => {
+      const refreshedAt = new Date().toISOString()
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: 'session_info',
+        id: 'fixture-post-completion-catalog-refresh',
+        parentId: 'fixture-live-final-multi',
+        timestamp: refreshedAt,
+        name: 'Post-completion catalog refresh',
+      }) + '\\n')
+    }, 250)
   } else if (command.id) {
     send({ type: 'response', id: command.id, command: command.type, success: true, data: {} })
   }
@@ -1619,7 +1629,9 @@ test.describe('Prime Work desktop smoke', () => {
     await worked.click()
     await expect(page.locator('.activity-line--question')).toContainText('What should I optimize for?')
 
-    const completedRow = page.locator('.session-row-wrap--complete').first()
+    const completedRow = page.locator('.session-row-wrap').filter({ hasText: 'Post-completion catalog refresh' })
+    await expect(completedRow).toHaveCount(1)
+    await expect(completedRow).toHaveClass(/session-row-wrap--complete/)
     await expect(completedRow).toHaveClass(/is-selected/)
     await expect(completedRow).not.toHaveClass(/has-attention/)
     await expect(page.getByRole('status', { name: 'A session turn ended or needs attention' })).toHaveCount(0)
