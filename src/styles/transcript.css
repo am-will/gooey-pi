@@ -59,9 +59,8 @@
 .work-disclosure.is-running { display: grid; grid-template-columns: 15px minmax(0, 1fr); gap: 8px; margin-top: 0; padding: 0 0 7px; border-top: 0; }
 .work-disclosure__button { width: 100%; min-height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 2px; color: var(--text-tertiary); background: transparent; text-align: left; font-size: 11.5px; font-weight: 520; }
 .work-disclosure__button:hover { color: var(--text); }
-.work-disclosure__rail { position: relative; min-height: 26px; }
-.work-disclosure__rail::before { position: absolute; top: 7px; bottom: 1px; left: 5px; width: 1px; background: color-mix(in srgb, var(--prime) 48%, var(--border)); content: ''; }
-.work-disclosure__rail::after { position: absolute; z-index: 1; top: 4px; left: 0; width: 11px; height: 11px; border: 3px solid var(--canvas); border-radius: 50%; background: var(--prime); box-shadow: 0 0 0 1px color-mix(in srgb, var(--prime) 50%, var(--border)); content: ''; }
+.work-disclosure__rail { position: relative; min-height: 18px; margin: 7px 0 1px 5px; border-left: 1px solid color-mix(in srgb, var(--prime) 48%, var(--border)); }
+.work-disclosure__rail::after { position: absolute; top: -3px; left: -5px; width: 11px; height: 11px; border: 3px solid var(--canvas); border-radius: 50%; background: var(--prime); box-shadow: 0 0 0 1px color-mix(in srgb, var(--prime) 50%, var(--border)); content: ''; }
 .work-disclosure__live { min-width: 0; }
 .work-disclosure__status { min-height: 20px; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--text-tertiary); font-size: 10.5px; font-weight: 560; }
 .work-disclosure__status .thinking-dots { min-width: 29px; }

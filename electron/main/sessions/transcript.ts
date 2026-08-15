@@ -399,12 +399,10 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       continue
     }
     const role = roleOf(message)
+    // Messages start at their own timestamp; the enclosing entry is persisted at completion.
     const entryTimestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
-    const rawTimestamp = typeof message.timestamp === 'string' || typeof message.timestamp === 'number' ? message.timestamp
-      : entryTimestamp
+    const rawTimestamp = typeof message.timestamp === 'string' || typeof message.timestamp === 'number' ? message.timestamp : entryTimestamp
     const timestamp = typeof rawTimestamp === 'string' ? boundedString(rawTimestamp, 128) : rawTimestamp
-    // The message timestamp marks assistant start; the enclosing entry
-    // timestamp marks persistence/completion.
     const completedAt = entryTimestamp ?? timestamp
     const parts = partsFromMessage(message)
     if (role === 'tool' && activeAssistant) {

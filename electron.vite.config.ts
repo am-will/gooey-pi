@@ -5,7 +5,9 @@ import { resolve } from 'node:path'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    build: { lib: { entry: 'electron/main/index.ts' } },
+    // Compact production syntax while retaining names and line-oriented output for diagnostics.
+    esbuild: { minifyIdentifiers: false, minifySyntax: true, minifyWhitespace: false },
+    build: { lib: { entry: 'electron/main/index.ts' }, minify: 'esbuild' },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
