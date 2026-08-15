@@ -1586,6 +1586,13 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(dialog).toContainText('Question 2 of 2')
 
     await dialog.getByRole('option', { name: 'Safety' }).click()
+    await expect(dialog).toContainText('Submit answers')
+    const submitStep = dialog.locator('.extension-questionnaire__progress button').last()
+    await expect(submitStep).toHaveAttribute('aria-current', 'step')
+    await expect(submitStep).toBeFocused()
+    await page.keyboard.press('Control+ArrowLeft')
+    await expect(dialog).toContainText('Question 2 of 2')
+    await expect(dialog.getByRole('option', { name: 'Safety' })).toHaveAttribute('aria-selected', 'true')
     await page.keyboard.press('Control+ArrowLeft')
     await expect(dialog).toContainText('Question 1 of 2')
     await expect(dialog.getByRole('textbox', { name: 'Additional context' })).toHaveValue('For the pilot')

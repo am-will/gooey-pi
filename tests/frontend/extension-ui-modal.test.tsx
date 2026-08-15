@@ -53,6 +53,11 @@ function pressKey(target: HTMLElement, init: KeyboardEventInit): KeyboardEvent {
   return event
 }
 
+async function clickButton(button: HTMLButtonElement): Promise<void> {
+  button.focus()
+  await act(async () => { button.click() })
+}
+
 describe('extension questionnaire keyboard handling', () => {
   it('leaves Tab to the focus trap instead of hijacking it for question navigation', async () => {
     await act(async () => { root.render(<ExtensionUiModal request={request} onRespond={vi.fn()} />) })
@@ -75,6 +80,26 @@ describe('extension questionnaire keyboard handling', () => {
     expect(currentQuestionTitle()).toBe('Pick a language')
     pressKey(questionnaireElement(), { key: 'PageUp' })
     expect(currentQuestionTitle()).toBe('Pick a framework')
+  })
+
+  it('keeps navigation focused after the final option auto-advances to the submit summary', async () => {
+    await act(async () => { root.render(<ExtensionUiModal request={request} onRespond={vi.fn()} />) })
+    await clickButton(questionnaireElement().querySelector<HTMLButtonElement>('.extension-question__options button')!)
+    expect(currentQuestionTitle()).toBe('Pick a language')
+
+    await clickButton(questionnaireElement().querySelector<HTMLButtonElement>('.extension-question__options button')!)
+    expect(currentQuestionTitle()).toBe('')
+    const summaryProgress = questionnaireElement().querySelector<HTMLButtonElement>('.extension-questionnaire__progress button:last-child')!
+    expect(document.activeElement).toBe(summaryProgress)
+    expect(summaryProgress.getAttribute('aria-current')).toBe('step')
+
+    pressKey(document.activeElement as HTMLElement, { key: 'ArrowLeft', ctrlKey: true })
+    expect(currentQuestionTitle()).toBe('Pick a language')
+
+    await clickButton(summaryProgress)
+    expect(currentQuestionTitle()).toBe('')
+    pressKey(document.activeElement as HTMLElement, { key: 'PageUp' })
+    expect(currentQuestionTitle()).toBe('Pick a language')
   })
 
   it('keeps caret movement in the context field when pressing bare arrow keys', async () => {

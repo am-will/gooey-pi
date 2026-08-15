@@ -79,6 +79,7 @@ export function ExtensionUiModal({ request, onRespond, platform = 'darwin' }: Ex
     const container = questionnaireRef.current
     if (!container || container.contains(document.activeElement)) return
     const focusTarget = container.querySelector<HTMLElement>('.extension-question__options button')
+      ?? container.querySelector<HTMLElement>('.extension-questionnaire__progress button.is-active')
     focusTarget?.focus()
   }, [request.id, request.method === 'questionnaire' ? request.complete : false, questionIndex])
 
@@ -219,11 +220,11 @@ export function ExtensionUiModal({ request, onRespond, platform = 'darwin' }: Ex
               ) : null}
               <div className="extension-questionnaire__progress" aria-label="Question progress">
                 {request.questions.map((question, index) => (
-                  <button type="button" key={question.id} className={questionIndex === index ? 'is-active' : ''} onClick={() => navigateQuestion(index)}>
+                  <button type="button" key={question.id} aria-current={questionIndex === index ? 'step' : undefined} className={questionIndex === index ? 'is-active' : ''} onClick={() => navigateQuestion(index)}>
                     {answeredByQuestion[question.id] ? '✓' : '○'} {index + 1}
                   </button>
                 ))}
-                <button type="button" className={questionIndex === request.questions.length ? 'is-active' : ''} onClick={() => navigateQuestion(request.questions.length)}>✓ Submit</button>
+                <button type="button" aria-current={questionIndex === request.questions.length ? 'step' : undefined} className={questionIndex === request.questions.length ? 'is-active' : ''} onClick={() => navigateQuestion(request.questions.length)}>✓ Submit</button>
               </div>
               {activeQuestion ? (
                 <div className="extension-questionnaire__question">
