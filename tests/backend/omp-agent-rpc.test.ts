@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentRpcManager, OMP_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import type { ProviderCatalog } from '../../electron/main/agent-rpc'
 import type { PrimeModelDescriptor } from '../../src/types/api'
@@ -153,6 +153,22 @@ describe('OMP RPC adapter argv', () => {
 })
 
 describe('OMP RPC handshake', () => {
+  it('releases the exact runtime environment after OMP termination', async () => {
+    const fake = fakeOmpAgent()
+    const manager = ompManager(fake.executable)
+    const environment = { GOOEYPI_COLLABORATION_TOKEN: 'omp-runtime-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    expect(ended).not.toHaveBeenCalled()
+    await manager.stop(runtime.runtimeId)
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended.mock.calls[0][0]).toBe(environment)
+    expect(ended.mock.calls[0][1]).toMatchObject({ runtimeId: runtime.runtimeId, harness: 'omp' })
+  })
+
   it('negotiates protocol v2 before get_state and reads OMP-shaped state', async () => {
     const fake = fakeOmpAgent()
     const manager = ompManager(fake.executable, { providers: ompCatalog })

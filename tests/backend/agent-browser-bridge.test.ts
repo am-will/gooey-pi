@@ -52,6 +52,17 @@ async function fixture(scope: { cwd: string; sessionPath?: string } = { cwd: '/p
 }
 
 describe('AgentBrowserBridge', () => {
+  it('rejects a revoked runtime token immediately without affecting active runtimes', async () => {
+    const { bridge, call, environment } = await fixture()
+    const active = bridge.environmentFor({ cwd: '/project', sessionPath: '/sessions/active.jsonl' })
+
+    expect(bridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)).toBe(true)
+    expect(bridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)).toBe(false)
+
+    expect(await call('tabs.list')).toMatchObject({ status: 401 })
+    expect(await call('tabs.list', {}, active.PRIME_WORK_BROWSER_TOKEN)).toMatchObject({ status: 200 })
+  })
+
   it('exposes the extension and skill paths and dispatches scoped methods', async () => {
     const { calls, environment, call } = await fixture()
     expect(environment.PRIME_WORK_BROWSER_EXTENSION_PATH).toBe('/app/extensions/prime-work-browser.ts')

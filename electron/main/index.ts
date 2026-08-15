@@ -873,6 +873,11 @@ async function bootstrap(): Promise<void> {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
     collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
   })
+  agents.setRuntimeEndListener((environment) => {
+    scheduleBridge.revoke(environment.PRIME_WORK_SCHEDULE_TOKEN)
+    browserBridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)
+    collaborationBridge.revoke(environment.GOOEYPI_COLLABORATION_TOKEN)
+  })
   // OMP runtimes get the same capability-scoped brokers through OMP-flavored
   // extensions. OMP has no --skill flag, so their tool descriptions carry the
   // app-specific usage guidance while OMP's own skills stay discovery-based.
@@ -891,6 +896,11 @@ async function bootstrap(): Promise<void> {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
     collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
   })
+  ompManager.setRuntimeEndListener((environment) => {
+    ompScheduleBridge.revoke(environment.PRIME_WORK_SCHEDULE_TOKEN)
+    browserBridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)
+    collaborationBridge.revoke(environment.GOOEYPI_COLLABORATION_TOKEN)
+  })
   // Pi runtimes receive the identical capability surface: pi's extension API
   // is the ancestor of OMP's, so the omp-work-* files are shared by design.
   piManager.setRuntimeEnvironmentProvider((scope) => ({
@@ -903,6 +913,11 @@ async function bootstrap(): Promise<void> {
   piManager.setRuntimeStartListener((environment, info) => {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
     collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
+  })
+  piManager.setRuntimeEndListener((environment) => {
+    piScheduleBridge.revoke(environment.PRIME_WORK_SCHEDULE_TOKEN)
+    browserBridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)
+    collaborationBridge.revoke(environment.GOOEYPI_COLLABORATION_TOKEN)
   })
   if (shutdownStarted) return
   const meta: AppMeta = {
