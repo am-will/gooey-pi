@@ -27,7 +27,11 @@ export class AgentBrowserBridge extends CapabilityBridge {
     }
   }
 
-  /** Adds handshake-discovered session scope once. */
+  /**
+   * Runtimes started without --resume only learn their session file at
+   * handshake; the manager reports it here so the claim gains its session
+   * scope. An existing scope is never overwritten.
+   */
   bindSession(token: string | undefined, sessionFile: string | undefined): void {
     if (!token || !sessionFile) return
     const claim = this.claimForToken(token)

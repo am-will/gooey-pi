@@ -61,6 +61,7 @@ export class OmpModelCatalogService extends CliModelCatalogService {
     return this.requireModelEntries(parsed)
   }
 
+  /** Validates one untrusted CLI model entry; returns null when any field is hostile or malformed. */
   protected toModelDescriptor(value: unknown): PrimeModelDescriptor | null {
     const entry = validateModelEntry(value)
     if (!entry) return null

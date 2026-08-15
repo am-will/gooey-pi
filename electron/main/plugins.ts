@@ -388,7 +388,7 @@ export class PluginService {
     return await operation
   }
 
-  /** Requires the Pi MCP adapter before writing its configuration. */
+  /** Pi core has no MCP. Do not write adapter configuration until its package is actually installed. */
   private async piMcpAdapterState(): Promise<PiMcpAdapterState | undefined> {
     try {
       const { content, truncated } = await readAtMost(join(this.agentDir, 'settings.json'), MAX_ADAPTER_SETTINGS_BYTES)

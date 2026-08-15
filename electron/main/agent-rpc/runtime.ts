@@ -154,7 +154,7 @@ export class RpcRuntime {
     this.scheduleCompactionPoll()
   }
 
-  /** Frozen shallow snapshot; IPC clones it for the renderer. */
+  /** Frozen shallow copy: nested state is replaced wholesale on update, and the IPC boundary clones for the renderer. */
   snapshot(): RuntimeInfo {
     return Object.freeze(this.continuationPending || this.retryPending ? { ...this.info, isStreaming: true } : { ...this.info })
   }
@@ -582,7 +582,7 @@ export class RpcRuntime {
     this.handleFrame(value)
   }
 
-  /** Drops broken chunks without killing the recoverable runtime. */
+  /** A broken reassembly is dropped without killing the runtime: the agent is still running, so the renderer reconciles from disk. */
   private failChunkReassembly(chunkId: string | undefined, error: string): void {
     if (chunkId !== undefined) {
       this.chunkAssemblies.delete(chunkId)
@@ -591,7 +591,7 @@ export class RpcRuntime {
     this.emit({ type: 'transport_limit', kind: 'chunk', error })
   }
 
-  /** Aims one unref'd timer at the earliest chunk deadline. */
+  /** Keeps one unref'd timer aimed at the earliest inactivity deadline across the bounded assembly map. */
   private rescheduleChunkAssemblySweep(): void {
     if (this.chunkAssemblySweepTimer) this.chunkAssemblyTiming.cancel(this.chunkAssemblySweepTimer)
     this.chunkAssemblySweepTimer = null

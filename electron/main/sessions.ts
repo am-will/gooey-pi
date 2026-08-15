@@ -315,7 +315,13 @@ export class SessionService {
     this.bucketWatcherRefreshPending = false
   }
 
-  /** Watches bounded Pi/OMP bucket directories. */
+  /**
+   * Pi and OMP keep JSONL files exactly one bucket below the session root, so
+   * watch a bounded set of real child directories and feed their root-relative
+   * names through the same containment checks as root events. Using this on
+   * every platform keeps behavior identical where recursive `fs.watch` is not
+   * implemented (notably Linux).
+   */
   private refreshBucketWatchers(rootWatcher: SessionWatcher): void {
     if (this.bucketWatcherRefresh) {
       this.bucketWatcherRefreshPending = true
@@ -382,7 +388,11 @@ export class SessionService {
     this.bucketWatchers.clear()
   }
 
-  /** Accepts a root file or exactly one bucket level. */
+  /**
+   * Root-relative watch names this watcher can resolve to one session file:
+   * a bare file name, plus exactly one bucket-directory level when watching
+   * recursively. Everything else coalesces into a catalog-wide refresh.
+   */
   private isWatchedSessionName(name: string): boolean {
     if (!name.endsWith('.jsonl')) return false
     const segments = name.split(sep)
