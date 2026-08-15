@@ -310,8 +310,15 @@ export const Composer = memo(function Composer({
     } catch {
       if (mountedRef.current) {
         setValue((current) => current || submittedValue)
-        imageAttachments.restoreIfEmpty(submittedComposerImages)
-        setAttachmentError('Message was not sent. Your draft and images were restored.')
+        const restoration = imageAttachments.restoreWithinLimits(submittedComposerImages)
+        if (restoration.omitted > 0) {
+          const restoredImages = restoration.restored > 0 ? ` along with ${restoration.restored} submitted image${restoration.restored === 1 ? '' : 's'}` : ''
+          setAttachmentError(`Message was not sent. Your draft was restored${restoredImages}, but ${restoration.omitted} submitted image${restoration.omitted === 1 ? '' : 's'} could not be restored because the attachment limits are full.`)
+        } else if (submittedComposerImages.length > 0) {
+          setAttachmentError('Message was not sent. Your draft and images were restored.')
+        } else {
+          setAttachmentError('Message was not sent. Your draft was restored.')
+        }
       }
     } finally {
       submittingRef.current = false

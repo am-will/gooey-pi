@@ -36,7 +36,7 @@ export function useComposerImages({ imageInputSupported, shortName }: UseCompose
   const [dragging, setDragging] = useState(false)
   const imagesRef = useRef<ComposerImage[]>([])
   const pendingBatchesRef = useRef(0)
-  const ingestAttemptRef = useRef(0)
+  const errorRevisionRef = useRef(0)
   const reservedCountRef = useRef(0)
   const reservedBytesRef = useRef(0)
   const dragDepthRef = useRef(0)
@@ -49,26 +49,31 @@ export function useComposerImages({ imageInputSupported, shortName }: UseCompose
     }
   }, [])
 
+  const updateError = useCallback((message: string) => {
+    errorRevisionRef.current += 1
+    setError(message)
+  }, [])
+
   const ingest = useCallback(async (files: readonly File[]) => {
     if (files.length === 0) return
-    const attempt = ++ingestAttemptRef.current
+    const startingErrorRevision = errorRevisionRef.current
     if (!imageInputSupported) {
-      setError('This model does not accept images. Choose a vision model before attaching an image.')
+      updateError('This model does not accept images. Choose a vision model before attaching an image.')
       return
     }
     if (files.some((file) => !supportedImageTypes.has(file.type.toLowerCase()))) {
-      setError(`${shortName} supports PNG, JPEG, GIF, and WebP images.`)
+      updateError(`${shortName} supports PNG, JPEG, GIF, and WebP images.`)
       return
     }
 
     const sourceBytes = files.reduce((sum, file) => sum + file.size, 0)
     if (imagesRef.current.length + reservedCountRef.current + files.length > MAX_COMPOSER_IMAGE_COUNT) {
-      setError(`You can attach up to ${MAX_COMPOSER_IMAGE_COUNT} images.`)
+      updateError(`You can attach up to ${MAX_COMPOSER_IMAGE_COUNT} images.`)
       return
     }
     const currentBytes = imagesRef.current.reduce((sum, image) => sum + image.size, 0)
     if (currentBytes + reservedBytesRef.current + sourceBytes > MAX_COMPOSER_IMAGE_SOURCE_BYTES) {
-      setError('These images are too large to send. Attach smaller images (about 1.3 MB total).')
+      updateError('These images are too large to send. Attach smaller images (about 1.3 MB total).')
       return
     }
 
@@ -89,16 +94,16 @@ export function useComposerImages({ imageInputSupported, shortName }: UseCompose
       const next = [...imagesRef.current, ...added]
       imagesRef.current = next
       setImages(next)
-      if (ingestAttemptRef.current === attempt) setError('')
+      if (errorRevisionRef.current === startingErrorRevision) setError('')
     } catch {
-      if (mountedRef.current && ingestAttemptRef.current === attempt) setError(`${shortName} could not read the image.`)
+      if (mountedRef.current) updateError(`${shortName} could not read the image.`)
     } finally {
       reservedCountRef.current -= files.length
       reservedBytesRef.current -= sourceBytes
       pendingBatchesRef.current -= 1
       if (mountedRef.current && pendingBatchesRef.current === 0) setProcessing(false)
     }
-  }, [imageInputSupported, shortName])
+  }, [imageInputSupported, shortName, updateError])
 
   const clear = useCallback(() => {
     imagesRef.current = []
@@ -109,13 +114,33 @@ export function useComposerImages({ imageInputSupported, shortName }: UseCompose
     const next = imagesRef.current.filter((image) => image.id !== id)
     imagesRef.current = next
     setImages(next)
-    setError('')
-  }, [])
+    updateError('')
+  }, [updateError])
 
-  const restoreIfEmpty = useCallback((restored: ComposerImage[]) => {
-    if (imagesRef.current.length !== 0) return
-    imagesRef.current = restored
-    setImages(restored)
+  const restoreWithinLimits = useCallback((restored: ComposerImage[]) => {
+    const current = imagesRef.current
+    const currentIds = new Set(current.map((image) => image.id))
+    let count = current.length + reservedCountRef.current
+    let bytes = current.reduce((sum, image) => sum + image.size, 0) + reservedBytesRef.current
+    const accepted: ComposerImage[] = []
+    let omitted = 0
+    for (const image of restored) {
+      if (currentIds.has(image.id)) continue
+      if (count >= MAX_COMPOSER_IMAGE_COUNT || bytes + image.size > MAX_COMPOSER_IMAGE_SOURCE_BYTES) {
+        omitted += 1
+        continue
+      }
+      accepted.push(image)
+      currentIds.add(image.id)
+      count += 1
+      bytes += image.size
+    }
+    if (accepted.length > 0) {
+      const next = [...accepted, ...current]
+      imagesRef.current = next
+      setImages(next)
+    }
+    return { restored: accepted.length, omitted }
   }, [])
 
   const onDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
@@ -150,14 +175,14 @@ export function useComposerImages({ imageInputSupported, shortName }: UseCompose
     images,
     imagesRef,
     error,
-    setError,
+    setError: updateError,
     processing,
     hasPending: () => pendingBatchesRef.current > 0,
     dragging,
     ingest,
     clear,
     remove,
-    restoreIfEmpty,
+    restoreWithinLimits,
     dragHandlers: { onDragEnter, onDragOver, onDragLeave, onDrop },
   }
 }
