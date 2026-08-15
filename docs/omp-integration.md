@@ -83,7 +83,7 @@ HarnessDescriptor {
 - `SessionService`: second instance with `sessionRoot` parameterized and OMP-specific `catalogIo`/metadata/transcript readers (v3 JSONL: 256-byte `title` slot line, `session` header v3, entries with `id`/`parentId` forming a tree, `model_change.model` as a single `provider/id` string, entry types `message | model_change | thinking_level_change | compaction | branch_summary | custom_message | label | title_change | session_init | mode_change | ...`). Catalog scans one bucket level deep; ordering comes from the filename ISO-timestamp prefix instead of UUIDv7. No live-CLI overlay (OMP has no `list --json`); rename is done via RPC `set_session_name` when a runtime is live, else by rewriting nothing (session files stay read-only; sidebar rename is disabled for offline OMP sessions in v1).
 - Providers: `OmpModelCatalogService` shells out to `omp models --json` (single-flight, 30 s TTL, byte-bounded) and adapts to the existing `PrimeModelCatalog` types. `AgentRpcManager.providers` already accepts an interface-shaped optional dependency; that interface is formalized so both services satisfy it.
 - Projects: `ProjectRecord` gains `harness: HarnessId` (state migration defaults existing records to `'prime'`). Two `ProjectService` views scoped by harness; inferred projects come from each harness's own session catalog.
-- Plugins: two `PluginService` instances preserve one renderer surface while routing discovery, installation, MCP paths, and reveal authorization through the active harness. OMP package installs go through `omp plugin`; catalog discovery includes OMP-native skill/extension roots and enabled package trees. MCP writes use OMP's upstream schema and the same pinned-directory, lock, conflict-retry, atomic replacement, and rollback safeguards as Prime.
+- Plugins: two `PluginService` instances preserve one renderer surface while routing discovery, installation, MCP paths, and reveal authorization through the active harness. OMP package installs go through `omp plugin`; catalog discovery includes OMP-native skill/extension roots and enabled package trees. GooeyPi writes only local stdio definitions using OMP's upstream schema and the same pinned-directory, lock, conflict-retry, atomic replacement, and rollback safeguards. Network definitions remain visible but externally managed and read-only.
 - Capability bridges: the browser `CapabilityBridge` is reused; `assets/extensions/omp-work-browser.ts` speaks OMP's extension API (default export `(pi) => void`, `pi.registerTool`) against the same loopback broker env contract. `assets/extensions/omp-work-schedules.ts` exposes list/create/update/manage tools through a separate scoped broker. `assets/extensions/omp-work-collaboration.ts` provides app-owned bounded list/models/create/read/send/wait tools for same-harness, same-working-directory top-level sessions; model-selectable creation and optional fast-mode negotiation use OMP's normal catalog and RPC manager rather than its parent-run task subagents or `/collab` relay rooms. When the universal capability is enabled, `assets/extensions/omp-work-ask-user.ts` registers a self-contained `ask_user` tool whose grouped select requests use the renderer's existing extension-UI questionnaire modal. Fresh installs leave this UI-blocking tool disabled. Schedule records carry their owning harness, the renderer lists only the active harness, and due runs route to the matching RPC manager and model catalog.
 
 ### Renderer
@@ -112,9 +112,10 @@ Same rules as `docs/security.md`, applied to the second harness: argv arrays onl
 
 ## Non-goals (v1)
 
-- A GooeyPi-owned OMP credential store. MCP OAuth is launched through OMP's
-  native `/mcp reauth` command in the active RPC session; OMP keeps ownership
-  of profile-scoped credentials.
+- A GooeyPi-owned OMP credential store or app-driven MCP OAuth. HTTP/SSE
+  definitions remain direct OMP operations outside GooeyPi; GooeyPi intercepts
+  rather than forwards `/mcp reauth`, so authentication must be run in OMP itself;
+  OMP keeps ownership of profile-scoped credentials.
 - Prime heartbeat RPC tools on OMP; OMP schedules use the local extension bridge instead.
 - Host tools / host URI schemes, subagent transcript streaming, native OMP relay-room UI, and handoff. GooeyPi-owned top-level session collaboration is documented separately in `docs/session-collaboration.md`.
 - Importing sessions across harnesses (`--from-claude`/`--from-codex` style).

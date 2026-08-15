@@ -3,6 +3,7 @@ import { readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import type { HarnessId, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
+import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { queueDaemonFollowUp } from './agent-daemon'
 import { comparePaths, createAdmissionQueue, createSingleFlight, type AdmissionQueue } from './lib/async'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
@@ -207,9 +208,11 @@ export class SessionService {
 
   async followUp(filePath: unknown, message: unknown, intent: unknown = 'queue'): Promise<boolean> {
     if (intent !== 'queue' && intent !== 'steer') throw new TypeError('Invalid active-session message intent')
+    const safeMessage = requireString(message, 'message', { min: 1, max: 64 * 1024 })
+    assertNoMcpAuthenticationCommand(safeMessage, this.harness)
     if (this.followUpsInFlight >= 4) throw new Error('Too many active-session replies are in flight')
     this.followUpsInFlight += 1
-    try { return await this.queueActiveFollowUp(filePath, message, intent) }
+    try { return await this.queueActiveFollowUp(filePath, safeMessage, intent) }
     finally { this.followUpsInFlight -= 1 }
   }
 

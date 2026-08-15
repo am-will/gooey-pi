@@ -110,7 +110,7 @@ function buildServices() {
     terminals: { ...serviceStub(), killForSession: vi.fn(async () => undefined) },
     git: serviceStub(),
     plugins: { ...serviceStub(), list: vi.fn(async () => 'prime-plugins'), install: vi.fn(async () => undefined), installExtension: vi.fn(async () => undefined), setMcpSupport: vi.fn(async () => undefined), connectMcp: vi.fn(async () => undefined), setMcpEnabled: vi.fn(async () => undefined), refresh: vi.fn(async () => 'prime-plugins') },
-    providers: { ...serviceStub(), catalog: vi.fn(async (_force, disabled, disabledModels) => catalog('prime', disabled, disabledModels)), saveApiKey: vi.fn(async () => undefined), startMcpOAuth: vi.fn(async () => ({ flowId: 'mcp-flow' })), logoutMcp: vi.fn(async () => undefined) },
+    providers: { ...serviceStub(), catalog: vi.fn(async (_force, disabled, disabledModels) => catalog('prime', disabled, disabledModels)), saveApiKey: vi.fn(async () => undefined) },
     settings: {
       ...serviceStub(),
       get: vi.fn(() => settingsState),
@@ -330,11 +330,9 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
   })
 
-  it('routes Prime MCP OAuth through the desktop auth service', async () => {
-    await expect(harness.invoke('providers:start-mcp-oauth', 'notion', 'prime')).resolves.toEqual({ flowId: 'mcp-flow' })
-    expect(harness.services.providers.startMcpOAuth).toHaveBeenCalledWith('notion')
-    await expect(harness.invoke('providers:logout-mcp', 'notion', 'prime')).resolves.toBeUndefined()
-    expect(harness.services.providers.logoutMcp).toHaveBeenCalledWith('notion')
+  it('does not register MCP-specific authentication or credential cleanup channels', () => {
+    expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:start-mcp-oauth', expect.any(Function))
+    expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:logout-mcp', expect.any(Function))
   })
 
   it('stores OMP provider visibility in desktop settings without mutating OMP', async () => {
@@ -418,8 +416,6 @@ describe('harness-aware IPC routing', () => {
       ['providers:save-api-key', ['openai', 'key']],
       ['providers:logout', ['openai']],
       ['providers:start-oauth', ['openai']],
-      ['providers:start-mcp-oauth', ['notion']],
-      ['providers:logout-mcp', ['notion']],
     ] as const) {
       await expect(async () => harness.invoke(channel, ...args, 'omp'), channel).rejects.toThrow('managed by the omp CLI')
     }

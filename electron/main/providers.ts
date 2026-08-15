@@ -1,90 +1,19 @@
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
-import { AuthStorage, ModelRegistry, SettingsManager, VERSION } from 'prime-agent'
+import { AuthStorage, ModelRegistry, VERSION } from 'prime-agent'
 import { getSupportedThinkingLevels, supportsFastMode } from 'prime-agent-ai'
-import { BUILTIN_MCP_CATALOG, createMcpOAuthProvider, getCatalogEntry, registerBuiltinMcpOAuthProviders } from 'prime-agent-ai/mcp'
-import { registerOAuthProvider } from 'prime-agent-ai/oauth'
+import { BUILTIN_MCP_CATALOG } from 'prime-agent-ai/mcp'
 import type { Api, Model } from 'prime-agent-ai'
 import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor, ProviderAuthEvent, ProviderAuthMethod, ProviderAuthSource, SkillRecord } from '../../src/types/api'
-import { errorCode, readAtMost } from './plugins/file-io'
+import { NETWORK_MCP_AUTH_UNAVAILABLE, NETWORK_MCP_UNAVAILABLE_DETAIL } from '../../src/lib/mcp-policy'
 import { catalogLimitWarnings, limitCatalogRelations } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
-import { isRecord, requireString, requireWebUrl } from './validation'
+import { requireString, requireWebUrl } from './validation'
 
 const CATALOG_TTL_MS = 30_000
 export { MAX_CATALOG_PROVIDERS } from './model-catalog'
 const EXTERNAL_AUTH_PROVIDERS = new Set(['amazon-bedrock', 'google-vertex'])
 const OAUTH_TIMEOUT_MS = 10 * 60_000
-const MAX_MCP_SETTINGS_BYTES = 4 * 1024 * 1024
-const MAX_OAUTH_METADATA_BYTES = 64 * 1024
-const OAUTH_DISCOVERY_TIMEOUT_MS = 10_000
-
-async function responseTextAtMost(response: Response, maxBytes: number): Promise<string> {
-  const declared = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > maxBytes) throw new TypeError('OAuth metadata response is too large')
-  if (!response.body) return ''
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    total += value.byteLength
-    if (total > maxBytes) {
-      await reader.cancel()
-      throw new TypeError('OAuth metadata response is too large')
-    }
-    chunks.push(value)
-  }
-  const bytes = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
-  return new TextDecoder().decode(bytes)
-}
-
-export async function resolveMcpOAuthDiscovery(serverUrl: string): Promise<{ url: string; scopes?: string }> {
-  let challenge: Response
-  try {
-    challenge = await fetch(serverUrl, {
-      method: 'GET',
-      redirect: 'error',
-      signal: AbortSignal.timeout(OAUTH_DISCOVERY_TIMEOUT_MS),
-    })
-  } catch {
-    return { url: serverUrl }
-  }
-  const authenticate = challenge.headers.get('www-authenticate') ?? ''
-  await challenge.body?.cancel()
-  const metadataMatch = /(?:^|,\s*)resource_metadata="([^"]+)"/i.exec(authenticate)
-  if (!metadataMatch) return { url: serverUrl }
-
-  const metadataUrl = requireWebUrl(metadataMatch[1])
-  // RFC 9728 places protected-resource metadata on the resource server's own origin; refusing
-  // anything else keeps a hostile challenge from pointing discovery at an unrelated host.
-  if (new URL(metadataUrl).origin !== new URL(serverUrl).origin) {
-    console.warn(`Ignoring cross-origin OAuth protected-resource metadata advertised by ${new URL(serverUrl).origin}`)
-    return { url: serverUrl }
-  }
-  const response = await fetch(metadataUrl, {
-    method: 'GET',
-    redirect: 'error',
-    signal: AbortSignal.timeout(OAUTH_DISCOVERY_TIMEOUT_MS),
-  })
-  const body = await responseTextAtMost(response, MAX_OAUTH_METADATA_BYTES)
-  if (!response.ok) throw new Error(`OAuth protected-resource metadata request failed: ${response.status}`)
-  let metadata: unknown
-  try { metadata = JSON.parse(body) as unknown } catch { throw new TypeError('OAuth protected-resource metadata is not valid JSON') }
-  if (!isRecord(metadata) || !Array.isArray(metadata.authorization_servers) || typeof metadata.authorization_servers[0] !== 'string') {
-    throw new TypeError('OAuth protected-resource metadata has no authorization server')
-  }
-  const authorizationServer = requireWebUrl(metadata.authorization_servers[0])
-  const scopes = Array.isArray(metadata.scopes_supported)
-    ? metadata.scopes_supported.filter((scope): scope is string => typeof scope === 'string' && scope.length > 0 && scope.length <= 256).slice(0, 100).join(' ')
-    : ''
-  return { url: authorizationServer, scopes: scopes || undefined }
-}
-
 interface PendingOAuthPrompt {
   id: string
   options?: Set<string>
@@ -112,6 +41,31 @@ function safeModelId(value: string): boolean {
 
 function safeProviderId(value: string): boolean {
   return value.length > 0 && value.length <= 128 && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(value)
+}
+
+function isMcpAuthProvider(providerId: string): boolean {
+  return providerId.toLowerCase().startsWith('mcp:')
+}
+
+/**
+ * ModelRegistry also registers MCP OAuth providers in its process-global
+ * registry. Give it a deliberately incomplete credential view so model
+ * discovery cannot inspect or mutate a shared `mcp:*` credential.
+ */
+function modelRegistryAuthStorage(authStorage: AuthStorage): AuthStorage {
+  return {
+    reload: () => authStorage.reload(),
+    getOAuthProviders: () => authStorage.getOAuthProviders().filter((provider) => !isMcpAuthProvider(provider.id)),
+    get: (provider: string) => isMcpAuthProvider(provider) ? undefined : authStorage.get(provider),
+    hasAuth: (provider: string) => !isMcpAuthProvider(provider) && authStorage.hasAuth(provider),
+    getAuthStatus: (provider: string) => isMcpAuthProvider(provider) ? { configured: false } : authStorage.getAuthStatus(provider),
+    getApiKey: async (provider: string, options?: Parameters<AuthStorage['getApiKey']>[1]) => isMcpAuthProvider(provider) ? undefined : authStorage.getApiKey(provider, options),
+    getApiKeyWithSourceToken: async (provider: string, options?: Parameters<AuthStorage['getApiKeyWithSourceToken']>[1]) => isMcpAuthProvider(provider) ? {} : authStorage.getApiKeyWithSourceToken(provider, options),
+    getProviderHeaders: (provider: string) => isMcpAuthProvider(provider) ? undefined : authStorage.getProviderHeaders(provider),
+    markAuthStale: (provider: string) => !isMcpAuthProvider(provider) && authStorage.markAuthStale(provider),
+    getCurrentAuthSourceToken: (provider: string) => isMcpAuthProvider(provider) ? undefined : authStorage.getCurrentAuthSourceToken(provider),
+    markAuthSourceStale: (token: Parameters<AuthStorage['markAuthSourceStale']>[0]) => !isMcpAuthProvider(token.provider) && authStorage.markAuthSourceStale(token),
+  } as unknown as AuthStorage
 }
 
 function boundedInteger(value: number): number {
@@ -159,39 +113,28 @@ export class PrimeProviderService {
   private cachedAt = 0
   private catalogRefresh: Promise<PrimeModelCatalog> | null = null
   private readonly flows = new Map<string, OAuthFlow>()
-  private readonly mcpOAuthProviders = new Map<string, ReturnType<typeof createMcpOAuthProvider>>()
   private eventSink: (event: ProviderAuthEvent) => void = () => undefined
   private readonly openExternal: (url: string) => Promise<void>
-  private readonly agentDir: string | undefined
 
-  constructor(options: { agentDir?: string; authPath?: string; modelsPath?: string; openExternal?: (url: string) => Promise<void> } = {}) {
+  constructor(options: { authPath?: string; modelsPath?: string; openExternal?: (url: string) => Promise<void> } = {}) {
     this.authStorage = AuthStorage.create(options.authPath, options.authPath ? { usePrimeCliConfig: false } : undefined)
-    this.registry = ModelRegistry.create(this.authStorage, options.modelsPath)
+    this.registry = ModelRegistry.create(modelRegistryAuthStorage(this.authStorage), options.modelsPath)
     this.openExternal = options.openExternal ?? (async () => undefined)
-    this.agentDir = options.agentDir ?? (options.authPath ? dirname(options.authPath) : undefined)
   }
 
   setEventSink(sink: (event: ProviderAuthEvent) => void): void { this.eventSink = sink }
 
   mcpCapabilities(): SkillRecord[] {
-    return BUILTIN_MCP_CATALOG.map((integration) => {
-      const enabled = this.authStorage.get(`mcp:${integration.server}`) !== undefined
-      return {
-        id: `prime-mcp-${integration.server}`,
-        name: integration.label,
-        description: enabled
-          ? `Authenticated official MCP integration at ${new URL(integration.url).origin}`
-          : `Official MCP integration at ${new URL(integration.url).origin}. Sign in with /mcp login ${integration.server}.`,
-        kind: 'mcp',
-        location: 'bundled',
-        enabled,
-        source: new URL(integration.url).origin,
-      }
-    })
-  }
-
-  protectedMcpServers(): Readonly<Record<string, string>> {
-    return Object.fromEntries(BUILTIN_MCP_CATALOG.map((integration) => [integration.server, integration.url]))
+    return BUILTIN_MCP_CATALOG.map((integration) => ({
+      id: `prime-mcp-${integration.server}`,
+      name: integration.label,
+      description: `Network MCP integration at ${new URL(integration.url).origin}. Configuration and authorization are managed directly in Prime Agent.`,
+      kind: 'mcp',
+      location: 'bundled',
+      enabled: false,
+      source: new URL(integration.url).origin,
+      availability: { available: false, detail: NETWORK_MCP_UNAVAILABLE_DETAIL },
+    }))
   }
 
   async catalog(force = false, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelCatalog> {
@@ -212,13 +155,13 @@ export class PrimeProviderService {
     let executableDiscoveryWarning: string | undefined
     try { executableModels = await this.registry.getExecutableModels() }
     catch { executableDiscoveryWarning = 'Executable model discovery failed; availability may be incomplete.' }
-    const oauthProviders = new Map(this.authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]))
+    const oauthProviders = new Map(this.registry.authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]))
     const eligibleModels = snapshot.models.filter((model) => safeProviderId(model.provider) && safeModelId(model.id))
     const providerIds = new Set([...eligibleModels.map((model) => model.provider), ...oauthProviders.keys()])
-    const authStatuses = new Map([...providerIds].map((id) => [id, this.registry.getProviderAuthStatus(id)]))
+    const validProviderIds = [...providerIds].filter((id) => safeProviderId(id) && !isMcpAuthProvider(id))
+    const authStatuses = new Map(validProviderIds.map((id) => [id, this.registry.getProviderAuthStatus(id)]))
     const configuredProviders = new Set([...authStatuses].filter(([, status]) => status.configured).map(([id]) => id))
     const { keys: available, fallbackProviders } = resolveAvailableModelKeys(eligibleModels, executableModels, configuredProviders)
-    const validProviderIds = [...providerIds].filter(safeProviderId)
     const relation = limitCatalogRelations(eligibleModels.map((model) => toModelDescriptor(model, available)), validProviderIds.map((id): PrimeProviderDescriptor => {
       const authStatus = authStatuses.get(id) ?? this.registry.getProviderAuthStatus(id)
       const authMethod: ProviderAuthMethod = oauthProviders.has(id) ? 'oauth' : EXTERNAL_AUTH_PROVIDERS.has(id) ? 'external' : 'api_key'
@@ -277,6 +220,7 @@ export class PrimeProviderService {
 
   async saveApiKey(rawProviderId: unknown, rawKey: unknown): Promise<void> {
     const providerId = requireString(rawProviderId, 'providerId', { min: 1, max: 128, trim: true })
+    if (isMcpAuthProvider(providerId)) throw new Error(NETWORK_MCP_AUTH_UNAVAILABLE)
     const key = requireString(rawKey, 'apiKey', { min: 1, max: 16_384, trim: true })
     await this.requireProvider(providerId, 'api_key')
     this.authStorage.set(providerId, { type: 'api_key', key })
@@ -285,6 +229,7 @@ export class PrimeProviderService {
 
   async logout(rawProviderId: unknown): Promise<void> {
     const providerId = requireString(rawProviderId, 'providerId', { min: 1, max: 128, trim: true })
+    if (isMcpAuthProvider(providerId)) throw new Error(NETWORK_MCP_AUTH_UNAVAILABLE)
     await this.requireProvider(providerId)
     this.authStorage.logout(providerId)
     this.invalidate()
@@ -292,74 +237,9 @@ export class PrimeProviderService {
 
   async startOAuth(rawProviderId: unknown): Promise<{ flowId: string }> {
     const providerId = requireString(rawProviderId, 'providerId', { min: 1, max: 128, trim: true })
+    if (isMcpAuthProvider(providerId)) throw new Error(NETWORK_MCP_AUTH_UNAVAILABLE)
     await this.requireProvider(providerId, 'oauth')
     return this.startOAuthFlow(providerId)
-  }
-
-  async startMcpOAuth(rawServer: unknown): Promise<{ flowId: string }> {
-    const providerId = await this.requireMcpOAuthProvider(rawServer)
-    return this.startOAuthFlow(providerId)
-  }
-
-  async logoutMcp(rawServer: unknown): Promise<void> {
-    const providerId = await this.requireMcpOAuthProvider(rawServer)
-    this.authStorage.logout(providerId)
-    this.invalidate()
-  }
-
-  async removeMcpCredential(rawServer: unknown): Promise<void> {
-    const server = requireString(rawServer, 'MCP server', { min: 1, max: 64, trim: true })
-    if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(server) || ['__proto__', 'prototype', 'constructor'].includes(server)) throw new TypeError('MCP server name contains unsupported characters')
-    this.authStorage.logout(`mcp:${server}`)
-    this.invalidate()
-  }
-
-  private async configuredMcpServer(server: string): Promise<unknown> {
-    if (this.agentDir) {
-      try {
-        const { content, truncated } = await readAtMost(join(this.agentDir, 'settings.json'), MAX_MCP_SETTINGS_BYTES)
-        if (truncated) throw new TypeError('Prime Agent settings exceed the maximum supported size')
-        const value = JSON.parse(content) as unknown
-        if (!isRecord(value)) throw new TypeError('Prime Agent settings must contain a JSON object')
-        if (value.mcpServers === undefined) return undefined
-        if (!isRecord(value.mcpServers)) throw new TypeError('Prime Agent MCP settings must contain a JSON object')
-        return value.mcpServers[server]
-      } catch (error) {
-        if (errorCode(error) === 'ENOENT') return undefined
-        if (error instanceof SyntaxError) throw new TypeError('Prime Agent settings are not valid JSON')
-        throw error
-      }
-    }
-    return SettingsManager.create(process.cwd()).getMcpServers()?.[server]
-  }
-
-  private async requireMcpOAuthProvider(rawServer: unknown): Promise<string> {
-    const server = requireString(rawServer, 'MCP server', { min: 1, max: 64, trim: true })
-    if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(server) || ['__proto__', 'prototype', 'constructor'].includes(server)) {
-      throw new TypeError('MCP server name contains unsupported characters')
-    }
-
-    // Model-catalog refreshes reset the global OAuth registry, so restore the
-    // built-in MCP providers immediately before resolving this login.
-    registerBuiltinMcpOAuthProviders()
-    const providerId = `mcp:${server}`
-    this.mcpOAuthProviders.delete(providerId)
-    const configured = await this.configuredMcpServer(server)
-    if (configured) {
-      if (!isRecord(configured) || configured.type !== 'http' || configured.oauth !== true) throw new Error(`MCP server ${server} is not configured for OAuth`)
-      const endpoint = requireWebUrl(configured.url)
-      const discovery = await resolveMcpOAuthDiscovery(endpoint)
-      const provider = createMcpOAuthProvider({ server, label: server, ...discovery })
-      registerOAuthProvider(provider)
-      this.mcpOAuthProviders.set(providerId, provider)
-    } else if (!getCatalogEntry(server)) {
-      throw new Error(`Unknown MCP integration: ${server}`)
-    }
-
-    if (!this.mcpOAuthProviders.has(providerId) && !this.authStorage.getOAuthProviders().some((provider) => provider.id === providerId)) {
-      throw new Error(`Unknown MCP integration: ${server}`)
-    }
-    return providerId
   }
 
   private startOAuthFlow(providerId: string): { flowId: string } {
@@ -442,13 +322,7 @@ export class PrimeProviderService {
           options: prompt.options.slice(0, 100).map((option) => ({ id: option.id.slice(0, 500), label: option.label.slice(0, 500) })),
         }),
       }
-      const mcpProvider = this.mcpOAuthProviders.get(flow.providerId)
-      if (mcpProvider) {
-        const credentials = await mcpProvider.login(callbacks)
-        this.authStorage.set(flow.providerId, { type: 'oauth', ...credentials })
-      } else {
-        await this.authStorage.login(flow.providerId, callbacks)
-      }
+      await this.authStorage.login(flow.providerId, callbacks)
       this.invalidate()
       this.emit(flow, { type: 'complete' })
     } catch (error) {

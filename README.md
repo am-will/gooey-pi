@@ -57,7 +57,7 @@ You only need one harness to get started:
 
 ### Add capabilities
 
-The Capabilities page brings together packages, plugins, extensions, skills, prompts, and MCP servers. The available controls follow the selected harness, including guided MCP setup and sign-in where supported.
+The Capabilities page brings together packages, plugins, extensions, skills, prompts, and MCP servers. GooeyPi can manage local stdio MCP definitions for OMP and adapter-enabled Pi. Network MCP and authentication stay under the selected harness's direct control; those entries are visible but read-only in GooeyPi, with bounded definition-only removal available for cleanup. MCP discovery has an independent 2,500-definition-per-settings-file limit and reports an explicit warning when that limit is exceeded, so unrelated capabilities cannot hide supported MCP rows.
 
 GooeyPi also ships optional capabilities for:
 

@@ -997,6 +997,14 @@ describe('SessionService transcript bounds', () => {
 
 
 describe('SessionService orchestration', () => {
+  it('rejects a Prime MCP auth command before daemon or session-path work', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-auth-command-')); dirs.push(dir)
+    const service = new SessionService(new JsonStateStore(join(dir, 'state.json')), null)
+
+    await expect(service.followUp(join(dir, 'missing.jsonl'), '/mcp login notion'))
+      .rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
+  })
+
   it('queues a follow-up through the active Prime Agent daemon instead of resuming its locked session', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-active-session-')); dirs.push(dir)
     const root = join(dir, 'sessions'); mkdirSync(root)

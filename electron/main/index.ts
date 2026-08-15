@@ -559,7 +559,6 @@ async function bootstrap(): Promise<void> {
   const listCatalogSessions = (): ReturnType<SessionService['list']> => sessions.list(undefined, true)
 
   const providers = new PrimeProviderService({
-    agentDir: join(homedir(), '.prime', 'agent'),
     openExternal: async (url) => { await shell.openExternal(url, { activate: true }) },
   })
   providerService = providers
@@ -718,8 +717,6 @@ async function bootstrap(): Promise<void> {
     }
   }
   const plugins = new PluginService(primeExecutable, (path) => projects.authorizeProjectRoot(path), {
-    removeMcpCredential: (server) => providers.removeMcpCredential(server),
-    protectedMcpServers: providers.protectedMcpServers(),
     builtInSkills: async () => [{
       id: 'prime-work-schedules', name: 'Scheduled tasks',
       description: 'Create and manage durable project and thread schedules from an agent.',

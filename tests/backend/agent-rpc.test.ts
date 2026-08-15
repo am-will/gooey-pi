@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
 import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
@@ -84,6 +84,35 @@ describe('agent RPC command frame bounds', () => {
     const command = (data: string, mimeType = 'image/png') => ({ type: 'prompt', message: 'inspect', images: [{ type: 'image', data, mimeType }] })
     await expect(validateRpcCommand(command('not base64'), async (path) => path)).rejects.toThrow('canonical base64')
     await expect(validateRpcCommand(command(Buffer.from('GIF89a').toString('base64')), async (path) => path)).rejects.toThrow('does not match')
+  })
+
+  it.each([
+    ['prime', PRIME_RPC_ADAPTER, '/mcp login notion'],
+    ['omp', OMP_RPC_ADAPTER, '/mcp reauth docs'],
+    ['pi', PI_RPC_ADAPTER, '/mcp-auth files'],
+  ] as const)('rejects forged %s auth commands for every main-process delivery mode', async (harness, adapter, message) => {
+    const wireCommand = vi.fn(async () => ({ type: 'response', command: 'prompt', success: true, data: {} }))
+    const runtime = {
+      snapshot: () => ({ runtimeId: 'runtime-auth-policy', harness, cwd: '/tmp', isStreaming: false, imageInputSupported: true }),
+      command: wireCommand,
+    }
+    const manager = new AgentRpcManager(null, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), adapter)
+    ;(manager as unknown as { runtimes: Map<string, unknown> }).runtimes.set('runtime-auth-policy', runtime)
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64')
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      for (const command of [
+        { type: 'prompt', message, images: [{ type: 'image', data: png, mimeType: 'image/png' }] },
+        { type: 'steer', message },
+        { type: 'follow_up', message },
+        { type: 'set_heartbeat', schedule: '0 * * * *', prompt: message },
+      ]) {
+        await expect(manager.command('runtime-auth-policy', command)).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
+      }
+      expect(wireCommand).not.toHaveBeenCalled()
+    } finally {
+      errorLog.mockRestore()
+    }
   })
 })
 

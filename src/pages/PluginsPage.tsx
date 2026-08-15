@@ -2,25 +2,18 @@ import { AlertTriangle, ArrowLeft, BookOpen, Check, ChevronRight, FileCode2, Fil
 import { useMemo, useState } from 'react'
 import type { CapabilityMutationInput, ExtensionInstallInput, HarnessId, McpConnectionInput, McpStateInput, PluginWarning, SkillRecord } from '@/types/api'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
-import { EmptyState, Modal, Segmented } from '@/components/ui'
-
-const MCP_HTTP_HELP: Record<HarnessId, string> = {
-  omp: 'OMP loads this MCP endpoint directly when a new session starts.',
-  prime: 'Prime Agent loads this HTTP endpoint through the matching Python integration skill installed above.',
-  pi: 'Pi loads this MCP endpoint through the pi-mcp-adapter extension (pi install npm:pi-mcp-adapter) when a new session starts.',
-}
+import { NETWORK_MCP_UNAVAILABLE_DETAIL } from '@/lib/mcp-policy'
+import { EmptyState, Modal } from '@/components/ui'
 
 const MCP_STDIO_HELP: Record<HarnessId, string> = {
   omp: 'OMP starts this stdio MCP server directly in each new session.',
-  prime: 'Prime Agent does not expose arbitrary stdio MCP servers.',
+  prime: 'Prime Agent MCP setup is managed outside GooeyPi.',
   pi: 'Pi starts this stdio MCP server through the pi-mcp-adapter extension (pi install npm:pi-mcp-adapter) in each new session.',
 }
 
 type DirectoryTab = 'plugins' | 'skills'
 type AddKind = 'mcp' | 'bundle' | 'extension'
-type McpTransport = 'http' | 'stdio'
 type McpScope = 'user' | 'project'
-type McpAuth = 'none' | 'oauth' | 'bearer'
 
 const PACKAGE_LABELS: Record<HarnessId, string> = { prime: 'Prime package', omp: 'OMP plugin', pi: 'Pi package' }
 const PACKAGE_HELP: Record<HarnessId, string> = {
@@ -29,7 +22,10 @@ const PACKAGE_HELP: Record<HarnessId, string> = {
   pi: 'Install a Pi package containing extensions, skills, prompts, or themes with Pi’s package manager.',
 }
 const GITHUB_ISSUES_URL = 'https://github.com/am-will/gooey-pi/issues/new'
-const PRIME_MCP_DOCS_URL = 'https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/mcp-integrations.md'
+
+function capabilityDetailId(skill: SkillRecord): string {
+  return `capability-detail-${skill.id.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128)}`
+}
 
 function SkillIcon({ skill }: { skill: SkillRecord }) {
   const common = { size: 16 }
@@ -62,12 +58,9 @@ interface PluginsPageProps {
   onConnectMcp(input: McpConnectionInput): Promise<{ ok: boolean; output: string }>
   onSetMcpEnabled(input: McpStateInput): Promise<{ ok: boolean; output: string }>
   onMutateCapability?(input: CapabilityMutationInput): Promise<{ ok: boolean; output: string }>
-  onConnectBundledMcp(server: string): Promise<void>
-  onDisconnectBundledMcp(server: string): Promise<void>
-  onRunMcpCommand(command: string): Promise<void>
 }
 
-export function PluginsPage({ harness, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }), onConnectBundledMcp, onRunMcpCommand }: PluginsPageProps) {
+export function PluginsPage({ harness, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
   const [tab, setTab] = useState<DirectoryTab>('plugins')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -75,16 +68,10 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
   const [addKind, setAddKind] = useState<AddKind | null>(null)
   const [source, setSource] = useState('')
   const [mcpName, setMcpName] = useState('')
-  const [mcpTransport, setMcpTransport] = useState<McpTransport>('http')
-  const [mcpUrl, setMcpUrl] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
   const [mcpArgs, setMcpArgs] = useState('')
   const [mcpScope, setMcpScope] = useState<McpScope>('user')
-  const [mcpAuth, setMcpAuth] = useState<McpAuth>('none')
-  const [mcpBearerEnv, setMcpBearerEnv] = useState('')
   const [result, setResult] = useState('')
-  const [loginCommand, setLoginCommand] = useState('')
-  const [loginServer, setLoginServer] = useState('')
   const [adding, setAdding] = useState(false)
   const [askUserUpdating, setAskUserUpdating] = useState(false)
   const [browserUpdating, setBrowserUpdating] = useState(false)
@@ -114,61 +101,28 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
     ? Boolean(source.trim())
     : addKind === 'extension'
       ? Boolean(source.trim() && (mcpScope !== 'project' || activeProjectPath))
-    : addKind === 'mcp' && (canConfigureMcp || harness === 'prime') && Boolean(
+    : addKind === 'mcp' && canConfigureMcp && Boolean(
       mcpName.trim()
-      && (mcpTransport === 'http' ? mcpUrl.trim() && (mcpAuth !== 'bearer' || mcpBearerEnv.trim()) : mcpCommand.trim())
-      && (harness !== 'prime' || source.trim())
+      && mcpCommand.trim()
       && (mcpScope !== 'project' || activeProjectPath),
     )
-
-  const mcpLoginCommand = (name: string) => harness === 'prime'
-    ? `/mcp login ${name}`
-    : harness === 'omp' ? `/mcp reauth ${name}` : `/mcp-auth ${name}`
-
-  const startMcpLogin = async (name: string, command: string) => {
-    if (harness === 'prime') await onConnectBundledMcp(name)
-    else await onRunMcpCommand(command)
-  }
 
   const add = async () => {
     if (!canAdd) return
     setAdding(true)
     setResult('')
-    setLoginCommand('')
-    setLoginServer('')
     try {
-      if (addKind === 'mcp' && harness === 'prime') {
-        const installed = await onInstall(source.trim())
-        if (!installed.ok) { setResult(installed.output); return }
-        await onRefresh()
-      }
       const response = addKind === 'bundle'
         ? await onInstall(source.trim())
         : addKind === 'extension'
           ? await onInstallExtension({ source: source.trim(), scope: mcpScope, projectPath: mcpScope === 'project' ? activeProjectPath : undefined })
-          : await onConnectMcp(mcpTransport === 'http'
-          ? { name: mcpName.trim(), scope: mcpScope, projectPath: mcpScope === 'project' ? activeProjectPath : undefined, type: 'http', url: mcpUrl.trim(), auth: mcpAuth, bearerTokenEnvVar: mcpAuth === 'bearer' ? mcpBearerEnv.trim() : undefined }
-          : { name: mcpName.trim(), scope: mcpScope, projectPath: mcpScope === 'project' ? activeProjectPath : undefined, type: 'stdio', command: mcpCommand.trim(), args: mcpArgs.split('\n').map((arg) => arg.trim()).filter(Boolean) })
+          : await onConnectMcp({ name: mcpName.trim(), scope: mcpScope, projectPath: mcpScope === 'project' ? activeProjectPath : undefined, type: 'stdio', command: mcpCommand.trim(), args: mcpArgs.split('\n').map((arg) => arg.trim()).filter(Boolean) })
       setResult(response.output)
       if (response.ok) {
-        const serverName = mcpName.trim()
-        const login = mcpLoginCommand(serverName)
         setSource('')
         setMcpName('')
-        setMcpUrl('')
         setMcpCommand('')
         setMcpArgs('')
-        setMcpBearerEnv('')
-        if (addKind === 'mcp' && mcpAuth === 'oauth') {
-          setLoginCommand(login)
-          setLoginServer(serverName)
-          try {
-            await startMcpLogin(serverName, login)
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            setResult(`${response.output}\n\nSaved, but login could not start: ${detail}`)
-          }
-        }
         if (addKind === 'mcp' || addKind === 'bundle') await onRefresh()
       }
     } finally {
@@ -176,8 +130,8 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
     }
   }
 
-  const selectAddKind = (value: AddKind | null) => { setAddKind(value); setSource(''); setResult(''); setLoginCommand(''); setLoginServer('') }
-  const openAdd = () => { setResult(''); setLoginCommand(''); setLoginServer(''); setAddKind(null); setMcpTransport('http'); setAddOpen(true) }
+  const selectAddKind = (value: AddKind | null) => { setAddKind(value); setSource(''); setResult('') }
+  const openAdd = () => { setResult(''); setAddKind(null); setAddOpen(true) }
   const setAskUser = async (enabled: boolean) => {
     if (askUserUpdating) return
     setAskUserUpdating(true)
@@ -218,7 +172,7 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
     if (mcpSupportUpdating) return
     setMcpSupportUpdating(true)
     setMcpSupportAlert('')
-    setMcpSupportNotice(enabling ? 'Installing Pi MCP Adapter…' : 'Removing Pi MCP Adapter…')
+    setMcpSupportNotice(enabling ? 'Installing Pi MCP Adapter…' : 'Disabling Pi MCP Adapter…')
     try {
       const response = await onSetMcpSupport(enabling)
       if (!response.ok) {
@@ -226,7 +180,7 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
         setMcpSupportAlert(busy ? 'Pi settings are busy. Close any other Pi package operation and try again.' : response.output)
         setMcpSupportNotice('')
       } else {
-        setMcpSupportNotice(enabling ? 'Pi MCP Adapter installed.' : 'Pi MCP Adapter removed.')
+        setMcpSupportNotice(enabling ? 'Pi MCP Adapter installed.' : 'Pi MCP Adapter disabled.')
       }
     } finally {
       setMcpSupportUpdating(false)
@@ -266,7 +220,8 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
         kind: skill.kind === 'mcp' ? 'mcp' : 'package',
         action,
         name: skill.kind === 'mcp' ? mcpServerName(skill) : skill.name,
-        source: skill.kind === 'package' ? skill.source : skill.associatedPackageSource,
+        ...(skill.kind === 'mcp' && action === 'remove' && skill.definitionKey !== undefined ? { definitionKey: skill.definitionKey } : {}),
+        ...(skill.kind === 'package' ? { source: skill.source } : {}),
         scope: skill.location === 'project' ? 'project' : 'user',
         projectPath: skill.location === 'project' ? activeProjectPath : undefined,
       })
@@ -279,7 +234,21 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
     setConfirmRemove(null)
     await mutate(skill, 'remove')
   }
+  const mcpStatusDetail = (skill: SkillRecord): string | undefined => {
+    if (skill.kind !== 'mcp') return undefined
+    if (skill.availability?.available === false) return skill.availability.detail
+    if (harness === 'pi' && !piMcpAdapterInstalled) return 'Enable Pi MCP Adapter before changing this local MCP server.'
+    return undefined
+  }
   const capabilityControl = (skill: SkillRecord) => {
+    if (skill.kind === 'mcp' && skill.availability?.available === false) {
+      const external = skill.availability.detail.includes('managed outside GooeyPi')
+      const label = external ? `Externally managed ${skill.name}` : harness === 'pi' ? `Pi MCP Adapter required for ${skill.name}` : `Unavailable ${skill.name}`
+      return <span className="plugin-toggle" role="img" aria-label={label} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
+    }
+    if (harness === 'pi' && skill.kind === 'mcp' && !piMcpAdapterInstalled) {
+      return <span className="plugin-toggle" role="img" aria-label={`Pi MCP Adapter required for ${skill.name}`} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
+    }
     const isBrowser = skill.id === 'prime-work-browser' || skill.id === 'omp-work-browser'
     const actionable = skill.id === 'gooeypi-ask-user' || isBrowser || skill.id === 'gooeypi-computer-use' || skill.id === 'gooeypi-pi-mcp' || skill.kind === 'mcp' || skill.kind === 'package'
     if (!actionable) return <span className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={`${skill.enabled ? 'Enabled' : 'Unavailable'} ${skill.name}`}>{skill.enabled ? <Check size={14}/> : <Plus size={14}/>}</span>
@@ -330,32 +299,37 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
         {harness === 'pi' && mcpSupportAlert ? <p className="page-inline-error" role="alert"><AlertTriangle size={13}/> {mcpSupportAlert}</p> : null}
         {harness === 'pi' && mcpSupportNotice ? <p className="connection-warning" role="status">{mcpSupportUpdating ? <RefreshCw className="spin" size={13}/> : <ShieldCheck size={13}/>} {mcpSupportNotice}</p> : null}
         {harness === 'pi' && !piMcpAdapterInstalled ? <p className="connection-warning"><ShieldCheck size={13}/> Pi core has no MCP client. Enable Pi MCP Adapter below before adding servers.</p> : null}
-        <div className="directory-heading"><h2>{filter === 'installed' ? 'Installed' : tab === 'plugins' ? 'Capabilities' : 'Skills'}</h2><span>{visible.length} available</span></div>
+        <p className="connection-warning"><ShieldCheck size={13}/> {NETWORK_MCP_UNAVAILABLE_DETAIL}</p>
+        <div className="directory-heading"><h2>{filter === 'installed' ? 'Installed' : tab === 'plugins' ? 'Capabilities' : 'Skills'}</h2><span>{visible.length} shown</span></div>
         {visible.length ? (
-          <div className="directory-list">{visible.map((skill) => (
-            <article key={skill.id}>
+          <div className="directory-list">{visible.map((skill) => {
+            const statusDetail = mcpStatusDetail(skill)
+            return <article key={skill.id}>
               <span className={`directory-icon directory-icon--${skill.kind}`}><SkillIcon skill={skill}/></span>
-              <div><div><h3>{skill.name}</h3><span>{skill.location}</span></div><p>{skill.description}</p></div>
-              <div className="capability-actions">{skill.kind === 'package' || skill.kind === 'mcp' && skill.location !== 'bundled' && skill.location !== 'system' ? <button type="button" className="plugin-remove" aria-label={`Remove ${skill.name}`} disabled={capabilityUpdating === skill.id} onClick={() => setConfirmRemove(skill)}><Trash2 size={13}/></button> : null}{capabilityControl(skill)}</div>
+              <div><div><h3>{skill.name}</h3><span>{skill.location}</span></div><p id={statusDetail ? capabilityDetailId(skill) : undefined}>{skill.description}{statusDetail ? ` ${statusDetail}` : ''}</p></div>
+              <div className="capability-actions">
+                {skill.kind === 'package' || skill.kind === 'mcp' && skill.location !== 'bundled' && skill.location !== 'system' && skill.definitionRemovalAvailable !== false ? <button type="button" className="plugin-remove" aria-label={`Remove ${skill.name}`} disabled={capabilityUpdating === skill.id} onClick={() => setConfirmRemove(skill)}><Trash2 size={13}/></button> : null}
+                {capabilityControl(skill)}
+              </div>
             </article>
-          ))}</div>
+          })}</div>
         ) : <EmptyState icon={<Sparkles size={23}/>} title="Nothing here yet">Try another filter or add a capability package supported by {HARNESS_SHORT_NAMES[harness]}.</EmptyState>}
 
         {confirmDisable ? <Modal title={`Disable ${confirmDisable.name}?`} onClose={() => setConfirmDisable(null)} footer={<><button type="button" className="button" onClick={() => setConfirmDisable(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => void disableCapability(confirmDisable)}>Yes, disable</button></>}><p className="modal-intro">Are you sure? New sessions will no longer receive this capability until you enable it again. Installed files, server settings, and saved authorization are kept.</p></Modal> : null}
-        {confirmRemove ? <Modal title={`Remove ${confirmRemove.name}?`} onClose={() => setConfirmRemove(null)} footer={<><button type="button" className="button" onClick={() => setConfirmRemove(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => void removeCapability(confirmRemove)}>Yes, remove completely</button></>}><p className="modal-intro">Are you sure? This removes the {confirmRemove.kind === 'mcp' ? 'server definition, saved authorization, and its associated integration package when present' : 'package registration and harness-managed files'}. Other packages and MCP entries will be kept.</p></Modal> : null}
+        {confirmRemove ? <Modal title={`Remove ${confirmRemove.name}?`} onClose={() => setConfirmRemove(null)} footer={<><button type="button" className="button" onClick={() => setConfirmRemove(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => void removeCapability(confirmRemove)}>Yes, remove completely</button></>}><p className="modal-intro">Are you sure? This removes {confirmRemove.kind === 'mcp' ? harness === 'prime' ? 'only the server definition. Prime authorization is unchanged and must be managed directly in Prime Agent.' : 'only the server definition; harness-owned authorization is not changed.' : 'the package registration and harness-managed files.'} Other packages and MCP entries will be kept.</p></Modal> : null}
 
         {addOpen ? (
           <Modal
             title={addKind ? `Add ${addKind === 'mcp' ? 'MCP server' : addKind === 'extension' ? 'extension' : PACKAGE_LABELS[harness].toLowerCase()}` : `Add a ${HARNESS_SHORT_NAMES[harness]} capability`}
             onClose={() => setAddOpen(false)}
             footer={addKind
-              ? <><button type="button" className="button" onClick={() => selectAddKind(null)}><ArrowLeft size={13}/> Back</button><button type="button" className="button button--primary" disabled={!canAdd || adding} onClick={() => void add()}>{adding ? (addKind === 'mcp' ? mcpAuth === 'oauth' ? 'Saving and opening login…' : 'Saving…' : 'Installing…') : (addKind === 'mcp' ? mcpAuth === 'oauth' ? 'Save and log in' : 'Save server configuration' : addKind === 'extension' ? 'Install extension' : `Install ${harness === 'omp' ? 'plugin' : 'package'}`)}</button></>
+              ? <><button type="button" className="button" onClick={() => selectAddKind(null)}><ArrowLeft size={13}/> Back</button><button type="button" className="button button--primary" disabled={!canAdd || adding} onClick={() => void add()}>{adding ? (addKind === 'mcp' ? 'Saving…' : 'Installing…') : (addKind === 'mcp' ? 'Save local server' : addKind === 'extension' ? 'Install extension' : `Install ${harness === 'omp' ? 'plugin' : 'package'}`)}</button></>
               : <button type="button" className="button" onClick={() => setAddOpen(false)}>Cancel</button>}
           >
             {addKind === null ? (
               <div className="capability-choice-list">
-                <button type="button" disabled={harness === 'pi' && !piMcpAdapterInstalled} onClick={() => selectAddKind('mcp')}>
-                  <span><Globe2 size={17}/></span><span><strong>Add MCP</strong><small>{harness === 'pi' && !piMcpAdapterInstalled ? 'Enable Pi MCP Adapter first' : harness === 'prime' ? 'Install the matching integration and add its server' : 'Connect a server using this harness’s MCP format'}</small></span><ChevronRight size={15}/>
+                <button type="button" disabled={harness === 'prime' || harness === 'pi' && !piMcpAdapterInstalled} onClick={() => selectAddKind('mcp')}>
+                  <span><Globe2 size={17}/></span><span><strong>Add MCP</strong><small>{harness === 'prime' ? 'Prime MCP setup is managed outside GooeyPi' : harness === 'pi' && !piMcpAdapterInstalled ? 'Enable Pi MCP Adapter first' : 'Add a local stdio server; network servers stay externally managed'}</small></span><ChevronRight size={15}/>
                 </button>
                 <button type="button" onClick={() => selectAddKind('bundle')}>
                   <span><Package size={17}/></span><span><strong>Add {harness === 'omp' ? 'Plugin' : 'Package'}</strong><small>{PACKAGE_HELP[harness]}</small></span><ChevronRight size={15}/>
@@ -383,25 +357,18 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
               </div>
             ) : (
               <div className="add-tool-form">
-                <p className="modal-intro">{harness === 'prime'
-                  ? 'Prime MCP integrations require a matching Python skill package and an HTTP server definition. GooeyPi installs both through one guided flow.'
-                  : harness === 'omp'
-                  ? 'Add a basic server to OMP’s native MCP configuration. Advanced OAuth, headers, and environment settings remain available through OMP’s own MCP commands and config.'
-                  : 'Add a server to pi-mcp-adapter’s configuration. This does not start or test the server.'}</p>
-                {harness === 'prime' ? <><label className="field"><span>Integration package source</span><input autoFocus value={source} onChange={(event) => setSource(event.target.value)} placeholder="npm:@scope/prime-integration"/></label><small className="field-help">Enter a Prime package source such as an npm package, Git URL, or local path—not the MCP server URL. It must provide a Python-backed skill whose integration name matches the server name. <button type="button" className="inline-help-link" onClick={() => onOpenExternal(PRIME_MCP_DOCS_URL)}>How Prime MCP integrations work</button></small></> : null}
+                <p className="modal-intro">{harness === 'omp'
+                  ? 'Add a local stdio server to OMP’s native MCP configuration. HTTP/SSE servers and OAuth are managed directly in OMP, outside GooeyPi.'
+                  : 'Add a local stdio server to pi-mcp-adapter’s configuration. HTTP/SSE servers and OAuth are managed outside GooeyPi.'}</p>
                 <label className="field"><span>Server name</span><input autoFocus value={mcpName} onChange={(event) => setMcpName(event.target.value)} placeholder="my-local-tools"/></label>
-                {harness === 'prime' ? null : <div className="field"><span>Connection</span><Segmented value={mcpTransport} options={[{ value: 'http', label: 'Server / Studio URL' }, { value: 'stdio', label: 'Local command' }]} onChange={(value) => setMcpTransport(value as McpTransport)} label="MCP connection type"/></div>}
-                {mcpTransport === 'http' ? (
-                  <><label className="field"><span>Server URL</span><input value={mcpUrl} onChange={(event) => setMcpUrl(event.target.value)} inputMode="url" placeholder="https://example.com/mcp"/></label><small className="field-help">{MCP_HTTP_HELP[harness]}</small><label className="field"><span>Authentication</span><select value={mcpAuth} onChange={(event) => setMcpAuth(event.target.value as McpAuth)}><option value="none">None / configured by server</option><option value="oauth">OAuth — save and log in</option><option value="bearer">Bearer token from environment</option></select></label>{mcpAuth === 'bearer' ? <><label className="field"><span>Token environment variable</span><input value={mcpBearerEnv} onChange={(event) => setMcpBearerEnv(event.target.value)} placeholder="MY_MCP_TOKEN"/></label><small className="field-help">GooeyPi stores only this variable name. Set the token in the environment that launches the app.</small></> : null}</>
-                ) : (
-                  <><p className="field-help">{MCP_STDIO_HELP[harness]}</p><label className="field"><span>Executable</span><input value={mcpCommand} onChange={(event) => setMcpCommand(event.target.value)} placeholder="npx"/></label><label className="field"><span>Arguments <small>(one per line)</small></span><textarea value={mcpArgs} onChange={(event) => setMcpArgs(event.target.value)} rows={3} placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/path/to/project'}/></label></>
-                )}
+                <p className="field-help">{MCP_STDIO_HELP[harness]}</p>
+                <label className="field"><span>Executable</span><input value={mcpCommand} onChange={(event) => setMcpCommand(event.target.value)} placeholder="npx"/></label>
+                <label className="field"><span>Arguments <small>(one per line)</small></span><textarea value={mcpArgs} onChange={(event) => setMcpArgs(event.target.value)} rows={3} placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/path/to/project'}/></label>
                 <label className="field"><span>Available in</span><select value={mcpScope} onChange={(event) => setMcpScope(event.target.value as McpScope)}><option value="user">All projects (personal)</option><option value="project" disabled={!activeProjectPath}>Current project</option></select></label>
                 <p className="connection-warning"><ShieldCheck size={13}/> Only connect servers you trust. MCP tools can read data or run actions with your user permissions.</p>
               </div>
             )}
             {result ? <pre className="install-output" role="status">{result}</pre> : null}
-            {loginCommand ? <div className="add-tool-form"><button type="button" className="button button--primary" disabled={harness !== 'prime' && !activeProjectPath} onClick={() => void startMcpLogin(loginServer, loginCommand)}>Try sign in again</button>{harness !== 'prime' && !activeProjectPath ? <small className="field-help">Open a project first, then run <code>{loginCommand}</code> in its session.</small> : <small className="field-help">Login should open automatically. If it does not, retry here or run <code>{loginCommand}</code> later.</small>}</div> : null}
           </Modal>
         ) : null}
       </div>

@@ -4,6 +4,14 @@ import { lstat, opendir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import type { HarnessId, PluginCatalog, PluginWarning, SkillRecord } from '../../../src/types/api'
+import {
+  isAppManageableLocalMcpKey,
+  isNetworkMcpDefinition,
+  LOCAL_MCP_STATE_UNAVAILABLE_DETAIL,
+  MAX_MCP_DEFINITION_KEY_LENGTH,
+  NETWORK_MCP_UNAVAILABLE_DETAIL,
+  PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL,
+} from '../../../src/lib/mcp-policy'
 import { HARNESSES } from '../harness'
 import { mapLimit } from '../lib/async'
 import { isPathWithin, isRecord } from '../validation'
@@ -24,6 +32,7 @@ const MAX_DISCOVERY_CANDIDATES = 2_000
 const MAX_DISCOVERY_DIRECTORIES = 1_000
 const MAX_DISCOVERY_ENTRIES = 20_000
 const MAX_DISCOVERY_RECORDS = 2_500
+const MAX_MCP_DISCOVERY_RECORDS = 2_500
 const MAX_METADATA_BYTES = 128 * 1024
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
 const METADATA_CONCURRENCY = 16
@@ -269,16 +278,11 @@ async function buildCandidateRecords(candidates: Candidate[], safeProjectPath?: 
   })
 }
 
-async function addSettingsMetadata(
+async function addPackageSettingsMetadata(
   settings: Record<string, unknown>,
   settingsPath: string,
   location: 'user' | 'project',
   output: SkillRecord[],
-  harness: HarnessId = 'prime',
-  // Pi's settings.json is not an MCP source (the pi-mcp-adapter extension reads
-  // mcp.json files, surfaced separately below); a stray mcpServers key there
-  // would advertise servers pi never loads.
-  includeMcpServers: boolean = harness !== 'pi',
 ): Promise<void> {
   if (Array.isArray(settings.packages)) {
     for (const raw of settings.packages) {
@@ -291,19 +295,69 @@ async function addSettingsMetadata(
       output.push({ id: idFor('package', location, sourceValue), ...metadata, kind: 'package', location, enabled, source })
     }
   }
-  if (includeMcpServers && isRecord(settings.mcpServers)) {
-    for (const [name, raw] of Object.entries(settings.mcpServers)) {
-      if (output.length >= MAX_DISCOVERY_RECORDS) break
-      if (!isRecord(raw)) continue
-      const enabled = raw.enabled !== false
-      if ((raw.type === 'http' || harness === 'pi') && typeof raw.url === 'string') {
-        let origin = 'remote HTTP server'
-        try { const url = new URL(raw.url); origin = url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : 'remote server' } catch { /* omit invalid and potentially secret URL */ }
-        output.push({ id: idFor('mcp', location, name), name, description: `HTTP MCP server at ${origin}`, kind: 'mcp', location, enabled, source: origin })
-      } else if ((raw.type === 'stdio' || harness === 'pi') && typeof raw.command === 'string') {
-        const command = basename(raw.command).slice(0, 120)
-        output.push({ id: idFor('mcp', location, name), name, description: `Local stdio MCP server (${command})`, kind: 'mcp', location, enabled, source: command })
-      }
+}
+
+function addMcpSettingsMetadata(
+  settings: Record<string, unknown>,
+  settingsPath: string,
+  location: 'user' | 'project',
+  output: SkillRecord[],
+  warnings: PluginWarning[],
+  harness: HarnessId = 'prime',
+  // Only Prime loads MCP definitions from settings.json. OMP reads mcp.json
+  // natively and the Pi adapter reads the same layout; surfacing a stray
+  // settings.json key would make UI actions target a different definition.
+  includeMcpServers: boolean = harness === 'prime',
+): void {
+  if (!includeMcpServers || !isRecord(settings.mcpServers)) return
+  const entries = Object.entries(settings.mcpServers)
+  if (entries.length > MAX_MCP_DISCOVERY_RECORDS) {
+    warnings.push({
+      scope: location,
+      path: settingsPath,
+      message: `MCP discovery is limited to 2,500 definitions in this file; remaining entries are managed directly in ${HARNESSES[harness].agentName}.`,
+    })
+  }
+  for (const [name, raw] of entries.slice(0, MAX_MCP_DISCOVERY_RECORDS)) {
+    const definition = isRecord(raw) ? raw : undefined
+    const displayName = [...name.slice(0, 120)].map((character) => {
+      const code = character.charCodeAt(0)
+      return code < 32 || code === 127 ? '�' : character
+    }).join('') || 'Unnamed MCP server'
+    const definitionIdentity = name.length <= MAX_MCP_DEFINITION_KEY_LENGTH
+      ? { definitionKey: name }
+      : { definitionRemovalAvailable: false }
+    const enabled = definition?.enabled !== false
+    if (definition && isNetworkMcpDefinition(definition)) {
+      let origin = 'remote HTTP server'
+      try { const url = new URL(typeof definition.url === 'string' ? definition.url : ''); origin = url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : 'remote server' } catch { /* omit invalid and potentially secret URL */ }
+      const transport = definition.type === 'sse' ? 'SSE' : 'HTTP'
+      output.push({
+        id: idFor('mcp', location, name), name: displayName,
+        description: `${transport} MCP server at ${origin}. Managed outside GooeyPi.`,
+        kind: 'mcp', location, enabled, source: origin, ...definitionIdentity,
+        availability: { available: false, detail: NETWORK_MCP_UNAVAILABLE_DETAIL },
+      })
+    } else if (definition && (definition.type === 'stdio' || harness === 'pi' || harness === 'prime') && typeof definition.command === 'string') {
+      const command = basename(definition.command).slice(0, 120)
+      const availability = harness === 'prime'
+        ? { available: false as const, detail: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
+        : !isAppManageableLocalMcpKey(name)
+          ? { available: false as const, detail: LOCAL_MCP_STATE_UNAVAILABLE_DETAIL }
+          : undefined
+      output.push({
+        id: idFor('mcp', location, name), name: displayName,
+        description: `Local stdio MCP server (${command})${harness === 'prime' ? '. Managed outside GooeyPi.' : ''}`,
+        kind: 'mcp', location, enabled, source: command, ...definitionIdentity,
+        ...(availability ? { availability } : {}),
+      })
+    } else if (harness === 'prime') {
+      output.push({
+        id: idFor('mcp', location, name), name: displayName,
+        description: 'Prime Agent MCP definition with an externally managed format.',
+        kind: 'mcp', location, enabled, source: 'Prime Agent settings', ...definitionIdentity,
+        availability: { available: false, detail: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL },
+      })
     }
   }
 }
@@ -455,20 +509,28 @@ export async function discoverPlugins(agentDir: string, safeProjectPath: string 
   }
 
   const result = await buildCandidateRecords(candidates, safeProjectPath, harness)
+  const mcpRecords: SkillRecord[] = []
   result.push(...ompPackageRecords)
-  await addSettingsMetadata(globalSettings, join(agentDir, 'settings.json'), 'user', result, harness)
-  await addSettingsMetadata(projectSettings, safeProjectPath ? join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'settings.json') : '', 'project', result, harness)
+  const globalSettingsPath = join(agentDir, 'settings.json')
+  const projectSettingsPath = safeProjectPath ? join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'settings.json') : ''
+  await addPackageSettingsMetadata(globalSettings, globalSettingsPath, 'user', result)
+  await addPackageSettingsMetadata(projectSettings, projectSettingsPath, 'project', result)
+  addMcpSettingsMetadata(globalSettings, globalSettingsPath, 'user', mcpRecords, warnings, harness)
+  addMcpSettingsMetadata(projectSettings, projectSettingsPath, 'project', mcpRecords, warnings, harness)
   // OMP reads mcp.json natively; pi reads the same layout through the
   // pi-mcp-adapter extension (~/.pi/agent/mcp.json and project .pi/mcp.json).
   if (harness !== 'prime') {
-    const globalMcp = await readSettings(join(agentDir, 'mcp.json'), 'user')
+    const globalMcpPath = join(agentDir, 'mcp.json')
+    const globalMcp = await readSettings(globalMcpPath, 'user')
     if (globalMcp.warning) warnings.push(globalMcp.warning)
-    await addSettingsMetadata(globalMcp.settings, join(agentDir, 'mcp.json'), 'user', result, harness, true)
+    addMcpSettingsMetadata(globalMcp.settings, globalMcpPath, 'user', mcpRecords, warnings, harness, true)
     if (safeProjectPath) {
-      const projectMcp = await readSettings(join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json'), 'project')
+      const projectMcpPath = join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json')
+      const projectMcp = await readSettings(projectMcpPath, 'project')
       if (projectMcp.warning) warnings.push(projectMcp.warning)
-      await addSettingsMetadata(projectMcp.settings, join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json'), 'project', result, harness, true)
+      addMcpSettingsMetadata(projectMcp.settings, projectMcpPath, 'project', mcpRecords, warnings, harness, true)
     }
   }
+  result.push(...mcpRecords)
   return { skills: result.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)), warnings }
 }

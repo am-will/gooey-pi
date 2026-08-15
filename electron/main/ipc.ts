@@ -348,14 +348,6 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     requirePrimeProviderAuth(harness)
     return services.providers.startOAuth(providerId)
   })
-  handle('providers:start-mcp-oauth', (_event, server, harness) => {
-    requirePrimeProviderAuth(harness)
-    return services.providers.startMcpOAuth(server)
-  })
-  handle('providers:logout-mcp', (_event, server, harness) => {
-    requirePrimeProviderAuth(harness)
-    return services.providers.logoutMcp(server)
-  })
   handle('providers:respond-oauth', (_event, flowId, promptId, value) => services.providers.respondOAuth(flowId, promptId, value))
   handle('providers:cancel-oauth', (_event, flowId) => services.providers.cancelOAuth(flowId))
 

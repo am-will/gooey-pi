@@ -182,3 +182,30 @@ describe('workspace runtime abort ownership', () => {
     expect(fixture.messages()).toMatchObject([{ id: 'message-b', streaming: true }])
   })
 })
+
+describe('workspace MCP command policy', () => {
+  it.each([
+    ['prime', '/mcp login notion', 'Prime Agent', 'notion'],
+    ['omp', '/mcp reauth docs', 'OMP', 'docs'],
+    ['pi', '/mcp-auth files', 'Pi', 'files'],
+  ] as const)('does not forward %s remote-auth commands to the harness', async (harness, prompt, agentName, server) => {
+    const agentStart = vi.fn()
+    const agentCommand = vi.fn()
+    const setToast = vi.fn()
+    const actions = createWorkspaceActions(() => ({
+      bridge: { agent: { start: agentStart, command: agentCommand } },
+      sessions: [],
+      workspace: { workspaceRef: { current: { project: { harness } } } },
+      provider: {},
+      settingsState: { settings: { activeHarness: harness } },
+      setToast,
+    } as unknown as WorkspaceActionsDeps))
+
+    await actions.sendPrompt(prompt)
+    await actions.sendPrompt(prompt, [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }])
+
+    expect(agentStart).not.toHaveBeenCalled()
+    expect(agentCommand).not.toHaveBeenCalled()
+    expect(setToast).toHaveBeenCalledWith(`Network MCP authentication is managed outside GooeyPi. Use ${agentName} directly to sign in to ${server}.`)
+  })
+})

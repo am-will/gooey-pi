@@ -1,4 +1,5 @@
 import type { RuntimeInfo, ScheduleExecution, AutomationScheduleRecord, ScheduleTarget } from '../../../src/types/api'
+import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import type { AgentRpcManager } from '../agent-rpc'
 import type { ModelCatalogProvider } from '../model-catalog'
 import type { ProjectService } from '../projects'
@@ -34,6 +35,7 @@ export class ScheduledRunExecutor {
   }
 
   async run(task: AutomationScheduleRecord): Promise<ScheduleRunResult> {
+    assertNoMcpAuthenticationCommand(task.prompt, this.sessions.harness)
     const target = await this.resolveTarget(task.target)
     await this.validateExecution(task.execution)
     return target.sessionPath

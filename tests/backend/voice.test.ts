@@ -4,11 +4,11 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from '../../electron/main/store'
 import { VoiceService, voiceSecretStorageStatus, type VoiceServiceOptions } from '../../electron/main/voice'
-import type { RuntimeInfo } from '../../src/types/api'
+import type { HarnessId, RuntimeInfo } from '../../src/types/api'
 
 const directories: string[] = []
 
-function project(harness: 'prime' | 'omp' = 'prime', inferred = false) {
+function project(harness: HarnessId = 'prime', inferred = false) {
   return {
     id: `${harness}-project`, harness, name: `${harness} project`, path: `/tmp/${harness}`,
     folders: [`/tmp/${harness}`], primaryFolder: `/tmp/${harness}`, pinned: false,
@@ -61,11 +61,13 @@ function makeService(overrides: Partial<VoiceServiceOptions> = {}) {
     projects: {
       prime: { list: vi.fn(async () => [project('prime')]) },
       omp: { list: vi.fn(async () => [project('omp')]) },
+      pi: { list: vi.fn(async () => [project('pi')]) },
     } as unknown as VoiceServiceOptions['projects'],
-    agents: { prime: agent, omp: agent } as unknown as VoiceServiceOptions['agents'],
+    agents: { prime: agent, omp: agent, pi: agent } as unknown as VoiceServiceOptions['agents'],
     catalogs: {
       prime: { catalog: primeCatalog },
       omp: { catalog: ompCatalog },
+      pi: { catalog: vi.fn(catalog) },
     } as unknown as VoiceServiceOptions['catalogs'],
     runProcess: vi.fn(),
     environment: {},
@@ -264,6 +266,20 @@ describe('VoiceService', () => {
       projectId: 'prime-project', projectName: 'prime project', harness: 'prime',
       runtimeId: 'runtime-1', sessionId: 'session-1', sessionFile: '/tmp/session.jsonl',
     })
+  })
+
+  it.each([
+    ['prime', '/mcp login notion'],
+    ['omp', '/mcp reauth docs'],
+    ['pi', '/mcp-auth files'],
+  ] as const)('rejects a %s MCP auth voice task before runtime start', async (harness, prompt) => {
+    const { service, agent, options } = makeService()
+
+    await expect(service.executeTool({
+      name: 'start_task', arguments: { project_id: `${harness}-project`, prompt },
+    }, harness)).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
+    expect(options.projects[harness].list).not.toHaveBeenCalled()
+    expect(agent.start).not.toHaveBeenCalled()
   })
 
   it('lists only available models from GUI-visible providers and searches approximate names', async () => {

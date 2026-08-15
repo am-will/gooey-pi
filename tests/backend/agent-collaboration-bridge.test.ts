@@ -343,6 +343,27 @@ describe('AgentCollaborationBridge', () => {
     expect(createdList.body.result).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: created.id })]))
   })
 
+  it('rejects an MCP auth creation prompt before starting a peer runtime', async () => {
+    const { call, primeManager } = await fixture()
+
+    const response = await call('create', { prompt: '/mcp login notion' })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error).toContain('Network MCP authentication is managed outside GooeyPi')
+    expect(primeManager.start).not.toHaveBeenCalled()
+  })
+
+  it('rejects an MCP auth delivery before waking or queuing a peer runtime', async () => {
+    const { call, primeManager } = await fixture(false)
+
+    const response = await call('send', { target_session_id: target.id, message: '/mcp login notion' })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error).toContain('Network MCP authentication is managed outside GooeyPi')
+    expect(primeManager.start).not.toHaveBeenCalled()
+    expect(primeManager.command).not.toHaveBeenCalled()
+  })
+
   it('starts normally and reports unavailable when fast mode is requested without model support', async () => {
     const { call, primeManager } = await fixture()
     const response = await call('create', { prompt: 'Review the fallback.', fast: true })

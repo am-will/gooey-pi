@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { HarnessId, PrimeModelDescriptor, RuntimeInfo, SessionRecord, TranscriptMessage } from '../../../src/types/api'
+import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import type { AgentRpcManager } from '../agent-rpc'
 import { CapabilityBridge, type CapabilityClaim } from '../lib/capability-bridge'
 import type { ModelCatalogProvider } from '../model-catalog'
@@ -277,6 +278,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
 
   private async create(source: CollaborationTarget, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     const prompt = requireString(params.prompt, 'prompt', { min: 1, max: MAX_CREATE_PROMPT_CHARS, trim: true })
+    assertNoMcpAuthenticationCommand(prompt, source.session.harness)
     const title = params.title === undefined ? undefined : requireString(params.title, 'title', { min: 1, max: 200, trim: true })
     const modelQuery = params.model === undefined ? undefined : requireString(params.model, 'model', { min: 1, max: 512, trim: true })
     const reasoningQuery = params.reasoning === undefined ? undefined : requireString(params.reasoning, 'reasoning', { min: 1, max: 64, trim: true })
@@ -373,6 +375,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
 
   private async send(source: CollaborationTarget, target: CollaborationTarget, rawMessage: unknown): Promise<Record<string, unknown>> {
     const message = requireString(rawMessage, 'message', { min: 1, max: MAX_SEND_CHARS, trim: true })
+    assertNoMcpAuthenticationCommand(message, source.session.harness)
     const existing = target.manager.getForSession(target.session.filePath)
     const runtime = existing ?? await this.wake(target)
     const before = await this.snapshot(target)

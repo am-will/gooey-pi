@@ -261,6 +261,10 @@ export interface SkillRecord {
   /** MCP server ids this package exists to bridge. Used to collapse duplicate capability rows. */
   associatedMcpServers?: string[]
   associatedPackageSource?: string
+  /** Exact bounded map key used only for definition removal; never rendered as display copy. */
+  definitionKey?: string
+  /** False when an external definition key cannot be represented safely by the app removal API. */
+  definitionRemovalAvailable?: boolean
   availability?: {
     available: boolean
     detail: string
@@ -299,6 +303,8 @@ export interface CapabilityMutationInput {
   kind: 'package' | 'mcp'
   action: 'enable' | 'disable' | 'remove'
   name: string
+  /** Exact bounded MCP map key for definition-only removal. */
+  definitionKey?: string
   source?: string
   scope: 'user' | 'project'
   projectPath?: string
@@ -699,8 +705,6 @@ export interface PrimeWorkApi {
     setDisabled(providerIds: string[], harness?: HarnessId): Promise<PrimeModelCatalog>
     setModelEnabled(modelKey: string, enabled: boolean, harness?: HarnessId): Promise<PrimeModelCatalog>
     startOAuth(providerId: string): Promise<{ flowId: string }>
-    startMcpOAuth(server: string, harness?: HarnessId): Promise<{ flowId: string }>
-    logoutMcp(server: string, harness?: HarnessId): Promise<void>
     respondOAuth(flowId: string, promptId: string, value?: string): Promise<boolean>
     cancelOAuth(flowId: string): Promise<boolean>
     onAuthEvent(callback: (event: ProviderAuthEvent) => void): () => void

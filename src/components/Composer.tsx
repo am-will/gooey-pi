@@ -96,7 +96,7 @@ const commands = [
 
 const primeCommands = [
   ...commands,
-  { command: '/mcp', detail: 'Manage and sign in to MCP integrations' },
+  { command: '/mcp', detail: 'View MCP integrations and local servers' },
 ]
 
 const reasoningLabels: Record<PrimeThinkingLevel, string> = {

@@ -1,4 +1,5 @@
 import type { PrimeEventEnvelope, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
+import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import { parseSessionActionSnapshot } from '../../../src/lib/session-actions'
 import { resolveExecutable, type ExecutableSource } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
@@ -188,6 +189,10 @@ export class AgentRpcManager {
     const runtime = this.requireRuntime(runtimeId)
     const command = await validateRpcCommand(rawCommand, this.validateSessionPath)
     this.requireOpen()
+    const policyPrompt = command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up'
+      ? command.message
+      : command.type === 'set_heartbeat' ? command.prompt : undefined
+    if (typeof policyPrompt === 'string') assertNoMcpAuthenticationCommand(policyPrompt, this.adapter.id)
     // Validation is harness-independent; the harness vocabulary applies after
     // it. set_service_tier passes through untranslated because the fast-mode
     // interception below routes it via runtime.setServiceTier instead.

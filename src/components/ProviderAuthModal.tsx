@@ -14,10 +14,6 @@ export function ProviderAuthModal({ event, onOpen, onRespond, onCancel }: Provid
   const [value, setValue] = useState('')
   const selectionLabelId = useId()
   useEffect(() => { setValue('') }, [event.type, 'promptId' in event ? event.promptId : event.flowId])
-  const serviceName = event.providerId.startsWith('mcp:')
-    ? event.providerId.slice('mcp:'.length).replace(/(^|[-_ ])\w/g, (match) => match.toUpperCase())
-    : 'provider'
-  const isMcpCodePrompt = event.type === 'prompt' && event.providerId.startsWith('mcp:')
 
   const footer = event.type === 'prompt' ? (
     <>
@@ -32,15 +28,15 @@ export function ProviderAuthModal({ event, onOpen, onRespond, onCancel }: Provid
     ? 'Authentication successful'
     : event.type === 'error'
       ? 'Authentication failed'
-      : `Connect ${serviceName}`
+      : 'Connect provider'
 
   return (
     <Modal title={title} onClose={onCancel} footer={footer}>
       {event.type === 'auth' ? <div className="provider-auth-step"><p>{event.instructions ?? 'Finish signing in through your browser.'}</p><button type="button" className="button" onClick={() => onOpen(event.url)}><ExternalLink size={13} /> Open sign-in page</button></div> : null}
       {event.type === 'progress' ? <p className="modal-intro" role="status">{event.message}</p> : null}
-      {event.type === 'prompt' ? <>{isMcpCodePrompt ? <p className="modal-intro" role="status">Finish authentication in your browser. If {serviceName} gives you an authorization code, enter it below. Otherwise, GooeyPi will finish automatically after you authorize.</p> : null}<label className="field"><span>{isMcpCodePrompt ? 'Enter authorization code' : event.message}</span><input autoFocus={!isMcpCodePrompt} value={value} placeholder={event.placeholder ?? (isMcpCodePrompt ? 'Authorization code' : undefined)} autoComplete="off" spellCheck={false} onChange={(change) => setValue(change.target.value)} onKeyDown={(key) => { if (key.key === 'Enter' && (event.allowEmpty || value.trim())) { key.preventDefault(); onRespond(event.promptId, value) } }} /></label></> : null}
+      {event.type === 'prompt' ? <label className="field"><span>{event.message}</span><input autoFocus value={value} placeholder={event.placeholder} autoComplete="off" spellCheck={false} onChange={(change) => setValue(change.target.value)} onKeyDown={(key) => { if (key.key === 'Enter' && (event.allowEmpty || value.trim())) { key.preventDefault(); onRespond(event.promptId, value) } }} /></label> : null}
       {event.type === 'select' ? <div className="provider-auth-options" role="group" aria-labelledby={selectionLabelId}><p id={selectionLabelId}>{event.message}</p>{event.options.map((option) => <button type="button" key={option.id} onClick={() => onRespond(event.promptId, option.id)}>{option.label}</button>)}</div> : null}
-      {event.type === 'complete' ? <p className="modal-intro" role="status">{serviceName} is connected. Start a new Prime session to use this integration.</p> : null}
+      {event.type === 'complete' ? <p className="modal-intro" role="status">Provider is connected. Start a new Prime session to use it.</p> : null}
       {event.type === 'error' ? <p className="page-inline-error" role="alert">{event.error}</p> : null}
     </Modal>
   )

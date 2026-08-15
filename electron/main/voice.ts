@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { VOICE_CREDENTIAL_PROVIDERS } from '../../src/types/api'
+import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import type {
   AppSettings,
   HarnessId,
@@ -517,6 +518,7 @@ export class VoiceService {
   private async startTask(args: Record<string, unknown>, harness: HarnessId): Promise<VoiceToolResult> {
     const projectId = requireId(args.project_id, 'project_id')
     const prompt = cleanText(args.prompt, 'prompt')
+    assertNoMcpAuthenticationCommand(prompt, harness)
     const title = args.title === undefined ? undefined : requireString(args.title, 'title', { min: 1, max: 200, trim: true })
     const modelQuery = args.model === undefined ? undefined : requireString(args.model, 'model', { min: 1, max: 512, trim: true })
     const reasoningQuery = args.reasoning === undefined ? undefined : requireString(args.reasoning, 'reasoning', { min: 1, max: 64, trim: true })

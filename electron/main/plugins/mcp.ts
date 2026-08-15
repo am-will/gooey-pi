@@ -3,6 +3,7 @@ import { renameSync, type BigIntStats, type Stats } from 'node:fs'
 import { lstat, mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { CapabilityMutationInput, HarnessId, McpConnectionInput, McpStateInput, ProcessOutcome } from '../../../src/types/api'
+import { isAppManageableLocalMcpKey, isNetworkMcpDefinition, MAX_MCP_DEFINITION_KEY_LENGTH, NETWORK_MCP_UNAVAILABLE_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '../../../src/lib/mcp-policy'
 import { isPathWithin, isRecord, requireString } from '../validation'
 import { errorCode, readAtMost } from './file-io'
 
@@ -263,30 +264,17 @@ async function writeSettingsAtomically(
 
 export function validateMcpConnection(value: unknown, harness: HarnessId = 'prime'): McpConnectionInput {
   if (!isRecord(value)) throw new TypeError('MCP connection must be an object')
+  if (isNetworkMcpDefinition(value)) throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
   const name = requireString(value.name, 'MCP server name', { min: 1, max: 64, trim: true })
   // Prime keeps its historical looser charset; OMP and pi mcp.json share the
   // stricter native map-key charset.
-  const validName = harness === 'prime' ? /^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(name) : /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(name)
+  const validName = harness === 'prime' ? /^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(name) : isAppManageableLocalMcpKey(name)
   if (!validName || ['__proto__', 'prototype', 'constructor'].includes(name)) throw new TypeError('MCP server name contains unsupported characters')
   const scope = value.scope
   if (scope !== 'user' && scope !== 'project') throw new TypeError('MCP scope must be user or project')
   const projectPath = scope === 'project' ? requireString(value.projectPath, 'projectPath', { min: 1, max: 4096 }) : undefined
-  if (value.type === 'http') {
-    const urlValue = requireString(value.url, 'MCP server URL', { min: 1, max: 2_048, trim: true })
-    let url: URL
-    try { url = new URL(urlValue) } catch { throw new TypeError('MCP server URL is invalid') }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('MCP server URL must use http or https')
-    if (url.username || url.password) throw new TypeError('MCP server URL credentials are not allowed')
-    const auth = value.auth ?? 'none'
-    if (auth !== 'none' && auth !== 'oauth' && auth !== 'bearer') throw new TypeError('MCP authentication must be none, oauth, or bearer')
-    const bearerTokenEnvVar = auth === 'bearer'
-      ? requireString(value.bearerTokenEnvVar, 'Bearer token environment variable', { min: 1, max: 128, trim: true })
-      : undefined
-    if (bearerTokenEnvVar && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(bearerTokenEnvVar)) throw new TypeError('Bearer token environment variable is invalid')
-    return { name, scope, projectPath, type: 'http', url: url.toString(), auth, bearerTokenEnvVar }
-  }
   if (value.type === 'stdio') {
-    if (harness === 'prime') throw new TypeError('Prime Agent MCP integrations support remote HTTP servers only')
+    if (harness === 'prime') throw new TypeError(PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL)
     const command = requireString(value.command, 'MCP command', { min: 1, max: 2_048, trim: true })
     if (command.startsWith('-') || /[\0\r\n\u2028\u2029]/.test(command)) throw new TypeError('MCP command is invalid')
     if (value.args !== undefined && !Array.isArray(value.args)) throw new TypeError('MCP arguments must be a list')
@@ -304,7 +292,7 @@ export function validateMcpConnection(value: unknown, harness: HarnessId = 'prim
 export function validateMcpStateInput(value: unknown, harness: HarnessId = 'prime'): McpStateInput {
   if (!isRecord(value)) throw new TypeError('MCP state must be an object')
   const name = requireString(value.name, 'MCP server name', { min: 1, max: 64, trim: true })
-  const validName = harness === 'prime' ? /^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(name) : /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(name)
+  const validName = harness === 'prime' ? /^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(name) : isAppManageableLocalMcpKey(name)
   if (!validName || ['__proto__', 'prototype', 'constructor'].includes(name)) throw new TypeError('MCP server name contains unsupported characters')
   if (value.scope !== 'user' && value.scope !== 'project') throw new TypeError('MCP scope must be user or project')
   const projectPath = value.scope === 'project' ? requireString(value.projectPath, 'projectPath', { min: 1, max: 4096 }) : undefined
@@ -324,8 +312,20 @@ export function validateCapabilityMutation(value: unknown, harness: HarnessId = 
     ? requireString(value.source, 'Package source', { min: 1, max: 2_048, trim: true })
     : value.source === undefined ? undefined : requireString(value.source, 'Associated package source', { min: 1, max: 2_048, trim: true })
   if (source && (source.startsWith('-') || /[\r\n\u2028\u2029]/.test(source))) throw new TypeError('Package source is invalid')
-  if (value.kind === 'mcp') validateMcpStateInput({ name, scope, projectPath, enabled: value.action === 'enable' }, harness)
-  return { kind: value.kind, action: value.action, name, source, scope, projectPath }
+  let definitionKey: string | undefined
+  if (value.kind === 'mcp' && value.action === 'remove' && value.definitionKey !== undefined) {
+    if (typeof value.definitionKey !== 'string' || value.definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) {
+      throw new TypeError('MCP definition key exceeds the supported removal limit')
+    }
+    definitionKey = value.definitionKey
+  } else if (value.kind === 'mcp') {
+    validateMcpStateInput({ name, scope, projectPath, enabled: value.action === 'enable' }, harness)
+  }
+  return {
+    kind: value.kind, action: value.action, name,
+    ...(definitionKey !== undefined ? { definitionKey } : {}),
+    source, scope, projectPath,
+  }
 }
 
 export async function prepareProjectSettingsPath(
@@ -385,6 +385,9 @@ export async function updateMcpSettings(
   fingerprint: FingerprintSettings = settingsFingerprint,
   options: { agentName?: string; harness?: HarnessId; schema?: string; successMessage?: string; includeType?: boolean } = {},
 ): Promise<ProcessOutcome> {
+  if (isNetworkMcpDefinition(input)) throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
+  if (options.harness !== 'omp' && options.harness !== 'pi') throw new TypeError(PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL)
+  if (input.type !== 'stdio') throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
   const agentName = options.agentName ?? 'Prime Agent'
   const settingsPath = typeof target === 'string' ? target : target.path
   const verify = typeof target === 'string' ? undefined : target.verify
@@ -401,24 +404,13 @@ export async function updateMcpSettings(
         return { ok: false, reason: 'blocked', output: `An MCP server named “${input.name}” already exists in this scope.` }
       }
       const includeType = options.includeType !== false
-      const auth = input.type === 'http' ? input.auth ?? 'none' : 'none'
-      const authConfig = input.type !== 'http' || auth === 'none' ? {}
-        : options.harness === 'prime'
-          ? auth === 'oauth' ? { oauth: true } : { bearerTokenEnvVar: input.bearerTokenEnvVar }
-          : options.harness === 'pi'
-            ? auth === 'oauth' ? { auth: 'oauth' } : { auth: 'bearer', bearerTokenEnv: input.bearerTokenEnvVar }
-            : auth === 'oauth'
-              ? {}
-              : { headers: { Authorization: ['Bearer ${', input.bearerTokenEnvVar, '}'].join('') } }
-      const config = input.type === 'http'
-        ? { ...(includeType ? { type: 'http' } : {}), url: input.url, ...authConfig, enabled: true }
-        : { ...(includeType ? { type: 'stdio' } : {}), command: input.command, ...(input.args?.length ? { args: input.args } : {}), enabled: true }
+      const config = { ...(includeType ? { type: 'stdio' } : {}), command: input.command, ...(input.args?.length ? { args: input.args } : {}), enabled: true }
       settings.mcpServers = { ...currentServers, [input.name]: config }
       if (options.schema && settings.$schema === undefined) settings.$schema = options.schema
       if (await writeSettingsAtomically(settingsPath, settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
         return { ok: true, output: options.successMessage ?? (agentName === 'OMP'
           ? `Saved MCP server definition “${input.name}”. Start a new OMP session to load it.`
-          : `Saved MCP server definition “${input.name}”. Install or add a matching integration skill, then start a new Prime session.`) }
+          : `Saved MCP server definition “${input.name}”. Start a new ${agentName} session to load it.`) }
       }
     }
     throw new Error(`${agentName} settings changed repeatedly; no MCP configuration was overwritten`)
@@ -431,8 +423,11 @@ export async function updateMcpState(
   target: string | ProjectSettingsPath,
   input: McpStateInput,
   fingerprint: FingerprintSettings = settingsFingerprint,
-  options: { agentName?: string } = {},
+  options: { agentName?: string; harness?: HarnessId } = {},
 ): Promise<ProcessOutcome> {
+  if (options.harness !== 'omp' && options.harness !== 'pi') {
+    return { ok: false, reason: 'blocked', output: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
+  }
   const agentName = options.agentName ?? 'Prime Agent'
   const settingsPath = typeof target === 'string' ? target : target.path
   const verify = typeof target === 'string' ? undefined : target.verify
@@ -446,6 +441,7 @@ export async function updateMcpState(
       if (!isRecord(settings.mcpServers)) return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
       const current = settings.mcpServers[input.name]
       if (!isRecord(current)) return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
+      if (isNetworkMcpDefinition(current)) return { ok: false, reason: 'blocked', output: NETWORK_MCP_UNAVAILABLE_DETAIL }
       const currentlyEnabled = current.enabled !== false
       if (currentlyEnabled === input.enabled) {
         return { ok: true, output: `MCP server “${input.name}” is already ${input.enabled ? 'enabled' : 'disabled'}.` }
@@ -463,60 +459,34 @@ export async function updateMcpState(
 
 export async function removeMcpDefinition(
   target: string | ProjectSettingsPath,
-  input: Pick<CapabilityMutationInput, 'name'>,
+  input: Pick<CapabilityMutationInput, 'name' | 'definitionKey'>,
   fingerprint: FingerprintSettings = settingsFingerprint,
   options: { agentName?: string } = {},
 ): Promise<ProcessOutcome> {
   const agentName = options.agentName ?? 'Prime Agent'
   const settingsPath = typeof target === 'string' ? target : target.path
+  const definitionKey = input.definitionKey ?? input.name
+  if (definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) {
+    throw new TypeError('MCP definition key exceeds the supported removal limit')
+  }
   const verify = typeof target === 'string' ? undefined : target.verify
   const release = await acquireSettingsLock(settingsPath, verify)
   try {
     for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
+      await verify?.()
       const snapshot = await readSettingsForUpdate(settingsPath, agentName)
-      if (!isRecord(snapshot.settings.mcpServers) || !isRecord(snapshot.settings.mcpServers[input.name])) {
+      await verify?.()
+      if (!isRecord(snapshot.settings.mcpServers) || !Object.hasOwn(snapshot.settings.mcpServers, definitionKey)) {
         return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
       }
       const nextServers = { ...snapshot.settings.mcpServers }
-      delete nextServers[input.name]
+      delete nextServers[definitionKey]
       snapshot.settings.mcpServers = nextServers
       if (await writeSettingsAtomically(settingsPath, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
         return { ok: true, output: `Removed MCP server “${input.name}”. Other server definitions were kept.` }
       }
     }
     throw new Error(`${agentName} settings changed repeatedly; no MCP configuration was overwritten`)
-  } finally {
-    await release()
-  }
-}
-
-export async function updateBuiltinMcpState(
-  target: string,
-  input: Pick<CapabilityMutationInput, 'name' | 'action'> & { url: string },
-  fingerprint: FingerprintSettings = settingsFingerprint,
-): Promise<ProcessOutcome> {
-  const release = await acquireSettingsLock(target)
-  try {
-    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
-      const snapshot = await readSettingsForUpdate(target)
-      const servers = isRecord(snapshot.settings.mcpServers) ? { ...snapshot.settings.mcpServers } : {}
-      const current = servers[input.name]
-      if (input.action === 'remove') return { ok: false, reason: 'blocked', output: `Built-in MCP integration “${input.name}” cannot be removed.` }
-      if (input.action === 'disable') {
-        if (current !== undefined) return { ok: false, reason: 'blocked', output: `Built-in MCP integration “${input.name}” has a custom server definition; manage that definition instead.` }
-        servers[input.name] = { type: 'http', url: input.url, oauth: true, enabled: false }
-      } else {
-        if (!isRecord(current) || current.type !== 'http' || current.url !== input.url || current.oauth !== true || current.enabled !== false) {
-          return { ok: true, output: `Built-in MCP integration “${input.name}” is already enabled.` }
-        }
-        delete servers[input.name]
-      }
-      snapshot.settings.mcpServers = servers
-      if (await writeSettingsAtomically(target, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint)) {
-        return { ok: true, output: `${input.action === 'enable' ? 'Enabled' : 'Disabled'} built-in MCP integration “${input.name}” without changing its authorization.` }
-      }
-    }
-    throw new Error('Prime Agent settings changed repeatedly; no MCP configuration was overwritten')
   } finally {
     await release()
   }

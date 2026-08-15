@@ -181,26 +181,25 @@ describe('provider settings behavior and accessibility', () => {
     expect(onRespond).toHaveBeenCalledWith('prompt-1', 'work')
   })
 
-  it('explains both MCP browser and authorization-code completion paths', async () => {
-    await render(<ProviderAuthModal event={{ type: 'prompt', flowId: 'flow-1', providerId: 'mcp:notion', promptId: 'prompt-1', message: 'Paste the authorization code from your browser.', placeholder: 'Authorization code' }} onOpen={() => undefined} onRespond={() => undefined} onCancel={() => undefined} />)
+  it('renders provider prompts without MCP-specific authentication claims', async () => {
+    await render(<ProviderAuthModal event={{ type: 'prompt', flowId: 'flow-1', providerId: 'openai-codex', promptId: 'prompt-1', message: 'Paste the authorization code from your browser.', placeholder: 'Authorization code' }} onOpen={() => undefined} onRespond={() => undefined} onCancel={() => undefined} />)
 
-    expect(container.textContent).toContain('Finish authentication in your browser.')
-    expect(container.textContent).toContain('If Notion gives you an authorization code, enter it below.')
-    expect(container.textContent).toContain('Otherwise, GooeyPi will finish automatically after you authorize.')
-    expect(container.querySelector('label span')?.textContent).toBe('Enter authorization code')
+    expect(container.textContent).not.toContain('GooeyPi will finish automatically')
+    expect(container.querySelector('label span')?.textContent).toBe('Paste the authorization code from your browser.')
+    expect(container.querySelector('input')?.getAttribute('placeholder')).toBe('Authorization code')
   })
 
-  it('keeps explicit MCP authentication success and failure results visible until closed', async () => {
+  it('keeps provider authentication success and failure results visible until closed', async () => {
     const onClose = vi.fn()
-    await render(<ProviderAuthModal event={{ type: 'complete', flowId: 'flow-1', providerId: 'mcp:notion' }} onOpen={() => undefined} onRespond={() => undefined} onCancel={onClose} />)
+    await render(<ProviderAuthModal event={{ type: 'complete', flowId: 'flow-1', providerId: 'openai-codex' }} onOpen={() => undefined} onRespond={() => undefined} onCancel={onClose} />)
     expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Authentication successful')
-    expect(container.textContent).toContain('Notion is connected. Start a new Prime session to use this integration.')
+    expect(container.textContent).toContain('Provider is connected. Start a new Prime session to use it.')
     await click(button('Close'))
     expect(onClose).toHaveBeenCalledOnce()
 
-    await render(<ProviderAuthModal event={{ type: 'error', flowId: 'flow-2', providerId: 'mcp:notion', error: 'Notion rejected the callback' }} onOpen={() => undefined} onRespond={() => undefined} onCancel={() => undefined} />)
+    await render(<ProviderAuthModal event={{ type: 'error', flowId: 'flow-2', providerId: 'openai-codex', error: 'Provider rejected the callback' }} onOpen={() => undefined} onRespond={() => undefined} onCancel={() => undefined} />)
     expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Authentication failed')
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Notion rejected the callback')
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Provider rejected the callback')
   })
 
   it('persists the diagnostics toggle through the privacy settings contract', async () => {

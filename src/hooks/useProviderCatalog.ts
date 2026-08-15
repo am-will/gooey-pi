@@ -239,11 +239,6 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     await bridge.providers.startOAuth(providerId)
   }, [bridge])
 
-  const startMcpOAuth = useCallback(async (server: string) => {
-    if (!bridge) throw new Error('MCP integrations can only be configured in the desktop app.')
-    await bridge.providers.startMcpOAuth(server, 'prime')
-  }, [bridge])
-
   const respondOAuth = useCallback((promptId: string, value?: string) => {
     if (!bridge || !authEvent) return
     void bridge.providers.respondOAuth(authEvent.flowId, promptId, value).catch(reportError)
@@ -257,6 +252,6 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   return {
     model, effort, fast, catalog, authEvent, selectedModel, reasoningLevels, modelsByProvider,
     refresh, changeModel, changeEffort, changeFast,
-    saveApiKey, logout, setEnabled, setAllEnabled, setAllDisabled, setModelEnabled, startOAuth, startMcpOAuth, respondOAuth, cancelOAuth,
+    saveApiKey, logout, setEnabled, setAllEnabled, setAllDisabled, setModelEnabled, startOAuth, respondOAuth, cancelOAuth,
   }
 }

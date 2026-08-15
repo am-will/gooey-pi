@@ -484,7 +484,7 @@ test.describe('Prime Work desktop smoke', () => {
       || testInfo.title === 'reflects an external JSONL append without reselecting the live session'
     const liveInstall = testInfo.title === 'adds and connects to a harness installed while the app is open'
     const noHarnesses = testInfo.title === 'opens Harness settings from the no-harness recovery prompt'
-    const authenticatedMcp = testInfo.title === 'shows authenticated built-in Prime MCPs in Capabilities'
+    const authenticatedMcp = testInfo.title === 'shows built-in Prime MCPs without inspecting or changing authorization'
     let startupError: unknown
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const fixture = createHermeticFixture(activeSession)
@@ -1398,20 +1398,18 @@ test.describe('Prime Work desktop smoke', () => {
         await computerUseToggle.click()
         await expect(page.getByRole('button', { name: 'Disable Computer Use | TryCUA' })).toHaveAttribute('aria-pressed', 'true')
         await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.computerUseEnabled).toBe(true)
-        await expect(page.getByText(/Prime MCP integrations require a matching Python skill package/)).toHaveCount(0)
         await page.getByRole('button', { name: 'Add', exact: true }).click()
         const addDialog = page.getByRole('dialog', { name: 'Add a Prime capability' })
         await expect(addDialog.getByText('Add MCP', { exact: true })).toBeVisible()
         await expect(addDialog.getByText('Add Package', { exact: true })).toBeVisible()
         await expect(addDialog.getByText('Add Extension', { exact: true })).toBeVisible()
         await expect(addDialog.getByText(/Not every third-party package, plugin, or extension will work in GooeyPi/)).toBeVisible()
-        await addDialog.getByRole('button', { name: /Add MCP/ }).click()
-        const mcpDialog = page.getByRole('dialog', { name: 'Add MCP server' })
-        await expect(mcpDialog.getByText(/Not every third-party/)).toHaveCount(0)
-        await expect(mcpDialog.getByText(/Prime MCP integrations require a matching Python skill package/)).toBeVisible()
-        await expect(mcpDialog.getByText('Integration package source', { exact: true })).toBeVisible()
-        await expect(mcpDialog.getByText('Local command', { exact: true })).toHaveCount(0)
-        await mcpDialog.getByRole('button', { name: 'Close' }).click()
+        const addMcp = addDialog.getByRole('button', { name: /Add MCP/ })
+        await expect(addMcp).toBeDisabled()
+        await expect(addMcp).toContainText('Prime MCP setup is managed outside GooeyPi')
+        await expect(addDialog.getByText('Server URL', { exact: true })).toHaveCount(0)
+        await expect(addDialog.getByText('Authentication', { exact: true })).toHaveCount(0)
+        await addDialog.getByRole('button', { name: 'Close' }).click()
       }
     }
     await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
@@ -1459,13 +1457,13 @@ test.describe('Prime Work desktop smoke', () => {
     await chooser.getByRole('button', { name: /Add MCP/ }).click()
     const addDialog = page.getByRole('dialog', { name: 'Add MCP server' })
     await addDialog.getByLabel('Server name').fill('docs')
-    await addDialog.getByLabel('Server URL').fill('https://docs.example/mcp')
-    await addDialog.getByLabel('Authentication').selectOption('oauth')
-    await addDialog.getByRole('button', { name: 'Save and log in' }).click()
-    const promptPath = join(fixtureRoot, 'pi-prompt-args.json')
-    await expect.poll(() => existsSync(promptPath) ? JSON.parse(readFileSync(promptPath, 'utf8')).message : null).toBe('/mcp-auth docs')
+    await addDialog.getByLabel('Executable').fill('mcp-docs')
+    await addDialog.getByLabel(/Arguments/).fill('--local')
+    await addDialog.getByRole('button', { name: 'Save local server' }).click()
+    const mcpPath = join(fixtureRoot, 'home', '.pi', 'agent', 'mcp.json')
+    await expect.poll(() => existsSync(mcpPath) ? JSON.parse(readFileSync(mcpPath, 'utf8')).mcpServers.docs : null).toEqual({ command: 'mcp-docs', args: ['--local'], enabled: true })
 
-    await page.getByRole('button', { name: 'Capabilities' }).click()
+    await addDialog.getByRole('button', { name: 'Close' }).click()
 
     await page.getByRole('button', { name: 'Disable Pi MCP Adapter' }).click()
     const confirmation = page.getByRole('dialog', { name: 'Disable Pi MCP Adapter?' })
@@ -1592,7 +1590,7 @@ test.describe('Prime Work desktop smoke', () => {
     await page.getByRole('button', { name: /^New session/ }).first().click()
     const composer = page.getByRole('combobox', { name: 'Message Prime' })
     await composer.fill('/mcp')
-    await expect(page.locator('.composer-menu').getByRole('option', { name: /\/mcp Manage and sign in/ })).toBeVisible()
+    await expect(page.locator('.composer-menu').getByRole('option', { name: /\/mcp View MCP integrations/ })).toBeVisible()
     await page.getByRole('button', { name: 'Send message' }).click()
 
     await expect(page.getByRole('heading', { name: /Extend/ })).toBeVisible()
@@ -1600,33 +1598,21 @@ test.describe('Prime Work desktop smoke', () => {
     expect(existsSync(join(fixtureRoot, 'prompt-args.json'))).toBe(false)
   })
 
-  test('shows authenticated built-in Prime MCPs in Capabilities', async () => {
+  test('shows built-in Prime MCPs without inspecting or changing authorization', async () => {
     await page.getByRole('button', { name: 'Capabilities', exact: true }).click()
     const notion = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Notion', exact: true }) })
-    await expect(notion).toContainText('Authenticated official MCP integration')
-    const disconnect = notion.getByRole('button', { name: 'Disable Notion' })
-    await expect(disconnect).toBeVisible()
+    await expect(notion).toContainText('Configuration and authorization are managed directly in Prime Agent')
+    await expect(notion.getByLabel('Externally managed Notion')).toBeVisible()
+    await expect(notion.getByRole('button', { name: 'Disable Notion' })).toHaveCount(0)
+    await expect(notion.getByRole('button', { name: 'Forget authorization for Notion' })).toHaveCount(0)
     const notionBox = await notion.boundingBox()
-    const disconnectBox = await disconnect.boundingBox()
-    if (!notionBox || !disconnectBox) throw new Error('Notion capability controls did not render')
-    expect(Math.abs(notionBox.x + notionBox.width - disconnectBox.x - disconnectBox.width)).toBeLessThanOrEqual(6)
-    await disconnect.hover()
-    await expect(disconnect.locator('.plugin-toggle__check')).toHaveCSS('opacity', '0')
-    await expect(disconnect.locator('.plugin-toggle__disable')).toHaveCSS('opacity', '1')
+    const controlBox = await notion.getByLabel('Externally managed Notion').boundingBox()
+    if (!notionBox || !controlBox) throw new Error('Notion capability controls did not render')
+    expect(Math.abs(notionBox.x + notionBox.width - controlBox.x - controlBox.width)).toBeLessThanOrEqual(6)
     await expect(notion.getByRole('button', { name: 'Remove Notion' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Remove Ask user' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Remove Browser' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Remove Computer Use | TryCUA' })).toHaveCount(0)
-    await disconnect.click()
-    const confirmation = page.getByRole('dialog', { name: 'Disable Notion?' })
-    await expect(confirmation).toContainText('saved authorization are kept')
-    await confirmation.getByRole('button', { name: 'Yes, disable' }).click()
-    const reconnect = notion.getByRole('button', { name: 'Enable Notion' })
-    await expect(reconnect).toBeVisible()
-    await reconnect.hover()
-    await expect(reconnect.locator('.plugin-toggle__plus')).not.toHaveCSS('transform', 'none')
-    await expect(reconnect.locator('.plugin-toggle__disable')).toHaveCount(0)
-    await expect(notion).toContainText('Authenticated official MCP integration')
     expect(JSON.parse(readFileSync(join(fixtureRoot, 'home', '.prime', 'agent', 'auth.json'), 'utf8'))['mcp:notion'].access).toBe('fixture-token')
   })
 

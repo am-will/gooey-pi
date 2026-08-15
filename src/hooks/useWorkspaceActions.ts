@@ -3,10 +3,11 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { requestFailureMessage } from '@/app/workspace'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
+import { parseMcpAuthenticationCommand } from '@/lib/mcp-policy'
 import { parseSessionActionSnapshot } from '@/lib/session-actions'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, HarnessId, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -43,7 +44,7 @@ export interface WorkspaceActionsDeps {
   reportError(error: unknown): void
 }
 
-export type PrimeMcpCommand = { type: 'open' } | { type: 'login'; server: string }
+export type McpCommand = { type: 'open' } | { type: 'authenticate'; server?: string }
 
 interface StartedSessionIndexInput {
   bridge: PrimeWorkApi
@@ -98,12 +99,13 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
   await indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle: title, isCurrent }).catch(() => undefined)
 }
 
-export function parsePrimeMcpCommand(prompt: string): PrimeMcpCommand | undefined {
+export function parseMcpCommand(prompt: string, harness: HarnessId): McpCommand | undefined {
   const value = prompt.trim()
-  if (value === '/mcp') return { type: 'open' }
-  const match = /^\/mcp\s+login\s+([A-Za-z0-9][A-Za-z0-9._ -]{0,63})\s*$/.exec(value)
-  if (!match || ['__proto__', 'prototype', 'constructor'].includes(match[1])) return undefined
-  return { type: 'login', server: match[1] }
+  if (harness === 'prime' && value === '/mcp') return { type: 'open' }
+  const authentication = parseMcpAuthenticationCommand(value, harness)
+  return authentication
+    ? authentication.server ? { type: 'authenticate', server: authentication.server } : { type: 'authenticate' }
+    : undefined
 }
 
 /**
@@ -251,20 +253,16 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
 
   const sendPrompt = async (prompt: string, images: PromptImage[] = [], intent: PromptDeliveryIntent = 'queue') => {
     const { bridge, sessions, workspace, provider, settingsState, submissionAdmissionRef, demoTimerRef, setSessions, setSubmitting, setView, setToast, reportError } = getDeps()
-    const mcpCommand = images.length === 0 && settingsState.settings.activeHarness === 'prime' ? parsePrimeMcpCommand(prompt) : undefined
-    if (mcpCommand?.type === 'open') {
+    const commandHarness = workspace.workspaceRef?.current?.project?.harness ?? settingsState.settings.activeHarness
+    const mcpCommand = parseMcpCommand(prompt, commandHarness)
+    if (mcpCommand?.type === 'open' && images.length === 0) {
       setView('plugins')
       setToast('Manage MCP integrations in Capabilities.')
       return
     }
-    if (mcpCommand?.type === 'login') {
-      try {
-        await provider.startMcpOAuth(mcpCommand.server)
-        setToast(`Opening ${mcpCommand.server} sign-in…`)
-      } catch (error) {
-        reportError(error)
-        throw error
-      }
+    if (mcpCommand?.type === 'authenticate') {
+      const target = mcpCommand.server ? ` to sign in to ${mcpCommand.server}` : ' to authenticate network MCP servers'
+      setToast(`Network MCP authentication is managed outside GooeyPi. Use ${HARNESS_AGENT_NAMES[commandHarness]} directly${target}.`)
       return
     }
     const currentWorkspace = workspace.workspaceRef.current
