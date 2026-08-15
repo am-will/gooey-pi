@@ -1625,6 +1625,8 @@ test.describe('Prime Work desktop smoke', () => {
 
     const dialog = page.getByRole('dialog', { name: 'Answer 2 questions' })
     await expect(dialog).toBeVisible()
+    await expect(page.locator('.work-disclosure__rail')).toBeVisible()
+    await expect(page.locator('.work-disclosure__status')).toContainText('Thinking')
     await expect(page.locator('.activity-line--reasoning')).toContainText('Reviewing the available release channels')
     await expect(page.locator('.thinking-dots > span')).toHaveCount(3)
     await expect(page.locator('.work-disclosure__button')).toHaveCount(0)

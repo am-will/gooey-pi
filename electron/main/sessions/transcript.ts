@@ -399,9 +399,13 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       continue
     }
     const role = roleOf(message)
+    const entryTimestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
     const rawTimestamp = typeof message.timestamp === 'string' || typeof message.timestamp === 'number' ? message.timestamp
-      : typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+      : entryTimestamp
     const timestamp = typeof rawTimestamp === 'string' ? boundedString(rawTimestamp, 128) : rawTimestamp
+    // The message timestamp marks assistant start; the enclosing entry
+    // timestamp marks persistence/completion.
+    const completedAt = entryTimestamp ?? timestamp
     const parts = partsFromMessage(message)
     if (role === 'tool' && activeAssistant) {
       const toolCallId = typeof message.toolCallId === 'string' ? boundedString(message.toolCallId, 1_024) : undefined
@@ -413,17 +417,17 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
         }
         registerToolCalls(callIndex + 1, parts)
       } else appendAssistantParts(parts)
-      activeAssistant.completedAt = timestamp ?? activeAssistant.completedAt
+      activeAssistant.completedAt = completedAt ?? activeAssistant.completedAt
       continue
     }
     if (role === 'assistant') {
       if (activeAssistant) {
         appendAssistantParts(parts)
-        activeAssistant.completedAt = timestamp ?? activeAssistant.completedAt
+        activeAssistant.completedAt = completedAt ?? activeAssistant.completedAt
       } else {
         beginAssistantTurn()
         registerToolCalls(0, parts)
-        activeAssistant = { id: safeId, role, timestamp, startedAt: timestamp, completedAt: timestamp, parts }
+        activeAssistant = { id: safeId, role, timestamp, startedAt: timestamp, completedAt, parts }
         transcript.push(activeAssistant)
       }
       continue

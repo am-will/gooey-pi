@@ -228,7 +228,14 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
 export function WorkDisclosure({ message, parts, showReasoning, showTools, running = message.streaming }: { message: TranscriptMessage; parts: MessagePart[]; showReasoning: boolean; showTools: boolean; running?: boolean }) {
   const [open, setOpen] = useState(false)
   if (running) {
-    return <section className="work-disclosure is-running" aria-label="Prime work activity"><WorkTimeline parts={parts} showReasoning={showReasoning} showTools={showTools} streaming /><div className="work-disclosure__thinking"><ThinkingDots labelled /></div></section>
+    const reasoningVisible = showReasoning && parts.some((part) => part.type === 'thinking')
+    return <section className="work-disclosure is-running" aria-label="Agent work activity">
+      <span className="work-disclosure__rail" aria-hidden="true" />
+      <div className="work-disclosure__live">
+        <div className="work-disclosure__status" role="status"><span>{reasoningVisible ? 'Thinking' : 'Working'}</span><ThinkingDots /></div>
+        <WorkTimeline parts={parts} showReasoning={showReasoning} showTools={showTools} streaming />
+      </div>
+    </section>
   }
   const startedAt = timestamp(message.startedAt ?? message.timestamp) ?? 0
   const completedAt = timestamp(message.completedAt) ?? startedAt

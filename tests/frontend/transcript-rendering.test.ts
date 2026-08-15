@@ -24,7 +24,7 @@ function render(messages: TranscriptMessage[], active = false): string {
 }
 
 describe('transcript rendering', () => {
-  it('streams reasoning as ordinary markdown text with animated thinking dots', () => {
+  it('streams reasoning inside a distinct process rail with animated thinking dots', () => {
     const html = render([{
       id: 'active',
       role: 'assistant',
@@ -38,9 +38,11 @@ describe('transcript rendering', () => {
     }])
 
     expect(html).toContain('activity-line--reasoning')
+    expect(html).toContain('work-disclosure__rail')
+    expect(html).toContain('work-disclosure__status')
+    expect(html).toContain('>Thinking</span>')
     expect(html).toContain('Checking <strong>the workspace</strong> now.')
     expect(html).not.toContain('**the workspace**')
-    expect(html).not.toContain('>Reasoning<')
     expect(html).not.toContain('Worked for')
     expect(html).toContain('activity-line--tool')
     expect(html).not.toContain('activity-tool__details')
@@ -71,7 +73,7 @@ describe('transcript rendering', () => {
     expect(html).toContain('src/App.tsx')
     expect(html).not.toContain('read complete')
     expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('Prime work activity')
+    expect(html).toContain('Agent work activity')
     expect(html).not.toContain('Worked for')
     expect(html).not.toContain('message-actions')
   })
