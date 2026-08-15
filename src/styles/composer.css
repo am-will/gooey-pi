@@ -19,11 +19,10 @@
 .composer:focus-within { border-color: color-mix(in srgb, var(--border-strong) 65%, var(--focus)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 30%, transparent); }
 .composer--busy { border-color: color-mix(in srgb, var(--prime) 33%, var(--border-strong)); }
 .composer-input { position: relative; width: 100%; min-height: 55px; max-height: 150px; flex: 1; }
-.composer-input > textarea, .composer-input__highlight { width: 100%; height: 100%; min-height: 55px; max-height: 150px; padding: 6px 9px; border: 0; font: inherit; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; }
-.composer-input > textarea { position: relative; z-index: 1; display: block; resize: none; outline: 0; color: transparent; background: transparent; caret-color: var(--text); -webkit-text-fill-color: transparent; }
-.composer-input > textarea::placeholder { color: var(--text-tertiary); -webkit-text-fill-color: var(--text-tertiary); }
-.composer-input__highlight { position: absolute; z-index: 0; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
-.composer-input__highlight mark { padding: 0; border: 0; border-radius: 0; color: var(--prime); background: transparent; font: inherit; letter-spacing: inherit; }
+/* The native control is the sole text renderer so its glyphs, wrapping, selection,
+   caret, and platform scrollbar always share one authoritative content box. */
+.composer-input > textarea { width: 100%; height: 100%; min-height: 55px; max-height: 150px; display: block; padding: 6px 9px; border: 0; resize: none; outline: 0; color: var(--text); background: transparent; caret-color: var(--text); font: inherit; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; }
+.composer-input > textarea::placeholder { color: var(--text-tertiary); }
 .composer-attachments { display: flex; align-items: center; gap: 6px; padding: 1px 6px 7px; overflow-x: auto; }
 .composer-attachment { max-width: 190px; height: 34px; display: flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 3px 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); }
 .composer-attachment > img { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 4px; object-fit: cover; }
