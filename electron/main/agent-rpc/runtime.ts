@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import type { PrimeContextUsage, PrimeEventEnvelope, PrimeModelDescriptor, PrimeServiceTier, RuntimeInfo } from '../../../src/types/api'
 import { emptySessionActionSnapshot, parseSessionActionSnapshot } from '../../../src/lib/session-actions'
 import { RPC_READ_FRAME_LIMIT_BYTES } from '../jsonl-limits'
@@ -40,6 +41,18 @@ interface ChunkAssembly {
   nextIndex: number
   bytes: number
   parts: Buffer[]
+  expiresAt: number
+}
+
+export interface RpcChunkAssemblyTimer {
+  unref(): void
+}
+
+export interface RpcChunkAssemblyTiming {
+  /** Monotonic elapsed time; wall-clock adjustments must not affect expiry. */
+  now(): number
+  schedule(callback: () => void, delayMs: number): RpcChunkAssemblyTimer
+  cancel(timer: RpcChunkAssemblyTimer): void
 }
 
 interface ContextUsageRefreshRequest {
@@ -50,6 +63,12 @@ interface ContextUsageRefreshRequest {
 
 const MAX_RPC_CHUNK_COUNT = 4096
 const MAX_CONCURRENT_RPC_CHUNK_IDS = 4
+export const RPC_CHUNK_ASSEMBLY_INACTIVITY_MS = 30_000
+const DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING: RpcChunkAssemblyTiming = {
+  now: () => performance.now(),
+  schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+  cancel: (timer) => clearTimeout(timer as NodeJS.Timeout),
+}
 
 export class RpcRuntime {
   readonly runtimeId = randomUUID()
@@ -95,6 +114,8 @@ export class RpcRuntime {
   // v2 chunked frames: base64 rpc_chunk sequences reassembled per chunkId,
   // bounded by the shared read frame limit and small concurrency caps.
   private readonly chunkAssemblies = new Map<string, ChunkAssembly>()
+  private chunkAssemblySweepTimer: RpcChunkAssemblyTimer | null = null
+  private acceptingChunkFrames = true
 
   constructor(
     executable: string,
@@ -105,6 +126,7 @@ export class RpcRuntime {
     extraEnvironment: NodeJS.ProcessEnv = {},
     watchdogTimings: Partial<CompactionWatchdogTimings> = {},
     private readonly adapter: HarnessRpcAdapter = PRIME_RPC_ADAPTER,
+    private readonly chunkAssemblyTiming: RpcChunkAssemblyTiming = DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING,
   ) {
     this.watchdogTimings = { ...DEFAULT_COMPACTION_WATCHDOG_TIMINGS, ...watchdogTimings }
     this.info = { runtimeId: this.runtimeId, harness: this.adapter.id, cwd, isStreaming: false, isCompacting: false, sessionActions: emptySessionActionSnapshot() }
@@ -229,12 +251,19 @@ export class RpcRuntime {
   }
 
   stop(): Promise<boolean> {
-    this.stopPromise ??= this.performStop()
+    if (!this.stopPromise) {
+      // Stop accepting partial frames before the abort round-trip: the child
+      // may keep writing while that request is in flight.
+      this.acceptingChunkFrames = false
+      this.disposeChunkAssemblies()
+      this.stopPromise = this.performStop()
+    }
     return this.stopPromise
   }
 
   private async performStop(): Promise<boolean> {
     this.disposeCompactionWatchdog()
+    this.disposeChunkAssemblies()
     if (this.info.isStreaming || this.info.isCompacting || this.retryPending) {
       try { await this.request({ type: 'abort' }, 5_000) } catch { /* close stdin and escalate below */ }
     }
@@ -391,6 +420,7 @@ export class RpcRuntime {
   private handleLine(line: string): void {
     let value: unknown
     try { value = JSON.parse(line) } catch {
+      this.disposeChunkAssemblies()
       this.emit({ type: 'transport_error', error: `${this.adapter.agentName} emitted malformed JSON` })
       return
     }
@@ -426,6 +456,7 @@ export class RpcRuntime {
       return
     }
     if (this.adapter.chunkedFrames && raw.type === 'rpc_chunk') {
+      if (!this.acceptingChunkFrames) return
       this.handleChunkFrame(raw)
       return
     }
@@ -500,6 +531,7 @@ export class RpcRuntime {
       this.failChunkReassembly(chunkId, 'chunked frame carried invalid sequencing')
       return
     }
+    if (this.expireChunkAssemblies(chunkId) && index !== 0) return
     const assembly = this.chunkAssemblies.get(chunkId)
     if (!assembly) {
       if (index !== 0) {
@@ -523,7 +555,7 @@ export class RpcRuntime {
       this.failChunkReassembly(chunkId, 'chunk byteLength did not match its data')
       return
     }
-    const current = assembly ?? { count: Number(count), nextIndex: 0, bytes: 0, parts: [] }
+    const current = assembly ?? { count: Number(count), nextIndex: 0, bytes: 0, parts: [], expiresAt: 0 }
     if (current.bytes + decoded.length > RPC_READ_FRAME_LIMIT_BYTES) {
       this.failChunkReassembly(chunkId, 'chunked frame exceeded the maximum frame size')
       return
@@ -531,13 +563,19 @@ export class RpcRuntime {
     current.bytes += decoded.length
     current.parts.push(decoded)
     current.nextIndex += 1
+    // A new prefix always needs an initial deadline, including an empty first
+    // chunk. Once admitted, only retained-byte progress extends its lifetime.
+    if (!assembly || decoded.length > 0) current.expiresAt = this.chunkAssemblyTiming.now() + RPC_CHUNK_ASSEMBLY_INACTIVITY_MS
     if (current.nextIndex < current.count) {
       this.chunkAssemblies.set(chunkId, current)
+      this.rescheduleChunkAssemblySweep()
       return
     }
     this.chunkAssemblies.delete(chunkId)
+    this.rescheduleChunkAssemblySweep()
     let value: unknown
     try { value = JSON.parse(Buffer.concat(current.parts).toString('utf8')) } catch {
+      this.disposeChunkAssemblies()
       this.emit({ type: 'transport_error', error: `${this.adapter.agentName} emitted a malformed chunked frame` })
       return
     }
@@ -546,8 +584,51 @@ export class RpcRuntime {
 
   /** A broken reassembly is dropped without killing the runtime: the agent is still running, so the renderer reconciles from disk. */
   private failChunkReassembly(chunkId: string | undefined, error: string): void {
-    if (chunkId !== undefined) this.chunkAssemblies.delete(chunkId)
+    if (chunkId !== undefined) {
+      this.chunkAssemblies.delete(chunkId)
+      this.rescheduleChunkAssemblySweep()
+    }
     this.emit({ type: 'transport_limit', kind: 'chunk', error })
+  }
+
+  /** Keeps one unref'd timer aimed at the earliest inactivity deadline across the bounded assembly map. */
+  private rescheduleChunkAssemblySweep(): void {
+    if (this.chunkAssemblySweepTimer) this.chunkAssemblyTiming.cancel(this.chunkAssemblySweepTimer)
+    this.chunkAssemblySweepTimer = null
+    if (this.chunkAssemblies.size === 0 || this.stopped || this.transportFailed) return
+    const deadline = Math.min(...[...this.chunkAssemblies.values()].map((assembly) => assembly.expiresAt))
+    const timer = this.chunkAssemblyTiming.schedule(() => {
+      if (this.chunkAssemblySweepTimer !== timer) return
+      this.chunkAssemblySweepTimer = null
+      this.expireChunkAssemblies()
+    }, Math.max(0, deadline - this.chunkAssemblyTiming.now()))
+    timer.unref()
+    this.chunkAssemblySweepTimer = timer
+  }
+
+  private expireChunkAssemblies(wantedChunkId?: string): boolean {
+    const now = this.chunkAssemblyTiming.now()
+    let expiredAny = false
+    let wantedExpired = false
+    for (const [chunkId, assembly] of this.chunkAssemblies) {
+      if (assembly.expiresAt > now) continue
+      this.chunkAssemblies.delete(chunkId)
+      expiredAny = true
+      if (chunkId === wantedChunkId) wantedExpired = true
+      this.emit({
+        type: 'transport_limit',
+        kind: 'chunk',
+        error: 'RPC chunk assembly expired after inactivity',
+      })
+    }
+    if (expiredAny || this.chunkAssemblySweepTimer === null) this.rescheduleChunkAssemblySweep()
+    return wantedExpired
+  }
+
+  private disposeChunkAssemblies(): void {
+    if (this.chunkAssemblySweepTimer) this.chunkAssemblyTiming.cancel(this.chunkAssemblySweepTimer)
+    this.chunkAssemblySweepTimer = null
+    this.chunkAssemblies.clear()
   }
 
   private refreshContextUsage(activityTokens?: number): Promise<void> {
@@ -714,6 +795,8 @@ export class RpcRuntime {
   }
 
   private fail(error: Error): void {
+    this.acceptingChunkFrames = false
+    this.disposeChunkAssemblies()
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
     this.pending.clear()
     this.uncertainDeliveries.clear()
