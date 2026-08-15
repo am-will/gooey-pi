@@ -1376,7 +1376,7 @@ describe('non-registry dependency pins', () => {
     )
 
     // The lockfile sha512 hashes are the supply-chain integrity boundary for
-    // the vendored Prime Agent tarballs. A regenerated lockfile silently
+    // reviewed vendored tarballs. A regenerated lockfile silently
     // re-anchors them to whatever bytes are present; this pin file makes that
     // a deliberate, reviewed change. To upgrade Prime Agent on purpose:
     // verify the new tarballs, replace them in vendor/, update the lockfile,
@@ -1484,10 +1484,10 @@ describe('production dependency audit', () => {
     expect(() => parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, advisory: 'CVE-2024-1', expires: '2099-01-01', reason: AUDIT_EXCEPTION_REASON }] }))).toThrow(/GHSA/)
   })
 
-  test('the checked-in exception list is valid and every entry still expires in the future', () => {
+  test('the checked-in exception list is valid, current, and no longer suppresses extract-zip', () => {
     const exceptions = readAuditExceptions()
 
-    expect(exceptions.length).toBeGreaterThan(0)
+    expect(exceptions).not.toContainEqual(expect.objectContaining({ advisory: 'GHSA-jmr9-qjv8-65gv', package: 'extract-zip' }))
     for (const entry of exceptions) {
       expect(entry.expiresAt, `audit exception for ${entry.advisory} has expired; re-check for a fix`).toBeGreaterThan(Date.now())
     }
