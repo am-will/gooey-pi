@@ -10,6 +10,7 @@ import {
   LEGACY_DESKTOP_STATE_FILENAME,
   openDesktopStateStore,
   StateCompatibilityError,
+  StateMigrationError,
   UnsupportedStateVersionError,
 } from '../../electron/main/store'
 import type { JsonStateStoreFileHandle, JsonStateStoreFileSystem } from '../../electron/main/store'
@@ -552,7 +553,10 @@ describe('JsonStateStore', () => {
       },
     }, legacyPath)
 
-    await expect(store.ready()).rejects.toThrow(/legacy.*retire.*permission denied/i)
+    const readiness = store.ready()
+    await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+    await expect(readiness).rejects.toMatchObject({ currentStatePath: currentPath, legacyStatePath: legacyPath })
+    await expect(readiness).rejects.toThrow(/legacy.*retire.*permission denied.*retry/i)
     await expect(store.update((state) => { state.archivedSessions.push('/must-not-write') })).rejects.toThrow(/legacy.*retire.*permission denied/i)
     expect(readFileSync(currentPath, 'utf8')).toBe(currentRaw)
     expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
@@ -588,6 +592,27 @@ describe('JsonStateStore', () => {
 
     await store.ready()
     expect(events).toEqual(['legacy-rename', 'directory-open', 'directory-sync', 'directory-close'])
+  })
+
+  it('does not require directory fsync on a fresh install with no legacy authority', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      open: async (openedPath, flags, mode) => {
+        if (openedPath !== dir || flags !== 'r') return open(openedPath, flags, mode)
+        return {
+          writeFile: async () => { throw new Error('unexpected directory write') },
+          sync: async () => { throw Object.assign(new Error('directory fsync unavailable'), { code: 'EINVAL' }) },
+          close: async () => undefined,
+        }
+      },
+    }, legacyPath)
+
+    await store.ready()
+    expect(JSON.parse(readFileSync(currentPath, 'utf8'))).toMatchObject({ version: 4, projects: [] })
+    expect(existsSync(legacyPath)).toBe(false)
   })
 
   it('keeps the legacy authority when publishing v4 cannot fsync its directory', async () => {
@@ -648,6 +673,73 @@ describe('JsonStateStore', () => {
     const retried = await openDesktopStateStore(dir)
     expect(existsSync(legacyPath)).toBe(false)
     await retried.beginShutdown()
+  })
+
+  it('reports a rollback rename failure separately and preserves the migrated backup path', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const currentRaw = JSON.stringify({ version: 4, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    writeFileSync(currentPath, currentRaw)
+    writeFileSync(legacyPath, legacyRaw)
+    let backupPath = ''
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      open: async (openedPath, flags, mode) => {
+        if (openedPath !== dir || flags !== 'r') return open(openedPath, flags, mode)
+        return {
+          writeFile: async () => { throw new Error('unexpected directory write') },
+          sync: async () => { throw Object.assign(new Error('injected retirement sync failure'), { code: 'EIO' }) },
+          close: async () => undefined,
+        }
+      },
+      rename: async (oldPath, newPath) => {
+        if (oldPath === legacyPath) {
+          backupPath = newPath
+          await rename(oldPath, newPath)
+          return
+        }
+        throw Object.assign(new Error('injected rollback rename failure'), { code: 'EACCES' })
+      },
+    }, legacyPath)
+
+    const readiness = store.ready()
+    await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+    await expect(readiness).rejects.toThrow(/rollback rename failed.*injected rollback rename failure/i)
+    await expect(readiness).rejects.toMatchObject({ backupStatePath: expect.stringContaining(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`) })
+    expect(existsSync(legacyPath)).toBe(false)
+    expect(readFileSync(backupPath, 'utf8')).toBe(legacyRaw)
+  })
+
+  it('reports rollback fsync failure after restoring the legacy filename', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const currentRaw = JSON.stringify({ version: 4, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    writeFileSync(currentPath, currentRaw)
+    writeFileSync(legacyPath, legacyRaw)
+    let syncAttempts = 0
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      open: async (openedPath, flags, mode) => {
+        if (openedPath !== dir || flags !== 'r') return open(openedPath, flags, mode)
+        return {
+          writeFile: async () => { throw new Error('unexpected directory write') },
+          sync: async () => {
+            syncAttempts += 1
+            throw Object.assign(new Error(`injected directory sync failure ${syncAttempts}`), { code: 'EIO' })
+          },
+          close: async () => undefined,
+        }
+      },
+    }, legacyPath)
+
+    const readiness = store.ready()
+    await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+    await expect(readiness).rejects.toThrow(/legacy filename was restored.*rollback directory sync failed.*failure 2/i)
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
   })
 
   it('keeps only bounded absolute runtime path overrides without changing the active harness', () => {
