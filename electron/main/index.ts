@@ -32,7 +32,7 @@ import { configureGooeyPiAgentMessageSigning, loadOrCreateGooeyPiAgentMessageKey
 import { SessionService } from './sessions'
 import { ompSessionServiceOptions } from './sessions/omp'
 import { piSessionServiceOptions } from './sessions/pi'
-import { JsonStateStore } from './store'
+import { type JsonStateStore, openDesktopStateStore, StateCompatibilityError } from './store'
 import { TerminalService } from './terminal'
 import { VoiceService, voiceSecretStorageStatus } from './voice'
 import { isAllowedRendererAudioPermission } from './voice-permissions'
@@ -501,7 +501,7 @@ function requestWindow(reason: 'activation' | 'second instance'): void {
 async function bootstrap(): Promise<void> {
   const userDataPath = app.getPath('userData')
   configureGooeyPiAgentMessageSigning(loadOrCreateGooeyPiAgentMessageKey(join(userDataPath, 'agent-message-signing.key')))
-  const stateStore = new JsonStateStore(join(userDataPath, 'prime-work-state.json'))
+  const stateStore = await openDesktopStateStore(userDataPath)
   store = stateStore
   const discovery = new HarnessDiscoveryService(() => stateStore.getSettings().runtimePaths)
   const initialHarnesses = await discovery.refresh()
@@ -1005,6 +1005,9 @@ else void app.whenReady().then(async () => {
     if (!shutdownStarted && BrowserWindow.getAllWindows().length === 0) requestWindow('activation')
   })
 }).catch((error: unknown) => {
+  if (error instanceof StateCompatibilityError) {
+    dialog.showErrorBox('GooeyPi update required', boundedErrorMessage(error))
+  }
   if (!shutdownStarted) console.error(`GooeyPi failed to start: ${boundedErrorMessage(error)}`)
   app.quit()
 })

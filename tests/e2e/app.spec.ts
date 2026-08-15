@@ -3,6 +3,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { CURRENT_DESKTOP_STATE_FILENAME, LEGACY_DESKTOP_STATE_FILENAME } from '../../electron/main/store'
 
 let app: ElectronApplication | undefined
 let page: Page
@@ -152,7 +153,7 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
       birthtimeNs: info.birthtimeNs > 0n ? info.birthtimeNs.toString() : undefined,
     }
   }
-  writeFileSync(join(userData, 'prime-work-state.json'), JSON.stringify({
+  writeFileSync(join(userData, LEGACY_DESKTOP_STATE_FILENAME), JSON.stringify({
     version: 1,
     projects: [{
       id: 'multi-folder-project', name: 'Multi-folder fixture', path: canonicalProject,
@@ -696,7 +697,7 @@ test.describe('Prime Work desktop smoke', () => {
     await showPet.press('Space')
     await expect(showPet).not.toBeChecked()
     await expect(page.locator('.desktop-pet')).toHaveCount(0)
-    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings).toMatchObject({ petEnabled: false, petId: 'gooey-pi' })
+    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings).toMatchObject({ petEnabled: false, petId: 'gooey-pi' })
 
     await closeHermeticApp(app)
     app = undefined
@@ -782,7 +783,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(anthropic).toBeChecked()
     await page.getByTitle('Hide provider in OMP').filter({ has: anthropic }).click()
     await expect(anthropic).not.toBeChecked()
-    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings.ompDisabledProviders).toEqual(['anthropic'])
+    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.ompDisabledProviders).toEqual(['anthropic'])
     const voiceModelsAfter = await page.evaluate(async () => JSON.parse((await window.prime.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
     expect(voiceModelsAfter.models.map((model) => model.name)).toEqual(['GPT Fixture'])
 
@@ -814,8 +815,8 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(row.locator('.provider-model-row__toggle')).toBeVisible()
     await row.locator('.provider-model-row__toggle').click()
     await expect(toggle).not.toBeChecked()
-    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings.ompDisabledModels).toEqual(['openai-codex/gpt-fixture'])
-    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings.ompDisabledProviders).toEqual(['openai-codex'])
+    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.ompDisabledModels).toEqual(['openai-codex/gpt-fixture'])
+    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.ompDisabledProviders).toEqual(['openai-codex'])
     const groups = page.locator('.provider-model-group')
     await expect(groups.nth(0)).toContainText('Claude Fixture')
     await expect(groups.nth(1)).toContainText('GPT Fixture')
@@ -833,8 +834,8 @@ test.describe('Prime Work desktop smoke', () => {
     const hiddenToggle = page.getByRole('checkbox', { name: 'Show GPT Fixture model' })
     await page.locator('.provider-model-row').filter({ has: hiddenToggle }).locator('.provider-model-row__toggle').click()
     await expect(hiddenToggle).toBeChecked()
-    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings.ompDisabledModels).toEqual([])
-    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings.ompDisabledProviders).toEqual([])
+    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.ompDisabledModels).toEqual([])
+    await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.ompDisabledProviders).toEqual([])
     await page.getByRole('tab', { name: /Providers/ }).click()
     await expect(page.getByRole('checkbox', { name: 'Show openai-codex provider' })).toBeChecked()
   })
@@ -1335,7 +1336,7 @@ test.describe('Prime Work desktop smoke', () => {
         await expect(computerUseToggle).toHaveAttribute('aria-pressed', 'false')
         await computerUseToggle.click()
         await expect(page.getByRole('button', { name: 'Disable Computer Use | TryCUA' })).toHaveAttribute('aria-pressed', 'true')
-        await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', 'prime-work-state.json'), 'utf8')).settings.computerUseEnabled).toBe(true)
+        await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.computerUseEnabled).toBe(true)
         await expect(page.getByText(/Prime MCP integrations require a matching Python skill package/)).toHaveCount(0)
         await page.getByRole('button', { name: 'Add', exact: true }).click()
         const addDialog = page.getByRole('dialog', { name: 'Add a Prime capability' })

@@ -1,9 +1,17 @@
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { defaultSettings, JsonStateStore } from '../../electron/main/store'
+import {
+  CURRENT_DESKTOP_STATE_FILENAME,
+  defaultSettings,
+  JsonStateStore,
+  LEGACY_DESKTOP_STATE_FILENAME,
+  openDesktopStateStore,
+  StateCompatibilityError,
+  UnsupportedStateVersionError,
+} from '../../electron/main/store'
 import type { JsonStateStoreFileHandle, JsonStateStoreFileSystem } from '../../electron/main/store'
 import { SessionService } from '../../electron/main/sessions'
 
@@ -348,14 +356,14 @@ describe('JsonStateStore', () => {
       schedules: [],
     }))
     const state = new JsonStateStore(path).snapshot()
-    expect(state.version).toBe(3)
+    expect(state.version).toBe(4)
     expect(state.projects.map((project) => project.harness)).toEqual(['prime'])
     expect(state.settings.activeHarness).toBe('prime')
     expect(state.settings.ompApprovalMode).toBe('inherit')
     expect(state.settings.askUserEnabled).toBe(false)
   })
 
-  it('keeps valid harness fields and resets hostile ones to defaults', () => {
+  it('keeps valid harness fields and drops projects with hostile harnesses', () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')
     writeFileSync(path, JSON.stringify({
@@ -370,7 +378,7 @@ describe('JsonStateStore', () => {
       schedules: [],
     }))
     const kept = new JsonStateStore(path).snapshot()
-    expect(kept.projects.map((project) => project.harness)).toEqual(['omp', 'prime'])
+    expect(kept.projects.map((project) => project.harness)).toEqual(['omp'])
     expect(kept.settings.activeHarness).toBe('omp')
     expect(kept.settings.ompApprovalMode).toBe('yolo')
 
@@ -412,8 +420,8 @@ describe('JsonStateStore', () => {
       schedules: [],
     }))
     const state = new JsonStateStore(path).snapshot()
-    expect(state.version).toBe(3)
-    expect(state.projects.map((project) => project.harness)).toEqual(['pi', 'prime'])
+    expect(state.version).toBe(4)
+    expect(state.projects.map((project) => project.harness)).toEqual(['pi'])
     expect(state.settings.activeHarness).toBe('pi')
   })
 
@@ -451,8 +459,135 @@ describe('JsonStateStore', () => {
       schedules: [],
     }))
     const state = new JsonStateStore(path).snapshot()
-    expect(state.version).toBe(3)
+    expect(state.version).toBe(4)
     expect(state.settings.piDisabledProviders).toEqual([])
+  })
+
+  it('preserves an unsupported future state byte-for-byte and refuses updates', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const raw = '{\n  "version": 99,\n  "futureAuthority": { "leave": "exactly as written" }\n}\n'
+    writeFileSync(path, raw)
+    const store = new JsonStateStore(path)
+    const mutator = vi.fn()
+
+    expect(() => store.snapshot()).toThrow(UnsupportedStateVersionError)
+    expect(() => store.getSettings()).toThrow(UnsupportedStateVersionError)
+    expect(() => store.getProjects()).toThrow(UnsupportedStateVersionError)
+    expect(() => store.getArchivedSessions()).toThrow(UnsupportedStateVersionError)
+    await expect(store.ready()).rejects.toBeInstanceOf(UnsupportedStateVersionError)
+    await expect(store.ready()).rejects.toThrow(/version 99.*newer.*version 4.*upgrade GooeyPi/i)
+    await expect(store.update(mutator)).rejects.toBeInstanceOf(UnsupportedStateVersionError)
+    expect(mutator).not.toHaveBeenCalled()
+    await store.beginShutdown()
+
+    expect(readFileSync(path, 'utf8')).toBe(raw)
+    expect(readdirSync(dir)).toEqual([CURRENT_DESKTOP_STATE_FILENAME])
+  })
+
+  it('atomically migrates the legacy authority to the versioned filename and ignores later downgrade writes', async () => {
+    const dir = makeDirectory()
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyRaw = JSON.stringify({
+      version: 3,
+      projects: [
+        { id: 'omp-project', harness: 'omp', name: 'OMP', path: '/omp', folders: ['/omp'], primaryFolder: '/omp' },
+        { id: 'missing-harness', name: 'Missing', path: '/missing', folders: ['/missing'], primaryFolder: '/missing' },
+      ],
+      settings: defaultSettings(),
+      archivedSessions: [],
+      dismissedProjectPaths: [],
+      schedules: [],
+    }, null, 2)
+    writeFileSync(legacyPath, legacyRaw)
+
+    const migrated = await openDesktopStateStore(dir)
+    expect(migrated.snapshot().projects.map(({ id, harness }) => ({ id, harness }))).toEqual([{ id: 'omp-project', harness: 'omp' }])
+    await migrated.beginShutdown()
+    expect(JSON.parse(readFileSync(currentPath, 'utf8'))).toMatchObject({ version: 4, projects: [{ id: 'omp-project', harness: 'omp' }] })
+    expect(existsSync(legacyPath)).toBe(false)
+    const firstBackup = readdirSync(dir).find((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))
+    expect(firstBackup).toBeDefined()
+    expect(readFileSync(join(dir, firstBackup!), 'utf8')).toBe(legacyRaw)
+
+    const currentRaw = readFileSync(currentPath, 'utf8')
+    const downgradedRaw = JSON.stringify({
+      version: 2,
+      projects: [{ id: 'downgrade-write', name: 'Downgrade write', path: '/downgrade', folders: ['/downgrade'], primaryFolder: '/downgrade' }],
+      settings: defaultSettings(),
+      archivedSessions: [],
+      dismissedProjectPaths: [],
+      schedules: [],
+    })
+    writeFileSync(legacyPath, downgradedRaw)
+
+    const reopened = await openDesktopStateStore(dir)
+    expect(reopened.snapshot().projects.map(({ id, harness }) => ({ id, harness }))).toEqual([{ id: 'omp-project', harness: 'omp' }])
+    expect(readFileSync(currentPath, 'utf8')).toBe(currentRaw)
+    expect(existsSync(legacyPath)).toBe(false)
+    const backups = readdirSync(dir).filter((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))
+    expect(backups).toHaveLength(2)
+    expect(backups.map((name) => readFileSync(join(dir, name), 'utf8'))).toContain(downgradedRaw)
+    await reopened.update((state) => { state.archivedSessions.push('/sessions/new.jsonl') })
+    await reopened.beginShutdown()
+    expect(JSON.parse(readFileSync(currentPath, 'utf8')).archivedSessions).toEqual(['/sessions/new.jsonl'])
+    expect(existsSync(legacyPath)).toBe(false)
+  })
+
+  it('fails readiness and updates when a recreated legacy authority cannot be retired', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const currentRaw = JSON.stringify({ version: 4, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    writeFileSync(currentPath, currentRaw)
+    writeFileSync(legacyPath, legacyRaw)
+    const retirementError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      rename: async (oldPath, newPath) => {
+        if (oldPath === legacyPath) throw retirementError
+        await rename(oldPath, newPath)
+      },
+    }, legacyPath)
+
+    await expect(store.ready()).rejects.toThrow(/legacy.*retire.*permission denied/i)
+    await expect(store.update((state) => { state.archivedSessions.push('/must-not-write') })).rejects.toThrow(/legacy.*retire.*permission denied/i)
+    expect(readFileSync(currentPath, 'utf8')).toBe(currentRaw)
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
+  })
+
+  it('fsyncs the legacy parent directory after retiring its authority filename', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    writeFileSync(currentPath, JSON.stringify({ version: 4, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    writeFileSync(legacyPath, JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    const events: string[] = []
+    const directory: JsonStateStoreFileHandle = {
+      writeFile: async () => { throw new Error('unexpected directory write') },
+      sync: async () => { events.push('directory-sync') },
+      close: async () => { events.push('directory-close') },
+    }
+    const store = new JsonStateStore(currentPath, {
+      open: async (openedPath, flags) => {
+        expect(openedPath).toBe(dir)
+        expect(flags).toBe('r')
+        events.push('directory-open')
+        return directory
+      },
+      rename: async (oldPath, newPath) => {
+        expect(oldPath).toBe(legacyPath)
+        expect(newPath).toContain(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`)
+        events.push('legacy-rename')
+        await rename(oldPath, newPath)
+      },
+      unlink,
+    }, legacyPath)
+
+    await store.ready()
+    expect(events).toEqual(['legacy-rename', 'directory-open', 'directory-sync', 'directory-close'])
   })
 
   it('keeps only bounded absolute runtime path overrides without changing the active harness', () => {
@@ -477,19 +612,19 @@ describe('JsonStateStore', () => {
     expect(state.settings.activeHarness).toBe('omp')
   })
 
-  it('refuses to parse an oversized state file and backs it up instead', async () => {
+  it('preserves an oversized state file and fails closed without rewriting it', async () => {
     const dir = makeDirectory()
-    const path = join(dir, 'state.json')
-    writeFileSync(path, `{"version":2,"padding":"${'x'.repeat(64 * 1024 * 1024)}"}`)
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    try {
-      const store = new JsonStateStore(path)
-      expect(store.snapshot().projects).toEqual([])
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('refusing to parse'))
-      await store.update((state) => { state.archivedSessions.push('after-oversize') })
-      expect(readdirSync(dir).some((name) => name.startsWith('state.json.corrupt-'))).toBe(true)
-      expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['after-oversize'])
-    } finally { errorSpy.mockRestore() }
+    const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const raw = `{"version":99,"padding":"${'x'.repeat(64 * 1024 * 1024)}"}`
+    writeFileSync(path, raw)
+    const store = new JsonStateStore(path)
+
+    expect(() => store.snapshot()).toThrow(StateCompatibilityError)
+    await expect(store.ready()).rejects.toThrow(/exceeds.*safe.*left unchanged/i)
+    await expect(store.update((state) => { state.archivedSessions.push('must-not-write') })).rejects.toBeInstanceOf(StateCompatibilityError)
+    await store.beginShutdown()
+    expect(readFileSync(path, 'utf8')).toBe(raw)
+    expect(readdirSync(dir)).toEqual([CURRENT_DESKTOP_STATE_FILENAME])
   })
 
   it('backs up corrupt state, returns defaults, and serializes recovery before later updates', async () => {
@@ -497,7 +632,7 @@ describe('JsonStateStore', () => {
     const path = join(dir, 'state.json')
     writeFileSync(path, '{broken')
     const store = new JsonStateStore(path)
-    expect(store.snapshot().version).toBe(3)
+    expect(store.snapshot().version).toBe(4)
     expect(store.snapshot().projects).toEqual([])
 
     await store.update((state) => { state.archivedSessions.push('after-recovery') })

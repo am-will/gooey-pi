@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
-import { dirname, isAbsolute } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, type AppSettings, type HarnessId, type ProjectRecord, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { isRecord } from './validation'
 
@@ -18,12 +18,34 @@ export interface PersistedProject extends Omit<ProjectRecord, 'sessionCount' | '
 }
 
 export interface DesktopState {
-  version: 3
+  version: 4
   projects: PersistedProject[]
   settings: AppSettings
   archivedSessions: string[]
   dismissedProjectPaths: string[]
   schedules: AutomationScheduleRecord[]
+}
+
+export const CURRENT_DESKTOP_STATE_FILENAME = 'prime-work-state-v4.json'
+export const LEGACY_DESKTOP_STATE_FILENAME = 'prime-work-state.json'
+const CURRENT_DESKTOP_STATE_VERSION = 4 as const
+type SupportedDesktopStateVersion = 1 | 2 | 3 | typeof CURRENT_DESKTOP_STATE_VERSION
+
+export class StateCompatibilityError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StateCompatibilityError'
+  }
+}
+
+export class UnsupportedStateVersionError extends StateCompatibilityError {
+  constructor(
+    readonly stateVersion: number,
+    readonly statePath: string,
+  ) {
+    super(`Desktop state schema version ${stateVersion} at ${statePath} is newer than supported version ${CURRENT_DESKTOP_STATE_VERSION}. Upgrade GooeyPi to a compatible version; the state file was left unchanged.`)
+    this.name = 'UnsupportedStateVersionError'
+  }
 }
 
 export function defaultSettings(): AppSettings {
@@ -77,23 +99,26 @@ export function defaultSettings(): AppSettings {
 }
 
 function defaultState(): DesktopState {
-  return { version: 3, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] }
+  return { version: CURRENT_DESKTOP_STATE_VERSION, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] }
 }
 
-/** Version <= 2 states predate harness scoping; every hostile or absent value falls back to 'prime'. */
-function parseHarness(value: unknown): HarnessId {
-  return value === 'omp' || value === 'pi' ? value : 'prime'
+/** Versions 1 and 2 predate harness scoping, so only an absent value migrates to Prime. */
+function parseHarness(value: unknown, preHarnessState: boolean): HarnessId | null {
+  if (value === 'prime' || value === 'omp' || value === 'pi') return value
+  return preHarnessState && value === undefined ? 'prime' : null
 }
 
 function validDate(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value))
 }
 
-function parseProject(value: unknown): PersistedProject | null {
+function parseProject(value: unknown, preHarnessState: boolean): PersistedProject | null {
   if (!isRecord(value)) return null
   if (typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.path !== 'string') return null
   const folders = Array.isArray(value.folders) ? value.folders.filter((item): item is string => typeof item === 'string') : [value.path]
   if (!folders.length || typeof value.primaryFolder !== 'string') return null
+  const harness = parseHarness(value.harness, preHarnessState)
+  if (!harness) return null
   const now = new Date().toISOString()
   const folderIdentities: Record<string, FolderIdentity> = {}
   if (isRecord(value.folderIdentities)) {
@@ -109,7 +134,7 @@ function parseProject(value: unknown): PersistedProject | null {
   }
   return {
     id: value.id || randomUUID(),
-    harness: parseHarness(value.harness),
+    harness,
     name: value.name,
     path: value.path,
     folders,
@@ -256,19 +281,20 @@ function parseScheduleRun(value: unknown): ScheduleRunRecord | null {
   }
 }
 
-function parseSchedule(value: unknown): AutomationScheduleRecord | null {
+function parseSchedule(value: unknown, preHarnessState: boolean): AutomationScheduleRecord | null {
   if (!isRecord(value) || value.schemaVersion !== 1 || !boundedString(value.id, 256)) return null
   if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1 || !boundedString(value.title, 200) || !boundedString(value.prompt, 1024 * 1024)) return null
   const target = parseScheduleTarget(value.target)
   const timing = parseScheduleTiming(value.timing)
   const execution = parseScheduleExecution(value.execution)
-  if (!target || !timing || !execution || !SCHEDULE_STATUSES.has(String(value.status))) return null
+  const harness = parseHarness(value.harness, preHarnessState)
+  if (!target || !timing || !execution || !harness || !SCHEDULE_STATUSES.has(String(value.status))) return null
   if ((value.createdBy !== 'user' && value.createdBy !== 'agent') || !validDate(value.createdAt) || !validDate(value.updatedAt)) return null
   const runs = Array.isArray(value.runs) ? value.runs.map(parseScheduleRun).filter((run): run is ScheduleRunRecord => run !== null).slice(-50) : []
   return {
     schemaVersion: 1,
     id: value.id,
-    harness: parseHarness(value.harness),
+    harness,
     revision: Number(value.revision),
     title: value.title,
     prompt: value.prompt,
@@ -295,20 +321,34 @@ function capUnboundedCollections(state: DesktopState): void {
   if (state.dismissedProjectPaths.length > MAX_DISMISSED_PROJECT_PATHS) state.dismissedProjectPaths = state.dismissedProjectPaths.slice(-MAX_DISMISSED_PROJECT_PATHS)
 }
 
-function parseState(value: unknown): DesktopState {
-  if (!isRecord(value)) return defaultState()
-  // Version 2 -> 3: projects and the previously single-harness workspace keep
-  // Prime. New or invalid version-3 settings use the current OMP-first default.
+function parseStateVersion(value: Record<string, unknown>, statePath: string): SupportedDesktopStateVersion {
+  if (!Number.isSafeInteger(value.version)) throw new Error('Desktop state is missing a supported integer schema version')
+  const version = Number(value.version)
+  if (version > CURRENT_DESKTOP_STATE_VERSION) throw new UnsupportedStateVersionError(version, statePath)
+  if (version !== 1 && version !== 2 && version !== 3 && version !== CURRENT_DESKTOP_STATE_VERSION) {
+    throw new Error(`Desktop state schema version ${version} is not supported`)
+  }
+  return version
+}
+
+function parseState(value: unknown, statePath: string): { sourceVersion: SupportedDesktopStateVersion; state: DesktopState } {
+  if (!isRecord(value)) throw new Error('Desktop state is missing a supported integer schema version')
+  const version = parseStateVersion(value, statePath)
+  const preHarnessProjectState = version === 1 || version === 2
+  const preHarnessScheduleState = version === 2
+  // Versions 1 and 2 predate harness scoping. Their absent harness fields are
+  // the only project records allowed to inherit Prime; schedules first existed
+  // in v2, so a v1 schedule is never eligible for legacy authority migration.
   const state: DesktopState = {
-    version: 3,
-    projects: Array.isArray(value.projects) ? value.projects.map(parseProject).filter((item): item is PersistedProject => item !== null) : [],
-    settings: parseSettings(value.settings, value.version === 2),
+    version: CURRENT_DESKTOP_STATE_VERSION,
+    projects: Array.isArray(value.projects) ? value.projects.map((project) => parseProject(project, preHarnessProjectState)).filter((item): item is PersistedProject => item !== null) : [],
+    settings: parseSettings(value.settings, preHarnessProjectState),
     archivedSessions: Array.isArray(value.archivedSessions) ? value.archivedSessions.filter((item): item is string => typeof item === 'string') : [],
     dismissedProjectPaths: Array.isArray(value.dismissedProjectPaths) ? value.dismissedProjectPaths.filter((item): item is string => typeof item === 'string') : [],
-    schedules: Array.isArray(value.schedules) ? value.schedules.map(parseSchedule).filter((item): item is AutomationScheduleRecord => item !== null).slice(0, 500) : [],
+    schedules: version !== 1 && Array.isArray(value.schedules) ? value.schedules.map((schedule) => parseSchedule(schedule, preHarnessScheduleState)).filter((item): item is AutomationScheduleRecord => item !== null).slice(0, 500) : [],
   }
   capUnboundedCollections(state)
-  return state
+  return { sourceVersion: version, state }
 }
 
 export interface JsonStateStoreFileHandle {
@@ -330,52 +370,84 @@ const nodeFileSystem: JsonStateStoreFileSystem = {
 }
 
 export class JsonStateStore {
-  private state: DesktopState
+  private state: DesktopState = defaultState()
   private queue: Promise<void> = Promise.resolve()
+  private readyPromise: Promise<void> = Promise.resolve()
+  private incompatibility: StateCompatibilityError | null = null
+  private initializationFailure: Error | null = null
   private closed = false
 
   constructor(
     private readonly filePath: string,
     private readonly fileSystem: JsonStateStoreFileSystem = nodeFileSystem,
+    private readonly legacyFilePath?: string,
   ) {
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
+    let sourcePath = filePath
     try {
-      const { size } = statSync(filePath)
-      if (size > MAX_STATE_FILE_BYTES) throw new Error(`state file is ${size} bytes; refusing to parse more than ${MAX_STATE_FILE_BYTES} bytes`)
-      this.state = parseState(JSON.parse(readFileSync(filePath, 'utf8')))
+      let size: number
+      try {
+        size = statSync(sourcePath).size
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !legacyFilePath) throw error
+        sourcePath = legacyFilePath
+        size = statSync(sourcePath).size
+      }
+      if (size > MAX_STATE_FILE_BYTES) {
+        throw new StateCompatibilityError(`Desktop state file at ${sourcePath} is ${size} bytes, which exceeds the ${MAX_STATE_FILE_BYTES}-byte safe parse limit. It was left unchanged; use the GooeyPi version that created it, or move it aside only after making a backup.`)
+      }
+      const parsed = parseState(JSON.parse(readFileSync(sourcePath, 'utf8')), sourcePath)
+      this.state = parsed.state
+      const needsPersist = sourcePath !== filePath || (legacyFilePath !== undefined && parsed.sourceVersion !== CURRENT_DESKTOP_STATE_VERSION)
+      if (needsPersist || legacyFilePath !== undefined) {
+        this.scheduleInitialization(needsPersist, legacyFilePath !== undefined, 'GooeyPi desktop state migration could not be completed')
+      }
     } catch (error) {
-      this.state = defaultState()
+      if (error instanceof StateCompatibilityError) {
+        this.incompatibility = error
+        return
+      }
       try {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           console.error(`GooeyPi desktop state was reset and backed up: ${error instanceof Error ? error.message : String(error)}`)
-          renameSync(filePath, `${filePath}.corrupt-${Date.now()}`)
+          renameSync(sourcePath, `${sourcePath}.corrupt-${Date.now()}`)
         }
       } catch { /* The valid in-memory fallback remains usable. */ }
-      this.queue = this.persist(this.state).catch((failure: unknown) => {
-        console.error(`GooeyPi desktop state could not be rewritten after the reset: ${failure instanceof Error ? failure.message : String(failure)}`)
-      })
+      this.scheduleInitialization(true, legacyFilePath !== undefined, 'GooeyPi desktop state could not be rewritten after the reset')
     }
   }
 
+  async ready(): Promise<void> {
+    this.assertCompatible()
+    await this.readyPromise
+  }
+
   snapshot(): DesktopState {
+    this.assertCompatible()
     return structuredClone(this.state)
   }
 
   getSettings(): AppSettings {
+    this.assertCompatible()
     return structuredClone(this.state.settings)
   }
 
   getProjects(): PersistedProject[] {
+    this.assertCompatible()
     return structuredClone(this.state.projects)
   }
 
   getArchivedSessions(): string[] {
+    this.assertCompatible()
     return [...this.state.archivedSessions]
   }
 
   async update<T>(mutator: (draft: DesktopState) => T): Promise<T> {
+    this.assertCompatible()
+    if (this.initializationFailure) throw this.initializationFailure
     if (this.closed) throw new Error('Desktop state store is shutting down')
     const operation = this.queue.then(async () => {
+      if (this.initializationFailure) throw this.initializationFailure
       const draft = structuredClone(this.state)
       const result = mutator(draft)
       capUnboundedCollections(draft)
@@ -392,6 +464,34 @@ export class JsonStateStore {
     await this.queue
   }
 
+  private assertCompatible(): void {
+    if (this.incompatibility) throw this.incompatibility
+  }
+
+  private scheduleInitialization(persistState: boolean, retireLegacy: boolean, failurePrefix: string): void {
+    const initialization = (async () => {
+      if (persistState) await this.persist(this.state)
+      if (retireLegacy) await this.retireLegacyState()
+    })()
+    this.readyPromise = initialization
+    this.queue = initialization.catch((failure: unknown) => {
+      this.initializationFailure = failure instanceof Error ? failure : new Error(String(failure))
+      console.error(`${failurePrefix}: ${failure instanceof Error ? failure.message : String(failure)}`)
+    })
+  }
+
+  private async retireLegacyState(): Promise<void> {
+    if (!this.legacyFilePath) return
+    const backupPath = `${this.legacyFilePath}.migrated-v4-${Date.now()}-${randomUUID()}`
+    try {
+      await this.fileSystem.rename(this.legacyFilePath, backupPath)
+      await this.syncParentDirectory(this.legacyFilePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw new Error(`Legacy desktop state could not be retired before startup: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   private async persist(state: DesktopState): Promise<void> {
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
     try {
@@ -405,14 +505,29 @@ export class JsonStateStore {
 
       await this.fileSystem.rename(temp, this.filePath)
 
-      try {
-        const directory = await this.fileSystem.open(dirname(this.filePath), 'r')
-        try { await directory.sync() } finally { await directory.close() }
-      } catch { /* Some filesystems do not allow fsync on a directory. */ }
+      await this.syncParentDirectory(this.filePath)
     } finally {
       await this.fileSystem.unlink(temp).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       })
     }
   }
+
+  private async syncParentDirectory(path: string): Promise<void> {
+    try {
+      const directory = await this.fileSystem.open(dirname(path), 'r')
+      try { await directory.sync() } finally { await directory.close() }
+    } catch { /* Some filesystems do not allow fsync on a directory. */ }
+  }
+}
+
+/** Opens the versioned authority file and durably completes any one-way legacy migration. */
+export async function openDesktopStateStore(userDataPath: string): Promise<JsonStateStore> {
+  const store = new JsonStateStore(
+    join(userDataPath, CURRENT_DESKTOP_STATE_FILENAME),
+    nodeFileSystem,
+    join(userDataPath, LEGACY_DESKTOP_STATE_FILENAME),
+  )
+  await store.ready()
+  return store
 }
