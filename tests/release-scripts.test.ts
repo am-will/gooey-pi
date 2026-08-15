@@ -649,10 +649,19 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(ciSteps.filter((step) => step.secretLines.length > 0)).toEqual([])
   })
 
+  test('cancels superseded PR runs without cancelling validation for pushed SHAs', () => {
+    const workflow = load(readFileSync('.github/workflows/ci.yml', 'utf8')) as {
+      concurrency: { group: string; 'cancel-in-progress': string }
+    }
+    expect(workflow.concurrency.group).toBe(
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.sha) || format('dispatch-{0}', github.run_id) }}",
+    )
+    expect(workflow.concurrency['cancel-in-progress']).toBe("${{ github.event_name == 'pull_request' }}")
+  })
+
   test('gates packaging regressions on every pull request', () => {
     const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
     expect(ciWorkflow).toMatch(/on:\n {2}push:\n {4}branches:\n {6}- main/)
-    expect(ciWorkflow).toContain('cancel-in-progress: true')
     expect(ciWorkflow).toMatch(/packaging-smoke:\n {4}if: github\.event_name == 'pull_request'/)
     for (const runner of ['macos-14', 'ubuntu-22.04', 'windows-2022']) expect(ciWorkflow).toContain(`runner: ${runner}`)
     expect(ciWorkflow).toContain('node node_modules/electron-builder/cli.js --dir')
