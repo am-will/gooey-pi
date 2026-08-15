@@ -108,7 +108,10 @@ You will need Node.js 24.15.0 or newer and npm 12.0.2 or newer. The repository p
 
 ```bash
 nvm install && nvm use
+npm run toolchain:bootstrap
 ```
+
+The bootstrap command installs the `packageManager`-pinned npm into the active Node installation, then verifies both tool versions against `package.json` and `.nvmrc` before dependencies are installed.
 
 ```bash
 npm install

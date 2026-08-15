@@ -12,11 +12,16 @@ import {
   assertArchitectureCoverage,
   assertAsarLayout,
   assertExactArchitectures,
+  assertSupportedNpm,
   assertSupportedNode,
+  assertSupportedToolchain,
   assertUnpackedNativeLayout,
   expectedUnpackedNativeLayout,
+  parseToolchainMetadata,
   parseArchitectures,
   parseTeamIdentifier,
+  readNpmVersion,
+  readRepositoryToolchain,
   requireReleaseArtifacts,
   resolveCommandInvocation,
   validateReleaseCredentials,
@@ -132,7 +137,7 @@ describe('release preflight', () => {
   test('package.mjs --dry-run says nothing executed instead of claiming success', () => {
     const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'
     const result = spawnSync(process.execPath, ['scripts/release/package.mjs', '--qa', '--platform', platform, '--dry-run'], { encoding: 'utf8' })
-    expect(result.status).toBe(0)
+    expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('DRY RUN — nothing executed.')
     expect(result.stdout).not.toContain('pipeline passed')
   })
@@ -170,17 +175,77 @@ describe('release preflight', () => {
     expect(() => assertBooleanEntitlement(`<key>${entitlement}</key><false/>`, entitlement, 'fixture')).toThrow(/missing required true entitlement/)
   })
 
-  test('requires the Electron 43 Node.js baseline', () => {
-    expect(() => assertSupportedNode('v22.11.0')).toThrow(/>=22\.12\.0/)
-    expect(() => assertSupportedNode('v22.12.0')).not.toThrow()
-    expect(() => assertSupportedNode('v24.0.0')).not.toThrow()
+  test('enforces the repository Node and npm boundaries from checked-in metadata', () => {
+    expect(readRepositoryToolchain()).toEqual({ node: '24.15.0', npm: '12.0.2' })
+    expect(() => assertSupportedNode('v24.14.99')).toThrow(/Node\.js >=24\.15\.0 is required/)
+    expect(() => assertSupportedNode('v24.15.0')).not.toThrow()
+    expect(() => assertSupportedNode('v25.0.0')).not.toThrow()
+    expect(() => assertSupportedNpm('12.0.1')).toThrow(/npm >=12\.0\.2 is required/)
+    expect(() => assertSupportedNpm('12.0.2')).not.toThrow()
+    expect(() => assertSupportedNpm('13.0.0')).not.toThrow()
+    expect(() => assertSupportedToolchain({ nodeVersion: 'v24.15.0', npmVersion: '12.0.2' })).not.toThrow()
+  })
+
+  test('rejects malformed and prerelease tool versions', () => {
+    for (const version of ['24.15', 'v24.15.0 trailing', 'not-node']) {
+      expect(() => assertSupportedNode(version)).toThrow(/Cannot parse Node\.js version/)
+    }
+    expect(() => assertSupportedNode('v24.15.0-rc.1')).toThrow(/stable Node\.js release/)
+    for (const version of ['12.0', '12.0.2 trailing', 'not-npm']) {
+      expect(() => assertSupportedNpm(version)).toThrow(/Cannot parse npm version/)
+    }
+    expect(() => assertSupportedNpm('12.0.2-beta.1')).toThrow(/stable npm release/)
+  })
+
+  test('fails closed when checked-in toolchain metadata disagrees', () => {
+    const packageMetadata = {
+      engines: { node: '>=24.15.0', npm: '>=12.0.2' },
+      packageManager: 'npm@12.0.2',
+    }
+    expect(parseToolchainMetadata(JSON.stringify(packageMetadata), '24.15.0\n')).toEqual({ node: '24.15.0', npm: '12.0.2' })
+    expect(() => parseToolchainMetadata(JSON.stringify(packageMetadata), '24.14.0\n')).toThrow(/\.nvmrc.*engines\.node/)
+    expect(() => parseToolchainMetadata(JSON.stringify({ ...packageMetadata, packageManager: 'npm@12.0.1' }), '24.15.0\n')).toThrow(/packageManager.*engines\.npm/)
+    expect(() => parseToolchainMetadata(JSON.stringify({ ...packageMetadata, engines: { ...packageMetadata.engines, node: '^24.15.0' } }), '24.15.0\n')).toThrow(/engines\.node must use/)
+    expect(() => parseToolchainMetadata(JSON.stringify(packageMetadata), '24.15.0-rc.1\n')).toThrow(/stable \.nvmrc release/)
+    expect(() => parseToolchainMetadata('{', '24.15.0\n')).toThrow(/Cannot parse package\.json/)
+
+    for (const path of ['scripts/release/lib.mjs', 'scripts/release/bootstrap-npm.mjs', 'scripts/release/package.mjs', 'scripts/release/preflight.mjs']) {
+      const source = readFileSync(path, 'utf8')
+      expect(source).not.toContain('24.15.0')
+      expect(source).not.toContain('12.0.2')
+    }
+  })
+
+  test('probes npm through its JavaScript CLI and both release entry points reject an old npm', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-npm-version-'))
+    const npmCli = join(directory, 'npm-cli.mjs')
+    writeFileSync(npmCli, "process.stdout.write('12.0.1\\n')\n")
+    const env = { ...process.env, npm_execpath: npmCli }
+    try {
+      expect(readNpmVersion({ env })).toBe('12.0.1')
+      const preflight = spawnSync(process.execPath, ['scripts/release/preflight.mjs', '--toolchain-only'], { encoding: 'utf8', env })
+      expect(preflight.status).toBe(1)
+      expect(preflight.stderr).toContain('npm >=12.0.2 is required')
+
+      const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'
+      const packaging = spawnSync(process.execPath, ['scripts/release/package.mjs', '--qa', '--platform', platform, '--dry-run'], { encoding: 'utf8', env })
+      expect(packaging.status).toBe(1)
+      expect(packaging.stderr).toContain('npm >=12.0.2 is required')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test('keeps contributor instructions aligned with the enforced engines', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
-    expect(packageJson.engines).toEqual({ node: '>=24.15.0', npm: '>=12.0.2' })
-    expect(readFileSync('.nvmrc', 'utf8').trim()).toBe('24.15.0')
-    expect(readFileSync('README.md', 'utf8')).toContain('Node.js 24.15.0 or newer and npm 12.0.2 or newer')
+    const toolchain = readRepositoryToolchain()
+    expect(packageJson.engines).toEqual({ node: `>=${toolchain.node}`, npm: `>=${toolchain.npm}` })
+    expect(packageJson.packageManager).toBe(`npm@${toolchain.npm}`)
+    expect(readFileSync('.nvmrc', 'utf8').trim()).toBe(toolchain.node)
+    expect(readFileSync('README.md', 'utf8')).toContain(`Node.js ${toolchain.node} or newer and npm ${toolchain.npm} or newer`)
+    expect(readFileSync('README.md', 'utf8')).toContain('npm run toolchain:bootstrap')
+    expect(readFileSync('scripts/release/package.mjs', 'utf8')).toContain('assertSupportedToolchain()')
+    expect(readFileSync('scripts/release/preflight.mjs', 'utf8')).toContain('assertSupportedToolchain()')
   })
 
   test('fails closed without Developer ID credentials', () => {
@@ -316,13 +381,29 @@ describe('release preflight', () => {
   test('reads the Node version from .nvmrc and hard-fails empty artifact uploads', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
-    for (const workflow of [releaseWorkflow, ciWorkflow]) {
+    const auditWorkflow = readFileSync('.github/workflows/audit.yml', 'utf8')
+    for (const workflow of [releaseWorkflow, ciWorkflow, auditWorkflow]) {
       expect(workflow).not.toMatch(/node-version:/)
-      expect(workflow.match(/node-version-file: \.nvmrc/g)?.length).toBeGreaterThan(0)
+      const steps = parseWorkflowSteps(workflow)
+      const setupSteps = steps.filter((step) => step.uses?.startsWith('actions/setup-node@'))
+      const bootstrapSteps = steps.filter((step) => step.lines.some((line) => line.includes('run: npm run toolchain:bootstrap')))
+      expect(setupSteps.length).toBeGreaterThan(0)
+      expect(bootstrapSteps.map((step) => step.job).sort()).toEqual(setupSteps.map((step) => step.job).sort())
+      for (const setup of setupSteps) {
+        const setupIndex = steps.indexOf(setup)
+        const bootstrapIndex = steps.findIndex((step, index) => index > setupIndex && step.job === setup.job && step.lines.some((line) => line.includes('run: npm run toolchain:bootstrap')))
+        const installIndex = steps.findIndex((step, index) => index > setupIndex && step.job === setup.job && step.lines.some((line) => /run: npm ci(?:\s|$)/.test(line)))
+        expect(bootstrapIndex).toBeGreaterThan(setupIndex)
+        if (installIndex >= 0) expect(bootstrapIndex).toBeLessThan(installIndex)
+      }
+    }
+    for (const workflow of [releaseWorkflow, ciWorkflow]) {
       const uploads = workflow.match(/uses: actions\/upload-artifact@/g) ?? []
       expect(workflow.match(/if-no-files-found: error/g)).toHaveLength(uploads.length)
       expect(workflow).toContain('actions/cache@')
     }
+    expect(ciWorkflow).toContain('npm run release:preflight -- --toolchain-only')
+    expect(releaseWorkflow).toContain('npm run release:preflight -- --toolchain-only')
     // Release jobs skip the CI-duplicated verification suite and never upload
     // an unpacked application directory; every platform publishes its update feed.
     expect(releaseWorkflow.match(/-- --skip-verify/g)).toHaveLength(4)
@@ -1038,7 +1119,7 @@ describe('cross-platform packaging repair', () => {
     expect(packageScript).not.toContain("['exec', '--', 'electron-builder'")
     const npmViaLifecycle = resolveCommandInvocation('npm', ['run', 'release:verify'], 'win32', { npm_execpath: 'C:/npm/npm-cli.js' })
     expect(npmViaLifecycle).toEqual({ file: process.execPath, args: ['C:/npm/npm-cli.js', 'run', 'release:verify'], shell: false })
-    expect(resolveCommandInvocation('npm', ['ci'], 'win32', {})).toEqual({ file: 'npm.cmd', args: ['ci'], shell: true })
+    expect(() => resolveCommandInvocation('npm', ['ci'], 'win32', { npm_execpath: 'C:/npm/npm.cmd' })).toThrow(/JavaScript npm CLI/)
     expect(resolveCommandInvocation('npm', ['ci'], 'darwin', {})).toEqual({ file: 'npm', args: ['ci'], shell: false })
   })
 

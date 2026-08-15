@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { copyFileSync, readdirSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { assertSupportedNode, runCommand, validateReleaseCredentials, validateWindowsReleaseCredentials, withoutReleaseCredentials } from './lib.mjs'
+import { assertSupportedToolchain, runCommand, validateReleaseCredentials, validateWindowsReleaseCredentials, withoutReleaseCredentials } from './lib.mjs'
 
 const args = new Set(process.argv.slice(2))
 const isPublic = args.has('--public')
@@ -41,7 +41,7 @@ function run(command, commandArgs, env = process.env) {
 }
 
 try {
-  assertSupportedNode()
+  assertSupportedToolchain()
   if (process.platform !== platformHosts[platform]) throw new Error(`${platform} packaging must run natively on ${platformHosts[platform]}`)
   if (isPublic && platform === 'mac') validateReleaseCredentials(process.env)
   if (isPublic && platform === 'win') validateWindowsReleaseCredentials(process.env)

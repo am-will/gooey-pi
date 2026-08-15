@@ -51,6 +51,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm run toolchain:bootstrap
+      - run: npm run release:preflight -- --toolchain-only
       - name: Validate tag and package versions
         run: node scripts/release/validate-release-tag.mjs --tag "$RELEASE_TAG"
       # fetch-depth: 0 above is what populates refs/remotes/origin/*; the check
@@ -73,6 +75,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm run toolchain:bootstrap
       - run: npm ci
       - run: npm run release:verify:package
 
@@ -87,6 +90,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm run toolchain:bootstrap
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
@@ -122,6 +126,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm run toolchain:bootstrap
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
@@ -183,6 +188,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm run toolchain:bootstrap
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
@@ -218,6 +224,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm run toolchain:bootstrap
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
@@ -275,6 +282,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+      - run: npm run toolchain:bootstrap
       # This job holds contents/attestations write, so it installs only the
       # runtime dependency tree the release script needs (js-yaml) instead of the
       # full dev toolchain.
