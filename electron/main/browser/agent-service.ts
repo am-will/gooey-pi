@@ -73,7 +73,7 @@ interface TabState {
   title: string
   /** Last known pointer position in guest CSS pixels; null until the first pointer action. */
   pointer: { x: number; y: number } | null
-  /** Authority generation captured by queued actions and changed on revocation. */
+  /** Authority generation captured by queued actions and changed on detachment or revocation. */
   generation: number
   revoked: boolean
   /** Serialization is independent from authority so ownership changes cannot interleave actions. */
@@ -724,6 +724,10 @@ export class AgentBrowserService {
     tab.unbindGuest?.()
     tab.unbindGuest = null
     tab.webContentsId = null
+    // Detachment ends this guest incarnation's authority without revoking the
+    // tab itself. Work queued afterward may wait for and use a replacement,
+    // while work that captured the destroyed/replaced guest is rejected.
+    tab.generation = this.nextGeneration++
     if (notify) this.push()
   }
 

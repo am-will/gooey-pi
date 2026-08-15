@@ -272,6 +272,38 @@ describe('AgentBrowserService', () => {
     expect(service.state().tabs.find((tab) => tab.tabId === first.tabId)?.active).toBe(true)
   })
 
+  it('rejects work queued for a destroyed guest while fresh work follows reattachment', async () => {
+    const { service, newGuest, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    guest.scriptResult = (code) => {
+      if (code.includes('running-before-destroy')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'running-before-destroy'" })
+    await started.promise
+    const stale = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-before-destroy'" })
+    guest.destroy()
+    const fresh = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-after-destroy'" })
+    const replacement = newGuest()
+    service.attachTab(tabId, replacement.id)
+    const staleRejected = expect(stale).rejects.toThrow(/browser tab access changed/i)
+    await Promise.resolve()
+    expect(replacement.executedScripts).toEqual([])
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+    await staleRejected
+    await expect(fresh).resolves.toEqual({})
+    expect(replacement.executedScripts.some((code) => code.includes('queued-before-destroy'))).toBe(false)
+    expect(replacement.executedScripts.some((code) => code.includes('queued-after-destroy'))).toBe(true)
+  })
+
   it('closes every browser guest owned by a session without disturbing other sessions', async () => {
     const { service, newGuest, openAttached } = fixture()
     const first = await openAttached('/sessions/a.jsonl', 'https://game.example/one')
