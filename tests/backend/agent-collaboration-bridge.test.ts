@@ -67,7 +67,53 @@ const defaultTargetTranscript: TranscriptMessage[] = [
   { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'The endpoint is ready.' }] },
 ]
 
-async function fixture(live = true, targetTranscript: TranscriptMessage[] = defaultTargetTranscript) {
+interface ScheduledFakeTimer {
+  callback: () => void
+  requestedAt: number
+  delayMs: number
+  dueAt: number
+  unref: () => void
+}
+
+class FakeCollaborationWaitClock {
+  private readonly pending: ScheduledFakeTimer[] = []
+  private readonly waiters: Array<(timer: ScheduledFakeTimer) => void> = []
+
+  constructor(private currentTime = 10_000) {}
+
+  readonly now = (): number => this.currentTime
+
+  readonly setTimeout = (callback: () => void, delayMs: number): { unref(): void } => {
+    const timer: ScheduledFakeTimer = {
+      callback,
+      requestedAt: this.currentTime,
+      delayMs,
+      dueAt: this.currentTime + delayMs,
+      unref: vi.fn(),
+    }
+    const waiter = this.waiters.shift()
+    if (waiter) waiter(timer)
+    else this.pending.push(timer)
+    return { unref: timer.unref }
+  }
+
+  takeNextTimer(): Promise<ScheduledFakeTimer> {
+    const timer = this.pending.shift()
+    if (timer) return Promise.resolve(timer)
+    return new Promise((resolveTimer) => this.waiters.push(resolveTimer))
+  }
+
+  fireAt(timer: ScheduledFakeTimer, timestamp: number): void {
+    this.currentTime = timestamp
+    timer.callback()
+  }
+}
+
+async function fixture(
+  live = true,
+  targetTranscript: TranscriptMessage[] = defaultTargetTranscript,
+  waitClock?: FakeCollaborationWaitClock,
+) {
   const records = [source, target, foreign, child, archived]
   const primeSessions = service(records, {
     [target.filePath]: targetTranscript,
@@ -108,6 +154,7 @@ async function fixture(live = true, targetTranscript: TranscriptMessage[] = defa
     } as unknown as ConstructorParameters<typeof AgentCollaborationBridge>[0]['catalogs'],
     disabledProviders: { prime: () => new Set(['hidden']), omp: () => new Set(), pi: () => new Set() },
     disabledModels: { prime: () => new Set(['openai-codex/desktop-hidden']), omp: () => new Set(), pi: () => new Set() },
+    ...(waitClock ? { waitClock } : {}),
   })
   await bridge.start()
   bridges.push(bridge)
@@ -341,23 +388,29 @@ describe('AgentCollaborationBridge', () => {
   })
 
   it('re-arms an early timeout wake without polling the transcript early', async () => {
-    const { call, primeSessions } = await fixture()
+    const clock = new FakeCollaborationWaitClock()
+    const { call, primeSessions } = await fixture(true, defaultTargetTranscript, clock)
     const read = await call('read', { target_session_id: target.id })
     const cursor = (read.body.result as Record<string, unknown>).cursor
     const readsBefore = primeSessions.read.mock.calls.length
-    const nativeSetTimeout = globalThis.setTimeout
-    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-      const requested = Number(delay ?? 0)
-      return nativeSetTimeout(callback, requested > 25 && requested <= 150 ? requested - 25 : requested, ...args)
-    }) as typeof setTimeout)
+    const waiting = call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 150 })
 
-    try {
-      const completed = await call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 150 })
-      expect(completed.body.result).toMatchObject({ timed_out: true })
-      expect(primeSessions.read.mock.calls.length - readsBefore).toBeLessThanOrEqual(2)
-    } finally {
-      timer.mockRestore()
-    }
+    const firstTimer = await clock.takeNextTimer()
+    expect(firstTimer).toMatchObject({ requestedAt: 10_000, delayMs: 150, dueAt: 10_150 })
+    expect(firstTimer.unref).toHaveBeenCalledOnce()
+    expect(primeSessions.read.mock.calls.length - readsBefore).toBe(1)
+
+    clock.fireAt(firstTimer, firstTimer.dueAt - 25)
+    const replacementTimer = await clock.takeNextTimer()
+    expect(replacementTimer).toMatchObject({ requestedAt: 10_125, delayMs: 25, dueAt: 10_150 })
+    expect(replacementTimer.unref).toHaveBeenCalledOnce()
+    expect(primeSessions.read.mock.calls.length - readsBefore).toBe(1)
+
+    clock.fireAt(replacementTimer, replacementTimer.dueAt)
+    const completed = await waiting
+    expect(completed.body.result).toMatchObject({ timed_out: true })
+    expect(clock.now()).toBe(10_150)
+    expect(primeSessions.read.mock.calls.length - readsBefore).toBe(2)
   })
 
   it('reports a transcript change found by the final deadline snapshot', async () => {
@@ -365,7 +418,8 @@ describe('AgentCollaborationBridge', () => {
       ...defaultTargetTranscript,
       { id: 'a2', role: 'assistant', parts: [{ type: 'text', text: 'The deadline update is ready.' }] },
     ]
-    const { call, primeSessions } = await fixture()
+    const clock = new FakeCollaborationWaitClock()
+    const { call, primeSessions } = await fixture(true, defaultTargetTranscript, clock)
     let reads = 0
     primeSessions.read.mockImplementation(async () => {
       reads += 1
@@ -374,12 +428,19 @@ describe('AgentCollaborationBridge', () => {
     const read = await call('read', { target_session_id: target.id })
     const cursor = (read.body.result as Record<string, unknown>).cursor
 
-    const completed = await call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 50 })
+    const waiting = call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 50 })
+    const deadlineTimer = await clock.takeNextTimer()
+    expect(deadlineTimer).toMatchObject({ requestedAt: 10_000, delayMs: 50, dueAt: 10_050 })
+    expect(deadlineTimer.unref).toHaveBeenCalledOnce()
+    clock.fireAt(deadlineTimer, deadlineTimer.dueAt)
+    const completed = await waiting
 
     expect(completed.body.result).toMatchObject({ timed_out: false })
     expect((completed.body.result as Record<string, unknown>).messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'a2', text: 'The deadline update is ready.' }),
     ]))
+    expect(clock.now()).toBe(10_050)
+    expect(reads).toBe(3)
   })
 
   it('wakes an offline target while rejecting missing source scope and invalid tokens', async () => {
