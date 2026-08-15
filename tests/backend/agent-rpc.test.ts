@@ -355,8 +355,81 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   it('does not admit a runtime when the handshake fails', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", "{ id: command.id, type: 'response', command: 'get_state', success: false, error: 'Unable to initialize session' }")
     const manager = managerFor(fake.executable)
+    const environment = { GOOEYPI_COLLABORATION_TOKEN: 'failed-start-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
 
     await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Unable to initialize session')
+    expect(manager.list()).toEqual([])
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended.mock.calls[0][0]).toBe(environment)
+  })
+
+  it('releases a minted environment when admission fails before a runtime exists', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const environment = { PRIME_WORK_BROWSER_TOKEN: 'never-spawned-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => {
+      manager.beginShutdown()
+      return environment
+    })
+    manager.setRuntimeEndListener(ended)
+
+    await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('manager is shutting down')
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended).toHaveBeenCalledWith(environment, undefined)
+  })
+
+  it('notifies runtime termination once after explicit stop while active claims remain owned', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const environment = { PRIME_WORK_SCHEDULE_TOKEN: 'active-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    expect(ended).not.toHaveBeenCalled()
+    await expect(manager.stop(runtime.runtimeId)).resolves.toBe(true)
+    await waitUntil(() => ended.mock.calls.length === 1)
+    expect(ended.mock.calls[0][0]).toBe(environment)
+    expect(ended.mock.calls[0][1]).toMatchObject({ runtimeId: runtime.runtimeId })
+
+    await expect(manager.stop(runtime.runtimeId)).resolves.toBe(false)
+    await manager.stopAll()
+    expect(ended).toHaveBeenCalledOnce()
+  })
+
+  it('notifies runtime termination after natural child exit', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-natural-exit-'))
+    dirs.push(cwd)
+    const executable = join(cwd, 'natural-exit-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+const readline = require('node:readline')
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line)
+  if (command.type === 'get_state') send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'natural-exit', isStreaming: false } })
+  else if (command.type === 'get_session_stats') {
+    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 1, contextWindow: 100, percent: 1 } } })
+    setTimeout(() => process.exit(0), 500)
+  }
+})
+`)
+    chmodSync(executable, 0o755)
+    const manager = managerFor(executable)
+    const environment = { PRIME_WORK_BROWSER_TOKEN: 'natural-exit-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
+    const runtime = await manager.start({ cwd })
+
+    expect(ended).not.toHaveBeenCalled()
+    await waitUntil(() => ended.mock.calls.length === 1)
+    expect(ended.mock.calls[0][0]).toBe(environment)
+    expect(ended.mock.calls[0][1]).toMatchObject({ runtimeId: runtime.runtimeId })
     expect(manager.list()).toEqual([])
   })
 
@@ -364,6 +437,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-stuck-'))
     dirs.push(cwd)
     const manager = managerFor('/bin/cat')
+    const environment = { PRIME_WORK_SCHEDULE_TOKEN: 'unreapable-start-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
     const handshake = vi.spyOn(RpcRuntime.prototype, 'handshake').mockRejectedValue(new Error('handshake unavailable'))
     // Simulate a child that survives the stop escalation: stop resolves false
     // and the close-event cleanup never runs.
@@ -371,6 +448,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     try {
       await expect(manager.start({ cwd })).rejects.toThrow('handshake unavailable')
       expect(manager.list()).toEqual([])
+      expect(ended).toHaveBeenCalledOnce()
+      expect(ended.mock.calls[0][0]).toBe(environment)
     } finally {
       handshake.mockRestore()
       stop.mockRestore()
@@ -380,6 +459,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   it('retires the previous idle runtime when a new session starts', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
     const manager = managerFor(fake.executable)
+    let claim = 0
+    const ended: NodeJS.ProcessEnv[] = []
+    manager.setRuntimeEnvironmentProvider(() => ({ RUNTIME_CLAIM: String(++claim) }))
+    manager.setRuntimeEndListener((environment) => ended.push(environment))
     const first = await manager.start({ cwd: fake.cwd })
 
     const second = await manager.start({ cwd: fake.cwd })
@@ -387,6 +470,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect(manager.list()).toHaveLength(1)
     expect(manager.list().some((runtime) => runtime.runtimeId === first.runtimeId)).toBe(false)
     expect(manager.list().some((runtime) => runtime.runtimeId === second.runtimeId)).toBe(true)
+    expect(ended).toEqual([{ RUNTIME_CLAIM: '1' }])
   })
 
   it('distinguishes interactive and unattended runtime environments', async () => {
@@ -404,11 +488,17 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   it('retires idle runtimes after a capability environment change', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
     const manager = managerFor(fake.executable)
+    const environment = { RUNTIME_CLAIM: 'retired' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
     await manager.start({ cwd: fake.cwd })
 
     await manager.requestRuntimeEnvironmentRefresh()
 
     await waitUntil(() => manager.list().length === 0)
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended.mock.calls[0][0]).toBe(environment)
   })
 
   it('retires a runtime whose launch overlapped a capability environment change', async () => {
@@ -582,9 +672,13 @@ setInterval(() => {}, 1000)
   }, 10_000)
 
   it('stops only runtimes whose cwd is inside a removed project root', async () => {
-    const project = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
-    const outside = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const busyState = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'busy', isStreaming: true } }"
+    const project = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", busyState)
+    const outside = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", busyState)
     const manager = managerFor(project.executable)
+    const ended: NodeJS.ProcessEnv[] = []
+    manager.setRuntimeEnvironmentProvider(({ cwd }) => ({ RUNTIME_CLAIM: cwd }))
+    manager.setRuntimeEndListener((environment) => ended.push(environment))
     const projectRuntime = await manager.start({ cwd: project.cwd })
     const outsideRuntime = await manager.start({ cwd: outside.cwd })
 
@@ -592,6 +686,30 @@ setInterval(() => {}, 1000)
 
     expect(manager.list().map((runtime) => runtime.runtimeId)).toEqual([outsideRuntime.runtimeId])
     expect(manager.list().some((runtime) => runtime.runtimeId === projectRuntime.runtimeId)).toBe(false)
+    expect(ended).toEqual([{ RUNTIME_CLAIM: project.cwd }])
+  })
+
+  it('notifies termination for session stop and manager shutdown', async () => {
+    const sessionFile = '/sessions/runtime-claim.jsonl'
+    const state = `{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'claimed', sessionFile: ${JSON.stringify(sessionFile)}, isStreaming: true } }`
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", state)
+    const sessionManager = managerFor(fake.executable)
+    const sessionEnded = vi.fn()
+    sessionManager.setRuntimeEnvironmentProvider(() => ({ RUNTIME_CLAIM: 'session-stop' }))
+    sessionManager.setRuntimeEndListener(sessionEnded)
+    await sessionManager.start({ cwd: fake.cwd, sessionPath: sessionFile })
+
+    await sessionManager.stopForSession(sessionFile)
+    expect(sessionEnded).toHaveBeenCalledOnce()
+
+    const shutdownManager = managerFor(fake.executable)
+    const shutdownEnded = vi.fn()
+    shutdownManager.setRuntimeEnvironmentProvider(() => ({ RUNTIME_CLAIM: 'shutdown' }))
+    shutdownManager.setRuntimeEndListener(shutdownEnded)
+    await shutdownManager.start({ cwd: fake.cwd })
+
+    await shutdownManager.stopAll()
+    expect(shutdownEnded).toHaveBeenCalledOnce()
   })
 
 })

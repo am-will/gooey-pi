@@ -40,6 +40,18 @@ async function fixture(harness: 'prime' | 'omp' = 'prime') {
 }
 
 describe('AgentScheduleBridge', () => {
+  it('revokes only the requested runtime claim and treats repeated revocation as a no-op', async () => {
+    const { environment, call } = await fixture()
+    const other = bridges[0].environmentFor({ cwd: '/project', sessionPath: '/sessions/two.jsonl' })
+
+    expect(await call('list', {})).toMatchObject({ status: 200 })
+    expect(bridges[0].revoke(environment.PRIME_WORK_SCHEDULE_TOKEN)).toBe(true)
+    expect(bridges[0].revoke(environment.PRIME_WORK_SCHEDULE_TOKEN)).toBe(false)
+
+    expect(await call('list', {})).toMatchObject({ status: 401 })
+    expect(await call('list', {}, other.PRIME_WORK_SCHEDULE_TOKEN)).toMatchObject({ status: 200 })
+  })
+
   it('creates agent-attributed tasks only in the capability current target', async () => {
     const { service, environment, call } = await fixture()
     expect(environment.PRIME_WORK_SCHEDULE_SKILL_PATH).toBe('/app/skills/prime-work-schedules')

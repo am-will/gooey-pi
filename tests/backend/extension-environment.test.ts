@@ -41,7 +41,7 @@ const browserBridgeEnvironment = {
 
 describe('capability extension environment parity (OMP and pi)', () => {
   it('populates the three shared extension paths and strips the Prime-only skill paths', () => {
-    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, browserBridgeEnvironment, extensionPaths)
+    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, () => browserBridgeEnvironment, extensionPaths)
 
     expect(environment.PRIME_WORK_SCHEDULE_EXTENSION_PATH).toBe('/app/extensions/omp-work-schedules.ts')
     expect(environment.PRIME_WORK_BROWSER_EXTENSION_PATH).toBe('/app/extensions/omp-work-browser.ts')
@@ -61,7 +61,7 @@ describe('capability extension environment parity (OMP and pi)', () => {
     ['omp', OMP_RPC_ADAPTER],
     ['pi', PI_RPC_ADAPTER],
   ] as const)('turns the shared environment into all three --extension injections for %s runtimes', (_harness, adapter) => {
-    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, browserBridgeEnvironment, extensionPaths)
+    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, () => browserBridgeEnvironment, extensionPaths)
     const args = adapter.buildStartArgs({ cwd: '/work', environment })
 
     const injected: string[] = []
@@ -79,7 +79,7 @@ describe('capability extension environment parity (OMP and pi)', () => {
 
   it('injects the Pi-only fast-mode compatibility extension without adding it to OMP', () => {
     const environment = {
-      ...extensionRuntimeEnvironment(scheduleBridgeEnvironment, browserBridgeEnvironment, extensionPaths),
+      ...extensionRuntimeEnvironment(scheduleBridgeEnvironment, () => browserBridgeEnvironment, extensionPaths),
       GOOEYPI_PI_FAST_MODE_EXTENSION_PATH: '/app/extensions/pi-work-fast-mode.ts',
     }
     expect(PI_RPC_ADAPTER.buildStartArgs({ cwd: '/work', environment })).toContain('/app/extensions/pi-work-fast-mode.ts')
@@ -87,7 +87,7 @@ describe('capability extension environment parity (OMP and pi)', () => {
   })
 
   it('keeps standalone copies suppressed while omitting the bundled tool when disabled', () => {
-    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, browserBridgeEnvironment, extensionPaths, false)
+    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, () => browserBridgeEnvironment, extensionPaths, false)
     expect(environment.GOOEYPI_MANAGES_ASK_USER).toBe('1')
     expect(environment.PRIME_WORK_ASK_USER_EXTENSION_PATH).toBeUndefined()
     for (const adapter of [OMP_RPC_ADAPTER, PI_RPC_ADAPTER]) {
@@ -95,14 +95,17 @@ describe('capability extension environment parity (OMP and pi)', () => {
     }
   })
 
-  it('omits the browser extension and broker credentials when Browser is disabled', () => {
-    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, browserBridgeEnvironment, extensionPaths, true, false)
+  it.each([
+    ['omp', OMP_RPC_ADAPTER],
+    ['pi', PI_RPC_ADAPTER],
+  ] as const)('does not mint or inject a browser claim for %s when Browser is disabled', (_harness, adapter) => {
+    const mintBrowserClaim = vi.fn(() => browserBridgeEnvironment)
+    const environment = extensionRuntimeEnvironment(scheduleBridgeEnvironment, mintBrowserClaim, extensionPaths, true, false)
+    expect(mintBrowserClaim).not.toHaveBeenCalled()
     expect(environment.PRIME_WORK_BROWSER_EXTENSION_PATH).toBeUndefined()
     expect(environment.PRIME_WORK_BROWSER_URL).toBeUndefined()
     expect(environment.PRIME_WORK_BROWSER_TOKEN).toBeUndefined()
-    for (const adapter of [OMP_RPC_ADAPTER, PI_RPC_ADAPTER]) {
-      expect(adapter.buildStartArgs({ cwd: '/work', environment })).not.toContain(extensionPaths.browser)
-    }
+    expect(adapter.buildStartArgs({ cwd: '/work', environment })).not.toContain(extensionPaths.browser)
   })
 
   it('injects the bundled ask_user extension into Prime interactive runtimes', () => {

@@ -122,6 +122,30 @@ async function fixture(live = true, targetTranscript: TranscriptMessage[] = defa
 }
 
 describe('AgentCollaborationBridge', () => {
+  it('revokes a runtime claim and clears its cached and pending session bindings', async () => {
+    const { bridge, call, environment } = await fixture()
+    const token = environment.GOOEYPI_COLLABORATION_TOKEN!
+    const active = bridge.environmentFor({ cwd: '/project', sessionPath: source.filePath, harness: 'prime' })
+    await expect(call('list')).resolves.toMatchObject({ status: 200 })
+    bridge.bindSession(token, undefined, 'runtime-pending')
+
+    const state = bridge as unknown as {
+      sourcesByToken: Map<string, unknown>
+      pendingRuntimeTokens: Map<string, string>
+    }
+    expect(state.sourcesByToken.has(token)).toBe(true)
+    expect(state.pendingRuntimeTokens.get('runtime-pending')).toBe(token)
+
+    expect(bridge.revoke(token)).toBe(true)
+    expect(bridge.revoke(token)).toBe(false)
+    expect(state.sourcesByToken.has(token)).toBe(false)
+    expect(state.pendingRuntimeTokens.has('runtime-pending')).toBe(false)
+    bridge.bindSession(token, undefined, 'runtime-late')
+    expect(state.pendingRuntimeTokens.has('runtime-late')).toBe(false)
+    await expect(call('list')).resolves.toMatchObject({ status: 401 })
+    await expect(call('list', {}, active.GOOEYPI_COLLABORATION_TOKEN)).resolves.toMatchObject({ status: 200 })
+  })
+
   it('lists and reads only same-project peers through bounded snapshots', async () => {
     const { call, environment } = await fixture()
     expect(environment.GOOEYPI_COLLABORATION_EXTENSION_PATH).toBe('/app/extensions/omp-work-collaboration.ts')

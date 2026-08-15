@@ -522,7 +522,7 @@ export interface VoiceToolResult {
 }
 
 export type ScheduleDefinitionStatus = 'active' | 'paused' | 'completed' | 'blocked'
-export type ScheduleRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted'
+export type ScheduleRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted' | 'cancelled'
 export type ScheduleCreatedBy = 'user' | 'agent'
 
 export type ScheduleTarget =
