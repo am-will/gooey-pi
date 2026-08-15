@@ -4,7 +4,12 @@ import type { ProcessOutcome } from '../../../src/types/api'
 import { processOutcome, runProcess } from '../process-utils'
 import { isLoopbackHostname, requireString, stripAnsi } from '../validation'
 
-const NPM_REGISTRY_SOURCE = /^npm:(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+(?:@[a-z0-9._!~*'()+^<>=| -]+)?$/i
+const NPM_REGISTRY_SOURCE_PARTS = /^npm:(?:@([a-z0-9_.-]+)\/)?([a-z0-9_.-]+)(?:@([-a-z0-9_!~*'()+^<>=|][a-z0-9._!~*'()+^<>=| -]*))?$/i
+
+function isNpmRegistrySource(source: string): boolean {
+  const parts = NPM_REGISTRY_SOURCE_PARTS.exec(source)
+  return parts !== null && !parts[1]?.startsWith('.') && !parts[2].startsWith('.')
+}
 
 function requireSecurePackageTransport(url: URL): void {
   if (url.protocol === 'git:') throw new TypeError('git:// package sources are not allowed; use HTTPS or SSH')
@@ -17,7 +22,7 @@ export function validatePackageSource(value: unknown, options: { allowOmpMarketp
   if (source.startsWith('-') || /[\r\n\u2028\u2029]/.test(source)) throw new TypeError('Invalid package source')
   if (options.allowOmpMarketplaceTarget && /^[a-z0-9][a-z0-9.-]{0,63}@[a-z0-9][a-z0-9.-]{0,63}$/i.test(source)) return source
   if (source.startsWith('npm:')) {
-    if (!NPM_REGISTRY_SOURCE.test(source)) throw new TypeError('Invalid npm package source')
+    if (!isNpmRegistrySource(source)) throw new TypeError('Invalid npm package source')
     return source
   }
   if (source.startsWith('git:') && !source.startsWith('git://')) {

@@ -26,6 +26,28 @@ describe('validatePackageSource', () => {
   })
 
   it.each([
+    'npm:.',
+    'npm:..',
+    'npm:.hidden',
+    'npm:...',
+    'npm:./pkg',
+    'npm:../pkg',
+    'npm:.hidden/pkg',
+    'npm:.../pkg',
+    'npm:@scope/.hidden',
+    'npm:@.scope/pkg',
+    'npm:pkg@.',
+    'npm:pkg@..',
+    'npm:pkg@.hidden',
+    'npm:pkg@...',
+    'npm:pkg@./other',
+    'npm:pkg@../other',
+    'npm:pkg@ .hidden',
+  ])('rejects dot-relative npm selector %s', (source) => {
+    expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
+  })
+
+  it.each([
     'npm:pkg@http://',
     'npm:pkg@HTTP://example.test/pkg.tgz',
     'npm:pkg@https://example.test/pkg.tgz',
