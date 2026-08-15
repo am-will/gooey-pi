@@ -20,12 +20,22 @@ const WAIT_TRANSCRIPT_POLL_MS = 1_000
 const WAIT_RUNTIME_POLL_MS = 250
 const MAX_ACTIVE_WAITS_PER_TOKEN = 2
 
-async function delayUntil(targetTime: number): Promise<void> {
+interface CollaborationWaitClock {
+  now(): number
+  setTimeout(callback: () => void, delayMs: number): { unref(): void }
+}
+
+const nativeWaitClock: CollaborationWaitClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+}
+
+async function delayUntil(targetTime: number, clock: CollaborationWaitClock): Promise<void> {
   while (true) {
-    const remaining = targetTime - Date.now()
+    const remaining = targetTime - clock.now()
     if (remaining <= 0) return
     await new Promise<void>((resolveDelay) => {
-      const timer = setTimeout(resolveDelay, remaining)
+      const timer = clock.setTimeout(resolveDelay, remaining)
       timer.unref()
     })
   }
@@ -49,6 +59,7 @@ export interface AgentCollaborationBridgeOptions {
   catalogs: Record<HarnessId, ModelCatalogProvider>
   disabledProviders: Record<HarnessId, () => ReadonlySet<string>>
   disabledModels: Record<HarnessId, () => ReadonlySet<string>>
+  waitClock?: CollaborationWaitClock
 }
 
 interface CollaborationMessage {
@@ -142,8 +153,12 @@ export class AgentCollaborationBridge extends CapabilityBridge {
   private readonly activeWaitTargets = new Set<string>()
   private readonly activeCreations = new Set<string>()
   private readonly pendingRuntimeTokens = new Map<string, string>()
+  private readonly waitClock: CollaborationWaitClock
 
-  constructor(private readonly options: AgentCollaborationBridgeOptions) { super() }
+  constructor(private readonly options: AgentCollaborationBridgeOptions) {
+    super()
+    this.waitClock = options.waitClock ?? nativeWaitClock
+  }
 
   protected environmentEntries(url: string, token: string): NodeJS.ProcessEnv {
     return {
@@ -422,10 +437,10 @@ export class AgentCollaborationBridge extends CapabilityBridge {
   private async wait(target: CollaborationTarget, rawCursor: unknown, rawTimeout: unknown): Promise<CollaborationSnapshot & { timed_out: boolean }> {
     const afterCursor = rawCursor === undefined ? undefined : requireString(rawCursor, 'after_cursor', { min: 1, max: 128, trim: true })
     const timeoutMs = rawTimeout === undefined ? 15_000 : requireInteger(rawTimeout, 'timeout_ms', 0, MAX_WAIT_MS)
-    const startedAt = Date.now()
+    const startedAt = this.waitClock.now()
     const deadline = startedAt + timeoutMs
     let snapshot = await this.snapshot(target)
-    while (Date.now() < deadline) {
+    while (this.waitClock.now() < deadline) {
       const runtime = target.manager.getForSession(target.session.filePath)
       const idle = !runtime || (!runtime.isStreaming && !runtime.isCompacting && !runtime.sessionActions?.active && (runtime.sessionActions?.queuedCount ?? 0) === 0)
       if (idle && (afterCursor === undefined || snapshot.cursor !== afterCursor)) return { ...snapshot, timed_out: false }
@@ -433,8 +448,8 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       // reads resume at a bounded cadence once the target is idle/offline.
       // Re-arm an early timer wake until the intended poll instant so a short
       // wait cannot perform multiple transcript reads at its deadline.
-      const nextPollAt = Math.min(deadline, Date.now() + (idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
-      await delayUntil(nextPollAt)
+      const nextPollAt = Math.min(deadline, this.waitClock.now() + (idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
+      await delayUntil(nextPollAt, this.waitClock)
       if (idle) {
         snapshot = await this.snapshot(target)
         if (afterCursor === undefined || snapshot.cursor !== afterCursor) return { ...snapshot, timed_out: false }

@@ -1,6 +1,6 @@
 import { supportsFastMode } from 'prime-agent-ai'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '../../src/types/api'
-import type { ModelCatalogProvider } from './model-catalog'
+import { catalogLimitWarnings, limitCatalogRelations, type ModelCatalogProvider } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
 import { requireString } from './validation'
@@ -15,8 +15,7 @@ import { requireString } from './validation'
  * CLI reports its version.
  */
 const CATALOG_TTL_MS = 30_000
-const MAX_CATALOG_MODELS = 5_000
-export const MAX_CATALOG_PROVIDERS = 256
+export { MAX_CATALOG_PROVIDERS } from './model-catalog'
 export const DEFAULT_CATALOG_TIMEOUT_MS = 15_000
 export const DEFAULT_CATALOG_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const VERSION_MAX_OUTPUT_BYTES = 4_096
@@ -188,7 +187,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
       this.resolveVersion(executable),
     ])
 
-    const models: PrimeModelDescriptor[] = []
+    const validModels: PrimeModelDescriptor[] = []
     const seenKeys = new Set<string>()
     let invalidEntries = 0
     for (const entry of rawModels) {
@@ -196,41 +195,33 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
       if (!model) { invalidEntries += 1; continue }
       if (seenKeys.has(model.key)) continue
       seenKeys.add(model.key)
-      if (models.length < MAX_CATALOG_MODELS) models.push(model)
+      validModels.push(model)
     }
 
-    const providerIds = [...new Set(models.map((model) => model.provider))]
-    const providers = providerIds.map((id): PrimeProviderDescriptor => {
-      const providerModels = models.filter((model) => model.provider === id)
-      return {
-        id,
-        name: id.slice(0, 200),
-        authMethod: 'external',
-        configured: true,
-        authLabel: this.credentialsLabel,
-        modelCount: providerModels.length,
-        availableModelCount: providerModels.filter((model) => model.available).length,
-        enabled: true,
-      }
-    }).sort((a, b) => a.name.localeCompare(b.name)).slice(0, MAX_CATALOG_PROVIDERS)
+    const providerIds = [...new Set(validModels.map((model) => model.provider))]
+    const relation = limitCatalogRelations(validModels, providerIds.map((id): PrimeProviderDescriptor => ({
+      id,
+      name: id.slice(0, 200),
+      authMethod: 'external',
+      configured: true,
+      authLabel: this.credentialsLabel,
+      modelCount: 0,
+      availableModelCount: 0,
+      enabled: true,
+    })))
 
     const warnings = [
-      seenKeys.size > models.length
-        ? `${this.harnessLabel} returned ${seenKeys.size.toLocaleString()} models; GooeyPi loaded the first ${models.length.toLocaleString()}.`
-        : undefined,
-      providerIds.length > providers.length
-        ? `${this.harnessLabel} returned ${providerIds.length.toLocaleString()} providers; GooeyPi loaded the first ${providers.length.toLocaleString()} sorted by name.`
-        : undefined,
+      ...catalogLimitWarnings(this.harnessLabel, relation, { uniqueModels: true }),
       invalidEntries > 0
-        ? `${this.harnessLabel} returned ${invalidEntries.toLocaleString()} model entries GooeyPi could not validate; they were skipped.`
+        ? `${this.harnessLabel} returned ${invalidEntries.toLocaleString('en-US')} model entries GooeyPi could not validate; they were skipped.`
         : undefined,
     ].filter((warning): warning is string => Boolean(warning))
 
     const catalog: PrimeModelCatalog = {
       primeVersion: version,
       refreshedAt: new Date().toISOString(),
-      models,
-      providers,
+      models: relation.models,
+      providers: relation.providers,
       warning: warnings.length ? warnings.join(' ') : undefined,
     }
     if (this.cachedExecutable === executable) {

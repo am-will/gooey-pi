@@ -423,14 +423,32 @@ export class SessionService {
     let catalogOnly = this.catalogOnlyChange
     this.changedNames.clear()
     this.catalogOnlyChange = false
-    this.catalog.invalidateLiveCatalog()
-    const paths = (await Promise.all(names.map(async (name) => {
-      try { return await this.requireSessionPath(join(this.sessionRoot, name)) } catch { return null }
-    }))).filter((path): path is string => path !== null)
-    if (paths.length !== names.length) catalogOnly = true
+
+    let paths: string[]
+    if (!catalogOnly && names.length) {
+      const result = await this.catalog.reconcileKnownChanges(names)
+      if (result.kind === 'reconciled') {
+        paths = result.paths
+      } else {
+        paths = await this.resolveChangedSessionPaths(names)
+        if (paths.length !== names.length) catalogOnly = true
+      }
+    } else {
+      // Missing/invalid names, watcher errors, and admission overflow leave
+      // the changed catalog membership unknowable, so retain the full-scan path.
+      this.catalog.invalidateLiveCatalog()
+      paths = await this.resolveChangedSessionPaths(names)
+      if (paths.length !== names.length) catalogOnly = true
+    }
     if (!this.changeListeners.size) return
     for (const filePath of paths) this.emitChange({ filePath, harness: this.harness })
     if (catalogOnly) this.emitChange({ harness: this.harness })
+  }
+
+  private async resolveChangedSessionPaths(names: readonly string[]): Promise<string[]> {
+    return (await Promise.all(names.map(async (name) => {
+      try { return await this.requireSessionPath(join(this.sessionRoot, name)) } catch { return null }
+    }))).filter((path): path is string => path !== null)
   }
 
   private emitChange(event: SessionChangeEvent): void {

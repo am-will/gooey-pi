@@ -77,13 +77,16 @@ export function requireWebUrl(value: unknown, options: { mailto?: boolean; max?:
   return parsed.toString()
 }
 
+export function isLoopbackHostname(value: string): boolean {
+  const host = value.toLowerCase()
+  return host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+}
+
 export function requireSelfHostedVoiceUrl(value: unknown): string {
   const normalized = requireWebUrl(value, { max: 2_048 })
   const parsed = new URL(normalized)
   if (parsed.search || parsed.hash) throw new TypeError('Self-hosted voice URL cannot contain a query or fragment')
-  const host = parsed.hostname.toLowerCase()
-  const loopback = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '[::1]' || host === '::1'
-  if (parsed.protocol === 'http:' && !loopback) throw new TypeError('Self-hosted voice HTTP is allowed only on this computer; use HTTPS or an SSH tunnel for another host')
+  if (parsed.protocol === 'http:' && !isLoopbackHostname(parsed.hostname)) throw new TypeError('Self-hosted voice HTTP is allowed only on this computer; use HTTPS or an SSH tunnel for another host')
   return parsed.toString()
 }
 
