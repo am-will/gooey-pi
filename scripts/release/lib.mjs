@@ -14,6 +14,9 @@ export const MINIMUM_NODE = [22, 12, 0]
  */
 export function resolveCommandInvocation(command, args, platform = process.platform, env = process.env) {
   if (command === 'node') return { file: process.execPath, args: [...args], shell: false }
+  if (command === 'install-electron') {
+    return { file: process.execPath, args: [localRequire.resolve('electron/install.js'), ...args], shell: false }
+  }
   if (command === 'electron-builder') {
     return { file: process.execPath, args: [localRequire.resolve('electron-builder/cli.js'), ...args], shell: false }
   }
