@@ -31,27 +31,41 @@ describe('transcript rendering', () => {
       timestamp: 1_000,
       startedAt: 1_000,
       streaming: true,
-      parts: [
-        { type: 'thinking', text: 'Checking **the workspace** now.' },
-        { type: 'toolCall', id: 'tool-1', name: 'read_file', args: { path: 'package.json' } },
-      ],
+      parts: [{ type: 'thinking', text: 'Checking **the workspace** now.' }],
     }])
 
     expect(html).toContain('activity-line--reasoning')
     expect(html).toContain('work-disclosure__rail')
     expect(html).toContain('work-disclosure__status')
-    expect(html).toContain('>Thinking</span>')
+    expect(html).toContain('role="status"><span>Thinking</span>')
     expect(html).toContain('Checking <strong>the workspace</strong> now.')
     expect(html).not.toContain('**the workspace**')
     expect(html).not.toContain('Worked for')
-    expect(html).toContain('activity-line--tool')
-    expect(html).not.toContain('activity-tool__details')
-    expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('package.json')
     expect(html).toContain('thinking-dots')
     expect(html.match(/thinking-dots[\s\S]*?<span><\/span><span><\/span><span><\/span>/)).not.toBeNull()
   })
 
+  it.each([
+    ['a running tool', 'read_file', { path: 'package.json' }],
+    ['an ask_user wait', 'ask_user', { question: 'Which release channel?' }],
+  ])('announces Working when reasoning transitions to %s', (_description, name, args) => {
+    const html = render([{
+      id: 'active',
+      role: 'assistant',
+      timestamp: 1_000,
+      startedAt: 1_000,
+      streaming: true,
+      parts: [
+        { type: 'thinking', text: 'Checking the workspace now.' },
+        { type: 'toolCall', id: 'tool-1', name, args },
+      ],
+    }])
+
+    expect(html).toContain('activity-line--reasoning')
+    expect(html).toContain('activity-line--tool')
+    expect(html).toContain('role="status"><span>Working</span>')
+    expect(html).not.toContain('role="status"><span>Thinking</span>')
+  })
 
   it('keeps external active work readable until the whole agent turn is done', () => {
     const html = render([{

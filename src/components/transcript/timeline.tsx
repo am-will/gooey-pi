@@ -225,14 +225,26 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
   })}</div>
 }
 
+function liveWorkStatus(parts: MessagePart[], showReasoning: boolean): 'Thinking' | 'Working' {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
+    if (part.type === 'thinking') {
+      if (showReasoning) return 'Thinking'
+      continue
+    }
+    if (part.type !== 'image') return 'Working'
+  }
+  return 'Working'
+}
+
 export function WorkDisclosure({ message, parts, showReasoning, showTools, running = message.streaming }: { message: TranscriptMessage; parts: MessagePart[]; showReasoning: boolean; showTools: boolean; running?: boolean }) {
   const [open, setOpen] = useState(false)
   if (running) {
-    const reasoningVisible = showReasoning && parts.some((part) => part.type === 'thinking')
+    const status = liveWorkStatus(parts, showReasoning)
     return <section className="work-disclosure is-running" aria-label="Agent work activity">
       <span className="work-disclosure__rail" aria-hidden="true" />
       <div className="work-disclosure__live">
-        <div className="work-disclosure__status" role="status"><span>{reasoningVisible ? 'Thinking' : 'Working'}</span><ThinkingDots /></div>
+        <div className="work-disclosure__status" role="status"><span>{status}</span><ThinkingDots /></div>
         <WorkTimeline parts={parts} showReasoning={showReasoning} showTools={showTools} streaming />
       </div>
     </section>
