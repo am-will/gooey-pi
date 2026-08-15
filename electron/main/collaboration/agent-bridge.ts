@@ -416,7 +416,10 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       // wait cannot perform multiple transcript reads at its deadline.
       const nextPollAt = Math.min(deadline, Date.now() + (idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
       await delayUntil(nextPollAt)
-      if (idle) snapshot = await this.snapshot(target)
+      if (idle) {
+        snapshot = await this.snapshot(target)
+        if (afterCursor === undefined || snapshot.cursor !== afterCursor) return { ...snapshot, timed_out: false }
+      }
     }
     return { ...snapshot, timed_out: true }
   }
