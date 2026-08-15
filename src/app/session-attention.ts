@@ -34,11 +34,13 @@ export function applySessionLifecycleEvent(
 ): SessionRecord {
   const change = sessionLifecycleChange(event)
   if (!change) return session
+  const eventRevision = (session.eventRevision ?? 0) + 1
   return {
     ...session,
     status: change.status,
     updatedAt: nextUpdatedAt(session.updatedAt, now),
-    eventRevision: (session.eventRevision ?? 0) + 1,
+    eventRevision,
+    statusEventRevision: eventRevision,
     unread: change.markUnread === undefined ? session.unread : change.markUnread && !visible,
   }
 }
