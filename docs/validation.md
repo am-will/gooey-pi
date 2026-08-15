@@ -1,5 +1,29 @@
 # Validation status
 
+## Protected `main` validation contract
+
+The repository's `main` branch protection must require pull requests and require status checks to pass with **Require branches to be up to date before merging** enabled (`required_status_checks.strict: true`). This strict latest-main requirement prevents a PR from merging on a newer base than the integration state validated by CI.
+
+The required checks are exactly the six normal pull-request gates:
+
+- `quality`
+- `hermetic-e2e`
+- `windows-state-migration`
+- `packaging-smoke (macos-14, mac, arm64, --config.mac.identity=null)`
+- `packaging-smoke (ubuntu-22.04, linux, x64)`
+- `packaging-smoke (windows-2022, win, x64)`
+
+Do not require `local-qa-package`: it is manual local QA, runs only through `workflow_dispatch`, and is intentionally excluded from pull-request validation.
+
+GitHub merge queues are not available to this public repository while it is owned by a personal account. Consequently, `merge_group` or a required merge queue cannot enforce this policy here; strict up-to-date branch protection is the supported latest-main control. If the repository moves to an organization, merge-queue support should be designed and tested separately before enabling it.
+
+An authorized maintainer can verify the active legacy branch protection and exact required-context set with:
+
+```sh
+gh api repos/am-will/gooey-pi/branches/main/protection \
+  --jq '{strict: .required_status_checks.strict, contexts: .required_status_checks.contexts, reviews: .required_pull_request_reviews}'
+```
+
 Last full local validation: 2026-08-06 on Apple Silicon macOS.
 
 | Gate | Result |
