@@ -130,7 +130,7 @@ export type MessagePart =
   | { type: 'text'; partId?: string; text: string }
   | { type: 'thinking'; partId?: string; text: string }
   | { type: 'toolCall'; partId?: string; id?: string; name: string; args?: unknown }
-  | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean }
+  | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean; streaming?: boolean }
   | { type: 'agentMessage'; partId?: string; text: string; agentName?: string }
   | { type: 'image'; partId?: string; mimeType?: string; data?: string; dataTruncated?: boolean }
   | {
