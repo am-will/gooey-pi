@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { StrictMode, useLayoutEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -7,6 +7,14 @@ import './styles.css'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('GooeyPi root element was not found')
+
+function RendererReadiness() {
+  useLayoutEffect(() => {
+    document.documentElement.dataset.gooeypiRendererReady = 'true'
+    window.dispatchEvent(new Event('gooeypi:renderer-ready'))
+  }, [])
+  return null
+}
 
 createRoot(root).render(
   <StrictMode>
@@ -22,6 +30,7 @@ createRoot(root).render(
         </div>
       )}
     >
+      <RendererReadiness />
       <App />
     </ErrorBoundary>
   </StrictMode>,

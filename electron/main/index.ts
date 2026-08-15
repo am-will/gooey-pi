@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, session, shell, webContents } from 'electron'
 import type { BrowserWindowConstructorOptions, WebContents } from 'electron'
 import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
@@ -37,6 +37,12 @@ import { TerminalService } from './terminal'
 import { VoiceService, voiceSecretStorageStatus } from './voice'
 import { isAllowedRendererAudioPermission } from './voice-permissions'
 import { createManualUpdateCheck, getAutoUpdater, UpdateService } from './updates'
+import {
+  PACKAGED_SMOKE_READY_FILE,
+  parsePackagedSmokeRequest,
+  serializePackagedSmokeResult,
+  waitForPackagedSmokeRenderer,
+} from './packaged-smoke'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'prime-work', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 
@@ -60,7 +66,12 @@ let shutdownApproved = false
 let confirmingShutdown = false
 let trustedRendererUrl = ''
 let windowCreation: Promise<BrowserWindow | null> | null = null
-const keepTestWindowsHidden = process.env.PRIME_WORK_E2E_HIDE_WINDOWS === '1'
+const packagedSmokeRequest = parsePackagedSmokeRequest(process.argv)
+if (packagedSmokeRequest.enabled) {
+  if (!app.isPackaged) throw new Error('Packaged smoke mode is available only in a packaged application')
+  app.setPath('userData', packagedSmokeRequest.userDataPath!)
+}
+const keepTestWindowsHidden = process.env.PRIME_WORK_E2E_HIDE_WINDOWS === '1' || packagedSmokeRequest.enabled
 
 installCrashGuards({
   logPath: () => {
@@ -983,7 +994,16 @@ async function bootstrap(): Promise<void> {
       })
     }),
   })
-  await ensureWindow()
+  const window = await ensureWindow()
+  if (packagedSmokeRequest.enabled) {
+    if (!window || window.isDestroyed()) throw new Error('Packaged smoke mode could not create its renderer window')
+    const result = await waitForPackagedSmokeRenderer(window.webContents, trustedRendererUrl)
+    await writeFile(join(app.getPath('userData'), PACKAGED_SMOKE_READY_FILE), serializePackagedSmokeResult(result), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    console.log(`${result.event}: ${result.url}; preload ready; renderer ready`)
+    shutdownApproved = true
+    app.quit()
+    return
+  }
   updates.start()
 }
 
@@ -1013,6 +1033,7 @@ else void app.whenReady().then(async () => {
     })
   }
   await bootstrap()
+  if (shutdownStarted) return
   app.on('second-instance', () => {
     if (!shutdownStarted) requestWindow('second instance')
   })

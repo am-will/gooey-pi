@@ -68,6 +68,7 @@ try {
     )
   } else {
     run('node', ['scripts/release/verify-cross-platform-package.mjs', '--platform', platform, '--arch', arch, '--mode', isPublic ? 'public' : 'qa'], withoutReleaseCredentials(process.env))
+    run('node', ['scripts/release/smoke-packaged-app.mjs', '--platform', platform, '--arch', arch], withoutReleaseCredentials(process.env))
   }
   if (dryRun) console.log('\nDRY RUN — nothing executed.')
   else console.log(`\n${isPublic ? 'Distribution' : 'Local QA'} ${platform}/${arch} package pipeline passed.`)

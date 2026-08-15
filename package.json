@@ -19,7 +19,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
     "lint": "biome lint --config-path=scripts/release/biome.json electron src tests scripts electron.vite.config.ts playwright.config.ts vitest.config.ts",
-    "format:check": "biome format --config-path=scripts/release/biome.json scripts/release electron.vite.config.ts vitest.config.ts playwright.config.ts tests/release-scripts.test.ts",
+    "format:check": "biome format --config-path=scripts/release/biome.json scripts/release electron.vite.config.ts vitest.config.ts playwright.config.ts tests/release-scripts.test.ts tests/packaged-smoke.test.ts tests/backend/packaged-smoke-readiness.test.ts",
     "check": "npm run lint && npm run format:check",
     "test": "vitest run",
     "test:watch": "vitest",

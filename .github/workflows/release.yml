@@ -215,10 +215,10 @@ jobs:
             ~/.cache/electron
             ~/.cache/electron-builder
           key: electron-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('package-lock.json') }}
-      - name: Install pacman packaging dependency
+      - name: Install Linux packaging and headless-display dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libarchive-tools
+          sudo apt-get install --yes libarchive-tools xvfb
       - run: npm ci
       - run: npm run release:preflight:toolchain
       - run: npm run package:linux -- --skip-verify --arch ${{ matrix.arch }}

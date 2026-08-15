@@ -521,6 +521,31 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(ciWorkflow).toContain('verify-cross-platform-package.mjs --platform ${{ matrix.target }} --arch ${{ matrix.arch }} --unpacked-only')
   })
 
+  test('launches unpacked Windows and Linux applications before CI and release uploads', () => {
+    const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
+    const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
+    const packaging = readFileSync('scripts/release/package.mjs', 'utf8')
+    const staticVerification = packaging.indexOf('verify-cross-platform-package.mjs')
+    const runtimeVerification = packaging.indexOf('smoke-packaged-app.mjs')
+
+    expect(staticVerification).toBeGreaterThan(-1)
+    expect(runtimeVerification).toBeGreaterThan(staticVerification)
+    expect(packaging).toContain("run('node', ['scripts/release/smoke-packaged-app.mjs', '--platform', platform, '--arch', arch], withoutReleaseCredentials(process.env))")
+    expect(ciWorkflow).toContain('id: packaged_smoke')
+    expect(ciWorkflow).toContain('node scripts/release/smoke-packaged-app.mjs --platform ${{ matrix.target }} --arch ${{ matrix.arch }}')
+    expect(ciWorkflow).toContain("if: matrix.target == 'linux'")
+    expect(ciWorkflow).toContain('sudo apt-get install --yes xvfb')
+    expect(ciWorkflow).toContain('name: packaged-smoke-${{ matrix.target }}-${{ matrix.arch }}')
+    expect(ciWorkflow).toContain('release/${{ matrix.target }}/${{ matrix.arch }}/packaged-smoke.log')
+
+    expect(releaseWorkflow).toContain('sudo apt-get install --yes libarchive-tools xvfb')
+    for (const command of ['npm run package:linux -- --skip-verify --arch ${{ matrix.arch }}', 'npm run package:win -- --skip-verify', 'npm run package:win:local-qa -- --skip-verify']) {
+      const packageIndex = releaseWorkflow.indexOf(command)
+      expect(packageIndex, command).toBeGreaterThan(-1)
+      expect(releaseWorkflow.indexOf('uses: actions/upload-artifact@', packageIndex), `${command} must precede its artifact upload`).toBeGreaterThan(packageIndex)
+    }
+  })
+
   test('gates every pull-request head and pinned release SHA on the named production audit', () => {
     type WorkflowJob = {
       name?: string

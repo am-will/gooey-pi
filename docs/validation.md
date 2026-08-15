@@ -12,7 +12,7 @@ This page explains how to reproduce and interpret GooeyPi's validation gates. It
 | Aggregate commands and toolchain policy | [`package.json`](../package.json) and [`.nvmrc`](../.nvmrc) |
 | Resolved dependency graph | [`package-lock.json`](../package-lock.json) |
 | Dependency-install lifecycle | [`package.json`](../package.json) and [`install-app-deps.mjs`](../scripts/release/install-app-deps.mjs) |
-| Package and post-package guarantees | [`scripts/release/package.mjs`](../scripts/release/package.mjs), [`verify-package.mjs`](../scripts/release/verify-package.mjs), and [`verify-cross-platform-package.mjs`](../scripts/release/verify-cross-platform-package.mjs) |
+| Package and post-package guarantees | [`scripts/release/package.mjs`](../scripts/release/package.mjs), [`verify-package.mjs`](../scripts/release/verify-package.mjs), [`verify-cross-platform-package.mjs`](../scripts/release/verify-cross-platform-package.mjs), and [`smoke-packaged-app.mjs`](../scripts/release/smoke-packaged-app.mjs) |
 | Audit policy and accepted risk | [`docs/security.md`](security.md), [`audit-production.mjs`](../scripts/release/audit-production.mjs), and [`audit-exceptions.json`](../scripts/release/audit-exceptions.json) |
 
 Read these files at the commit being validated. Job names, test inventory, dependency versions, budgets, and artifact matrices can change; copying their current values into a permanent pass/fail table would create another stale snapshot.
@@ -45,7 +45,7 @@ The [CI workflow](../.github/workflows/ci.yml) runs on pull requests, pushes to 
 | `quality` | Pull request, `main`, manual dispatch | TypeScript checks; configured lint and format checks; the coverage suite and thresholds; production bundle creation; bundle-size budgets; coverage artifact upload. |
 | `hermetic-e2e` | Pull request, `main`, manual dispatch | The built application passes the Playwright Electron suite on the pinned macOS runner without relying on developer state. Failure artifacts are uploaded when available. |
 | `windows-state-migration` | Pull request, `main`, manual dispatch | The state migration suite passes on a real `windows-2022` runner, including the production-platform fresh-install, migration, restart, and update path. Simulating `platform: 'win32'` on another OS is useful unit coverage but is not a substitute for this job. |
-| `packaging-smoke` | Pull requests only | Native macOS arm64, Linux x64, and Windows x64 runners can build unpacked application directories. Linux and Windows additionally verify the ASAR layout and exact native-unpack allowlist. These are unsigned smoke builds, not public installers. |
+| `packaging-smoke` | Pull requests only | Native macOS arm64, Linux x64, and Windows x64 runners can build unpacked application directories. Linux and Windows additionally verify the ASAR layout and exact native-unpack allowlist, then launch the actual unpacked executable and require the trusted renderer plus preload IPC bridge to report ready. These are unsigned smoke builds, not public installers. |
 | `local-qa-package` | Manual dispatch only | Native runners create and verify installable local-QA artifacts for macOS, Linux, and Windows, then upload the configured artifact set. These artifacts are not represented as signed or notarized public releases. |
 
 Expected skips are part of this design:
@@ -68,10 +68,12 @@ Use focused tests while developing, then choose the aggregate that matches the c
 | `npm run test:e2e` | Builds the application, then runs the hermetic Electron E2E suite. |
 | `npm run audit:production` | Fetches npm's production audit report and applies the repository's high/critical advisory and exception policy. Network access is required. |
 | `npm run package:mac:local-qa` | On macOS, runs the relevant verification aggregate, creates unsigned/unnotarized DMG and ZIP artifacts, and applies macOS post-package checks in QA mode. |
-| `npm run package:linux:local-qa` | On Linux, runs the package-verification aggregate, creates the configured Linux artifacts, and verifies their runtime layout in QA mode. |
-| `npm run package:win:local-qa` | On Windows, runs the package-verification aggregate, creates the configured Windows artifacts, and verifies their runtime layout in QA mode. |
+| `npm run package:linux:local-qa` | On Linux, runs the package-verification aggregate, creates the configured Linux artifacts, verifies their runtime layout, and launch-smokes the unpacked executable under a headless display in QA mode. |
+| `npm run package:win:local-qa` | On Windows, runs the package-verification aggregate, creates the configured Windows artifacts, verifies their runtime layout, and launch-smokes the unpacked executable in QA mode. |
 
 Packaging is native: run each platform command on its matching operating system and architecture. The public `package:mac`, `package:linux`, and `package:win` commands use distribution mode; macOS and Windows distribution checks require their external signing configuration. A successful local-QA command must not be described as a public trust check.
+
+The Linux/Windows packaged launcher uses a fresh temporary user-data directory, admits success only after the exact packaged renderer commits and a real preload IPC call succeeds, and then requires a clean application exit. Early exit, navigation to another URL, startup error, or timeout fails closed. The launcher always attempts process-tree termination and temporary-state removal; its bounded stdout/stderr diagnostic is written to the target release directory so CI can upload it on failure. This runtime check complements rather than replaces the static ASAR/native-module verifier.
 
 ## Dependency audit policy
 
@@ -99,8 +101,8 @@ The [release workflow](../.github/workflows/release.yml) runs for a semantic-ver
 | `quality` | Run `release:verify:package` for that SHA. |
 | `hermetic-e2e` | Build and run the Electron E2E suite for that SHA. |
 | `package` | Build both native macOS architectures. Credential preflight is fail-closed; public verification checks the signing identity, required microphone entitlements on the app and every Electron helper, the notarization staple on each packaged app, Gatekeeper, artifact integrity, fuses, native layout/architecture, and package budgets. |
-| `package-linux` | Build the configured Linux architectures on native runners and apply the Linux package/runtime verification path. |
-| `package-windows` | When explicitly enabled, build either Authenticode-signed public packages or unsigned beta packages. Signed mode requires signing secrets and the configured signer subject and/or thumbprint. |
+| `package-linux` | Build the configured Linux architectures on native runners, apply the Linux package/runtime verification path, and launch-smoke each unpacked executable before artifact upload. |
+| `package-windows` | When explicitly enabled, build either Authenticode-signed public packages or unsigned beta packages, then launch-smoke the unpacked executable before artifact upload. Signed mode requires signing secrets and the configured signer subject and/or thumbprint. |
 | `release-packages` | Reject failed prerequisites, collect the enabled platform artifacts, generate checksums, attest provenance, and publish or resume the GitHub Release with write permission scoped to this final job. |
 
 Native release jobs pass `--skip-verify` only after the same immutable SHA has passed the upstream quality and E2E jobs. That flag skips a duplicate pre-package test aggregate; it does not skip bundle creation or the platform-specific post-package verification.

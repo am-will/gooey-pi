@@ -150,6 +150,11 @@ jobs:
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install headless display for packaged Linux launch
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb
       - run: npm ci
       - run: npm run release:preflight:toolchain
       - run: npm run build:bundle
@@ -158,6 +163,16 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - if: matrix.target != 'mac'
         run: node scripts/release/verify-cross-platform-package.mjs --platform ${{ matrix.target }} --arch ${{ matrix.arch }} --unpacked-only
+      - name: Launch the packaged application to trusted renderer readiness
+        id: packaged_smoke
+        if: matrix.target != 'mac'
+        run: node scripts/release/smoke-packaged-app.mjs --platform ${{ matrix.target }} --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure() && steps.packaged_smoke.outcome == 'failure'
+        with:
+          name: packaged-smoke-${{ matrix.target }}-${{ matrix.arch }}
+          path: release/${{ matrix.target }}/${{ matrix.arch }}/packaged-smoke.log
+          if-no-files-found: error
 
   local-qa-package:
     if: github.event_name == 'workflow_dispatch'
@@ -206,6 +221,11 @@ jobs:
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install headless display for local-QA Linux launch
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb
       - run: npm ci
       - run: npm run release:preflight:toolchain
       - run: ${{ matrix.package }}
