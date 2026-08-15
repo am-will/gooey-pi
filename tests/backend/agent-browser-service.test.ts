@@ -405,6 +405,31 @@ describe('AgentBrowserService', () => {
     guest.destroy()
   })
 
+  it('rejects queued work when an ordinary attached tab is closed', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    guest.scriptResult = (code) => {
+      if (code.includes('running-before-tab-close')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'running-before-tab-close'" })
+    await started.promise
+    const queued = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-after-tab-close'" })
+    expect(service.closeTab(tabId)).toBe(true)
+    const queuedRejected = expect(queued).rejects.toThrow(/browser tab access changed/i)
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+    await queuedRejected
+    expect(guest.executedScripts.some((code) => code.includes('queued-after-tab-close'))).toBe(false)
+  })
+
   it('announces every agent action so the UI can surface the Browser panel', async () => {
     const { service, activityEvents, newGuest, openAttached } = fixture()
     const { tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
