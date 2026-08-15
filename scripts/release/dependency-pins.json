@@ -1,5 +1,5 @@
 {
-  "//": "Tamper-evidence pins for dependencies installed from outside the npm registry (the vendored Prime Agent tarballs in vendor/). The guard test in tests/release-scripts.test.ts asserts (1) the lockfile matches these pins exactly and (2) the vendor/*.tgz files on disk hash to the pinned sha512. To upgrade Prime Agent deliberately: verify the new tarballs against their publisher, replace them in vendor/, update package.json + package-lock.json, and mirror the new values here in the same commit.",
+  "//": "Tamper-evidence pins for dependencies installed from outside the npm registry (reviewed tarballs in vendor/). The guard test in tests/release-scripts.test.ts asserts (1) the lockfile matches these pins exactly and (2) the vendor/*.tgz files on disk hash to the pinned sha512. To update one deliberately: verify the new tarball and patch provenance, replace it in vendor/, update package.json + package-lock.json, and mirror the new values here in the same commit.",
   "packages": {
     "node_modules/@earendil-works/pi-agent-core": {
       "resolved": "file:vendor/prime-agent-core-0.7.0.tgz",
@@ -13,9 +13,13 @@
       "resolved": "file:vendor/prime-agent-tui-0.7.0.tgz",
       "integrity": "sha512-mbypMOaUYrrQCBc59YZ34RQHWmsnzJNhd1ISF5E39L9qEKpVU5ZpctTqrA9Dhdo7IGDk0WfSnppNls/uyAcMjw=="
     },
+    "node_modules/extract-zip": {
+      "resolved": "file:vendor/extract-zip-2.0.2-gooeypi.1.tgz",
+      "integrity": "sha512-jowWxp+rFGsw37bWa3iuDk5luc3hBVRMpK54L1oYUMGR34JjVdbVviV78KSg8QMdqY0ZPWeFmFYK1g1fTDY4OQ=="
+    },
     "node_modules/prime-agent": {
-      "resolved": "file:vendor/prime-agent-0.7.0-gooeypi.1.tgz",
-      "integrity": "sha512-vxCM2XVoVQc0kQbh1n0kKSZEa7EA5Gshn0DB+mfZzBLlQqgFSPccoKFXfzF/lqjrnQvTkyABUiLtDDrhrjjjrA=="
+      "resolved": "file:vendor/prime-agent-0.7.0-gooeypi.2.tgz",
+      "integrity": "sha512-Ylitnx182ue076jyVty39hhtzi6XJN7/q+SssERV5gtTbIRJwSC8ZTGbDFF4VfiRJKRdV/sqSu/LP6JR6zOKvA=="
     },
     "node_modules/prime-agent-ai": {
       "resolved": "file:vendor/prime-agent-ai-0.7.0-gooeypi.1.tgz",
