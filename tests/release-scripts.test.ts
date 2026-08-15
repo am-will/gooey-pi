@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
-import { bootstrapNpm, persistNpmShimDirectory, resolveNpmGlobalLayout } from '../scripts/release/bootstrap-npm.mjs'
+import { bootstrapNpm, parsePinnedNpmArtifact, persistNpmShimDirectory, readPinnedNpmArtifact, resolveNpmGlobalLayout, verifyPinnedNpmArtifact } from '../scripts/release/bootstrap-npm.mjs'
 import { installAppDependencies } from '../scripts/release/install-app-deps.mjs'
 import {
   artifactArchitectures,
@@ -135,6 +135,36 @@ function createBundleSizeFixture() {
   return directory
 }
 
+const PINNED_NPM_INTEGRITY = 'sha512-uIXokLlBj6FpNUTQX1PmT5pz7BlIN9QlixX+zdaSNHsd0qUXsbDLr50xzY6Sw7cJVr0uzHKDOle0swmPW/p5Qw=='
+
+function npmArtifactManifest(size: number, overrides: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    artifacts: {
+      npm: {
+        version: '12.0.2',
+        path: 'vendor/npm-12.0.2.tgz',
+        source: 'https://registry.npmjs.org/npm/-/npm-12.0.2.tgz',
+        integrity: PINNED_NPM_INTEGRITY,
+        size,
+        license: 'Artistic-2.0',
+        ...overrides,
+      },
+    },
+  })
+}
+
+function createPinnedNpmArtifactFixture(contents = Buffer.from('verified npm archive fixture')) {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'gooeypi npm artifact & '))
+  const repositoryRoot = join(temporaryDirectory, 'repository with spaces & metacharacters')
+  const artifactPath = join(repositoryRoot, 'vendor', 'npm-12.0.2.tgz')
+  mkdirSync(dirname(artifactPath), { recursive: true })
+  writeFileSync(artifactPath, contents)
+  const integrity = `sha512-${createHash('sha512').update(contents).digest('base64')}`
+  const manifest = npmArtifactManifest(contents.length, { integrity })
+  const artifact = parsePinnedNpmArtifact(manifest, { node: '24.15.0', npm: '12.0.2' }, repositoryRoot)
+  return { temporaryDirectory, repositoryRoot, artifactPath, artifact, manifest, contents, integrity }
+}
+
 describe('release preflight', () => {
   test('package.mjs --dry-run says nothing executed instead of claiming success', () => {
     const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'
@@ -218,6 +248,80 @@ describe('release preflight', () => {
     }
   })
 
+  test('binds the npm bootstrap artifact to the packageManager version and canonical registry provenance', () => {
+    const fixture = createPinnedNpmArtifactFixture()
+    try {
+      expect(fixture.artifact).toMatchObject({
+        version: '12.0.2',
+        relativePath: 'vendor/npm-12.0.2.tgz',
+        path: fixture.artifactPath,
+        source: 'https://registry.npmjs.org/npm/-/npm-12.0.2.tgz',
+        integrity: fixture.integrity,
+        size: fixture.contents.length,
+        license: 'Artistic-2.0',
+      })
+
+      const invalidPins = [
+        npmArtifactManifest(fixture.contents.length, { version: '12.0.1' }),
+        npmArtifactManifest(fixture.contents.length, { path: 'vendor/npm-elsewhere.tgz' }),
+        npmArtifactManifest(fixture.contents.length, { path: '../npm-12.0.2.tgz' }),
+        npmArtifactManifest(fixture.contents.length, { source: 'https://example.invalid/npm-12.0.2.tgz' }),
+        npmArtifactManifest(fixture.contents.length, { integrity: 'sha256-not-strong-enough' }),
+        npmArtifactManifest(fixture.contents.length, { size: 0 }),
+        npmArtifactManifest(fixture.contents.length, { size: 1.5 }),
+        npmArtifactManifest(fixture.contents.length, { license: 'MIT' }),
+        JSON.stringify({ artifacts: {} }),
+        '{',
+      ]
+      for (const source of invalidPins) {
+        expect(() => parsePinnedNpmArtifact(source, { node: '24.15.0', npm: '12.0.2' }, fixture.repositoryRoot)).toThrow(/npm bootstrap artifact|dependency-pins\.json/)
+      }
+    } finally {
+      rmSync(fixture.temporaryDirectory, { recursive: true, force: true })
+    }
+  })
+
+  test('verifies the npm archive before any npm invocation and rejects unsafe artifact state', () => {
+    const fixture = createPinnedNpmArtifactFixture()
+    try {
+      expect(verifyPinnedNpmArtifact(fixture.artifact)).toEqual(fixture.artifact)
+
+      writeFileSync(fixture.artifactPath, Buffer.alloc(fixture.contents.length, 0x78))
+      let npmInvocations = 0
+      expect(() =>
+        bootstrapNpm({
+          artifact: fixture.artifact,
+          nodeVersion: 'v24.15.0',
+          toolchain: { node: '24.15.0', npm: '12.0.2' },
+          readOutput: () => {
+            npmInvocations += 1
+            return 'unexpected'
+          },
+          run: () => {
+            npmInvocations += 1
+          },
+          persist: () => {
+            throw new Error('GITHUB_PATH must not be updated after verification failure')
+          },
+        }),
+      ).toThrow(/integrity does not match/)
+      expect(npmInvocations).toBe(0)
+
+      writeFileSync(fixture.artifactPath, fixture.contents.subarray(0, fixture.contents.length - 1))
+      expect(() => verifyPinnedNpmArtifact(fixture.artifact)).toThrow(/size does not match/)
+      rmSync(fixture.artifactPath)
+      expect(() => verifyPinnedNpmArtifact(fixture.artifact)).toThrow(/does not exist/)
+      expect(() =>
+        verifyPinnedNpmArtifact(fixture.artifact, {
+          lstat: () => ({ isFile: () => false, isSymbolicLink: () => true, size: fixture.contents.length }),
+          readFile: () => fixture.contents,
+        }),
+      ).toThrow(/regular non-symlink file/)
+    } finally {
+      rmSync(fixture.temporaryDirectory, { recursive: true, force: true })
+    }
+  })
+
   test('probes npm through its JavaScript CLI and both release entry points reject an old npm', () => {
     const directory = mkdtempSync(join(tmpdir(), 'gooeypi-npm-version-'))
     const npmCli = join(directory, 'npm-cli.mjs')
@@ -277,57 +381,68 @@ describe('release preflight', () => {
     }
   })
 
-  test('bootstraps at the invoked npm prefix and verifies the installed CLI, not stale lifecycle state', () => {
+  test('always installs the verified archive and verifies the installed CLI, even when invoked npm reports the pinned version', () => {
+    const fixture = createPinnedNpmArtifactFixture()
     const staleCli = '/runner/node/lib/node_modules/npm/bin/npm-cli.js'
     const githubPath = '/runner/github-path'
     const calls: Array<{ args: string[]; npmCliPath: string | undefined }> = []
-    const runs: Array<{ command: string; args: string[] }> = []
+    const runs: Array<{ command: string; args: string[]; shell: boolean }> = []
     const persisted: Array<{ shimDirectory: string; destination: string | undefined }> = []
     let installed = false
-    const result = bootstrapNpm({
-      env: { npm_execpath: staleCli, GITHUB_PATH: githubPath },
-      nodeVersion: 'v24.15.0',
-      platform: 'linux',
-      toolchain: { node: '24.15.0', npm: '12.0.2' },
-      readOutput: (args: string[], options: { npmCliPath?: string }) => {
-        calls.push({ args, npmCliPath: options.npmCliPath })
-        if (args[0] === 'prefix') return '/runner/npm-global'
-        if (args[0] === 'root') return '/runner/npm-global/lib/node_modules'
-        return options.npmCliPath && installed ? '12.0.2' : '11.12.1'
-      },
-      run: (command: string, args: string[]) => {
-        installed = true
-        return runs.push({ command, args })
-      },
-      fileExists: () => true,
-      persist: (shimDirectory: string, destination: string | undefined) => {
-        persisted.push({ shimDirectory, destination })
-        return true
-      },
-    })
+    try {
+      const result = bootstrapNpm({
+        artifact: fixture.artifact,
+        env: { npm_execpath: staleCli, GITHUB_PATH: githubPath },
+        nodeVersion: 'v24.15.0',
+        platform: 'linux',
+        toolchain: { node: '24.15.0', npm: '12.0.2' },
+        readOutput: (args: string[], options: { npmCliPath?: string }) => {
+          calls.push({ args, npmCliPath: options.npmCliPath })
+          if (args[0] === 'prefix') return '/runner/npm-global'
+          if (args[0] === 'root') return '/runner/npm-global/lib/node_modules'
+          if (!options.npmCliPath) return '12.0.2'
+          return options.npmCliPath && installed ? '12.0.2' : '11.12.1'
+        },
+        run: (command: string, args: string[], options: { shell?: boolean }) => {
+          installed = true
+          return runs.push({ command, args, shell: options.shell ?? false })
+        },
+        fileExists: () => true,
+        persist: (shimDirectory: string, destination: string | undefined) => {
+          persisted.push({ shimDirectory, destination })
+          return true
+        },
+      })
 
-    expect(runs).toEqual([
-      {
-        command: 'npm',
-        args: ['install', '--global', '--prefix', '/runner/npm-global', 'npm@12.0.2'],
-      },
-    ])
-    expect(calls.at(-1)).toEqual({
-      args: ['--version'],
-      npmCliPath: '/runner/npm-global/lib/node_modules/npm/bin/npm-cli.js',
-    })
-    expect(persisted).toEqual([{ shimDirectory: '/runner/npm-global/bin', destination: githubPath }])
-    expect(result).toMatchObject({ installed: '12.0.2', shimDirectory: '/runner/npm-global/bin', githubPathUpdated: true })
+      expect(runs).toEqual([
+        {
+          command: 'npm',
+          args: ['install', '--global', '--prefix', '/runner/npm-global', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', fixture.artifactPath],
+          shell: false,
+        },
+      ])
+      expect(runs[0]?.args.join(' ')).not.toContain('npm@12.0.2')
+      expect(runs[0]?.args.some((argument) => argument.startsWith('https://'))).toBe(false)
+      expect(calls.at(-1)).toEqual({
+        args: ['--version'],
+        npmCliPath: '/runner/npm-global/lib/node_modules/npm/bin/npm-cli.js',
+      })
+      expect(persisted).toEqual([{ shimDirectory: '/runner/npm-global/bin', destination: githubPath }])
+      expect(result).toMatchObject({ current: '12.0.2', installed: '12.0.2', shimDirectory: '/runner/npm-global/bin', githubPathUpdated: true })
+    } finally {
+      rmSync(fixture.temporaryDirectory, { recursive: true, force: true })
+    }
   })
 
   test('executes the installed npm CLI and selects its shim for the next workflow step', () => {
+    const fixture = createPinnedNpmArtifactFixture()
     const directory = mkdtempSync(join(tmpdir(), 'gooeypi stale npm & bootstrap-'))
     const prefix = join(directory, 'configured global')
     const root = process.platform === 'win32' ? join(prefix, 'node_modules') : join(prefix, 'lib', 'node_modules')
     const layout = resolveNpmGlobalLayout(prefix, root)
     const staleCli = join(directory, 'stale npm-cli.mjs')
     const githubPath = join(directory, 'github-path')
-    const expectedInstallArgs = ['install', '--global', '--prefix', prefix, 'npm@12.0.2']
+    const expectedInstallArgs = ['install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', fixture.artifactPath]
     mkdirSync(dirname(staleCli), { recursive: true })
     writeFileSync(githubPath, '')
     writeFileSync(
@@ -350,13 +465,37 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     )
 
     try {
-      const result = bootstrapNpm({ env: { ...process.env, GITHUB_PATH: githubPath, npm_execpath: staleCli } })
+      const result = bootstrapNpm({ artifact: fixture.artifact, env: { ...process.env, GITHUB_PATH: githubPath, npm_execpath: staleCli } })
       expect(result).toMatchObject({ current: '11.12.1', installed: '12.0.2', ...layout, githubPathUpdated: true })
       expect(readFileSync(githubPath, 'utf8')).toBe(`${layout.shimDirectory}\n`)
     } finally {
       rmSync(directory, { recursive: true, force: true })
+      rmSync(fixture.temporaryDirectory, { recursive: true, force: true })
     }
   })
+
+  test('installs the checked-in npm archive into a fresh prefix without network access', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi real npm bootstrap & '))
+    const prefix = join(directory, 'fresh global prefix')
+    const githubPath = join(directory, 'github-path')
+    const cache = join(directory, 'npm cache')
+    writeFileSync(githubPath, '')
+    try {
+      const result = bootstrapNpm({
+        env: {
+          ...process.env,
+          GITHUB_PATH: githubPath,
+          npm_config_cache: cache,
+          npm_config_prefix: prefix,
+        },
+      })
+      expect(result).toMatchObject({ installed: '12.0.2', prefix, githubPathUpdated: true })
+      expect(readFileSync(githubPath, 'utf8')).toBe(`${result.shimDirectory}\n`)
+      expect(readNpmOutput(['--version'], { npmCliPath: result.cliPath })).toBe('12.0.2')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 30_000)
 
   test('persists only a validated npm shim directory for the next GitHub Actions step', () => {
     const directory = mkdtempSync(join(tmpdir(), 'gooeypi-github-path-'))
@@ -386,6 +525,7 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(readme).toContain(`Node.js ${toolchain.node} or newer and npm ${toolchain.npm} or newer`)
     expect(readme).toContain('npm run toolchain:bootstrap')
     expect(readme).toContain("invoked npm's configured global prefix")
+    expect(readme).toContain('install-time lifecycle scripts disabled')
     expect(readme).not.toContain('into the active Node installation')
     expect(readFileSync('scripts/release/package.mjs', 'utf8')).toContain('assertSupportedToolchain()')
     expect(readFileSync('scripts/release/preflight.mjs', 'utf8')).toContain('assertSupportedToolchain()')
@@ -1367,7 +1507,7 @@ describe('release size budgets', () => {
   })
 })
 
-describe('non-registry dependency pins', () => {
+describe('vendored supply-chain pins', () => {
   test('every non-registry dependency in the lockfile matches its recorded pin exactly', () => {
     const lockfile = JSON.parse(readFileSync('package-lock.json', 'utf8'))
     const pins = JSON.parse(readFileSync('scripts/release/dependency-pins.json', 'utf8')).packages
@@ -1413,6 +1553,43 @@ describe('non-registry dependency pins', () => {
       const digest = `sha512-${createHash('sha512').update(readFileSync(path)).digest('base64')}`
       expect(digest, `vendored tarball bytes drifted from pin: ${path}`).toBe(integrity)
     }
+  })
+
+  test('the checked-in npm bootstrap archive matches its strict artifact pin and provenance record', () => {
+    const pinManifest = JSON.parse(readFileSync('scripts/release/dependency-pins.json', 'utf8'))
+    const artifact = readPinnedNpmArtifact()
+    expect(pinManifest.artifacts).toEqual({
+      npm: {
+        version: '12.0.2',
+        path: 'vendor/npm-12.0.2.tgz',
+        source: 'https://registry.npmjs.org/npm/-/npm-12.0.2.tgz',
+        integrity: PINNED_NPM_INTEGRITY,
+        size: artifact.size,
+        license: 'Artistic-2.0',
+      },
+    })
+    expect(verifyPinnedNpmArtifact(artifact)).toEqual(artifact)
+    expect(readdirSync('vendor').filter((name) => /^npm-\d+\.\d+\.\d+\.tgz$/.test(name))).toEqual(['npm-12.0.2.tgz'])
+
+    const provenance = readFileSync('vendor/npm-12.0.2.md', 'utf8')
+    expect(provenance).toContain('https://registry.npmjs.org/npm/-/npm-12.0.2.tgz')
+    expect(provenance).toContain(PINNED_NPM_INTEGRITY)
+    expect(provenance).toContain('Artistic-2.0')
+    expect(provenance).toContain('unmodified')
+    expect(provenance).toMatch(/before\s+invoking npm's installer/)
+
+    const security = readFileSync('docs/security.md', 'utf8')
+    expect(security).toContain("Before invoking npm's installer")
+    expect(security).not.toContain('Before invoking npm,')
+    expect(security).not.toContain('lifecycle scripts, extensions')
+  })
+
+  test('keeps the bootstrap archive out of the packaged desktop application', () => {
+    const build = JSON.parse(readFileSync('package.json', 'utf8')).build
+    const packagedInputs = JSON.stringify({ files: build.files, extraResources: build.extraResources, mac: build.mac?.files, linux: build.linux?.files, win: build.win?.files })
+    expect(packagedInputs).not.toContain('vendor/npm-')
+    expect(packagedInputs).not.toContain('vendor/**')
+    expect(build.files).toEqual(['out/**/*', 'package.json'])
   })
 })
 
