@@ -30,10 +30,21 @@ export interface ProjectSettingsPath {
 
 /** Pins a user settings directory and rejects file symlinks before sensitive rewrites. */
 export async function prepareGlobalSettingsPath(path: string): Promise<ProjectSettingsPath> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const parent = await realpath(dirname(path))
+  const parentPath = dirname(path)
+  await mkdir(parentPath, { recursive: true, mode: 0o700 })
+  const parent = await realpath(parentPath)
+  const parentStat = await lstat(parent, { bigint: true })
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new TypeError('Agent settings directory must be a real directory')
+  const parentIdentity = { dev: parentStat.dev, ino: parentStat.ino }
   const verify = async (): Promise<void> => {
-    if (await realpath(dirname(path)) !== parent) throw new TypeError('Agent settings directory changed during update')
+    if (await realpath(parentPath) !== parent) throw new TypeError('Agent settings directory changed during update')
+    const currentParent = await lstat(parent, { bigint: true })
+    if (
+      currentParent.isSymbolicLink()
+      || !currentParent.isDirectory()
+      || currentParent.dev !== parentIdentity.dev
+      || currentParent.ino !== parentIdentity.ino
+    ) throw new TypeError('Agent settings directory changed during update')
     try {
       const stat = await lstat(path)
       if (stat.isSymbolicLink() || !stat.isFile()) throw new TypeError('Agent settings file must be a regular file')

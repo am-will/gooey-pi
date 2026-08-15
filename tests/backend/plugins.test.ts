@@ -609,6 +609,46 @@ describe('PluginService MCP connections', () => {
     expect(readFileSync(external, 'utf8')).toBe(source)
   })
 
+  it('fails closed when the global MCP settings directory is replaced at the same path', async () => {
+    const root = temp()
+    const agentDir = join(root, 'omp-agent')
+    const replacementAgentDir = join(root, 'replacement-agent')
+    const displacedAgentDir = join(root, 'displaced-agent')
+    mkdirSync(agentDir)
+    // Allocate the replacement while the original exists so it cannot reuse
+    // the pinned directory inode after the rename.
+    mkdirSync(replacementAgentDir)
+    const settingsPath = join(agentDir, 'mcp.json')
+    writeFileSync(settingsPath, JSON.stringify({ mcpServers: {
+      docs: { type: 'http', url: 'https://docs.example/mcp', enabled: true },
+    } }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir, harness: 'omp' })
+    const internal = service as unknown as { settingsFingerprint(path: string): Promise<string> }
+    const original = internal.settingsFingerprint.bind(service)
+    let substituted = false
+    internal.settingsFingerprint = async (path) => {
+      const fingerprint = await original(path)
+      if (!substituted) {
+        substituted = true
+        const stagedNames = readdirSync(agentDir).filter((name) => name.startsWith('mcp.json.') && (name.endsWith('.tmp') || name.endsWith('.bak')))
+        expect(stagedNames).toHaveLength(2)
+        renameSync(agentDir, displacedAgentDir)
+        renameSync(replacementAgentDir, agentDir)
+        // Preserve the settings, staging, and backup inodes so the regression
+        // specifically exercises the parent-directory identity check.
+        for (const name of ['mcp.json', ...stagedNames]) {
+          renameSync(join(displacedAgentDir, name), join(agentDir, name))
+        }
+      }
+      return fingerprint
+    }
+
+    await expect(service.setMcpEnabled({ name: 'docs', scope: 'user', enabled: false })).rejects.toThrow(/settings directory changed/)
+
+    expect(substituted).toBe(true)
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).mcpServers.docs.enabled).toBe(true)
+  })
+
   it('does not create a missing MCP definition while changing state', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
