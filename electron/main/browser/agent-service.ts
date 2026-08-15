@@ -165,7 +165,7 @@ export class AgentBrowserService {
     this.previewTab = null
   }
 
-  /** Called from the will/did-attach-webview hardening path for every guest of the trusted partition. */
+  /** Hardens each trusted-partition webview guest. */
   approveGuest(contents: WebContents): void {
     if (this.closed) return
     this.approvedGuests.add(contents.id)
@@ -268,12 +268,7 @@ export class AgentBrowserService {
     return true
   }
 
-  /**
-   * The renderer reports which session's workspace currently owns the user's
-   * Preview webview (and which guest it is). Null clears the binding. Agent
-   * calls resolve the binding at call time, so a session switch immediately
-   * moves control.
-   */
+  /** Binds the current Preview guest to its owning session; null clears it. */
   setPreviewContext(webContentsIdValue: unknown, sessionFileValue: unknown): boolean {
     if (this.closed) return false
     if (webContentsIdValue === null || sessionFileValue === null || sessionFileValue === undefined) {
@@ -312,12 +307,7 @@ export class AgentBrowserService {
     return true
   }
 
-  /**
-   * Permanently releases every browser guest owned by a session. Archiving is
-   * a lifecycle boundary, so merely dropping the tab records is insufficient:
-   * hidden webview guests can keep media, timers, workers, and renderer
-   * processes alive after their thread disappears from the UI.
-   */
+  /** Destroys every guest owned by an archived session. */
   closeForSession(sessionKeyValue: unknown): boolean {
     if (this.closed) return false
     const sessionKey = canonicalSessionPath(requireString(sessionKeyValue, 'sessionFile', { min: 1, max: 4096 }))
@@ -833,12 +823,7 @@ export class AgentBrowserService {
     return { x, y }
   }
 
-  /**
-   * Moves the pointer from its last position to the target as a smooth eased
-   * glide of real mouseMove events (so pages get genuine hover states), and
-   * emits a pointer event on the same clock so the renderer's synthetic
-   * cursor can animate the identical path.
-   */
+  /** Keeps real and rendered pointer motion synchronized. */
   private async glidePointer(tab: TabState, guest: WebContents, to: { x: number; y: number }, action: AgentBrowserPointerEvent['action']): Promise<void> {
     const from = tab.pointer
     const distance = from ? Math.hypot(to.x - from.x, to.y - from.y) : 0
@@ -865,12 +850,7 @@ export class AgentBrowserService {
     tab.pointer = { x: to.x, y: to.y }
   }
 
-  /**
-   * webContents.sendInputEvent does not reach OOPIF-based webview guests
-   * (input routing happens in the embedder); the DevTools protocol Input
-   * domain dispatches with real hit-testing, so all synthetic input goes
-   * through the debugger instead.
-   */
+  /** Uses DevTools input because sendInputEvent cannot reach OOPIF webview guests. */
   private async dispatchInput(guest: WebContents, method: string, params: Record<string, unknown>): Promise<void> {
     if (!guest.debugger.isAttached()) guest.debugger.attach('1.3')
     await guest.debugger.sendCommand(method, params)

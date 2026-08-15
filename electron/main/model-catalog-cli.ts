@@ -173,7 +173,6 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     return (await this.catalog()).models.find((model) => model.provider === provider && model.id === modelId)
   }
 
-  /** Reads `models` off an untrusted catalog container, rejecting any other shape. */
   protected requireModelEntries(container: unknown): unknown[] {
     if (typeof container !== 'object' || container === null || Array.isArray(container) || !Array.isArray((container as Record<string, unknown>).models)) {
       throw new Error(`${this.harnessLabel} returned an unexpected model catalog shape`)
@@ -231,11 +230,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     return catalog
   }
 
-  /**
-   * Probes `<cli> --version`. Only a successful probe is cached: a transient
-   * failure answers 'unknown' for this call and retries on the next catalog
-   * refresh.
-   */
+  /** Caches successful version probes; transient failures retry on the next refresh. */
   private async resolveVersion(executable: string): Promise<string> {
     if (this.cachedVersion?.executable === executable) return this.cachedVersion.value
     let version: string | null = null

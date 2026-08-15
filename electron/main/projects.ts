@@ -143,7 +143,6 @@ export class ProjectService {
     private readonly identityFilesystem: FolderIdentityFilesystem = defaultFolderIdentityFilesystem,
   ) {}
 
-  /** Persisted projects visible to this instance: exactly its own harness's records. */
   private ownProjects(projects: readonly PersistedProject[]): PersistedProject[] {
     return projects.filter((project) => project.harness === this.harness)
   }
@@ -179,10 +178,7 @@ export class ProjectService {
     } catch { return undefined }
   }
 
-  /**
-   * Refreshes only still-present grants whose persisted identity is exactly the
-   * one that was verified. A concurrent removal or re-grant cannot be undone.
-   */
+  /** Refreshes only unchanged grants so concurrent removal or re-grant wins. */
   private async persistFolderIdentityRefreshes(
     refreshes: FolderIdentityRefresh[],
     authorizationRevision: number,
@@ -208,12 +204,7 @@ export class ProjectService {
     })
   }
 
-  /**
-   * The one verify-and-authorize resolution for a persisted project folder:
-   * lexical (configured) path, canonical path when it still exists, the
-   * recorded identity for either spelling, and the verified canonical path
-   * when the on-disk identity still matches the grant.
-   */
+  /** Resolves folder paths against their persisted identity. */
   private async resolveFolderAuthorization(
     project: Pick<PersistedProject, 'folderIdentities' | 'createdAt'>,
     folder: string,
@@ -381,11 +372,7 @@ export class ProjectService {
     }
   }
 
-  /**
-   * Grants `path` to this harness: undismisses it, refreshes or creates the
-   * owning persisted project, publishes the authorization, and returns the
-   * enriched record. `knownSessions` reuses an already-loaded session list.
-   */
+  /** Grants a folder and reuses knownSessions when the caller already loaded them. */
   private async grantProjectFolder(path: string, identity: FolderIdentity, knownSessions?: readonly SessionRecord[]): Promise<ProjectRecord> {
     if (await this.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
     this.removalRoots.delete(path)

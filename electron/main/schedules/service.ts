@@ -133,10 +133,7 @@ export class AutomationService {
     this.armTimer()
   }
 
-  /**
-   * Runs persisted as queued/running belong to a previous process; they will
-   * never resume, so surface them as interrupted instead of forever-pending.
-   */
+  /** Marks queued/running work from the previous process as interrupted. */
   private async reconcileInterruptedRuns(): Promise<void> {
     const finishedAt = this.now().toISOString()
     await this.store.update((state) => {
@@ -285,11 +282,7 @@ export class AutomationService {
     return updated
   }
 
-  /**
-   * Deleting a task cancels work that has not started. A run that already
-   * crossed the persisted `running` transition is allowed to finish because
-   * schedule executors do not expose a reliable cancellation primitive.
-   */
+  /** Deletes pending work but lets already-running executors finish. */
   async delete(idValue: unknown): Promise<boolean> {
     const id = requireId(idValue, 'schedule id')
     const removed = await this.store.update((state) => {

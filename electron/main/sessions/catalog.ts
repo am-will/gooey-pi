@@ -155,11 +155,7 @@ export class SessionMetadataCatalog {
     private readonly nameTimestamp: SessionNameTimestamp = timestampFromSessionName,
   ) {}
 
-  /**
-   * Marks the catalog content stale without discarding the last snapshot: the
-   * `prime-agent list` spawn stays rate limited independently of change events,
-   * so append bursts keep serving the previous snapshot instead of respawning.
-   */
+  /** Invalidates content while retaining the rate-limited last snapshot. */
   invalidateLiveCatalog(): void {
     this.catalogRevision += 1
     this.preparedRevision = null

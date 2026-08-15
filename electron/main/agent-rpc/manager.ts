@@ -49,12 +49,12 @@ export class AgentRpcManager {
     this.runtimeEnvironmentProvider = provider
   }
 
-  /** Called once per successfully started runtime with the environment it was spawned with, so capability bridges can bind their claims to the runtime's session. */
+  /** Lets capability bridges bind successful runtime claims to their session. */
   setRuntimeStartListener(listener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void): void {
     this.runtimeStartListener = listener
   }
 
-  /** Called once when ownership of a spawned environment ends, including starts that fail before a runtime can be created. */
+  /** Reports every spawned environment's ownership end, including failed starts. */
   setRuntimeEndListener(listener: (environment: NodeJS.ProcessEnv, info?: RuntimeInfo) => void): void {
     this.runtimeEndListener = listener
   }
@@ -65,7 +65,7 @@ export class AgentRpcManager {
     return this.startWithMode(raw, true)
   }
 
-  /** Internal scheduler entrypoint: unattended children must never expose UI-blocking tools. */
+  /** Starts a runtime without interactive tools. */
   async startUnattended(raw: unknown): Promise<RuntimeInfo> {
     return this.startWithMode(raw, false)
   }
@@ -161,10 +161,7 @@ export class AgentRpcManager {
     }
   }
 
-  /**
-   * Retire children launched with stale capability settings. Idle runtimes are
-   * stopped now; busy runtimes are polled until their current turn settles.
-   */
+  /** Retires stale idle runtimes now and busy runtimes after their turn settles. */
   async requestRuntimeEnvironmentRefresh(): Promise<void> {
     this.runtimeEnvironmentRevision += 1
     await Promise.all([...this.runtimes.values()].map((runtime) => this.retireWhenIdle(runtime)))
@@ -260,7 +257,7 @@ export class AgentRpcManager {
 
   list(): RuntimeInfo[] { return [...this.runtimes.values()].map((runtime) => runtime.snapshot()) }
 
-  /** Cheap ownership probe for IPC routing; requireRuntime keeps the authoritative not-found error. */
+  /** Ownership probe for IPC routing. */
   has(runtimeId: string): boolean { return this.runtimes.has(runtimeId) }
 
   getForSession(filePath: string): RuntimeInfo | undefined {

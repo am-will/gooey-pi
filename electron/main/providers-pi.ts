@@ -176,7 +176,6 @@ export class PiModelCatalogService extends CliModelCatalogService {
     return this.requireModelEntries(frame.data)
   }
 
-  /** Validates one untrusted RPC model entry; returns null when any field is hostile or malformed. */
   protected toModelDescriptor(value: unknown): PrimeModelDescriptor | null {
     const entry = validateModelEntry(value)
     if (!entry) return null

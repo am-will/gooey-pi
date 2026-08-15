@@ -83,7 +83,7 @@ export abstract class CapabilityBridge {
     return this.claims.get(token)
   }
 
-  /** Revoke one runtime's bearer claim. Safe to call repeatedly and during bridge shutdown. */
+  /** Idempotently revokes a runtime claim. */
   revoke(token: string | undefined): boolean {
     if (!token) return false
     const claim = this.claims.get(token)

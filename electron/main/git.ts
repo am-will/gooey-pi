@@ -384,14 +384,7 @@ export async function createGitWorktree(cwd: string, targetPath: string, branchV
 export class GitService {
   constructor(private readonly authorizeCwd: (cwd: string) => Promise<string>) {}
 
-  /**
-   * Entry guard for every repository operation: authorizes and canonicalizes
-   * the toplevel, fetches the repository configuration once, derives the
-   * filter-neutralizing overrides, and — when the operation names its input
-   * paths up front — rejects paths that require clean/smudge filters. The
-   * whole call graph of one operation reuses this context instead of
-   * re-resolving the toplevel or re-reading the configuration.
-   */
+  /** Builds one shared authorized, filter-safe context. */
   private async withRepositoryGuards(cwdValue: unknown, paths?: readonly string[]): Promise<RepositoryContext> {
     const cwd = await this.repositoryCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }))
     const config = await repositoryConfig(cwd)
