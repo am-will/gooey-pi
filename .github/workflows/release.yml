@@ -64,6 +64,23 @@ jobs:
         id: resolve
         run: echo "sha=$(git rev-parse HEAD^{commit})" >> "$GITHUB_OUTPUT"
 
+  production-audit:
+    name: Production dependency audit
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm run toolchain:bootstrap
+      - run: npm run release:preflight:toolchain
+      - name: Apply named production dependency audit exceptions
+        run: npm run audit:production
+
   quality:
     needs: validate
     runs-on: ubuntu-22.04
@@ -106,7 +123,7 @@ jobs:
       - run: npm run test:e2e:hermetic
 
   package:
-    needs: [validate, quality, hermetic-e2e]
+    needs: [validate, production-audit, quality, hermetic-e2e]
     strategy:
       # Ship both mac architectures as separate DMG/ZIP builds. Each leg runs
       # on a runner whose native architecture matches the target so
@@ -169,7 +186,7 @@ jobs:
           if-no-files-found: error
 
   package-linux:
-    needs: [validate, quality, hermetic-e2e]
+    needs: [validate, production-audit, quality, hermetic-e2e]
     strategy:
       # Ship both Linux architectures from native runners so npm install and
       # electron-builder package node-pty and ZeroMQ for the matching ABI.
@@ -218,7 +235,7 @@ jobs:
 
   package-windows:
     if: (github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))
-    needs: [validate, quality, hermetic-e2e]
+    needs: [validate, production-audit, quality, hermetic-e2e]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -261,7 +278,7 @@ jobs:
           if-no-files-found: error
 
   release-packages:
-    needs: [validate, package, package-linux, package-windows]
+    needs: [validate, production-audit, package, package-linux, package-windows]
     # Always run the aggregate gate. A skipped job can satisfy a required check,
     # so failures are asserted by an explicit first step rather than encoded in
     # the job-level condition. Windows may legitimately be skipped.
@@ -274,11 +291,11 @@ jobs:
     steps:
       - name: Fail if a release prerequisite did not succeed
         if: >-
-          always() && (needs.validate.result != 'success' || needs.package.result != 'success' ||
-          needs.package-linux.result != 'success' ||
+          always() && (needs.validate.result != 'success' || needs.production-audit.result != 'success' ||
+          needs.package.result != 'success' || needs.package-linux.result != 'success' ||
           (needs.package-windows.result != 'success' && needs.package-windows.result != 'skipped'))
         run: |
-          echo "Release prerequisite results: validate=${{ needs.validate.result }}, package=${{ needs.package.result }}, package-linux=${{ needs.package-linux.result }}, package-windows=${{ needs.package-windows.result }}"
+          echo "Release prerequisite results: validate=${{ needs.validate.result }}, production-audit=${{ needs.production-audit.result }}, package=${{ needs.package.result }}, package-linux=${{ needs.package-linux.result }}, package-windows=${{ needs.package-windows.result }}"
           exit 1
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

@@ -521,6 +521,53 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(ciWorkflow).toContain('verify-cross-platform-package.mjs --platform ${{ matrix.target }} --arch ${{ matrix.arch }} --unpacked-only')
   })
 
+  test('gates every pull-request head and pinned release SHA on the named production audit', () => {
+    type WorkflowJob = {
+      name?: string
+      needs?: string | string[]
+      if?: string
+      steps?: Array<{ name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown> }>
+    }
+    type Workflow = { on: Record<string, unknown>; jobs: Record<string, WorkflowJob> }
+    const ci = load(readFileSync('.github/workflows/ci.yml', 'utf8')) as Workflow
+    const release = load(readFileSync('.github/workflows/release.yml', 'utf8')) as Workflow
+
+    expect(ci.on).toHaveProperty('pull_request')
+    const ciAudit = ci.jobs['production-audit']
+    expect(ciAudit.name).toBe('Production dependency audit')
+    expect(ciAudit.if).toBeUndefined()
+    expect(ciAudit.steps?.find((step) => step.uses?.startsWith('actions/checkout@'))?.with?.ref).toBe('${{ github.event.pull_request.head.sha || github.sha }}')
+    const ciAuditSteps = ciAudit.steps?.filter((step) => step.run === 'npm run audit:production') ?? []
+    expect(ciAuditSteps).toHaveLength(1)
+    expect(ciAuditSteps[0].name).toBe('Apply named production dependency audit exceptions')
+
+    const releaseAudit = release.jobs['production-audit']
+    expect(releaseAudit.name).toBe(ciAudit.name)
+    expect(releaseAudit.needs).toBe('validate')
+    expect(releaseAudit.steps?.find((step) => step.uses?.startsWith('actions/checkout@'))?.with?.ref).toBe('${{ needs.validate.outputs.sha }}')
+    const releaseAuditSteps = releaseAudit.steps?.filter((step) => step.run === 'npm run audit:production') ?? []
+    expect(releaseAuditSteps).toHaveLength(1)
+    expect(releaseAuditSteps[0].name).toBe(ciAuditSteps[0].name)
+
+    for (const jobName of ['package', 'package-linux', 'package-windows']) {
+      expect(release.jobs[jobName].needs, `${jobName} must wait for the pinned production audit`).toEqual(['validate', 'production-audit', 'quality', 'hermetic-e2e'])
+    }
+    expect(release.jobs['release-packages'].needs).toEqual(['validate', 'production-audit', 'package', 'package-linux', 'package-windows'])
+    expect(release.jobs['release-packages'].steps?.find((step) => step.name === 'Fail if a release prerequisite did not succeed')?.if).toContain("needs.production-audit.result != 'success'")
+  })
+
+  test('keeps the weekly and manual disclosure audit on the same exception-aware evaluator', () => {
+    type Workflow = {
+      on: { schedule?: Array<{ cron?: string }>; workflow_dispatch?: unknown }
+      jobs: Record<string, { steps?: Array<{ run?: string }> }>
+    }
+    const audit = load(readFileSync('.github/workflows/audit.yml', 'utf8')) as Workflow
+
+    expect(audit.on.schedule).toEqual([{ cron: '17 6 * * 1' }])
+    expect(audit.on).toHaveProperty('workflow_dispatch')
+    expect(audit.jobs.audit.steps?.filter((step) => step.run === 'npm run audit:production')).toHaveLength(1)
+  })
+
   test('reads the Node version from .nvmrc and hard-fails empty artifact uploads', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
@@ -567,7 +614,7 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/win/**/latest*.yml')
-    expect(releaseWorkflow).toMatch(/needs: \[validate, package, package-linux, package-windows\]/)
+    expect(releaseWorkflow).toMatch(/needs: \[validate, production-audit, package, package-linux, package-windows\]/)
     expect(releaseWorkflow).toContain("needs.package-windows.result != 'skipped'")
     expect(releaseWorkflow).toContain('--platforms "$platforms"')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/*.pacman')
@@ -596,7 +643,7 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(workflow).toContain('--generate-notes')
     // always() keeps the aggregate job from being skipped; the first step
     // fails explicitly when a prerequisite failed or was cancelled.
-    expect(workflow).toMatch(/release-packages:\n {4}needs: \[validate, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: always\(\)\n {4}runs-on: ubuntu-22\.04/)
+    expect(workflow).toMatch(/release-packages:\n {4}needs: \[validate, production-audit, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: always\(\)\n {4}runs-on: ubuntu-22\.04/)
     expect(workflow).toContain('Fail if a release prerequisite did not succeed')
     expect(workflow).toContain("needs.validate.result != 'success'")
     expect(workflow).toContain('exit 1')
@@ -659,7 +706,7 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
 
   test('ships both Linux architectures as separately labeled native builds', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
-    expect(releaseWorkflow).toMatch(/package-linux:\n {4}needs: \[validate, quality, hermetic-e2e\]\n {4}strategy:/)
+    expect(releaseWorkflow).toMatch(/package-linux:\n {4}needs: \[validate, production-audit, quality, hermetic-e2e\]\n {4}strategy:/)
     expect(releaseWorkflow).toMatch(/- arch: arm64\n {12}runner: ubuntu-24\.04-arm/)
     expect(releaseWorkflow).toMatch(/- arch: x64\n {12}runner: ubuntu-22\.04/)
     expect(releaseWorkflow).toContain('runs-on: ${{ matrix.runner }}')
@@ -1459,16 +1506,20 @@ describe('production dependency audit', () => {
   test('fails once an accepted advisory passes its expiry so it cannot become permanent', () => {
     const expiring = parseAuditExceptions(JSON.stringify({ exceptions: [{ ...advisory, expires: '2026-08-13', reason: AUDIT_EXCEPTION_REASON }] }))
     const evaluation = evaluateAuditReport(auditReport([advisory]), expiring, now)
+    const described = describeAuditEvaluation(evaluation)
 
     expect(evaluation.expired).toMatchObject([{ advisory: advisory.advisory }])
-    expect(describeAuditEvaluation(evaluation).message).toContain('expired on 2026-08-13')
+    expect(described.ok).toBe(false)
+    expect(described.message).toContain('expired on 2026-08-13')
   })
 
   test('fails on a stale exception so a fixed advisory stops being suppressed', () => {
     const evaluation = evaluateAuditReport({ vulnerabilities: {} }, exception, now)
+    const described = describeAuditEvaluation(evaluation)
 
     expect(evaluation.stale).toHaveLength(1)
-    expect(describeAuditEvaluation(evaluation).message).toContain('no longer matches any advisory')
+    expect(described.ok).toBe(false)
+    expect(described.message).toContain('no longer matches any advisory')
   })
 
   test('passes with a clean report and names every accepted advisory in the summary', () => {

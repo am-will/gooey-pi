@@ -15,6 +15,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  production-audit:
+    name: Production dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request defaults to a synthetic merge ref; audit the immutable PR
+      # head itself so this required status names the exact proposed lockfile.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm run toolchain:bootstrap
+      - run: npm run release:preflight:toolchain
+      - name: Apply named production dependency audit exceptions
+        run: npm run audit:production
+
   quality:
     runs-on: ubuntu-latest
     steps:
