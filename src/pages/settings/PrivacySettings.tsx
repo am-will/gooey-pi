@@ -1,18 +1,17 @@
-import { LockKeyhole } from 'lucide-react'
+import { Bot, LockKeyhole } from 'lucide-react'
 import type { SettingsSectionProps } from './contracts'
-import { SettingsToggle } from './SettingsToggle'
 
-export function PrivacySettings({ settings, onUpdate }: SettingsSectionProps) {
+export function PrivacySettings(_props: SettingsSectionProps) {
   return (
     <>
-      <header><h1>Privacy</h1><p>Control optional diagnostics and local data.</p></header>
+      <header><h1>Privacy</h1><p>Understand how GooeyPi stores settings and connects to agents.</p></header>
       <section className="settings-group">
-        <h2>Diagnostics</h2>
-        <SettingsToggle checked={settings.telemetry} onChange={(telemetry) => { void onUpdate({ telemetry }) }} label="Share optional diagnostics" description="Allow anonymous crash and reliability diagnostics. Prompts, files, terminal output, and provider credentials are never included." />
+        <h2>Local data</h2>
+        <div className="info-row"><LockKeyhole size={15} /><div><strong>Settings stay on this device</strong><small>Project metadata and interface settings are stored locally on this device.</small></div></div>
       </section>
       <section className="settings-group">
-        <h2>Local-first</h2>
-        <div className="info-row"><LockKeyhole size={15} /><div><strong>Your work stays on this Mac</strong><small>Project metadata and interface settings are stored locally. Provider requests follow your Prime Agent configuration.</small></div></div>
+        <h2>Agent requests</h2>
+        <div className="info-row"><Bot size={15} /><div><strong>Requests use your selected agent</strong><small>Session requests follow the selected agent and its provider configuration.</small></div></div>
       </section>
     </>
   )

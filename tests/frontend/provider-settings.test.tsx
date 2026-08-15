@@ -4,9 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProviderAuthModal } from '../../src/components/ProviderAuthModal'
 import { useProviderCatalog } from '../../src/hooks/useProviderCatalog'
-import { PrivacySettings } from '../../src/pages/settings/PrivacySettings'
 import { ProviderSettings } from '../../src/pages/settings/ProviderSettings'
-import type { AppSettings, HarnessId, PrimeModelCatalog, PrimeWorkApi, RuntimeInfo } from '../../src/types/api'
+import type { HarnessId, PrimeModelCatalog, PrimeWorkApi, RuntimeInfo } from '../../src/types/api'
 
 vi.mock('../../src/components/ui', () => ({
   Modal: ({ title, children, footer }: { title: string; children: ReactNode; footer?: ReactNode }) => <div role="dialog" aria-label={title}>{children}{footer}</div>,
@@ -202,16 +201,6 @@ describe('provider settings behavior and accessibility', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('Provider rejected the callback')
   })
 
-  it('persists the diagnostics toggle through the privacy settings contract', async () => {
-    const settings = { telemetry: false } as AppSettings
-    const onUpdate = vi.fn()
-    await render(<PrivacySettings settings={settings} onUpdate={onUpdate} />)
-
-    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
-    expect(toggle).not.toBeNull()
-    await click(toggle!)
-    expect(onUpdate).toHaveBeenCalledWith({ telemetry: true })
-  })
 })
 
 describe('provider runtime mutations', () => {
