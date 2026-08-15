@@ -510,13 +510,15 @@ export async function settleShutdown(
   }
 }
 
-function requestWindow(reason: 'activation' | 'second instance' | 'menu bar'): void {
+function requestWindow(reason: 'activation' | 'second instance' | 'menu bar' | 'settings', afterOpen?: (window: BrowserWindow) => void): void {
   void ensureWindow().then((window) => {
     if (!window || shutdownStarted || window.isDestroyed()) return
-    if (keepTestWindowsHidden) return
-    if (window.isMinimized()) window.restore()
-    window.show()
-    window.focus()
+    if (!keepTestWindowsHidden) {
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    }
+    afterOpen?.(window)
   }).catch((error: unknown) => {
     if (!shutdownStarted) console.error(`GooeyPi failed to open a window after ${reason}: ${boundedErrorMessage(error)}`)
   })
@@ -536,6 +538,9 @@ async function bootstrap(): Promise<void> {
     iconPath: appIconPath(),
     getSettings: () => stateStore.getSettings(),
     onOpen: () => requestWindow('menu bar'),
+    onSettings: () => requestWindow('settings', (window) => {
+      if (!window.webContents.isDestroyed()) window.webContents.send('app:open-settings')
+    }),
     onQuit: () => app.quit(),
     startInBackground,
   })

@@ -15,8 +15,8 @@ export function GeneralSettings({ settings, onUpdate, platform }: SettingsSectio
       {platform === 'darwin' ? (
         <section className="settings-group">
           <h2>Startup &amp; background</h2>
-          <SettingsToggle checked={settings.keepRunningInBackground} onChange={(keepRunningInBackground) => { void onUpdate({ keepRunningInBackground }) }} label="Keep GooeyPi running after closing the window" description="Keep scheduled work running from the menu bar until you quit GooeyPi." />
-          <SettingsToggle checked={settings.launchAtLogin} onChange={(launchAtLogin) => { void onUpdate({ launchAtLogin }) }} label="Launch GooeyPi at login" description="Start GooeyPi in the background when you log in to this Mac." />
+          <SettingsToggle checked={settings.keepRunningInBackground} onChange={(keepRunningInBackground) => { void onUpdate({ keepRunningInBackground }) }} label="Keep running after closing the app window" description="Keep scheduled work running from the menu bar until you quit the app." />
+          <SettingsToggle checked={settings.launchAtLogin} onChange={(launchAtLogin) => { void onUpdate({ launchAtLogin }) }} label="Launch at login" description="Start the app in the background when you log in to this Mac." />
         </section>
       ) : null}
       <section className="settings-group">

@@ -1,5 +1,5 @@
 import { app, Menu, nativeImage, Tray } from 'electron'
-import type { BrowserWindow } from 'electron'
+import type { BrowserWindow, NativeImage } from 'electron'
 import type { AppSettings } from '../../src/types/api'
 
 export const BACKGROUND_START_ARG = '--background'
@@ -18,6 +18,7 @@ export interface MacBackgroundControllerOptions {
   iconPath: string
   getSettings(): BackgroundSettings
   onOpen(): void
+  onSettings(): void
   onQuit(): void
   startInBackground?: boolean
   platform?: NodeJS.Platform
@@ -71,14 +72,22 @@ export class MacBackgroundController {
   }
 
   open(): void {
+    this.reveal(this.options.onOpen)
+  }
+
+  private openSettings(): void {
+    this.reveal(this.options.onSettings)
+  }
+
+  private reveal(action: () => void): void {
     if (!this.isMac()) {
-      this.options.onOpen()
+      action()
       return
     }
     this.backgrounded = false
     app.setActivationPolicy('regular')
     app.show()
-    this.options.onOpen()
+    action()
     if (!this.options.getSettings().keepRunningInBackground) this.destroyTray()
   }
 
@@ -110,8 +119,10 @@ export class MacBackgroundController {
     const tray = new Tray(icon)
     tray.setToolTip('GooeyPi')
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open GooeyPi', click: () => this.open() },
-      { label: 'Quit GooeyPi', click: () => this.options.onQuit() },
+      { label: 'Open GooeyPi', icon: menuIcon('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>'), accelerator: 'CommandOrControl+N', click: () => this.open() },
+      { type: 'separator' },
+      { label: 'Settings...', icon: menuIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'), accelerator: 'CommandOrControl+,', click: () => this.openSettings() },
+      { label: 'Quit', icon: menuIcon('<path d="m18 6-12 12M6 6l12 12"/>'), accelerator: 'CommandOrControl+Q', click: () => this.options.onQuit() },
     ]))
     this.tray = tray
   }
@@ -134,4 +145,11 @@ export class MacBackgroundController {
     this.tray?.destroy()
     this.tray = null
   }
+}
+
+function menuIcon(body: string): NativeImage {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
+  const icon = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+  icon.setTemplateImage(true)
+  return icon
 }

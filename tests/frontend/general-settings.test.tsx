@@ -27,10 +27,10 @@ describe('GeneralSettings macOS background controls', () => {
     act(() => root.render(<GeneralSettings settings={DEFAULT_SETTINGS} onUpdate={update} platform="darwin" />))
 
     expect(container.textContent).toContain('Startup & background')
-    expect(container.textContent).toContain('Keep GooeyPi running after closing the window')
-    expect(container.textContent).toContain('Keep scheduled work running from the menu bar until you quit GooeyPi.')
-    expect(container.textContent).toContain('Launch GooeyPi at login')
-    expect(container.textContent).toContain('Start GooeyPi in the background when you log in to this Mac.')
+    expect(container.textContent).toContain('Keep running after closing the app window')
+    expect(container.textContent).toContain('Keep scheduled work running from the menu bar until you quit the app.')
+    expect(container.textContent).toContain('Launch at login')
+    expect(container.textContent).toContain('Start the app in the background when you log in to this Mac.')
 
     const toggles = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
     expect(toggles.slice(-2).map((toggle) => toggle.checked)).toEqual([false, false])
@@ -43,6 +43,6 @@ describe('GeneralSettings macOS background controls', () => {
   it('keeps the unfinished cross-platform behavior out of other builds', () => {
     act(() => root.render(<GeneralSettings settings={DEFAULT_SETTINGS} onUpdate={vi.fn()} platform="win32" />))
     expect(container.textContent).not.toContain('Startup & background')
-    expect(container.textContent).not.toContain('Launch GooeyPi at login')
+    expect(container.textContent).not.toContain('Launch at login')
   })
 })

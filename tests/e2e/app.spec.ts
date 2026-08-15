@@ -691,6 +691,18 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(sidebar).toBeVisible()
   })
 
+  test('opens General settings when the main process requests Settings', async () => {
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Appearance', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Theme' })).toBeVisible()
+
+    await app!.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('app:open-settings')
+    })
+
+    await expect(page.getByRole('heading', { name: 'Startup & background' })).toBeVisible()
+  })
+
   test('uses the persisted selected pet for realtime voice after a full restart', async () => {
     const desktopPet = page.getByRole('button', { name: /Orb, draggable GooeyPi pet/ })
     await expect(desktopPet).toBeVisible()

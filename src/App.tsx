@@ -360,6 +360,14 @@ export default function App() {
     closeTerminalForSession: (sessionPath) => setTerminalSessions((current) => current.filter((terminal) => terminal.sessionPath !== sessionPath)),
     clearSessionAttention, reportError,
   })
+  useEffect(() => {
+    const onOpenSettings = bridge?.app.onOpenSettings
+    if (!onOpenSettings) return
+    return onOpenSettings(() => {
+      setSettingsSectionRequest((current) => ({ section: 'general', id: current.id + 1 }))
+      navigate('settings')
+    })
+  }, [bridge, navigate])
   const handleVoiceTaskStarted = useCallback(async (task: VoiceTaskStarted) => {
     if (!bridge) return
     const projectCatalog = task.harness === activeHarness ? projects : await bridge.projects.list(task.harness)

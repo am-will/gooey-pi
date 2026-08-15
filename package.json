@@ -97,7 +97,7 @@
         "zip"
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "icon": "assets/icon.png",
+      "icon": "assets/icon.icns",
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {

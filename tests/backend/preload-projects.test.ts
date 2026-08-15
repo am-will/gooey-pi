@@ -11,7 +11,24 @@ vi.mock('electron', () => ({ contextBridge: electronMocks.contextBridge, ipcRend
 await import('../../electron/preload/index')
 
 describe('preload project worktree bridge', () => {
-  beforeEach(() => { electronMocks.ipcRenderer.invoke.mockReset() })
+  beforeEach(() => {
+    electronMocks.ipcRenderer.invoke.mockReset()
+    electronMocks.ipcRenderer.on.mockReset()
+    electronMocks.ipcRenderer.removeListener.mockReset()
+  })
+
+  it('exposes the main-process Settings signal with a removable listener', () => {
+    const api = electronMocks.api as { app: { onOpenSettings(callback: () => void): () => void } }
+    const callback = vi.fn()
+    const unsubscribe = api.app.onOpenSettings(callback)
+    const listener = electronMocks.ipcRenderer.on.mock.calls[0]?.[1] as (() => void) | undefined
+
+    expect(electronMocks.ipcRenderer.on).toHaveBeenCalledWith('app:open-settings', expect.any(Function))
+    listener?.()
+    expect(callback).toHaveBeenCalledOnce()
+    unsubscribe()
+    expect(electronMocks.ipcRenderer.removeListener).toHaveBeenCalledWith('app:open-settings', listener)
+  })
 
   it('exposes fixed worktree IPC calls with the harness in the final argument', async () => {
     const api = electronMocks.api as { projects: {

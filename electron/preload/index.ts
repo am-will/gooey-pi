@@ -10,6 +10,13 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
   return () => { ipcRenderer.removeListener(channel, listener) }
 }
 
+function subscribeSignal(channel: string, callback: () => void): () => void {
+  if (typeof callback !== 'function') throw new TypeError('callback must be a function')
+  const listener = (): void => callback()
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
+
 const api: PrimeWorkApi = {
   app: {
     getMeta: () => ipcRenderer.invoke('app:get-meta'),
@@ -18,6 +25,7 @@ const api: PrimeWorkApi = {
     revealPath: (path) => ipcRenderer.invoke('app:reveal-path', path),
     popupMenu: (menu, x, y) => ipcRenderer.invoke('app:popup-menu', menu, x, y),
     setTitleBarTheme: (theme) => ipcRenderer.invoke('app:set-title-bar-theme', theme),
+    onOpenSettings: (callback) => subscribeSignal('app:open-settings', callback),
   },
   updates: {
     getState: () => ipcRenderer.invoke('updates:get-state'),
