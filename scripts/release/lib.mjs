@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants, existsSync, readdirSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, isAbsolute, join, win32 } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const localRequire = createRequire(import.meta.url)
-
-export const MINIMUM_NODE = [22, 12, 0]
+const packageJsonPath = fileURLToPath(new URL('../../package.json', import.meta.url))
+const nvmrcPath = fileURLToPath(new URL('../../.nvmrc', import.meta.url))
 
 /**
  * Resolves a release-script command to a spawn invocation that works on every platform.
@@ -22,9 +23,19 @@ export function resolveCommandInvocation(command, args, platform = process.platf
   }
   if (command === 'npm') {
     const npmCli = env.npm_execpath
-    if (npmCli && /\.[cm]?js$/.test(npmCli)) return { file: process.execPath, args: [npmCli, ...args], shell: false }
-    // Outside an npm lifecycle there is no npm_execpath; on Windows npm.cmd requires a shell.
-    return platform === 'win32' ? { file: 'npm.cmd', args: [...args], shell: true } : { file: 'npm', args: [...args], shell: false }
+    if (npmCli) {
+      const absolute = platform === 'win32' ? win32.isAbsolute(npmCli) : isAbsolute(npmCli)
+      if (!absolute || !/\.[cm]?js$/i.test(npmCli)) {
+        throw new Error('npm_execpath must identify an absolute JavaScript npm CLI path')
+      }
+      return { file: process.execPath, args: [npmCli, ...args], shell: false }
+    }
+    if (platform === 'win32') {
+      const adjacentCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+      if (existsSync(adjacentCli)) return { file: process.execPath, args: [adjacentCli, ...args], shell: false }
+      throw new Error('Cannot locate a JavaScript npm CLI safely on Windows; run this command through npm or use a Node distribution that includes npm')
+    }
+    return { file: 'npm', args: [...args], shell: false }
   }
   return { file: command, args: [...args], shell: false }
 }
@@ -60,20 +71,91 @@ export function withoutReleaseCredentials(env = process.env, allowed = []) {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !RELEASE_CREDENTIAL_NAMES.includes(name) || allowedNames.has(name)))
 }
 
-export function parseVersion(version) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version)
-  if (!match) throw new Error(`Cannot parse Node.js version: ${version}`)
-  return match.slice(1).map(Number)
+function parseStableVersion(version, label, allowLeadingV = false) {
+  if (typeof version !== 'string') throw new Error(`Cannot parse ${label} version: ${String(version)}`)
+  const value = version.trim()
+  const match = /^(v?)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(value)
+  if (!match || (!allowLeadingV && match[1])) throw new Error(`Cannot parse ${label} version: ${version}`)
+  if (match[5]) throw new Error(`A stable ${label} release is required (found ${version})`)
+  return { numbers: match.slice(2, 5).map(Number), version: match.slice(2, 5).join('.') }
 }
 
-export function assertSupportedNode(version = process.version) {
-  const parsed = parseVersion(version)
-  for (let index = 0; index < MINIMUM_NODE.length; index += 1) {
-    if (parsed[index] > MINIMUM_NODE[index]) return
-    if (parsed[index] < MINIMUM_NODE[index]) {
-      throw new Error(`Node.js >=${MINIMUM_NODE.join('.')} is required (found ${version})`)
-    }
+function parseEngineFloor(value, field) {
+  if (typeof value !== 'string' || !/^>=(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) {
+    throw new Error(`package.json ${field} must use an exact stable minimum in the form >=x.y.z`)
   }
+  return value.slice(2)
+}
+
+export function parseToolchainMetadata(packageJsonSource, nvmrcSource) {
+  let packageJson
+  try {
+    packageJson = JSON.parse(packageJsonSource)
+  } catch (error) {
+    throw new Error(`Cannot parse package.json: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const node = parseEngineFloor(packageJson?.engines?.node, 'engines.node')
+  const npm = parseEngineFloor(packageJson?.engines?.npm, 'engines.npm')
+  const nvmNode = parseStableVersion(nvmrcSource.trim(), '.nvmrc').version
+  if (nvmNode !== node) throw new Error(`.nvmrc (${nvmNode}) must match the package.json engines.node floor (${node})`)
+
+  const packageManager = packageJson?.packageManager
+  const packageManagerMatch = typeof packageManager === 'string' ? /^npm@((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(packageManager) : null
+  if (!packageManagerMatch) throw new Error('package.json packageManager must pin npm as npm@x.y.z')
+  if (packageManagerMatch[1] !== npm) {
+    throw new Error(`package.json packageManager (${packageManagerMatch[1]}) must match the engines.npm floor (${npm})`)
+  }
+  return { node, npm }
+}
+
+export function readRepositoryToolchain() {
+  return parseToolchainMetadata(readFileSync(packageJsonPath, 'utf8'), readFileSync(nvmrcPath, 'utf8'))
+}
+
+function assertMinimumVersion(label, version, minimum, allowLeadingV = false) {
+  const parsed = parseStableVersion(version, label, allowLeadingV).numbers
+  const floor = parseStableVersion(minimum, `${label} minimum`).numbers
+  for (let index = 0; index < floor.length; index += 1) {
+    if (parsed[index] > floor[index]) return
+    if (parsed[index] < floor[index]) throw new Error(`${label} >=${minimum} is required (found ${version})`)
+  }
+}
+
+export function readNpmVersion(options = {}) {
+  const platform = options.platform ?? process.platform
+  const env = options.env ?? process.env
+  const invocation = resolveCommandInvocation('npm', ['--version'], platform, env)
+  const result = spawnSync(invocation.file, invocation.args, {
+    encoding: 'utf8',
+    env,
+    shell: invocation.shell,
+    windowsHide: true,
+  })
+  if (result.error) throw new Error(`Cannot run npm --version: ${result.error.message}`)
+  if (result.status !== 0) {
+    const detail = result.stderr?.trim()
+    throw new Error(`npm --version failed with exit code ${result.status ?? `signal ${result.signal}`}${detail ? `: ${detail}` : ''}`)
+  }
+  const version = result.stdout?.trim()
+  if (!version) throw new Error('npm --version returned no version')
+  return version
+}
+
+export function assertSupportedNode(version = process.version, toolchain = readRepositoryToolchain()) {
+  assertMinimumVersion('Node.js', version, toolchain.node, true)
+}
+
+export function assertSupportedNpm(version = readNpmVersion(), toolchain = readRepositoryToolchain()) {
+  assertMinimumVersion('npm', version, toolchain.npm)
+}
+
+export function assertSupportedToolchain(options = {}) {
+  const toolchain = options.toolchain ?? readRepositoryToolchain()
+  const nodeVersion = options.nodeVersion ?? process.version
+  const npmVersion = options.npmVersion ?? readNpmVersion(options)
+  assertSupportedNode(nodeVersion, toolchain)
+  assertSupportedNpm(npmVersion, toolchain)
+  return { node: nodeVersion, npm: npmVersion, minimum: toolchain }
 }
 
 function requireNonEmpty(env, names, label) {
