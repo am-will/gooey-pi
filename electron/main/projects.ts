@@ -7,8 +7,11 @@ import { homedir } from 'node:os'
 import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, SessionRecord } from '../../src/types/api'
 import { createGitWorktree, isNotARepositoryFailure, listGitWorktrees, validateGitBranch } from './git'
 import { HARNESSES } from './harness'
+import { mapLimit } from './lib/async'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
 import { isPathWithin, requireExistingDirectory, requireExistingPath, requireId, requireString } from './validation'
+
+const MAX_CONCURRENT_BRANCH_LOOKUPS = 4
 
 function inferredId(path: string): string {
   return `inferred-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`
@@ -44,6 +47,35 @@ interface FolderIdentityRefresh {
   canonical: string
   expected: FolderIdentity
   current: FolderIdentity
+}
+
+interface SessionProjectStats {
+  count: number
+  earliestCreatedAt: string
+  latestUpdatedAt: string
+}
+
+function aggregateSessionProjectStats(
+  sessions: readonly SessionRecord[],
+  canonicalSessionPaths: ReadonlyMap<string, string>,
+): Map<string, SessionProjectStats> {
+  const stats = new Map<string, SessionProjectStats>()
+  for (const session of sessions) {
+    const projectPath = canonicalSessionPaths.get(session.projectPath)!
+    const current = stats.get(projectPath)
+    if (!current) {
+      stats.set(projectPath, {
+        count: 1,
+        earliestCreatedAt: session.createdAt,
+        latestUpdatedAt: session.updatedAt,
+      })
+      continue
+    }
+    current.count += 1
+    if (session.createdAt < current.earliestCreatedAt) current.earliestCreatedAt = session.createdAt
+    if (session.updatedAt > current.latestUpdatedAt) current.latestUpdatedAt = session.updatedAt
+  }
+  return stats
 }
 
 export interface FolderIdentityFilesystem {
@@ -234,12 +266,17 @@ export class ProjectService {
     await this.migrateLegacyFolderIdentities()
     const authorizationRevision = this.authorizationRevision
     const sessions = await this.sessionProvider()
+    const sessionPaths = [...new Set(sessions.map((session) => session.projectPath))]
     const canonicalSessionPaths = new Map<string, string>()
-    await Promise.all([...new Set(sessions.map((session) => session.projectPath))].map(async (path) => {
-      try { canonicalSessionPaths.set(path, await requireExistingDirectory(path, 'session project path')) }
+    const existingSessionPaths = new Set<string>()
+    await Promise.all(sessionPaths.map(async (path) => {
+      try {
+        canonicalSessionPaths.set(path, await requireExistingDirectory(path, 'session project path'))
+        existingSessionPaths.add(path)
+      }
       catch { canonicalSessionPaths.set(path, resolve(path)) }
     }))
-    const sessionProjectPaths = new Map(sessions.map((session) => [session, canonicalSessionPaths.get(session.projectPath)!]))
+    const sessionStats = aggregateSessionProjectStats(sessions, canonicalSessionPaths)
     const snapshot = this.store.snapshot()
     const persisted = this.ownProjects(snapshot.projects)
     const dismissed = new Set(await Promise.all(snapshot.dismissedProjectPaths.map(async (path) => {
@@ -273,10 +310,12 @@ export class ProjectService {
           }
         }
       }
+      let sessionCount = 0
+      for (const folder of folderSet) sessionCount += sessionStats.get(folder)?.count ?? 0
       const record: ProjectRecord = {
         id: project.id, harness: project.harness, name: project.name, path: project.path, folders: project.folders, primaryFolder: project.primaryFolder,
         pinned: project.pinned, createdAt: project.createdAt, lastOpenedAt: project.lastOpenedAt,
-        sessionCount: sessions.filter((session) => folderSet.has(sessionProjectPaths.get(session)!)).length,
+        sessionCount,
         gitBranch: undefined,
       }
       records.push(record)
@@ -294,15 +333,13 @@ export class ProjectService {
       this.quarantinedBroadRoots = nextQuarantinedBroadRoots
     }
 
-    for (const projectPath of [...new Set(sessions.map((session) => session.projectPath).filter(Boolean))]) {
-      let canonical: string
-      try { canonical = await requireExistingDirectory(projectPath, 'session project path') } catch { continue }
+    for (const projectPath of sessionPaths) {
+      if (!projectPath || !existingSessionPaths.has(projectPath)) continue
+      const canonical = canonicalSessionPaths.get(projectPath)!
       if (represented.has(canonical) || dismissed.has(canonical)) continue
       if (await this.isBroadRoot(canonical)) continue
       represented.add(canonical)
-      const projectSessions = sessions.filter((session) => sessionProjectPaths.get(session) === canonical)
-      const timestamps = projectSessions.map((session) => session.updatedAt).sort()
-      const created = projectSessions.map((session) => session.createdAt).sort()
+      const stats = sessionStats.get(canonical)
       records.push({
         id: inferredId(canonical),
         harness: this.harness,
@@ -311,16 +348,27 @@ export class ProjectService {
         folders: [canonical],
         primaryFolder: canonical,
         pinned: false,
-        createdAt: created[0] ?? new Date().toISOString(),
-        lastOpenedAt: timestamps.at(-1) ?? new Date().toISOString(),
-        sessionCount: projectSessions.length,
+        createdAt: stats?.earliestCreatedAt ?? new Date().toISOString(),
+        lastOpenedAt: stats?.latestUpdatedAt ?? new Date().toISOString(),
+        sessionCount: stats?.count ?? 0,
         gitBranch: undefined,
         inferred: true,
       })
     }
     // Branch enrichment runs after the swap: authorization must never wait on
     // git subprocesses.
-    for (const target of branchTargets) target.record.gitBranch = await this.branchProvider(target.cwd)
+    let branchLookupFailed = false
+    await mapLimit(branchTargets, MAX_CONCURRENT_BRANCH_LOOKUPS, async (target) => {
+      if (branchLookupFailed) return target
+      try { target.record.gitBranch = await this.branchProvider(target.cwd) }
+      catch (error) {
+        // mapLimit owns all worker promises, so concurrent failures remain
+        // handled. Stop admitting queued Git work once the first one fails.
+        branchLookupFailed = true
+        throw error
+      }
+      return target
+    })
     return records.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt))
   }
 
