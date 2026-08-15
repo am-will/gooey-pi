@@ -467,9 +467,12 @@ describe('JsonStateStore', () => {
   it('preserves an unsupported future state byte-for-byte and refuses updates', async () => {
     const dir = makeDirectory()
     const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
     const raw = '{\n  "version": 99,\n  "futureAuthority": { "leave": "exactly as written" }\n}\n'
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
     writeFileSync(path, raw)
-    const store = new JsonStateStore(path)
+    writeFileSync(legacyPath, legacyRaw)
+    const store = new JsonStateStore(path, realFileSystem, legacyPath, 'linux')
     const mutator = vi.fn()
 
     expect(() => store.snapshot()).toThrow(UnsupportedStateVersionError)
@@ -483,7 +486,47 @@ describe('JsonStateStore', () => {
     await store.beginShutdown()
 
     expect(readFileSync(path, 'utf8')).toBe(raw)
-    expect(readdirSync(dir)).toEqual([CURRENT_DESKTOP_STATE_FILENAME])
+    expect(existsSync(legacyPath)).toBe(false)
+    const backup = readdirSync(dir).find((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))
+    expect(backup).toBeDefined()
+    expect(readFileSync(join(dir, backup!), 'utf8')).toBe(legacyRaw)
+  })
+
+  it('restores recreated POSIX legacy authority when retiring it beside incompatible current state cannot be synchronized', async () => {
+    const dir = makeDirectory()
+    const currentPath = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+    const currentRaw = '{\n  "version": 99,\n  "futureAuthority": true\n}\n'
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+    writeFileSync(currentPath, currentRaw)
+    writeFileSync(legacyPath, legacyRaw)
+    let directorySyncs = 0
+    const store = new JsonStateStore(currentPath, {
+      ...realFileSystem,
+      open: async (openedPath, flags, mode) => {
+        if (openedPath !== dir || flags !== 'r') return open(openedPath, flags, mode)
+        return {
+          writeFile: async () => { throw new Error('unexpected directory write') },
+          sync: async () => {
+            directorySyncs += 1
+            if (directorySyncs === 1) throw Object.assign(new Error('injected incompatible-state retirement sync failure'), { code: 'EIO' })
+          },
+          close: async () => undefined,
+        }
+      },
+    }, legacyPath, 'linux')
+    const mutator = vi.fn()
+    const readiness = store.ready()
+
+    await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+    await expect(readiness).rejects.toThrow(/retirement was not durable.*legacy filename was restored/i)
+    await expect(readiness).rejects.toMatchObject({ currentStatePath: currentPath, legacyStatePath: legacyPath, backupStatePath: undefined })
+    await expect(store.update(mutator)).rejects.toBeInstanceOf(UnsupportedStateVersionError)
+    expect(mutator).not.toHaveBeenCalled()
+    expect(directorySyncs).toBe(2)
+    expect(readFileSync(currentPath, 'utf8')).toBe(currentRaw)
+    expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
+    expect(readdirSync(dir).filter((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))).toEqual([])
   })
 
   it('atomically migrates the legacy authority to the versioned filename and ignores later downgrade writes', async () => {
@@ -767,16 +810,24 @@ describe('JsonStateStore', () => {
   it('preserves an oversized state file and fails closed without rewriting it', async () => {
     const dir = makeDirectory()
     const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+    const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
     const raw = `{"version":99,"padding":"${'x'.repeat(64 * 1024 * 1024)}"}`
+    const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
     writeFileSync(path, raw)
-    const store = new JsonStateStore(path)
+    writeFileSync(legacyPath, legacyRaw)
+    const store = new JsonStateStore(path, realFileSystem, legacyPath, 'linux')
+    const mutator = vi.fn()
 
     expect(() => store.snapshot()).toThrow(StateCompatibilityError)
     await expect(store.ready()).rejects.toThrow(/exceeds.*safe.*left unchanged/i)
-    await expect(store.update((state) => { state.archivedSessions.push('must-not-write') })).rejects.toBeInstanceOf(StateCompatibilityError)
+    await expect(store.update(mutator)).rejects.toBeInstanceOf(StateCompatibilityError)
+    expect(mutator).not.toHaveBeenCalled()
     await store.beginShutdown()
     expect(readFileSync(path, 'utf8')).toBe(raw)
-    expect(readdirSync(dir)).toEqual([CURRENT_DESKTOP_STATE_FILENAME])
+    expect(existsSync(legacyPath)).toBe(false)
+    const backup = readdirSync(dir).find((name) => name.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`))
+    expect(backup).toBeDefined()
+    expect(readFileSync(join(dir, backup!), 'utf8')).toBe(legacyRaw)
   })
 
   it('backs up corrupt state, returns defaults, and serializes recovery before later updates', async () => {

@@ -479,11 +479,19 @@ export class JsonStateStore {
     } catch (error) {
       if (error instanceof StateCompatibilityError) {
         this.incompatibility = error
-        if (this.platform === 'win32' && legacyFilePath && sourceKind === 'current') {
-          this.scheduleInitializationOperation(
-            () => this.ensureWindowsLegacyProtection(false),
-            'GooeyPi could not protect incompatible v4 state from a downgraded Windows binary',
-          )
+        if (legacyFilePath && sourceKind === 'current') {
+          if (this.platform === 'win32') {
+            this.scheduleInitializationOperation(
+              () => this.ensureWindowsLegacyProtection(false),
+              'GooeyPi could not protect incompatible v4 state from a downgraded Windows binary',
+            )
+          } else {
+            this.scheduleInitialization(
+              false,
+              true,
+              'GooeyPi could not protect incompatible v4 state from a downgraded binary',
+            )
+          }
         }
         return
       }
