@@ -587,6 +587,19 @@ test.describe('Prime Work desktop smoke', () => {
     expect(Math.abs(offset.y)).toBeLessThanOrEqual(0.5)
   })
 
+  test('picks, previews, and removes an image in the composer', async () => {
+    await page.locator('.session-row-wrap').filter({ hasText: 'Hermetic desktop fixture' }).locator('.session-row').click()
+    const imagePath = join(fixtureRoot, 'picker.png')
+    writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'))
+
+    await expect(page.getByRole('button', { name: 'Attach images' })).toBeVisible()
+    await page.locator('input[aria-label="Choose images to attach"]').setInputFiles(imagePath)
+    await expect(page.locator('.composer-attachment').filter({ hasText: 'picker.png' })).toBeVisible()
+    await expect(page.locator('.composer p[role="status"]')).toHaveText('1 image attached.')
+    await page.getByRole('button', { name: 'Remove picker.png' }).click()
+    await expect(page.locator('.composer-attachment').filter({ hasText: 'picker.png' })).toHaveCount(0)
+  })
+
   test('collapses composer selectors and keeps the checkout menu inside a narrow conversation pane', async () => {
     await page.locator('.session-row-wrap').filter({ hasText: 'Hermetic desktop fixture' }).locator('.session-row').click()
     await page.locator('.conversation-column').evaluate((node) => {

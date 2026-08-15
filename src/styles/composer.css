@@ -18,6 +18,8 @@
 .composer-queue__action--delete:hover { color: var(--danger); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--border-strong) 65%, var(--focus)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 30%, transparent); }
 .composer--busy { border-color: color-mix(in srgb, var(--prime) 33%, var(--border-strong)); }
+.composer--image-dragging { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 28%, transparent); }
+.composer-drop-feedback { position: absolute; z-index: 80; inset: 5px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed color-mix(in srgb, var(--focus) 72%, var(--border)); border-radius: 10px; color: var(--text); background: color-mix(in srgb, var(--surface-raised) 91%, transparent); backdrop-filter: blur(4px); font-size: 12px; font-weight: 620; pointer-events: none; }
 .composer-input { position: relative; width: 100%; min-height: 55px; max-height: 150px; flex: 1; }
 /* The native control is the sole text renderer so its glyphs, wrapping, selection,
    caret, and platform scrollbar always share one authoritative content box. */
