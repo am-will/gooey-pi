@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ModelCatalogProvider } from '../../electron/main/model-catalog'
 import { OMP_NOT_INSTALLED_WARNING, OmpModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-omp'
+import type { PrimeModelCatalog } from '../../src/types/api'
 import { waitUntil } from '../helpers/wait'
 
 const dirs: string[] = []
@@ -41,6 +42,22 @@ const sampleCatalog = {
 
 const processExists = (pid: number): boolean => {
   try { process.kill(pid, 0); return true } catch { return false }
+}
+
+function expectRelationalIntegrity(catalog: PrimeModelCatalog): void {
+  const providerIds = catalog.providers.map((provider) => provider.id)
+  expect(new Set(providerIds).size).toBe(providerIds.length)
+  const providerIdSet = new Set(providerIds)
+  for (const model of catalog.models) expect(providerIdSet.has(model.provider)).toBe(true)
+  for (const provider of catalog.providers) {
+    const models = catalog.models.filter((model) => model.provider === provider.id)
+    expect(provider.modelCount).toBe(models.length)
+    expect(provider.availableModelCount).toBe(models.filter((model) => model.available).length)
+  }
+}
+
+function ompModel(provider: string, id: string): Record<string, unknown> {
+  return { provider, id, name: `${provider} ${id}`, reasoning: false, thinking: null, input: ['text'], contextWindow: 1, maxTokens: 1 }
 }
 
 describe('OMP model catalog service', () => {
@@ -92,6 +109,9 @@ describe('OMP model catalog service', () => {
     expect(anthropic.modelCount).toBe(2)
     expect(anthropic.availableModelCount).toBe(2)
     expect(anthropic.enabled).toBe(true)
+    const cached = await service.catalog()
+    expect(cached.models).toEqual(catalog.models)
+    expect(cached.providers).toEqual(catalog.providers)
   })
 
   it('resolves availability, capabilities, and desktop provider enablement', async () => {
@@ -188,23 +208,37 @@ setTimeout(() => { process.stdout.write(${JSON.stringify(JSON.stringify(sampleCa
     expect(runs()).toBe(2)
   })
 
-  it('serves the last good catalog with a warning when a refresh fails', async () => {
+  it('keeps omitted models absent from cached and stale overflow catalogs', async () => {
     const stateFile = join(tempDir(), 'mode')
+    const overflowModels = Array.from({ length: MAX_CATALOG_PROVIDERS + 1 }, (_, index) => (
+      ompModel(`provider-${String(index).padStart(3, '0')}`, 'model')
+    ))
     // First run succeeds; every later run exits non-zero.
     const executable = fakeOmp(`
 const fs = require('node:fs')
 if (fs.existsSync(${JSON.stringify(stateFile)})) process.exit(7)
 fs.writeFileSync(${JSON.stringify(stateFile)}, 'ran')
-process.stdout.write(${JSON.stringify(JSON.stringify(sampleCatalog))})
+process.stdout.write(${JSON.stringify(JSON.stringify({ models: overflowModels }))})
 `)
     const service = new OmpModelCatalogService(executable)
     const fresh = await service.catalog(true)
-    expect(fresh.warning).toBeUndefined()
+    expect(fresh.models).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(fresh.models.some((model) => model.key === 'provider-256/model')).toBe(false)
+    expect(fresh.warning).toMatch(/provider limit/)
+
+    const cached = await service.catalog()
+    expect(cached.models).toEqual(fresh.models)
+    expect(cached.providers).toEqual(fresh.providers)
+    expect(cached.models.some((model) => model.key === 'provider-256/model')).toBe(false)
 
     const stale = await service.catalog(true)
-    expect(stale.models.length).toBe(fresh.models.length)
+    expect(stale.models).toEqual(fresh.models)
+    expect(stale.providers).toEqual(fresh.providers)
+    expect(stale.models.some((model) => model.key === 'provider-256/model')).toBe(false)
     expect(stale.warning).toMatch(/could not be refreshed/)
     expect(stale.warning).toMatch(/last loaded catalog/)
+    expect(await service.capabilities('provider-256', 'model')).toBeUndefined()
+    await expect(service.requireAvailableModel('provider-256/model')).rejects.toThrow(/not found/)
 
     // With no prior catalog the failure still surfaces.
     const failingOnly = new OmpModelCatalogService(fakeOmp('process.exit(7)'))
@@ -250,15 +284,63 @@ process.stdout.write(${JSON.stringify(JSON.stringify(sampleCatalog))})
     expect(catalog.providers.map((provider) => provider.id)).toEqual(['anthropic', 'zai'])
   })
 
-  it('caps runaway catalogs at the model and provider limits', async () => {
+  it('keeps an exact-boundary catalog unchanged and relationally consistent', async () => {
     const models: unknown[] = []
-    // Provider overflow entries come first so they land inside the 5,000-model
-    // cap and exercise the 256-provider cap independently.
+    for (let index = 0; index < MAX_CATALOG_PROVIDERS; index += 1) {
+      models.push(ompModel(`provider-${String(index).padStart(3, '0')}`, 'model'))
+    }
+    for (let index = MAX_CATALOG_PROVIDERS; index < 5_000; index += 1) {
+      models.push(ompModel('provider-000', `model-${index}`))
+    }
+
+    const service = new OmpModelCatalogService(fakeOmpWithCatalog({ models }))
+    const catalog = await service.catalog(true)
+
+    expect(catalog.models).toHaveLength(5_000)
+    expect(catalog.providers).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(catalog.warning).toBeUndefined()
+    expectRelationalIntegrity(catalog)
+  })
+
+  it('caps provider-only overflow without returning orphan models', async () => {
+    const models = Array.from({ length: MAX_CATALOG_PROVIDERS + 1 }, (_, index) => (
+      ompModel(`provider-${String(index).padStart(3, '0')}`, 'model')
+    ))
+    const service = new OmpModelCatalogService(fakeOmpWithCatalog({ models }))
+    const catalog = await service.catalog(true)
+
+    expect(catalog.providers).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(catalog.models).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(catalog.warning).toMatch(/257 valid providers.*retained 256.*1 omitted/)
+    expect(catalog.warning).toMatch(/257 valid unique models.*retained 256.*1 omitted/)
+    expect(catalog.warning).toContain('1 omitted by catalog limits: 1 with omitted providers and 0 beyond the model limit')
+    expectRelationalIntegrity(catalog)
+    await expect(service.requireAvailableModel('provider-256/model')).rejects.toThrow(/not found/)
+    expect(await service.capabilities('provider-256', 'model')).toBeUndefined()
+  })
+
+  it('caps model-only overflow while keeping visibility and launch validation aligned', async () => {
+    const models = Array.from({ length: 5_001 }, (_, index) => ompModel('provider-000', `model-${index}`))
+    const service = new OmpModelCatalogService(fakeOmpWithCatalog({ models }))
+    const catalog = await service.catalog(true, new Set(), new Set(['provider-000/model-0']))
+
+    expect(catalog.providers).toHaveLength(1)
+    expect(catalog.models).toHaveLength(5_000)
+    expect(catalog.models[0]?.enabled).toBe(false)
+    expect(catalog.warning).toMatch(/5,001 valid unique models.*retained 5,000.*1 omitted/)
+    expect(catalog.warning).toContain('1 omitted by catalog limits: 0 with omitted providers and 1 beyond the model limit')
+    expectRelationalIntegrity(catalog)
+    await expect(service.requireAvailableModel('provider-000/model-5000')).rejects.toThrow(/not found/)
+    await expect(service.requireAvailableModel('provider-000/model-0', new Set(), new Set(['provider-000/model-0']))).rejects.toThrow(/disabled/)
+  })
+
+  it('applies simultaneous model and provider caps as one relational operation', async () => {
+    const models: unknown[] = []
     for (let index = 0; index < 300; index += 1) {
-      models.push({ provider: `overflow-${String(index).padStart(3, '0')}`, id: 'model', name: `Overflow ${index}`, reasoning: false, thinking: null, input: ['text'], contextWindow: 1, maxTokens: 1 })
+      models.push(ompModel(`overflow-${String(index).padStart(3, '0')}`, 'model'))
     }
     for (let index = 0; index < 5_010; index += 1) {
-      models.push({ provider: 'anthropic', id: `model-${index}`, name: `Model ${index}`, reasoning: false, thinking: null, input: ['text'], contextWindow: 1, maxTokens: 1 })
+      models.push(ompModel('anthropic', `model-${index}`))
     }
     const service = new OmpModelCatalogService(fakeOmpWithCatalog({ models }))
     const catalog = await service.catalog(true)
@@ -267,7 +349,12 @@ process.stdout.write(${JSON.stringify(JSON.stringify(sampleCatalog))})
     expect(catalog.providers).toHaveLength(MAX_CATALOG_PROVIDERS)
     const names = catalog.providers.map((provider) => provider.name)
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)))
-    expect(catalog.warning).toMatch(/models/)
+    expect(catalog.warning).toMatch(/301 valid providers.*retained 256.*45 omitted/)
+    expect(catalog.warning).toMatch(/5,310 valid unique models.*retained 5,000.*310 omitted/)
+    expect(catalog.warning).toContain('310 omitted by catalog limits: 45 with omitted providers and 265 beyond the model limit')
+    expectRelationalIntegrity(catalog)
+    expect(catalog.models.some((model) => model.provider === 'overflow-299')).toBe(false)
+    await expect(service.requireAvailableModel('overflow-299/model')).rejects.toThrow(/not found/)
   })
 
   it('rejects a CLI that exits with a failure status', async () => {
