@@ -4,11 +4,17 @@ import type { ProcessOutcome } from '../../../src/types/api'
 import { processOutcome, runProcess } from '../process-utils'
 import { isLoopbackHostname, requireString, stripAnsi } from '../validation'
 
-const NPM_REGISTRY_SOURCE_PARTS = /^npm:(?:@([a-z0-9_.-]+)\/)?([a-z0-9_.-]+)(?:@([-a-z0-9_!~*'()+^<>=|][a-z0-9._!~*'()+^<>=| -]*))?$/i
+const NPM_REGISTRY_SOURCE_PARTS = /^npm:(?:@([a-z0-9][a-z0-9_.-]*)\/)?([a-z0-9][a-z0-9_.-]*)(?:@([-a-z0-9_!~*'()+^<>=|][a-z0-9._!~*'()+^<>=| -]*))?$/i
+const NPM_SEMVER_PART = String.raw`[vV]?(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?`
+const NPM_SEMVER_COMPARATOR = String.raw`[<>=~^]{0,2}\s*${NPM_SEMVER_PART}`
+const NPM_SEMVER_SET = String.raw`(?:${NPM_SEMVER_PART}\s+-\s+${NPM_SEMVER_PART}|${NPM_SEMVER_COMPARATOR}(?:\s+${NPM_SEMVER_COMPARATOR})*)`
+const NPM_SEMVER_RANGE = new RegExp(String.raw`^${NPM_SEMVER_SET}(?:\s*\|\|\s*${NPM_SEMVER_SET})*$`, 'i')
 
 function isNpmRegistrySource(source: string): boolean {
   const parts = NPM_REGISTRY_SOURCE_PARTS.exec(source)
-  return parts !== null && !parts[1]?.startsWith('.') && !parts[2].startsWith('.')
+  if (!parts) return false
+  const selector = parts[3]
+  return selector === undefined || !/[\s|]|^[<>=~^]/.test(selector) || NPM_SEMVER_RANGE.test(selector)
 }
 
 function requireSecurePackageTransport(url: URL): void {

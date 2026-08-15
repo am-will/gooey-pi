@@ -18,11 +18,26 @@ describe('validatePackageSource', () => {
     'npm:@scope/pkg@1.2.3',
     'npm:@scope/pkg@1.2.3-beta.1+build.5',
     'npm:example-package@^1.2.3',
+    'npm:example-package@~1.2.3',
+    'npm:example-package@>= 1.2.3',
     'npm:example-package@1.2 - 2.3',
     'npm:example-package@>=1.2.3 <2 || >=3.0.0',
+    'npm:example-package@1.x || 2.x',
     'npm:example-package@*',
   ])('accepts npm registry selector %s', (source) => {
     expect(validatePackageSource(source)).toBe(source)
+  })
+
+  it.each([
+    'npm:-rf',
+    'npm:--help',
+    'npm:_package',
+    'npm:@-scope/pkg',
+    'npm:@_scope/pkg',
+    'npm:@scope/-pkg',
+    'npm:@scope/_pkg',
+  ])('rejects npm components with an option-like or reserved prefix %s', (source) => {
+    expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
   })
 
   it.each([
@@ -44,6 +59,18 @@ describe('validatePackageSource', () => {
     'npm:pkg@../other',
     'npm:pkg@ .hidden',
   ])('rejects dot-relative npm selector %s', (source) => {
+    expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
+  })
+
+  it.each([
+    'npm:pkg@|',
+    'npm:pkg@|||',
+    'npm:pkg@>=',
+    'npm:pkg@^',
+    'npm:pkg@latest beta',
+    'npm:pkg@1.2.3 latest',
+    'npm:pkg@>=1 <2 trailing',
+  ])('rejects malformed npm selector %s', (source) => {
     expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
   })
 
@@ -125,7 +152,7 @@ describe('validatePackageSource', () => {
 })
 
 describe('PluginService package source validation', () => {
-  it.each(['prime', 'pi', 'omp'] as const)('does not launch the %s executable for a nested npm URL', async (harness) => {
+  it.each(['prime', 'pi', 'omp'] as const)('does not launch the %s executable for rejected npm sources', async (harness) => {
     const root = mkdtempSync(join(tmpdir(), 'prime-work-package-service-'))
     dirs.push(root)
     const agentDir = join(root, 'agent')
@@ -136,7 +163,9 @@ describe('PluginService package source validation', () => {
     chmodSync(executable, 0o755)
     const service = new PluginService(executable, async (path) => path, { agentDir, harness })
 
-    await expect(service.install('npm:pkg@HtTp://example.test/pkg.tgz')).rejects.toThrow(/Invalid npm package source/)
-    expect(existsSync(launched)).toBe(false)
+    for (const source of ['npm:pkg@HtTp://example.test/pkg.tgz', 'npm:-rf', 'npm:--help']) {
+      await expect(service.install(source), source).rejects.toThrow(/Invalid npm package source/)
+      expect(existsSync(launched), source).toBe(false)
+    }
   })
 })
