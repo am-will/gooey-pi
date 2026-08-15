@@ -32,12 +32,17 @@ const MAX_READ_TEXT_CHARS = 40_000
 const MAX_READ_ELEMENTS = 300
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
 const SCREENSHOT_JPEG_QUALITY = 70
+const ACTION_REVOKED_MESSAGE = 'Browser tab access changed before this action could start'
 
 interface CdpKey {
   key: string
   code: string
   keyCode: number
   text?: string
+}
+
+interface TabActionSerial {
+  tail: Promise<unknown>
 }
 
 const PRESS_KEYS: Record<string, CdpKey> = {
@@ -68,7 +73,11 @@ interface TabState {
   title: string
   /** Last known pointer position in guest CSS pixels; null until the first pointer action. */
   pointer: { x: number; y: number } | null
-  queue: Promise<unknown>
+  /** Authority generation captured by queued actions and changed on revocation. */
+  generation: number
+  revoked: boolean
+  /** Serialization is independent from authority so ownership changes cannot interleave actions. */
+  serial: TabActionSerial
   attachWaiters: Array<{ resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>
   unbindGuest: (() => void) | null
 }
@@ -127,6 +136,8 @@ export class AgentBrowserService {
   private readonly tabs = new Map<string, TabState>()
   private readonly activeBySession = new Map<string, string>()
   private previewTab: TabState | null = null
+  private readonly previewSerial: TabActionSerial = { tail: Promise.resolve() }
+  private nextGeneration = 1
   private readonly approvedGuests = new Set<number>()
   private readonly changeListeners = new Set<(state: AgentBrowserState) => void>()
   private readonly pointerListeners = new Set<(event: AgentBrowserPointerEvent) => void>()
@@ -145,6 +156,7 @@ export class AgentBrowserService {
   beginShutdown(): void {
     this.closed = true
     for (const tab of this.tabs.values()) this.releaseTab(tab)
+    if (this.previewTab) this.revokeTab(this.previewTab)
     this.tabs.clear()
     this.activeBySession.clear()
     this.changeListeners.clear()
@@ -159,7 +171,10 @@ export class AgentBrowserService {
     this.approvedGuests.add(contents.id)
     contents.once('destroyed', () => {
       this.approvedGuests.delete(contents.id)
-      if (this.previewTab?.webContentsId === contents.id) this.previewTab = null
+      if (this.previewTab?.webContentsId === contents.id) {
+        this.revokeTab(this.previewTab)
+        this.previewTab = null
+      }
       for (const tab of this.tabs.values()) {
         if (tab.webContentsId === contents.id) this.detachTab(tab)
       }
@@ -262,6 +277,7 @@ export class AgentBrowserService {
   setPreviewContext(webContentsIdValue: unknown, sessionFileValue: unknown): boolean {
     if (this.closed) return false
     if (webContentsIdValue === null || sessionFileValue === null || sessionFileValue === undefined) {
+      if (this.previewTab) this.revokeTab(this.previewTab)
       this.previewTab = null
       return true
     }
@@ -271,6 +287,7 @@ export class AgentBrowserService {
     const sessionKey = canonicalSessionPath(requireString(sessionFileValue, 'sessionFile', { min: 1, max: 4096 }))
     const previous = this.previewTab
     if (previous && previous.webContentsId === webContentsId && previous.sessionKey === sessionKey) return true
+    if (previous) this.revokeTab(previous)
     this.previewTab = {
       tabId: PREVIEW_TAB_ID,
       sessionKey,
@@ -278,7 +295,11 @@ export class AgentBrowserService {
       url: '',
       title: '',
       pointer: previous?.webContentsId === webContentsId ? previous.pointer : null,
-      queue: previous?.queue ?? Promise.resolve(),
+      generation: this.nextGeneration++,
+      revoked: false,
+      // Keep only the sequencing barrier across owners. The binding generation,
+      // not this shared tail, is the authority to access the Preview guest.
+      serial: this.previewSerial,
       attachWaiters: [],
       unbindGuest: null,
     }
@@ -312,6 +333,7 @@ export class AgentBrowserService {
     if (preview) {
       const guest = preview.webContentsId === null ? undefined : this.options.getGuest(preview.webContentsId)
       if (guest && !guest.isDestroyed()) guests.set(guest.id, guest)
+      this.revokeTab(preview)
       this.previewTab = null
     }
     if (!ownedTabs.length && !preview) return false
@@ -342,7 +364,9 @@ export class AgentBrowserService {
       url,
       title: '',
       pointer: null,
-      queue: Promise.resolve(),
+      generation: this.nextGeneration++,
+      revoked: false,
+      serial: { tail: Promise.resolve() },
       attachWaiters: [],
       unbindGuest: null,
     }
@@ -619,13 +643,26 @@ export class AgentBrowserService {
     // Every agent action announces itself so the UI can bring the Browser
     // panel and the acting tab into view.
     this.emitActivity(tab)
+    const generation = tab.generation
     // Serialize actions per tab so concurrent tool calls cannot interleave input events.
-    const run = tab.queue.then(async () => {
+    const run = tab.serial.tail.then(async () => {
+      this.assertActionAuthority(tab, sessionKey, generation)
       const guest = await this.waitForGuest(tab)
+      this.assertActionAuthority(tab, sessionKey, generation)
+      if (tab.webContentsId !== guest.id || guest.isDestroyed()) throw new Error(ACTION_REVOKED_MESSAGE)
+      // Revocation after this point does not attempt to cancel an operation
+      // already using Electron's guest APIs; it may finish or fail naturally.
       return action(tab, guest)
     })
-    tab.queue = run.catch(() => undefined)
+    tab.serial.tail = run.catch(() => undefined)
     return run
+  }
+
+  private assertActionAuthority(tab: TabState, sessionKey: string, generation: number): void {
+    const current = tab.tabId === PREVIEW_TAB_ID ? this.previewTab : this.tabs.get(tab.tabId)
+    if (this.closed || tab.revoked || tab.generation !== generation || tab.sessionKey !== sessionKey || current !== tab) {
+      throw new Error(ACTION_REVOKED_MESSAGE)
+    }
   }
 
   private emitActivity(tab: TabState): void {
@@ -691,12 +728,19 @@ export class AgentBrowserService {
   }
 
   private releaseTab(tab: TabState): void {
-    for (const waiter of tab.attachWaiters.splice(0)) {
-      clearTimeout(waiter.timer)
-      waiter.reject(new Error('The browser tab was closed before it attached'))
-    }
+    this.revokeTab(tab)
     tab.unbindGuest?.()
     tab.unbindGuest = null
+  }
+
+  private revokeTab(tab: TabState): void {
+    if (tab.revoked) return
+    tab.revoked = true
+    tab.generation = this.nextGeneration++
+    for (const waiter of tab.attachWaiters.splice(0)) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error(ACTION_REVOKED_MESSAGE))
+    }
   }
 
   private removeTab(tab: TabState): void {
