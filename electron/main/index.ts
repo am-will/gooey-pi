@@ -32,7 +32,7 @@ import { configureGooeyPiAgentMessageSigning, loadOrCreateGooeyPiAgentMessageKey
 import { SessionService } from './sessions'
 import { ompSessionServiceOptions } from './sessions/omp'
 import { piSessionServiceOptions } from './sessions/pi'
-import { JsonStateStore } from './store'
+import { type JsonStateStore, openDesktopStateStore, StateCompatibilityError, StateMigrationError } from './store'
 import { TerminalService } from './terminal'
 import { VoiceService, voiceSecretStorageStatus } from './voice'
 import { isAllowedRendererAudioPermission } from './voice-permissions'
@@ -422,9 +422,24 @@ function ensureWindow(): Promise<BrowserWindow | null> {
   return creation
 }
 
-function boundedErrorMessage(error: unknown): string {
+function boundedErrorMessage(error: unknown, maxLength = 512): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replace(/[\r\n\t]+/g, ' ').slice(0, 512) || 'Unknown error'
+  return message.replace(/[\r\n\t]+/g, ' ').slice(0, maxLength) || 'Unknown error'
+}
+
+export interface StartupFailureDialog {
+  title: string
+  detail: string
+}
+
+export function startupFailureDialog(error: unknown): StartupFailureDialog | null {
+  if (error instanceof StateMigrationError) {
+    return { title: 'GooeyPi state migration failed', detail: boundedErrorMessage(error, 2_048) }
+  }
+  if (error instanceof StateCompatibilityError) {
+    return { title: 'GooeyPi update required', detail: boundedErrorMessage(error, 2_048) }
+  }
+  return null
 }
 
 /** Filesystem locations of the three shared capability extensions injected into extension-based harnesses. */
@@ -501,7 +516,7 @@ function requestWindow(reason: 'activation' | 'second instance'): void {
 async function bootstrap(): Promise<void> {
   const userDataPath = app.getPath('userData')
   configureGooeyPiAgentMessageSigning(loadOrCreateGooeyPiAgentMessageKey(join(userDataPath, 'agent-message-signing.key')))
-  const stateStore = new JsonStateStore(join(userDataPath, 'prime-work-state.json'))
+  const stateStore = await openDesktopStateStore(userDataPath)
   store = stateStore
   const discovery = new HarnessDiscoveryService(() => stateStore.getSettings().runtimePaths)
   const initialHarnesses = await discovery.refresh()
@@ -1005,6 +1020,8 @@ else void app.whenReady().then(async () => {
     if (!shutdownStarted && BrowserWindow.getAllWindows().length === 0) requestWindow('activation')
   })
 }).catch((error: unknown) => {
+  const failureDialog = startupFailureDialog(error)
+  if (failureDialog) dialog.showErrorBox(failureDialog.title, failureDialog.detail)
   if (!shutdownStarted) console.error(`GooeyPi failed to start: ${boundedErrorMessage(error)}`)
   app.quit()
 })

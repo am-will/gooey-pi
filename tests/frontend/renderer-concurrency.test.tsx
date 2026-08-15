@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, type ReactNode } from 'react'
+import { act, type ReactNode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_EVENT_FLUSH_CHUNK, AGENT_EVENT_QUEUE_LIMIT } from '../../src/app/agent-events'
@@ -452,6 +452,108 @@ describe('agent event git refresh timer', () => {
 })
 
 describe('bootstrap critical path', () => {
+  it('keeps agent_end completion when a delayed idle catalog refresh resolves', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const delayedCatalog = deferred<SessionRecord[]>()
+      const listSessions = vi.fn()
+        .mockResolvedValueOnce([session])
+        .mockImplementationOnce(() => delayedCatalog.promise)
+      let catalogChanged!: (change: { filePath?: string; harness?: 'prime' }) => void
+      let agentEvent!: (payload: { runtimeId: string; event: Record<string, unknown> }) => void
+      const bridge = {
+        projects: { list: async () => [project] },
+        sessions: {
+          list: listSessions,
+          onChanged: (callback: typeof catalogChanged) => { catalogChanged = callback; return () => undefined },
+        },
+        agent: {
+          list: async () => [runtime],
+          onEvent: (callback: typeof agentEvent) => { agentEvent = callback; return () => undefined },
+        },
+        app: { getMeta: async () => ({ version: '1', platform: 'darwin', arch: 'arm64', primeAvailable: true }) },
+        schedules: { list: async () => [] },
+      } as unknown as PrimeWorkApi
+      const runtimeIdRef = { current: runtime.runtimeId as string | null }
+      const runtimeSessionsRef = { current: new Map([[runtime.runtimeId, session.filePath]]) }
+      const runtimeOwnerRef = { current: null }
+      const workspaceRef = { current: { generation: 0, project, session, cwd: project.path, sessionFile: session.filePath } }
+      const setProjects = vi.fn()
+      const setSchedules = vi.fn()
+      const setScheduleError = vi.fn()
+      const activateWorkspace = () => 0
+      const attachRuntime = vi.fn()
+      const reportError = vi.fn()
+      const queueAgentEvent = vi.fn()
+      const reconcileTranscriptForEvent = vi.fn()
+      const showExtensionUi = vi.fn()
+      const clearExtensionUi = vi.fn()
+      const refreshGit = async () => undefined
+      let renderedSessions: SessionRecord[] = []
+
+      function RaceProbe() {
+        const [sessions, setSessions] = useState([session])
+        const [, setRuntime] = useState<RuntimeInfo | null>(runtime)
+        renderedSessions = sessions
+        useBootstrap({
+          bridge,
+          setProjects,
+          setSessions,
+          setSchedules,
+          setScheduleError,
+          runtimeSessionsRef,
+          workspaceRef,
+          activateWorkspace,
+          attachRuntime,
+          reportError,
+        })
+        useAgentEvents({
+          bridge,
+          runtimeIdRef,
+          runtimeSessionsRef,
+          runtimeOwnerRef,
+          workspaceRef,
+          setSessions,
+          setRuntime,
+          queueAgentEvent,
+          reconcileTranscriptForEvent,
+          showExtensionUi,
+          clearExtensionUi,
+          refreshGit,
+          refreshGitOnTerminalEvent: false,
+          activeSessionVisible: true,
+        })
+        return <Probe />
+      }
+
+      await act(async () => {
+        root.render(<RaceProbe />)
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(listSessions).toHaveBeenCalledTimes(1)
+
+      act(() => agentEvent({ runtimeId: runtime.runtimeId, event: { type: 'agent_end' } }))
+      expect(renderedSessions[0]).toMatchObject({ status: 'complete', unread: false, eventRevision: 1, statusEventRevision: 1 })
+
+      act(() => {
+        catalogChanged({ filePath: session.filePath, harness: 'prime' })
+        vi.advanceTimersByTime(80)
+      })
+      expect(listSessions).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        delayedCatalog.resolve([{ ...session, status: 'idle' }])
+        await delayedCatalog.promise
+        await Promise.resolve()
+      })
+
+      expect(renderedSessions[0]).toMatchObject({ status: 'complete', unread: false, eventRevision: 1, statusEventRevision: 1, syncRevision: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('selects projects and sessions before runtime discovery resolves', async () => {
     const runtimes = deferred<RuntimeInfo[]>()
     const bridge = {

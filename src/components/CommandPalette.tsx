@@ -1,19 +1,17 @@
 import { Bell, CalendarClock, Folder, LayoutPanelLeft, NotebookPen, PackageOpen, Search, Settings, Terminal, } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { HarnessId, WorkspaceView } from '@/types/api'
+import type { WorkspaceView } from '@/types/api'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { BrowserGlobe, useAppShellOverlay, useFocusTrap } from './ui'
 
 interface Command { id:string; label:string; detail:string; shortcut?:string; icon:ReactNode; run():void }
 
-export function CommandPalette({ open, onClose, harness = 'prime', onNavigate, onNewSession, onToggleSidebar, onToggleTerminal, onOpenBrowser, platform = 'darwin' }: { open:boolean; onClose():void; harness?:HarnessId; onNavigate(view:WorkspaceView):void; onNewSession():void; onToggleSidebar():void; onToggleTerminal():void; onOpenBrowser():void; platform?:NodeJS.Platform }) {
+export function CommandPalette({ open, onClose, onNavigate, onNewSession, onToggleSidebar, onToggleTerminal, onOpenBrowser, platform = 'darwin' }: { open:boolean; onClose():void; onNavigate(view:WorkspaceView):void; onNewSession():void; onToggleSidebar():void; onToggleTerminal():void; onOpenBrowser():void; platform?:NodeJS.Platform }) {
   const [query,setQuery]=useState('')
   const [active,setActive]=useState(0)
   const inputRef=useRef<HTMLInputElement>(null)
   const paletteRef=useFocusTrap<HTMLDivElement>(open,onClose)
-  // Scheduling remains Prime-only here; capabilities are harness-specific and universal.
-  const primeOnly=new Set(harness==='prime'?[]:['scheduled'])
   const commands:Command[]=[
     {id:'new',label:'New session',detail:'Start fresh in the current project',shortcut:shortcutLabel(platform, ['Primary', 'N']),icon:<NotebookPen size={14}/>,run:onNewSession},
     {id:'projects',label:'Open Projects',detail:'Browse local workspaces',icon:<Folder size={14}/>,run:()=>onNavigate('projects')},
@@ -25,7 +23,7 @@ export function CommandPalette({ open, onClose, harness = 'prime', onNavigate, o
     {id:'sidebar',label:'Toggle sidebar',detail:'Show or hide project navigation',shortcut:shortcutLabel(platform, ['Primary', 'B']),icon:<LayoutPanelLeft size={14}/>,run:onToggleSidebar},
     {id:'settings',label:'Open Settings',detail:'Configure GooeyPi',shortcut:shortcutLabel(platform, ['Primary', ',']),icon:<Settings size={14}/>,run:()=>onNavigate('settings')},
   ]
-  const visible=commands.filter((command)=>!primeOnly.has(command.id)&&`${command.label} ${command.detail}`.toLowerCase().includes(query.toLowerCase()))
+  const visible=commands.filter((command)=>`${command.label} ${command.detail}`.toLowerCase().includes(query.toLowerCase()))
   useEffect(()=>{if(open){setQuery('');setActive(0);requestAnimationFrame(()=>inputRef.current?.focus())}},[open])
   useEffect(()=>setActive(0),[query])
   useAppShellOverlay(open)

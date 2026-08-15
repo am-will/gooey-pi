@@ -34,14 +34,14 @@ interface UseBootstrapOptions {
 
 const NO_OPEN_EXTENSION_UI = () => false
 
-function sessionRecordChanged(previous: SessionRecord, record: SessionRecord): boolean {
+function sessionRecordChanged(previous: SessionRecord, record: SessionRecord, status = record.status): boolean {
   return previous.id !== record.id
     || previous.projectPath !== record.projectPath
     || previous.title !== record.title
     || previous.createdAt !== record.createdAt
     || previous.updatedAt !== record.updatedAt
     || previous.lastUserMessageAt !== record.lastUserMessageAt
-    || previous.status !== record.status
+    || previous.status !== status
     || previous.model !== record.model
     || previous.provider !== record.provider
     || previous.thinkingLevel !== record.thinkingLevel
@@ -49,6 +49,25 @@ function sessionRecordChanged(previous: SessionRecord, record: SessionRecord): b
     || previous.pinned !== record.pinned
     || previous.preview !== record.preview
     || previous.archived !== record.archived
+}
+
+function catalogMergeStatus(
+  previous: SessionRecord | undefined,
+  record: SessionRecord,
+  sessionHasOpenExtensionUi: (filePath: string) => boolean,
+): SessionRecord['status'] {
+  // The catalog cannot see an open extension-UI request, so renderer-owned
+  // waiting state remains authoritative until that request settles.
+  if (previous?.status === 'waiting' && sessionHasOpenExtensionUi(record.filePath)) return previous.status
+  // Runtime-backed catalog scans can report idle after agent_end even though
+  // the renderer has already observed the terminal event. The matching status
+  // revision proves that this non-idle status is live renderer state;
+  // startup/external records and catalog-owned transitions have no provenance.
+  if (record.status === 'idle' && typeof previous?.statusEventRevision === 'number'
+    && previous.statusEventRevision === previous.eventRevision
+    && (previous.status === 'running' || previous.status === 'waiting'
+      || previous.status === 'complete' || previous.status === 'failed')) return previous.status
+  return record.status
 }
 
 export function mergeSessionCatalog(
@@ -62,25 +81,26 @@ export function mergeSessionCatalog(
   const previousByPath = new Map(current.map((session) => [session.filePath, session]))
   return records.map((record) => {
     const previous = previousByPath.get(record.filePath)
+    const status = catalogMergeStatus(previous, record, sessionHasOpenExtensionUi)
+    // Status provenance survives corroborating or deliberately ignored
+    // snapshots, but a catalog transition to a different status takes
+    // ownership. eventRevision itself remains monotonic for attention IDs.
+    const statusEventRevision = status === previous?.status ? previous.statusEventRevision : undefined
     const needsAttention = (record.status === 'waiting' || record.status === 'complete')
       && previous?.status !== record.status
-    const recordChanged = !previous || sessionRecordChanged(previous, record)
+    const recordChanged = !previous || sessionRecordChanged(previous, record, status)
     // A session's sync revision only advances when its own file changed:
     // catalog-wide ticks must not re-sync (or re-render) untouched sessions.
     const syncRevision = changedFiles.get(record.filePath)
       ?? (catalogRevision && recordChanged ? catalogRevision : previous?.syncRevision ?? record.syncRevision)
-    // The catalog scan cannot see an open extension-UI request, so a session
-    // the renderer marked waiting stays waiting until the request settles.
-    const status = previous?.status === 'waiting' && sessionHasOpenExtensionUi(record.filePath)
-      ? previous.status
-      : record.status
     const lastUserMessageAt = previous?.lastUserMessageAt
       && (!record.lastUserMessageAt || Date.parse(previous.lastUserMessageAt) > Date.parse(record.lastUserMessageAt))
       ? previous.lastUserMessageAt
       : record.lastUserMessageAt
     const unread = record.filePath === activeFile ? false : needsAttention ? true : previous?.unread ?? record.unread
     if (previous && !recordChanged && previous.unread === unread && previous.syncRevision === syncRevision
-      && previous.status === status && previous.lastUserMessageAt === lastUserMessageAt) return previous
+      && previous.status === status && previous.statusEventRevision === statusEventRevision
+      && previous.lastUserMessageAt === lastUserMessageAt) return previous
     return {
       ...record,
       status,
@@ -88,6 +108,7 @@ export function mergeSessionCatalog(
       // eventRevision is renderer-only lifecycle state; disk records never
       // carry it, so always keep the live value.
       eventRevision: previous?.eventRevision,
+      statusEventRevision,
       unread,
       syncRevision,
     }
