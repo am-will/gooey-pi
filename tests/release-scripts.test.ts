@@ -545,8 +545,12 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
       expect(workflow.match(/if-no-files-found: error/g)).toHaveLength(uploads.length)
       expect(workflow).toContain('actions/cache@')
     }
-    expect(ciWorkflow).toContain('npm run release:preflight -- --toolchain-only')
-    expect(releaseWorkflow).toContain('npm run release:preflight -- --toolchain-only')
+    expect(ciWorkflow.match(/npm run release:preflight:toolchain/g)).toHaveLength(4)
+    expect(releaseWorkflow.match(/npm run release:preflight:toolchain/g)).toHaveLength(1)
+    expect(auditWorkflow.match(/npm run release:preflight:toolchain/g)).toHaveLength(1)
+    for (const workflow of [ciWorkflow, releaseWorkflow, auditWorkflow]) {
+      expect(workflow).not.toContain('npm run release:preflight -- --toolchain-only')
+    }
     // Release jobs skip the CI-duplicated verification suite and never upload
     // an unpacked application directory; every platform publishes its update feed.
     expect(releaseWorkflow.match(/-- --skip-verify/g)).toHaveLength(4)

@@ -52,7 +52,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm run toolchain:bootstrap
-      - run: npm run release:preflight -- --toolchain-only
+      - run: npm run release:preflight:toolchain
       - name: Validate tag and package versions
         run: node scripts/release/validate-release-tag.mjs --tag "$RELEASE_TAG"
       # fetch-depth: 0 above is what populates refs/remotes/origin/*; the check
