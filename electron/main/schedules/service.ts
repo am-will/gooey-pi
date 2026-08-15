@@ -21,7 +21,6 @@ import {
   previewScheduleOccurrences,
   validateScheduleTiming,
 } from './recurrence'
-import { normalizeScheduleRunHistory } from './retention'
 
 const MAX_TASKS = 500
 const MAX_CONCURRENT_RUNS = 2
@@ -385,7 +384,7 @@ export class AutomationService {
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
       if (task?.status !== 'active' || task.nextRunAt !== scheduledFor) return
-      this.pushRun(state.schedules, task, run)
+      this.pushRun(task, run)
       const next = nextScheduleOccurrence(task.timing, now)
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
@@ -419,7 +418,7 @@ export class AutomationService {
     await this.store.update((state) => {
       const current = state.schedules.find((candidate) => candidate.id === task.id)
       if (!current) throw new Error('Scheduled task was deleted before its run could start')
-      this.pushRun(state.schedules, current, run)
+      this.pushRun(current, run)
     })
     this.pending.push({ task: cloneTask(task), runId: run.id })
     this.changed({ taskId: task.id, reason: 'run' })
@@ -496,9 +495,8 @@ export class AutomationService {
     })
   }
 
-  private pushRun(schedules: AutomationScheduleRecord[], task: AutomationScheduleRecord, run: ScheduleRunRecord): void {
+  private pushRun(task: AutomationScheduleRecord, run: ScheduleRunRecord): void {
     task.runs.push(structuredClone(run))
-    normalizeScheduleRunHistory(schedules)
   }
 
   private changed(event: ScheduleChangeEvent): void {
