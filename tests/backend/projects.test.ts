@@ -1,11 +1,17 @@
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { lstat, realpath } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
-import { ProjectService } from '../../electron/main/projects'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isBroadProjectRoot, ProjectService } from '../../electron/main/projects'
 import { JsonStateStore } from '../../electron/main/store'
+import type { SessionRecord } from '../../src/types/api'
+
+const electronMocks = vi.hoisted(() => ({
+  dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() },
+}))
+vi.mock('electron', () => electronMocks)
 
 const dirs: string[] = []
 function identity(path: string): { dev: string; ino: string; birthtimeNs?: string } {
@@ -17,7 +23,11 @@ function identity(path: string): { dev: string; ino: string; birthtimeNs?: strin
   }
 }
 const identities = (...paths: string[]) => Object.fromEntries(paths.map((path) => [realpathSync(path), identity(path)]))
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  electronMocks.dialog.showOpenDialog.mockReset()
+  electronMocks.dialog.showSaveDialog.mockReset()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
 
 function setup(): { root: string; service: ProjectService; store: JsonStateStore } {
   const dir = mkdtempSync(join(tmpdir(), 'prime-work-files-')); dirs.push(dir)
@@ -26,6 +36,289 @@ function setup(): { root: string; service: ProjectService; store: JsonStateStore
   const service = new ProjectService(store, () => null)
   return { root, service, store }
 }
+
+function session(id: string, projectPath: string, createdAt: string, updatedAt: string): SessionRecord {
+  return {
+    id,
+    harness: 'prime',
+    filePath: join(projectPath, `${id}.jsonl`),
+    projectPath,
+    title: id,
+    createdAt,
+    updatedAt,
+    status: 'idle',
+    depth: 0,
+    archived: false,
+  }
+}
+
+function deferred<T>() {
+  let resolvePromise!: (value: T | PromiseLike<T>) => void
+  let rejectPromise!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve
+    rejectPromise = reject
+  })
+  return { promise, resolve: resolvePromise, reject: rejectPromise }
+}
+
+describe('ProjectService list enrichment', () => {
+  it('aggregates canonical session metadata once for persisted and inferred projects', async () => {
+    const { root, service, store } = setup()
+    const projectAlias = `${root}-alias`
+    const additionalFolder = `${root}-additional`
+    const inferred = `${root}-inferred`
+    const dismissed = `${root}-dismissed`
+    const missing = `${root}-missing`
+    symlinkSync(root, projectAlias)
+    mkdirSync(additionalFolder)
+    mkdirSync(inferred)
+    mkdirSync(dismissed)
+    const sessions = [
+      session('persisted-newer', root, '2026-02-03T00:00:00.000Z', '2026-02-04T00:00:00.000Z'),
+      session('persisted-alias', projectAlias, '2026-02-01T00:00:00.000Z', '2026-02-06T00:00:00.000Z'),
+      session('persisted-additional', additionalFolder, '2026-02-02T00:00:00.000Z', '2026-02-05T00:00:00.000Z'),
+      session('inferred-newer', inferred, '2026-03-03T00:00:00.000Z', '2026-03-04T00:00:00.000Z'),
+      session('inferred-older', inferred, '2026-03-01T00:00:00.000Z', '2026-03-07T00:00:00.000Z'),
+      session('dismissed', dismissed, '2026-04-01T00:00:00.000Z', '2026-04-02T00:00:00.000Z'),
+      session('missing', missing, '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z'),
+    ]
+    const filterSpy = vi.spyOn(sessions, 'filter')
+    const now = '2026-01-01T00:00:00.000Z'
+    await store.update((state) => {
+      state.projects.push({
+        id: 'persisted', harness: 'prime', name: 'Persisted', path: root,
+        // Canonical aliases and repeated folders must not multiply counts.
+        folders: [root, projectAlias, additionalFolder, additionalFolder], primaryFolder: root, pinned: true,
+        createdAt: now, lastOpenedAt: '2026-05-01T00:00:00.000Z', folderIdentities: identities(root, additionalFolder),
+      })
+      state.dismissedProjectPaths.push(dismissed)
+    })
+    service.bindProviders({ sessions: async () => sessions, branch: async () => undefined })
+
+    const records = await service.list()
+
+    expect(filterSpy).not.toHaveBeenCalled()
+    expect(records.map((record) => record.id)).toEqual([
+      'persisted',
+      expect.stringMatching(/^inferred-/),
+    ])
+    expect(records[0]).toMatchObject({
+      id: 'persisted',
+      createdAt: now,
+      lastOpenedAt: '2026-05-01T00:00:00.000Z',
+      sessionCount: 3,
+    })
+    expect(records[1]).toMatchObject({
+      path: realpathSync(inferred),
+      createdAt: '2026-03-01T00:00:00.000Z',
+      lastOpenedAt: '2026-03-07T00:00:00.000Z',
+      sessionCount: 2,
+      inferred: true,
+    })
+    expect(records.some((record) => record.path === realpathSync(dismissed))).toBe(false)
+    expect(records.some((record) => record.path === resolve(missing))).toBe(false)
+  })
+
+  it('bounds overlapping branch enrichment without changing record order or undefined branches', async () => {
+    const { root, service, store } = setup()
+    const concurrencyLimit = 4
+    const projectRoots = [root]
+    for (let index = 1; index < concurrencyLimit + 2; index += 1) {
+      const path = `${root}-${index}`
+      mkdirSync(path)
+      projectRoots.push(path)
+    }
+    const now = '2026-01-01T00:00:00.000Z'
+    await store.update((state) => {
+      for (const [index, path] of projectRoots.entries()) state.projects.push({
+        id: `project-${index}`, harness: 'prime', name: `Project ${index}`, path,
+        folders: [path], primaryFolder: path, pinned: false,
+        createdAt: now, lastOpenedAt: now, folderIdentities: identities(path),
+      })
+    })
+
+    const gates = projectRoots.map(() => deferred<string | undefined>())
+    const firstStarted = deferred<void>()
+    const nextStarted = deferred<void>()
+    const started: string[] = []
+    let active = 0
+    let maximumActive = 0
+    service.bindProviders({ sessions: async () => [], branch: async (cwd) => {
+      const index = projectRoots.indexOf(cwd)
+      started.push(cwd)
+      active += 1
+      maximumActive = Math.max(maximumActive, active)
+      if (started.length === 1) firstStarted.resolve()
+      if (started.length === concurrencyLimit + 1) nextStarted.resolve()
+      try { return await gates[index].promise }
+      finally { active -= 1 }
+    } })
+
+    const listing = service.list()
+    await firstStarted.promise
+    try {
+      expect(started).toEqual(projectRoots.slice(0, concurrencyLimit))
+      expect(maximumActive).toBe(concurrencyLimit)
+
+      gates[0].resolve('branch-0')
+      await nextStarted.promise
+      expect(active).toBe(concurrencyLimit)
+
+      for (let index = 1; index < gates.length; index += 1) {
+        gates[index].resolve(index === gates.length - 1 ? undefined : `branch-${index}`)
+      }
+      const records = await listing
+      expect(records.map((record) => record.id)).toEqual(projectRoots.map((_path, index) => `project-${index}`))
+      expect(records.map((record) => record.gitBranch)).toEqual([
+        'branch-0', 'branch-1', 'branch-2', 'branch-3', 'branch-4', undefined,
+      ])
+      expect(maximumActive).toBe(concurrencyLimit)
+    } finally {
+      for (const gate of gates) gate.resolve(undefined)
+      await listing.catch(() => undefined)
+    }
+  })
+
+  it('publishes authorization before enrichment and still propagates branch failures', async () => {
+    const { root, service, store } = setup()
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push({
+      id: 'project', harness: 'prime', name: 'Project', path: root, folders: [root], primaryFolder: root,
+      pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root),
+    }) })
+    service.bindProviders({ sessions: async () => [], branch: async (cwd) => {
+      await expect(service.authorizeCwd(cwd)).resolves.toBe(realpathSync(root))
+      throw new Error('branch inspection failed')
+    } })
+
+    await expect(service.list()).rejects.toThrow('branch inspection failed')
+    await expect(service.authorizeCwd(root)).resolves.toBe(realpathSync(root))
+  })
+
+  it('does not start queued branch lookups after a concurrent lookup fails', async () => {
+    const { root, service, store } = setup()
+    const concurrencyLimit = 4
+    const projectRoots = [root]
+    for (let index = 1; index <= concurrencyLimit; index += 1) {
+      const path = `${root}-failure-${index}`
+      mkdirSync(path)
+      projectRoots.push(path)
+    }
+    const now = new Date().toISOString()
+    await store.update((state) => {
+      for (const [index, path] of projectRoots.entries()) state.projects.push({
+        id: `failure-${index}`, harness: 'prime', name: `Failure ${index}`, path,
+        folders: [path], primaryFolder: path, pinned: false,
+        createdAt: now, lastOpenedAt: now, folderIdentities: identities(path),
+      })
+    })
+
+    const gates = projectRoots.map(() => deferred<string | undefined>())
+    const saturated = deferred<void>()
+    const initialSettled = deferred<void>()
+    const started: string[] = []
+    let settled = 0
+    service.bindProviders({ sessions: async () => [], branch: async (cwd) => {
+      const index = projectRoots.indexOf(cwd)
+      started.push(cwd)
+      if (started.length === concurrencyLimit) saturated.resolve()
+      try { return await gates[index].promise }
+      finally {
+        settled += 1
+        if (settled === concurrencyLimit) initialSettled.resolve()
+      }
+    } })
+
+    const listing = service.list()
+    await saturated.promise
+    const primaryFailure = new Error('primary branch failure')
+    gates[0].reject(primaryFailure)
+    await expect(listing).rejects.toBe(primaryFailure)
+
+    // A second in-flight rejection is still owned by mapLimit's workers. The
+    // remaining active calls settle, but the fifth lookup must stay queued.
+    gates[1].reject(new Error('secondary branch failure'))
+    gates[2].resolve('branch-2')
+    gates[3].resolve('branch-3')
+    await initialSettled.promise
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(started).toEqual(projectRoots.slice(0, concurrencyLimit))
+    await expect(service.authorizeCwd(projectRoots.at(-1)!)).resolves.toBe(realpathSync(projectRoots.at(-1)!))
+  })
+})
+
+describe('broad project root authorization', () => {
+  it.each([
+    ['POSIX filesystem root', '/', { platform: 'linux', homePath: '/Users/alice' }],
+    ['POSIX home directory', '/Users/alice', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['Windows system drive root', 'C:\\', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows secondary drive root', 'D:/', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows UNC share root', '\\\\server\\share', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows extended UNC share root', '\\\\?\\UNC\\server\\share\\', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows home directory case-insensitively', 'c:\\users\\alice', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+  ] as const)('classifies %s as too broad', (_label, path, options) => {
+    expect(isBroadProjectRoot(path, options)).toBe(true)
+  })
+
+  it.each([
+    ['POSIX project', '/Users/alice/work/app', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['POSIX home-name sibling', '/Users/alice-other', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['Windows project', 'C:\\Users\\Alice\\work\\app', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows UNC project', '\\\\server\\share\\work\\app', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+  ] as const)('allows %s', (_label, path, options) => {
+    expect(isBroadProjectRoot(path, options)).toBe(false)
+  })
+
+  it.each([
+    ['filesystem root', realpathSync(resolve('/'))],
+    ['home directory', realpathSync(homedir())],
+  ])('rejects a direct grant for the %s before persisting it', async (_label, path) => {
+    const { service, store } = setup()
+    electronMocks.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [path] })
+
+    await expect(service.add()).rejects.toThrow(/Broad filesystem roots cannot be added as projects/)
+    expect(store.snapshot().projects).toEqual([])
+  })
+
+  it.each([
+    ['filesystem root', realpathSync(resolve('/'))],
+    ['home directory', realpathSync(homedir())],
+  ])('keeps a persisted %s visible but quarantined from authorization', async (_label, path) => {
+    const { root, service, store } = setup()
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push({
+      id: 'broad-project', harness: 'prime', name: 'Broad project', path, folders: [path], primaryFolder: path,
+      pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(path),
+    }) })
+
+    expect((await service.list()).map((project) => project.id)).toEqual(['broad-project'])
+    await expect(service.authorizeCwd(path === resolve('/') ? root : path)).rejects.toThrow(/unsafe broad.*remove it and add a narrower project folder/i)
+  })
+
+  it('does not reauthorize a quarantined broad grant while rebuilding after removal', async () => {
+    const { root, service, store } = setup()
+    const filesystemRoot = realpathSync(resolve('/'))
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push(
+      {
+        id: 'broad-project', harness: 'prime', name: 'Broad project', path: filesystemRoot, folders: [filesystemRoot], primaryFolder: filesystemRoot,
+        pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(filesystemRoot),
+      },
+      {
+        id: 'narrow-project', harness: 'prime', name: 'Narrow project', path: root, folders: [root], primaryFolder: root,
+        pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root),
+      },
+    ) })
+
+    await service.list()
+    await expect(service.authorizeCwd(root)).resolves.toBe(realpathSync(root))
+    await expect(service.remove('narrow-project')).resolves.toBe(true)
+    await expect(service.authorizeCwd(root)).rejects.toThrow(/unsafe broad.*remove it and add a narrower project folder/i)
+  })
+})
 
 describe('ProjectService file listing', () => {
   it('lists project files while excluding generated trees and symlinks', async () => {

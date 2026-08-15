@@ -65,10 +65,22 @@ function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = fal
   return onSend
 }
 
-function pastedPng(read?: () => Promise<ArrayBuffer>): File {
+function pngFile(name: string, read?: () => Promise<ArrayBuffer>): File {
   const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
-  const file = new File([bytes], 'pasted.png', { type: 'image/png' })
+  const file = new File([bytes], name, { type: 'image/png' })
   Object.defineProperty(file, 'arrayBuffer', { value: read ?? (async () => bytes.buffer) })
+  return file
+}
+
+function pastedPng(read?: () => Promise<ArrayBuffer>): File {
+  return pngFile('pasted.png', read)
+}
+
+function sizedPng(name: string, size: number): File {
+  const bytes = new Uint8Array(size)
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10])
+  const file = new File([bytes], name, { type: 'image/png' })
+  Object.defineProperty(file, 'arrayBuffer', { value: async () => bytes.buffer })
   return file
 }
 
@@ -93,7 +105,37 @@ async function pasteFiles(files: File[], text = ''): Promise<void> {
 
 const paste = (file: File) => pasteFiles([file])
 
-describe('Composer image paste', () => {
+async function pickFiles(files: File[]): Promise<void> {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')
+  Object.defineProperty(input, 'files', { configurable: true, value: files })
+  await act(async () => {
+    input?.dispatchEvent(new Event('change', { bubbles: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function dispatchDrag(type: string, target: Element, files: File[]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files, dropEffect: 'none' },
+  })
+  target.dispatchEvent(event)
+  return event
+}
+
+async function dropFiles(files: File[]): Promise<void> {
+  const composer = container.querySelector('.composer') as HTMLElement
+  await act(async () => {
+    dispatchDrag('dragenter', composer, files)
+    dispatchDrag('dragover', composer, files)
+    dispatchDrag('drop', composer, files)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+describe('Composer image ingestion', () => {
   it('previews and sends a pasted image through the prompt callback', async () => {
     const onSend = renderComposer(vi.fn(async () => undefined))
     await paste(pastedPng())
@@ -137,6 +179,30 @@ describe('Composer image paste', () => {
       await Promise.resolve()
     })
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled).toBe(false)
+  })
+
+  it('reports an older delayed read failure after a newer batch succeeds', async () => {
+    let rejectOlder!: (reason: Error) => void
+    const older = pngFile('older.png', () => new Promise<ArrayBuffer>((_resolve, reject) => { rejectOlder = reject }))
+    renderComposer()
+
+    await act(async () => {
+      dispatchPasteFiles([older])
+      dispatchPasteFiles([pngFile('newer.png')])
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.composer-attachment')?.textContent).toContain('newer.png')
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+
+    await act(async () => {
+      rejectOlder(new Error('read failed'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('could not read the image')
+    expect(container.querySelector('.composer-attachment')?.textContent).toContain('newer.png')
   })
 
   it('inserts mixed clipboard text at the caret instead of appending', async () => {
@@ -185,6 +251,150 @@ describe('Composer image paste', () => {
     expect(textarea.value).toBe('Keep this draft')
     expect(container.querySelector('.composer-attachment')).not.toBeNull()
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('restored')
+  })
+
+  it('merges submitted images with images attached while a failed send is pending', async () => {
+    let rejectSend!: (reason: Error) => void
+    const onSend = renderComposer(vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject })))
+    await pickFiles([pngFile('submitted.png')])
+
+    act(() => { (container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click() })
+    expect(onSend).toHaveBeenCalledOnce()
+    await pickFiles([pngFile('new-draft.png')])
+    await act(async () => {
+      rejectSend(new Error('rejected'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const attachments = Array.from(container.querySelectorAll('.composer-attachment')).map((attachment) => attachment.textContent)
+    expect(attachments).toHaveLength(2)
+    expect(attachments.join(' ')).toContain('submitted.png')
+    expect(attachments.join(' ')).toContain('new-draft.png')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and images were restored')
+  })
+
+  it('reports submitted images omitted from failed-send restoration when new images fill the limit', async () => {
+    let rejectSend!: (reason: Error) => void
+    renderComposer(vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject })))
+    await pickFiles([pngFile('submitted-1.png'), pngFile('submitted-2.png')])
+
+    act(() => { (container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click() })
+    await pickFiles(Array.from({ length: 7 }, (_, index) => pngFile(`new-${index + 1}.png`)))
+    await act(async () => {
+      rejectSend(new Error('rejected'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelectorAll('.composer-attachment')).toHaveLength(8)
+    expect(container.textContent).toContain('submitted-1.png')
+    expect(container.textContent).not.toContain('submitted-2.png')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted image could not be restored because the attachment limits are full')
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('8 images attached')
+  })
+
+  it('accounts for newly attached bytes when restoring a failed send', async () => {
+    let rejectSend!: (reason: Error) => void
+    renderComposer(vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject })))
+    await pickFiles([sizedPng('submitted-large.png', 700_000)])
+
+    act(() => { (container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click() })
+    await pickFiles([sizedPng('new-large.png', 700_000)])
+    await act(async () => {
+      rejectSend(new Error('rejected'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelectorAll('.composer-attachment')).toHaveLength(1)
+    expect(container.textContent).toContain('new-large.png')
+    expect(container.textContent).not.toContain('submitted-large.png')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted image could not be restored because the attachment limits are full')
+  })
+
+  it('opens an image-only picker and attaches its selection', async () => {
+    renderComposer()
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Choose images to attach"]')
+    const click = vi.spyOn(input as HTMLInputElement, 'click')
+
+    ;(container.querySelector('button[aria-label="Attach images"]') as HTMLButtonElement).click()
+    expect(click).toHaveBeenCalledOnce()
+    expect(input?.multiple).toBe(true)
+    expect(input?.accept).toBe('image/png,image/jpeg,image/gif,image/webp')
+
+    await pickFiles([pastedPng()])
+    expect(container.querySelector('.composer-attachment')?.textContent).toContain('pasted.png')
+  })
+
+  it('attaches dropped images and keeps nested drag feedback stable', async () => {
+    renderComposer()
+    const composer = container.querySelector('.composer') as HTMLElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    act(() => {
+      dispatchDrag('dragenter', composer, [pastedPng()])
+      dispatchDrag('dragenter', textarea, [pastedPng()])
+      dispatchDrag('dragleave', textarea, [pastedPng()])
+    })
+    expect(container.querySelector('.composer-drop-feedback')?.textContent).toContain('Drop images')
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Drop images')
+
+    await act(async () => {
+      dispatchDrag('drop', composer, [pastedPng()])
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.composer-drop-feedback')).toBeNull()
+    expect(container.querySelector('.composer-attachment')?.textContent).toContain('pasted.png')
+  })
+
+  it('rejects mixed supported and unsupported payloads atomically', async () => {
+    renderComposer()
+    const unsupported = new File(['plain text'], 'notes.txt', { type: 'text/plain' })
+
+    await pasteFiles([pastedPng(), unsupported], 'keep this text')
+
+    expect(container.querySelector('.composer-attachment')).toBeNull()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('PNG, JPEG, GIF, and WebP')
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('keep this text')
+  })
+
+  it('shares count and byte limits across picker, paste, and drop', async () => {
+    renderComposer()
+    await pickFiles(Array.from({ length: 4 }, () => pastedPng()))
+    await dropFiles(Array.from({ length: 5 }, () => pastedPng()))
+    expect(container.querySelectorAll('.composer-attachment')).toHaveLength(4)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('up to 8 images')
+
+    const removeButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('.composer-attachment > button'))
+    act(() => removeButtons.forEach((button) => { button.click() }))
+    const largeImage = () => new File([new Uint8Array(700_000)], 'large.png', { type: 'image/png' })
+    await paste(largeImage())
+    await pickFiles([largeImage()])
+    expect(container.querySelectorAll('.composer-attachment')).toHaveLength(1)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('too large')
+  })
+
+  it('rejects picker and drop input for text-only models', async () => {
+    renderComposer(vi.fn(), false)
+    await pickFiles([pastedPng()])
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('does not accept images')
+    await dropFiles([pastedPng()])
+    expect(container.querySelector('.composer-attachment')).toBeNull()
+  })
+
+  it('removes a chosen image and exposes accessible picker and attachment status labels', async () => {
+    renderComposer()
+    await pickFiles([pastedPng()])
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('1 image attached')
+
+    const remove = container.querySelector<HTMLButtonElement>('button[aria-label="Remove pasted.png"]')
+    expect(remove).not.toBeNull()
+    act(() => remove?.click())
+    expect(container.querySelector('.composer-attachment')).toBeNull()
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('')
+    expect(container.querySelector('button[aria-label="Attach images"]')?.getAttribute('title')).toBe('Attach images')
   })
 
 })

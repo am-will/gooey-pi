@@ -243,6 +243,26 @@ describe('pi session path authorization', () => {
 })
 
 describe('pi transcript access through the service', () => {
+  it('uses the message timestamp as the assistant start and the entry timestamp as completion', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_A)
+    const startedAt = Date.parse('2026-08-10T22:41:22.000Z')
+    const completedAt = '2026-08-10T22:42:02.495Z'
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'question' } }),
+        piEntry('message', 'cc33dd44', 'aa11bb22', {
+          message: { role: 'assistant', content: 'answer', timestamp: startedAt },
+        }, completedAt),
+      ],
+    })
+
+    const assistant = (await service.read(file)).find((message) => message.role === 'assistant')
+    expect(assistant).toMatchObject({ startedAt, completedAt })
+  })
+
   it('reads a pi transcript through the injected reader and authorized path', async () => {
     const { root, project, service } = setup()
     mkdirSync(join(root, BUCKET))

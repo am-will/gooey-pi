@@ -1,6 +1,12 @@
+import { request as httpRequest } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentBrowserBridge } from '../../electron/main/browser/agent-bridge'
 import type { AgentBrowserService } from '../../electron/main/browser/agent-service'
+import { waitUntil } from '../helpers/wait'
+
+class TestAgentBrowserBridge extends AgentBrowserBridge {
+  requestsFor(token: string): number | undefined { return this.claimForToken(token)?.requests }
+}
 
 const bridges: AgentBrowserBridge[] = []
 afterEach(async () => {
@@ -37,7 +43,7 @@ function fakeTerminals() {
 async function fixture(scope: { cwd: string; sessionPath?: string } = { cwd: '/project', sessionPath: '/sessions/one.jsonl' }) {
   const { calls, service } = fakeService()
   const terminals = fakeTerminals()
-  const bridge = new AgentBrowserBridge({ service, terminals, extensionPath: '/app/extensions/prime-work-browser.ts', skillPath: '/app/skills/prime-work-browser' })
+  const bridge = new TestAgentBrowserBridge({ service, terminals, extensionPath: '/app/extensions/prime-work-browser.ts', skillPath: '/app/skills/prime-work-browser' })
   await bridge.start()
   bridges.push(bridge)
   const environment = bridge.environmentFor(scope)
@@ -52,6 +58,47 @@ async function fixture(scope: { cwd: string; sessionPath?: string } = { cwd: '/p
 }
 
 describe('AgentBrowserBridge', () => {
+  it('rejects a revoked runtime token immediately without affecting active runtimes', async () => {
+    const { bridge, call, environment } = await fixture()
+    const active = bridge.environmentFor({ cwd: '/project', sessionPath: '/sessions/active.jsonl' })
+
+    expect(bridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)).toBe(true)
+    expect(bridge.revoke(environment.PRIME_WORK_BROWSER_TOKEN)).toBe(false)
+
+    expect(await call('tabs.list')).toMatchObject({ status: 401 })
+    expect(await call('tabs.list', {}, active.PRIME_WORK_BROWSER_TOKEN)).toMatchObject({ status: 200 })
+  })
+
+  it('returns 401 without dispatch when a claim is revoked after headers but before the full body', async () => {
+    const { bridge, calls, environment } = await fixture()
+    const token = environment.PRIME_WORK_BROWSER_TOKEN!
+    const body = JSON.stringify({ method: 'tabs.list', params: {} })
+    const request = httpRequest(environment.PRIME_WORK_BROWSER_URL!, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    })
+    const response = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      request.on('response', (incoming) => {
+        const chunks: Buffer[] = []
+        incoming.on('data', (chunk: Buffer) => chunks.push(chunk))
+        incoming.on('end', () => resolve({ status: incoming.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+      })
+      request.on('error', reject)
+    })
+
+    request.write(body.slice(0, -1))
+    await waitUntil(() => bridge.requestsFor(token) === 1)
+    expect(bridge.revoke(token)).toBe(true)
+    request.end(body.slice(-1))
+
+    await expect(response).resolves.toMatchObject({ status: 401, body: expect.stringContaining('Capability expired') })
+    expect(calls).toHaveLength(0)
+  })
+
   it('exposes the extension and skill paths and dispatches scoped methods', async () => {
     const { calls, environment, call } = await fixture()
     expect(environment.PRIME_WORK_BROWSER_EXTENSION_PATH).toBe('/app/extensions/prime-work-browser.ts')

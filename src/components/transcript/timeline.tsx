@@ -92,12 +92,13 @@ function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall
   const resetCopiedTimerRef = useRef<number | null>(null)
   const result = next?.type === 'toolResult' ? next : undefined
   const failed = result?.isError
+  const finished = result && !result.streaming
   const kind = classifyTool(part.name)
   const args = serialize(part.args, true)
   const output = result?.text ?? ''
   const visibleOutput = boundText(`${args}${args && output ? '\n\n' : ''}${output}`, 200_000, '\n\n[Output truncated in the desktop view.]')
   const canExpand = Boolean(visibleOutput)
-  const state = failed ? 'error' : result ? 'done' : kind === 'question' ? 'waiting' : 'running'
+  const state = failed ? 'error' : finished ? 'done' : kind === 'question' ? 'waiting' : 'running'
   const preview = toolPreview(part)
   useEffect(
     () => () => {
@@ -123,7 +124,7 @@ function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall
         <span className="activity-line__icon">{toolIcon(kind)}</span>
         <span className="activity-line__kind">{kind === 'question' ? 'Question' : part.name}</span>
         {preview ? <code className="activity-tool__preview"><SyntaxText text={preview} /></code> : null}
-        <span className="activity-tool__state">{failed ? <><CircleAlert size={12} /> failed</> : result ? <><Check size={12} /> done</> : kind === 'question' ? 'needs input' : <><LoaderCircle className="spin" size={12} /> running</>}</span>
+        <span className="activity-tool__state">{failed ? <><CircleAlert size={12} /> failed</> : finished ? <><Check size={12} /> done</> : kind === 'question' ? 'needs input' : <><LoaderCircle className="spin" size={12} /> running</>}</span>
         {canExpand ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
       </button>
       {open && visibleOutput ? (
@@ -225,10 +226,30 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
   })}</div>
 }
 
+function liveWorkStatus(parts: MessagePart[], showReasoning: boolean, showTools: boolean): 'Thinking' | 'Working' {
+  let status: 'Thinking' | 'Working' | undefined
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
+    const next = parts[index + 1]
+    if (part.type === 'toolCall' && (next?.type !== 'toolResult' || next.streaming)) return 'Working'
+    if (status || part.type === 'image') continue
+    if (part.type === 'thinking') status = showReasoning ? 'Thinking' : undefined
+    else if (showTools || part.type !== 'toolCall' && part.type !== 'toolResult') status = 'Working'
+  }
+  return status ?? 'Working'
+}
+
 export function WorkDisclosure({ message, parts, showReasoning, showTools, running = message.streaming }: { message: TranscriptMessage; parts: MessagePart[]; showReasoning: boolean; showTools: boolean; running?: boolean }) {
   const [open, setOpen] = useState(false)
   if (running) {
-    return <section className="work-disclosure is-running" aria-label="Prime work activity"><WorkTimeline parts={parts} showReasoning={showReasoning} showTools={showTools} streaming /><div className="work-disclosure__thinking"><ThinkingDots labelled /></div></section>
+    const status = liveWorkStatus(message.parts, showReasoning, showTools)
+    return <section className="work-disclosure is-running" aria-label="Agent work activity">
+      <span className="work-disclosure__rail" aria-hidden="true" />
+      <div className="work-disclosure__live">
+        <div className="work-disclosure__status" role="status"><span>{status}</span><ThinkingDots /></div>
+        <WorkTimeline parts={parts} showReasoning={showReasoning} showTools={showTools} streaming />
+      </div>
+    </section>
   }
   const startedAt = timestamp(message.startedAt ?? message.timestamp) ?? 0
   const completedAt = timestamp(message.completedAt) ?? startedAt

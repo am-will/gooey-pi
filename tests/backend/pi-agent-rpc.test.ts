@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentRpcManager, PI_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import type { ProviderCatalog } from '../../electron/main/agent-rpc'
 import type { PrimeModelDescriptor } from '../../src/types/api'
@@ -146,6 +146,22 @@ describe('pi RPC adapter argv', () => {
 })
 
 describe('pi RPC handshake', () => {
+  it('releases the exact runtime environment after Pi termination', async () => {
+    const fake = fakePiAgent()
+    const manager = piManager(fake.executable)
+    const environment = { GOOEYPI_COLLABORATION_TOKEN: 'pi-runtime-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    expect(ended).not.toHaveBeenCalled()
+    await manager.stop(runtime.runtimeId)
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended.mock.calls[0][0]).toBe(environment)
+    expect(ended.mock.calls[0][1]).toMatchObject({ runtimeId: runtime.runtimeId, harness: 'pi' })
+  })
+
   it('handshakes Prime-style without protocol negotiation and reads no harness state fields', async () => {
     const fake = fakePiAgent()
     const manager = piManager(fake.executable)

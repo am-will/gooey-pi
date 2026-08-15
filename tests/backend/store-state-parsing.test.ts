@@ -265,9 +265,10 @@ describe('persisted schedule parsing', () => {
         runs: [
           { ...validRun, startedAt: '2026-01-01T09:00:02.000Z', finishedAt: '2026-01-01T09:01:00.000Z', sessionId: 'session-1', sessionFile: '/sessions/session-1.jsonl', error: 'transient failure', skippedCount: 3 },
           { ...validRun, id: 'run-2', startedAt: 'soon', finishedAt: 7, sessionId: '', sessionFile: 7, error: 7, skippedCount: 0 },
-          'run-3',
+          { ...validRun, id: 'run-3', status: 'cancelled', finishedAt: '2026-01-01T09:00:03.000Z', error: 'Task changed' },
+          'run-4',
           { ...validRun, taskRevision: 0 },
-          { ...validRun, status: 'cancelled' },
+          { ...validRun, status: 'abandoned' },
           { ...validRun, trigger: 'heartbeat' },
           { ...validRun, scheduledFor: 'soon' },
           { ...validRun, queuedAt: 'soon' },
@@ -275,9 +276,10 @@ describe('persisted schedule parsing', () => {
         ],
       }],
     })
-    expect(schedules[0].runs.map((run) => run.id)).toEqual(['run-1', 'run-2'])
+    expect(schedules[0].runs.map((run) => run.id)).toEqual(['run-1', 'run-2', 'run-3'])
     expect(schedules[0].runs[0]).toMatchObject({ startedAt: '2026-01-01T09:00:02.000Z', finishedAt: '2026-01-01T09:01:00.000Z', sessionId: 'session-1', sessionFile: '/sessions/session-1.jsonl', error: 'transient failure', skippedCount: 3 })
     expect(schedules[0].runs[1]).toMatchObject({ startedAt: undefined, finishedAt: undefined, sessionId: undefined, sessionFile: undefined, error: undefined, skippedCount: undefined })
+    expect(schedules[0].runs[2]).toMatchObject({ status: 'cancelled', finishedAt: '2026-01-01T09:00:03.000Z', error: 'Task changed' })
     expect(loadState({ version: 3, schedules: [{ ...validSchedule, runs: 'none' }] }).schedules[0].runs).toEqual([])
   })
 

@@ -302,7 +302,7 @@ export function replayPrimeEvents(
       upsertToolDraft(index, id, name, raw.args)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
-      if (call) setToolResult(draft, call, { type: 'toolResult', name, text: resultText(raw.partialResult) })
+      if (call) setToolResult(draft, call, { type: 'toolResult', name, text: resultText(raw.partialResult), streaming: true })
       continue
     }
     if (type === 'tool_execution_end') {

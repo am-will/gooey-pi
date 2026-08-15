@@ -460,11 +460,26 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
   const stopRuntime = async () => {
     const { bridge, workspace, reportError } = getDeps()
-    if (!workspace.runtime) return
+    const stoppedRuntime = workspace.runtime
+    if (!stoppedRuntime) return
     if (!bridge) { workspace.setMessages((items) => items.map((item) => item.streaming ? { ...item, streaming: false } : item)); workspace.setRuntime(null); return }
+    const stoppedRuntimeId = stoppedRuntime.runtimeId
+    const stoppedGeneration = workspace.workspaceRef.current.generation
+    const stoppedOwner = workspace.runtimeOwnerRef.current
+    const stoppedOwnerRuntimeId = stoppedOwner?.runtimeId
+    const stoppedOwnerGeneration = stoppedOwner?.generation
     try {
-      await bridge.agent.command(workspace.runtime.runtimeId, { type: 'abort' })
-      workspace.setRuntime((current) => current ? { ...current, isStreaming: false } : current)
+      await bridge.agent.command(stoppedRuntimeId, { type: 'abort' })
+      const currentOwner = workspace.runtimeOwnerRef.current
+      if (
+        workspace.workspaceRef.current.generation !== stoppedGeneration
+        || workspace.runtimeIdRef.current !== stoppedRuntimeId
+        || stoppedOwnerRuntimeId !== stoppedRuntimeId
+        || stoppedOwnerGeneration !== stoppedGeneration
+        || currentOwner?.runtimeId !== stoppedOwnerRuntimeId
+        || currentOwner?.generation !== stoppedOwnerGeneration
+      ) return
+      workspace.setRuntime((current) => current?.runtimeId === stoppedRuntimeId ? { ...current, isStreaming: false } : current)
       workspace.setMessages((items) => items.map((item) => item.streaming ? { ...item, streaming: false } : item))
     } catch (error) { reportError(error) }
   }

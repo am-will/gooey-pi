@@ -14,6 +14,15 @@ describe.each(adapters)('%s steering protocol parity', (_name, adapter) => {
     expect(adapter.translateCommand(command)).toBe(command)
   })
 
+  it('preserves the existing image payload for prompts and steers', () => {
+    const images = [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]
+    const prompt = { type: 'prompt', message: 'inspect', images }
+    const steer = { type: 'steer', message: 'inspect this instead', images }
+
+    expect(adapter.translateCommand(prompt)).toBe(prompt)
+    expect(adapter.translateCommand(steer)).toBe(steer)
+  })
+
   it('preserves both queued and picked-up session action snapshots', () => {
     const queued = {
       type: 'session_action_update',

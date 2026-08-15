@@ -111,7 +111,7 @@ nvm install && nvm use
 npm run toolchain:bootstrap
 ```
 
-The bootstrap command installs the `packageManager`-pinned npm into the invoked npm's configured global prefix, verifies that exact CLI and both tool versions against `package.json` and `.nvmrc`, and makes its shim available to subsequent GitHub Actions steps before dependencies are installed.
+The bootstrap command verifies the exact size and SHA-512 of the checked-in npm archive, then installs it offline with install-time lifecycle scripts disabled into the invoked npm's configured global prefix, verifies the installed CLI and both tool versions against `package.json` and `.nvmrc`, and makes its shim available to subsequent GitHub Actions steps before dependencies are installed.
 
 ```bash
 npm install

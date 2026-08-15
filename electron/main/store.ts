@@ -275,7 +275,7 @@ function parseDisabledModels(value: unknown, fallback: string[]): string[] {
 }
 
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
-const RUN_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'skipped', 'interrupted'])
+const RUN_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'skipped', 'interrupted', 'cancelled'])
 const SCHEDULE_STATUSES = new Set(['active', 'paused', 'completed', 'blocked'])
 
 function boundedString(value: unknown, max: number, allowEmpty = false): value is string {

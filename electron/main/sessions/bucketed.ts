@@ -1,5 +1,5 @@
 import type { Stats } from 'node:fs'
-import { readdir, realpath, stat } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
 import { mapLimit } from '../lib/async'
 import { isPathWithin, isRecord } from '../validation'
@@ -70,6 +70,7 @@ export function createBucketedCatalogIo(): SessionCatalogIo {
     },
     canonicalize: realpath,
     inspect: stat,
+    inspectLink: lstat,
   }
 }
 

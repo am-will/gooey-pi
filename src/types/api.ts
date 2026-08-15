@@ -77,7 +77,10 @@ export interface SessionRecord {
   depth: number
   pinned?: boolean
   unread?: boolean
+  /** Monotonic renderer lifecycle revision used to distinguish attention events. */
   eventRevision?: number
+  /** Lifecycle revision that authored the current status; absent when the catalog owns it. */
+  statusEventRevision?: number
   preview?: string
   archived?: boolean
   syncRevision?: number
@@ -127,7 +130,7 @@ export type MessagePart =
   | { type: 'text'; partId?: string; text: string }
   | { type: 'thinking'; partId?: string; text: string }
   | { type: 'toolCall'; partId?: string; id?: string; name: string; args?: unknown }
-  | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean }
+  | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean; streaming?: boolean }
   | { type: 'agentMessage'; partId?: string; text: string; agentName?: string }
   | { type: 'image'; partId?: string; mimeType?: string; data?: string; dataTruncated?: boolean }
   | {
@@ -519,7 +522,7 @@ export interface VoiceToolResult {
 }
 
 export type ScheduleDefinitionStatus = 'active' | 'paused' | 'completed' | 'blocked'
-export type ScheduleRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted'
+export type ScheduleRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted' | 'cancelled'
 export type ScheduleCreatedBy = 'user' | 'agent'
 
 export type ScheduleTarget =

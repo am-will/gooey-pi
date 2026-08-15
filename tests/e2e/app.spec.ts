@@ -288,6 +288,16 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     ].join('\\n') + '\\n')
     send({ type: 'agent_end' })
     send({ type: 'response', id: prompt.id, command: prompt.type, success: true, data: {} })
+    setTimeout(() => {
+      const refreshedAt = new Date().toISOString()
+      fs.appendFileSync(sessionFile, JSON.stringify({
+        type: 'session_info',
+        id: 'fixture-post-completion-catalog-refresh',
+        parentId: 'fixture-live-final-multi',
+        timestamp: refreshedAt,
+        name: 'Post-completion catalog refresh',
+      }) + '\\n')
+    }, 250)
   } else if (command.id) {
     send({ type: 'response', id: command.id, command: command.type, success: true, data: {} })
   }
@@ -575,6 +585,19 @@ test.describe('Prime Work desktop smoke', () => {
     expect(offset.size).toBeCloseTo(26.4, 1)
     expect(Math.abs(offset.x)).toBeLessThanOrEqual(0.5)
     expect(Math.abs(offset.y)).toBeLessThanOrEqual(0.5)
+  })
+
+  test('picks, previews, and removes an image in the composer', async () => {
+    await page.locator('.session-row-wrap').filter({ hasText: 'Hermetic desktop fixture' }).locator('.session-row').click()
+    const imagePath = join(fixtureRoot, 'picker.png')
+    writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'))
+
+    await expect(page.getByRole('button', { name: 'Attach images' })).toBeVisible()
+    await page.locator('input[aria-label="Choose images to attach"]').setInputFiles(imagePath)
+    await expect(page.locator('.composer-attachment').filter({ hasText: 'picker.png' })).toBeVisible()
+    await expect(page.locator('.composer p[role="status"]')).toHaveText('1 image attached.')
+    await page.getByRole('button', { name: 'Remove picker.png' }).click()
+    await expect(page.locator('.composer-attachment').filter({ hasText: 'picker.png' })).toHaveCount(0)
   })
 
   test('collapses composer selectors and keeps the checkout menu inside a narrow conversation pane', async () => {
@@ -1171,6 +1194,64 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('combobox', { name: 'Message Prime' })).toHaveValue('')
   })
 
+  test('keeps wrapped editing native and aligned through classic scrollbar overflow', async () => {
+    const composer = page.getByRole('combobox', { name: 'Message Prime' })
+    await page.addStyleTag({ content: `
+      .composer-input > textarea { overflow-y: scroll !important; }
+      .composer-input > textarea::-webkit-scrollbar { width: 28px; }
+    ` })
+
+    await composer.fill('@Ownership')
+    const reference = page.getByRole('option', { name: /@Ownership peer fixture/ })
+    await expect(reference).toBeVisible()
+    await expect(composer).toHaveAttribute('aria-autocomplete', 'list')
+    await reference.click()
+
+    const longToken = 'unbroken-token-'.repeat(18)
+    const draft = `@Ownership peer fixture\nFirst wrapped line ${'with words '.repeat(22)}\nEDITME ${longToken}\n${'final line '.repeat(30)}`
+    await composer.fill(draft)
+    const editStart = draft.indexOf('EDITME')
+    await composer.evaluate((element, start) => {
+      const textarea = element as HTMLTextAreaElement
+      textarea.focus()
+      textarea.setSelectionRange(start, start + 'EDITME'.length)
+    }, editStart)
+    await composer.pressSequentially('replacement')
+    await expect(composer).toHaveValue(draft.replace('EDITME', 'replacement'))
+
+    const layout = await composer.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement
+      textarea.scrollTop = textarea.scrollHeight
+      textarea.dispatchEvent(new Event('scroll'))
+      const style = getComputedStyle(textarea)
+      return {
+        hasVerticalOverflow: textarea.scrollHeight > textarea.clientHeight,
+        scrollbarWidth: textarea.offsetWidth - textarea.clientWidth,
+        scrollTop: textarea.scrollTop,
+        color: style.color,
+        textFillColor: style.webkitTextFillColor,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd,
+        mirrorCount: textarea.parentElement?.querySelectorAll('.composer-input__highlight').length ?? -1,
+      }
+    })
+    expect(layout.hasVerticalOverflow).toBe(true)
+    expect(layout.scrollbarWidth).toBeGreaterThanOrEqual(24)
+    expect(layout.scrollTop).toBeGreaterThan(0)
+    expect(layout.selectionStart).toBe(layout.selectionEnd)
+    expect(layout.color).not.toBe('rgba(0, 0, 0, 0)')
+    expect(layout.textFillColor).not.toBe('rgba(0, 0, 0, 0)')
+    expect(layout.mirrorCount).toBe(0)
+
+    await page.emulateMedia({ forcedColors: 'active' })
+    const forcedColorText = await composer.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { color: style.color, textFillColor: style.webkitTextFillColor }
+    })
+    expect(forcedColorText.color).not.toBe('rgba(0, 0, 0, 0)')
+    expect(forcedColorText.textFillColor).not.toBe('rgba(0, 0, 0, 0)')
+  })
+
   test('copies a session id and routes an @session mention without exposing its UUID block', async () => {
     await page.evaluate(() => {
       const target = window as Window & { __copiedSessionId?: string }
@@ -1195,27 +1276,7 @@ test.describe('Prime Work desktop smoke', () => {
       return { start: textarea.selectionStart, end: textarea.selectionEnd, length: textarea.value.length }
     })
     expect(caret).toEqual({ start: caret.length, end: caret.length, length: caret.length })
-    const mentionStyles = await page.evaluate(() => {
-      const textarea = document.querySelector('.composer-input textarea')
-      const mark = document.querySelector('.composer-input__highlight mark')
-      if (!textarea || !mark) return null
-      const input = getComputedStyle(textarea)
-      const highlight = getComputedStyle(mark)
-      return {
-        inputFont: input.font,
-        highlightFont: highlight.font,
-        inputLetterSpacing: input.letterSpacing,
-        highlightLetterSpacing: highlight.letterSpacing,
-        background: highlight.backgroundColor,
-        border: highlight.borderTopWidth,
-      }
-    })
-    expect(mentionStyles).toMatchObject({
-      inputFont: mentionStyles?.highlightFont,
-      inputLetterSpacing: mentionStyles?.highlightLetterSpacing,
-      background: 'rgba(0, 0, 0, 0)',
-      border: '0px',
-    })
+    await expect(composer).toHaveAttribute('aria-expanded', 'false')
     await composer.pressSequentially('about ownership')
     await expect(composer).toHaveValue('Coordinate with @Ownership peer fixture about ownership')
     await composer.press('Enter')
@@ -1577,6 +1638,10 @@ test.describe('Prime Work desktop smoke', () => {
 
     const dialog = page.getByRole('dialog', { name: 'Answer 2 questions' })
     await expect(dialog).toBeVisible()
+    await expect(page.locator('.work-disclosure__rail')).toBeVisible()
+    const workStatus = page.locator('.work-disclosure__status')
+    await expect(workStatus).toHaveAttribute('role', 'status')
+    await expect(workStatus).toContainText('Working')
     await expect(page.locator('.activity-line--reasoning')).toContainText('Reviewing the available release channels')
     await expect(page.locator('.thinking-dots > span')).toHaveCount(3)
     await expect(page.locator('.work-disclosure__button')).toHaveCount(0)
@@ -1620,7 +1685,9 @@ test.describe('Prime Work desktop smoke', () => {
     await worked.click()
     await expect(page.locator('.activity-line--question')).toContainText('What should I optimize for?')
 
-    const completedRow = page.locator('.session-row-wrap--complete').first()
+    const completedRow = page.locator('.session-row-wrap').filter({ hasText: 'Post-completion catalog refresh' })
+    await expect(completedRow).toHaveCount(1)
+    await expect(completedRow).toHaveClass(/session-row-wrap--complete/)
     await expect(completedRow).toHaveClass(/is-selected/)
     await expect(completedRow).not.toHaveClass(/has-attention/)
     await expect(page.getByRole('status', { name: 'A session turn ended or needs attention' })).toHaveCount(0)

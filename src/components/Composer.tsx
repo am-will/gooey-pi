@@ -1,6 +1,6 @@
 import { ArrowUp, AtSign, Brain, Check, ChevronDown, Clock3, Command, Edit3, FolderGit2, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties } from 'react'
 import type {
   BrowserAnnotation,
   GitWorktree,
@@ -21,11 +21,12 @@ import type {
   VoiceTranscriptionProvider,
 } from '@/types/api'
 import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
-import { appendCapabilityRouting, findCapabilityMentions } from '@/lib/capability-mentions'
+import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
 import { takeComposerDraft } from '@/lib/composer-draft'
 import { messageActionForKey } from '@/lib/message-shortcuts'
+import { COMPOSER_IMAGE_ACCEPT, useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
 import { IconButton, SelectControl } from './ui'
 
@@ -108,23 +109,7 @@ const reasoningLabels: Record<PrimeThinkingLevel, string> = {
   max: 'Max',
 }
 
-const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_IMAGE_COUNT = 8
-const MAX_IMAGE_SOURCE_BYTES = 1_350_000
 const MAX_IMAGE_PROMPT_BYTES = 2 * 1024 * 1024
-
-interface ComposerImage extends PromptImage {
-  id: string
-  name: string
-  size: number
-}
-
-function base64FromBuffer(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-  return window.btoa(binary)
-}
 
 const EMPTY_ANNOTATIONS: BrowserAnnotation[] = []
 const noop = () => undefined
@@ -178,11 +163,10 @@ export const Composer = memo(function Composer({
   const [menu, setMenu] = useState<'add' | 'mention' | 'command' | null>(null)
   const [sessionReferenceIds, setSessionReferenceIds] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [activeSuggestion, setActiveSuggestion] = useState(0)
-  const [images, setImages] = useState<ComposerImage[]>([])
   const [annotationsOpen, setAnnotationsOpen] = useState(false)
   const [terminalSelectionOpen, setTerminalSelectionOpen] = useState(false)
-  const [attachmentError, setAttachmentError] = useState('')
-  const [processingImages, setProcessingImages] = useState(false)
+  const imageAttachments = useComposerImages({ imageInputSupported, shortName })
+  const { images, imagesRef, error: attachmentError, setError: setAttachmentError, processing: processingImages } = imageAttachments
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false)
   const [creatingWorktree, setCreatingWorktree] = useState(false)
   const [worktreeBranch, setWorktreeBranch] = useState('')
@@ -192,32 +176,14 @@ export const Composer = memo(function Composer({
   const worktreeMenuId = useId()
   const worktreeMenuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const mentionHighlightRef = useRef<HTMLDivElement>(null)
   const acceptedMentionRef = useRef<{ start: number; text: string } | null>(null)
   const submittingRef = useRef(false)
-  const pendingImagesRef = useRef(0)
-  const imagesRef = useRef<ComposerImage[]>([])
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const imageStatusId = useId()
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
   const mountedRef = useRef(true)
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills])
-  const capabilityMentions = useMemo(() => findCapabilityMentions(value, enabledSkills), [enabledSkills, value])
-  const sessionMentions = useMemo(() => findSessionMentions(value, sessions, sessionReferenceIds), [sessionReferenceIds, sessions, value])
-  const highlightedValue = useMemo(() => {
-    const mentions = [...sessionMentions, ...capabilityMentions]
-      .sort((left, right) => left.start - right.start)
-      .filter((mention, index, all) => index === 0 || mention.start >= all[index - 1].end)
-    if (!mentions.length) return value
-    const parts: ReactNode[] = []
-    let cursor = 0
-    for (const mention of mentions) {
-      if (mention.start > cursor) parts.push(value.slice(cursor, mention.start))
-      parts.push(<mark key={`${mention.start}:${mention.end}`}>{mention.text}</mark>)
-      cursor = mention.end
-    }
-    if (cursor < value.length) parts.push(value.slice(cursor))
-    return parts
-  }, [capabilityMentions, sessionMentions, value])
 
   useEffect(() => {
     const mentionMatch = /(?:^|\s)@([^@\n]*)$/.exec(value)
@@ -306,8 +272,8 @@ export const Composer = memo(function Composer({
       ? (currentImages.length === 1 ? '[Attached image]' : '[Attached images]')
       : currentAnnotations.length > 0 ? '[Page annotations]' : '[Terminal selection]')
     if ((!draftValue.trim() && currentImages.length === 0 && currentAnnotations.length === 0 && !hasTerminalSelection) || loading || disabled || (intent !== 'steer' && !busy && (submitting || submittingRef.current))) return
-    if (pendingImagesRef.current > 0) {
-      setAttachmentError('Wait for the pasted image to finish processing before sending.')
+    if (imageAttachments.hasPending()) {
+      setAttachmentError('Wait for the image to finish processing before sending.')
       return
     }
     if (currentImages.length > 0 && !imageInputSupported) {
@@ -334,8 +300,7 @@ export const Composer = memo(function Composer({
     const submittedValue = draftValue
     const submittedComposerImages = currentImages
     setValue('')
-    imagesRef.current = []
-    setImages([])
+    imageAttachments.clear()
     setAttachmentError('')
     setMenu(null)
     try {
@@ -345,11 +310,15 @@ export const Composer = memo(function Composer({
     } catch {
       if (mountedRef.current) {
         setValue((current) => current || submittedValue)
-        if (imagesRef.current.length === 0) {
-          imagesRef.current = submittedComposerImages
-          setImages(submittedComposerImages)
+        const restoration = imageAttachments.restoreWithinLimits(submittedComposerImages)
+        if (restoration.omitted > 0) {
+          const restoredImages = restoration.restored > 0 ? ` along with ${restoration.restored} submitted image${restoration.restored === 1 ? '' : 's'}` : ''
+          setAttachmentError(`Message was not sent. Your draft was restored${restoredImages}, but ${restoration.omitted} submitted image${restoration.omitted === 1 ? '' : 's'} could not be restored because the attachment limits are full.`)
+        } else if (submittedComposerImages.length > 0) {
+          setAttachmentError('Message was not sent. Your draft and images were restored.')
+        } else {
+          setAttachmentError('Message was not sent. Your draft was restored.')
         }
-        setAttachmentError('Message was not sent. Your draft and images were restored.')
       }
     } finally {
       submittingRef.current = false
@@ -364,54 +333,6 @@ export const Composer = memo(function Composer({
     setValue(next)
     if (send) await submit('queue', next)
     else requestAnimationFrame(() => textareaRef.current?.focus())
-  }
-
-  const addPastedImages = async (files: File[]) => {
-    pendingImagesRef.current += 1
-    setProcessingImages(true)
-    try {
-      if (!imageInputSupported) {
-        setAttachmentError('This model does not accept images. Choose a vision model before pasting an image.')
-        return
-      }
-      const supported = files.filter((file) => supportedImageTypes.has(file.type.toLowerCase()))
-      if (supported.length !== files.length) {
-        setAttachmentError(`${shortName} supports pasted PNG, JPEG, GIF, and WebP images.`)
-        return
-      }
-      const added = await Promise.all(
-        supported.map(
-          async (file, index): Promise<ComposerImage> => ({
-            id: crypto.randomUUID(),
-            name: file.name || `Pasted image ${index + 1}`,
-            size: file.size,
-            type: 'image',
-            mimeType: file.type.toLowerCase(),
-            data: base64FromBuffer(await file.arrayBuffer()),
-          }),
-        ),
-      )
-      if (!mountedRef.current) return
-      const current = imagesRef.current
-      if (current.length + added.length > MAX_IMAGE_COUNT) {
-        setAttachmentError(`You can attach up to ${MAX_IMAGE_COUNT} images.`)
-        return
-      }
-      const totalBytes = current.reduce((sum, image) => sum + image.size, 0) + added.reduce((sum, image) => sum + image.size, 0)
-      if (totalBytes > MAX_IMAGE_SOURCE_BYTES) {
-        setAttachmentError('These images are too large to send. Paste a smaller image (about 1.3 MB total).')
-        return
-      }
-      const next = [...current, ...added]
-      imagesRef.current = next
-      setImages(next)
-      setAttachmentError('')
-    } catch {
-      if (mountedRef.current) setAttachmentError(`${shortName} could not read the pasted image.`)
-    } finally {
-      pendingImagesRef.current -= 1
-      if (mountedRef.current && pendingImagesRef.current === 0) setProcessingImages(false)
-    }
   }
 
   const insertAtCaret = (textarea: HTMLTextAreaElement, text: string) => {
@@ -548,12 +469,12 @@ export const Composer = memo(function Composer({
           </div>
         </section>
       ) : null}
-      <div className={`composer ${busy || submitting ? 'composer--busy' : ''}`}>
+      <div
+        className={`composer ${busy || submitting ? 'composer--busy' : ''} ${imageAttachments.dragging ? 'composer--image-dragging' : ''}`}
+        {...imageAttachments.dragHandlers}
+      >
+        {imageAttachments.dragging ? <div className="composer-drop-feedback" aria-hidden="true"><ImageIcon size={18} />Drop images to attach</div> : null}
         <div className="composer-input">
-          <div ref={mentionHighlightRef} className="composer-input__highlight" aria-hidden="true">
-            {highlightedValue}
-            {value.endsWith('\n') ? '\n ' : null}
-          </div>
           <textarea
             ref={textareaRef}
             value={value}
@@ -567,14 +488,9 @@ export const Composer = memo(function Composer({
             aria-controls={menu ? menuId : undefined}
             aria-activedescendant={menu && suggestions.length ? `${menuId}-option-${activeSuggestion}` : undefined}
             onChange={(event) => setValue(event.target.value)}
-            onScroll={(event) => {
-              if (!mentionHighlightRef.current) return
-              mentionHighlightRef.current.scrollTop = event.currentTarget.scrollTop
-              mentionHighlightRef.current.scrollLeft = event.currentTarget.scrollLeft
-            }}
             onPaste={(event) => {
               const files = [...event.clipboardData.items]
-                .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+                .filter((item) => item.kind === 'file')
                 .flatMap((item) => {
                   const file = item.getAsFile()
                   return file ? [file] : []
@@ -583,7 +499,7 @@ export const Composer = memo(function Composer({
               const pastedText = event.clipboardData.getData('text/plain')
               event.preventDefault()
               if (pastedText) insertAtCaret(event.currentTarget, pastedText)
-              void addPastedImages(files)
+              void imageAttachments.ingest(files)
             }}
             onKeyDown={(event) => {
               if (event.key === 'Backspace') acceptedMentionRef.current = null
@@ -726,12 +642,7 @@ export const Composer = memo(function Composer({
                 <button
                   type="button"
                   aria-label={`Remove ${image.name}`}
-                  onClick={() => {
-                    const next = imagesRef.current.filter((item) => item.id !== image.id)
-                    imagesRef.current = next
-                    setImages(next)
-                    setAttachmentError('')
-                  }}
+                  onClick={() => imageAttachments.remove(image.id)}
                 >
                   <X size={12} />
                 </button>
@@ -744,6 +655,9 @@ export const Composer = memo(function Composer({
             {attachmentError}
           </p>
         ) : null}
+        <p id={imageStatusId} className="sr-only" role="status" aria-live="polite">
+          {imageAttachments.dragging ? 'Drop images to attach.' : processingImages ? 'Adding images.' : images.length ? `${images.length} image${images.length === 1 ? '' : 's'} attached.` : ''}
+        </p>
         <div className="composer__footer">
           <div className="composer__controls">
             <IconButton
@@ -756,6 +670,25 @@ export const Composer = memo(function Composer({
               }}
             >
               <Plus size={17} />
+            </IconButton>
+            <input
+              ref={imageInputRef}
+              className="sr-only"
+              type="file"
+              accept={COMPOSER_IMAGE_ACCEPT}
+              multiple
+              tabIndex={-1}
+              aria-label="Choose images to attach"
+              aria-describedby={imageStatusId}
+              disabled={disabled || loading || submitting}
+              onChange={(event) => {
+                const files = Array.from(event.currentTarget.files ?? [])
+                event.currentTarget.value = ''
+                void imageAttachments.ingest(files)
+              }}
+            />
+            <IconButton label="Attach images" disabled={disabled || loading || submitting} onClick={() => imageInputRef.current?.click()}>
+              <ImageIcon size={16} />
             </IconButton>
             <SelectControl label="Model" compact icon={<Brain size={14} />} value={model} onChange={(event) => onModelChange(event.target.value)}>
               <option value="auto">Auto</option>
