@@ -20,6 +20,17 @@ const WAIT_TRANSCRIPT_POLL_MS = 1_000
 const WAIT_RUNTIME_POLL_MS = 250
 const MAX_ACTIVE_WAITS_PER_TOKEN = 2
 
+async function delayUntil(targetTime: number): Promise<void> {
+  while (true) {
+    const remaining = targetTime - Date.now()
+    if (remaining <= 0) return
+    await new Promise<void>((resolveDelay) => {
+      const timer = setTimeout(resolveDelay, remaining)
+      timer.unref()
+    })
+  }
+}
+
 interface CollaborationSessionService {
   list(projectPath?: unknown, includeArchived?: unknown, force?: unknown): Promise<SessionRecord[]>
   read(filePath: unknown): Promise<TranscriptMessage[]>
@@ -393,18 +404,18 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     const afterCursor = rawCursor === undefined ? undefined : requireString(rawCursor, 'after_cursor', { min: 1, max: 128, trim: true })
     const timeoutMs = rawTimeout === undefined ? 15_000 : requireInteger(rawTimeout, 'timeout_ms', 0, MAX_WAIT_MS)
     const startedAt = Date.now()
+    const deadline = startedAt + timeoutMs
     let snapshot = await this.snapshot(target)
-    while (Date.now() - startedAt < timeoutMs) {
+    while (Date.now() < deadline) {
       const runtime = target.manager.getForSession(target.session.filePath)
       const idle = !runtime || (!runtime.isStreaming && !runtime.isCompacting && !runtime.sessionActions?.active && (runtime.sessionActions?.queuedCount ?? 0) === 0)
       if (idle && (afterCursor === undefined || snapshot.cursor !== afterCursor)) return { ...snapshot, timed_out: false }
-      await new Promise<void>((resolveDelay) => {
-        // Busy runtimes need only a cheap in-memory state probe. Transcript
-        // reads resume at a bounded cadence once the target is idle/offline.
-        const remaining = Math.max(0, timeoutMs - (Date.now() - startedAt))
-        const timer = setTimeout(resolveDelay, Math.min(remaining, idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
-        timer.unref()
-      })
+      // Busy runtimes need only a cheap in-memory state probe. Transcript
+      // reads resume at a bounded cadence once the target is idle/offline.
+      // Re-arm an early timer wake until the intended poll instant so a short
+      // wait cannot perform multiple transcript reads at its deadline.
+      const nextPollAt = Math.min(deadline, Date.now() + (idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
+      await delayUntil(nextPollAt)
       if (idle) snapshot = await this.snapshot(target)
     }
     return { ...snapshot, timed_out: true }
