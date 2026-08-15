@@ -525,31 +525,41 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
     const auditWorkflow = readFileSync('.github/workflows/audit.yml', 'utf8')
-    for (const workflow of [releaseWorkflow, ciWorkflow, auditWorkflow]) {
+    const workflows = [
+      { path: '.github/workflows/release.yml', source: releaseWorkflow },
+      { path: '.github/workflows/ci.yml', source: ciWorkflow },
+      { path: '.github/workflows/audit.yml', source: auditWorkflow },
+    ]
+    for (const { path, source } of workflows) {
+      const workflow = source
       expect(workflow).not.toMatch(/node-version:/)
       const steps = parseWorkflowSteps(workflow)
       const setupSteps = steps.filter((step) => step.uses?.startsWith('actions/setup-node@'))
-      const bootstrapSteps = steps.filter((step) => step.lines.some((line) => line.includes('run: npm run toolchain:bootstrap')))
       expect(setupSteps.length).toBeGreaterThan(0)
-      expect(bootstrapSteps.map((step) => step.job).sort()).toEqual(setupSteps.map((step) => step.job).sort())
       for (const setup of setupSteps) {
         const setupIndex = steps.indexOf(setup)
-        const bootstrapIndex = steps.findIndex((step, index) => index > setupIndex && step.job === setup.job && step.lines.some((line) => line.includes('run: npm run toolchain:bootstrap')))
+        const bootstrapIndexes = steps.flatMap((step, index) => (step.job === setup.job && step.lines.some((line) => line.includes('run: npm run toolchain:bootstrap')) ? [index] : []))
+        const preflightIndexes = steps.flatMap((step, index) => (step.job === setup.job && step.lines.some((line) => line.includes('run: npm run release:preflight:toolchain')) ? [index] : []))
+        expect(bootstrapIndexes, `${path} ${setup.job} bootstrap steps`).toHaveLength(1)
+        expect(preflightIndexes, `${path} ${setup.job} toolchain preflight steps`).toHaveLength(1)
+        const bootstrapIndex = bootstrapIndexes[0]
+        const preflightIndex = preflightIndexes[0]
         const installIndex = steps.findIndex((step, index) => index > setupIndex && step.job === setup.job && step.lines.some((line) => /run: npm ci(?:\s|$)/.test(line)))
         expect(bootstrapIndex).toBeGreaterThan(setupIndex)
-        if (installIndex >= 0) expect(bootstrapIndex).toBeLessThan(installIndex)
+        expect(preflightIndex).toBeGreaterThan(bootstrapIndex)
+        if (installIndex >= 0) {
+          expect(bootstrapIndex).toBeLessThan(installIndex)
+          expect(preflightIndex).toBeGreaterThan(installIndex)
+          const firstRunAfterInstall = steps.findIndex((step, index) => index > installIndex && step.job === setup.job && step.lines.some((line) => /^\s*(?:-\s*)?run:/.test(line)))
+          expect(firstRunAfterInstall, `${path} ${setup.job} first command after npm ci`).toBe(preflightIndex)
+        }
       }
+      expect(workflow).not.toContain('npm run release:preflight -- --toolchain-only')
     }
     for (const workflow of [releaseWorkflow, ciWorkflow]) {
       const uploads = workflow.match(/uses: actions\/upload-artifact@/g) ?? []
       expect(workflow.match(/if-no-files-found: error/g)).toHaveLength(uploads.length)
       expect(workflow).toContain('actions/cache@')
-    }
-    expect(ciWorkflow.match(/npm run release:preflight:toolchain/g)).toHaveLength(4)
-    expect(releaseWorkflow.match(/npm run release:preflight:toolchain/g)).toHaveLength(1)
-    expect(auditWorkflow.match(/npm run release:preflight:toolchain/g)).toHaveLength(1)
-    for (const workflow of [ciWorkflow, releaseWorkflow, auditWorkflow]) {
-      expect(workflow).not.toContain('npm run release:preflight -- --toolchain-only')
     }
     // Release jobs skip the CI-duplicated verification suite and never upload
     // an unpacked application directory; every platform publishes its update feed.
