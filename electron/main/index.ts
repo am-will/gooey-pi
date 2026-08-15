@@ -578,6 +578,7 @@ async function bootstrap(): Promise<void> {
     disabledProviders,
   )
   agents.setDisabledModelsProvider(disabledModels)
+  agents.setResumeCwdProvider((path) => sessions.requireSessionProjectPath(path))
   // The OMP manager exists whether or not the omp CLI is installed; starting a
   // runtime without it fails with the adapter's per-harness not-found error.
   // OMP provider visibility is desktop-owned and independent from both Prime's
@@ -595,6 +596,7 @@ async function bootstrap(): Promise<void> {
     },
   )
   ompManager.setDisabledModelsProvider(ompDisabledModels)
+  ompManager.setResumeCwdProvider((path) => ompSessions.requireSessionProjectPath(path))
   ompAgents = ompManager
   // Pi mirrors the OMP construction, minus the approval-mode getter: pi has no
   // permission system, so the manager keeps its default (undefined) override.
@@ -607,6 +609,7 @@ async function bootstrap(): Promise<void> {
     PI_RPC_ADAPTER,
   )
   piManager.setDisabledModelsProvider(piDisabledModels)
+  piManager.setResumeCwdProvider((path) => piSessions.requireSessionProjectPath(path))
   piAgents = piManager
   sessions.bindRuntimeHooks({
     get: (path) => agents?.getForSession(path),
@@ -767,6 +770,9 @@ async function bootstrap(): Promise<void> {
       kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
     }, await computerUseSkill()],
   })
+  agents.setRuntimePreflight(async ({ cwd }) => { await plugins.quarantineInsecureMcpServers(cwd) })
+  ompManager.setRuntimePreflight(async ({ cwd }) => { await ompPlugins.quarantineInsecureMcpServers(cwd) })
+  piManager.setRuntimePreflight(async ({ cwd }) => { await piPlugins.quarantineInsecureMcpServers(cwd) })
   const heartbeats = new HeartbeatService(agents, primeExecutable)
   const primeScheduledRuns = new ScheduledRunExecutor(
     projects,

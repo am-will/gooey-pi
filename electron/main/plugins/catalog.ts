@@ -8,6 +8,7 @@ import { HARNESSES } from '../harness'
 import { mapLimit } from '../lib/async'
 import { isPathWithin, isRecord } from '../validation'
 import { errorCode, readAtMost } from './file-io'
+import { isInsecurePersistedMcpDefinition } from './mcp-policy'
 
 type Kind = SkillRecord['kind']
 type Location = SkillRecord['location']
@@ -279,6 +280,7 @@ async function addSettingsMetadata(
   // mcp.json files, surfaced separately below); a stray mcpServers key there
   // would advertise servers pi never loads.
   includeMcpServers: boolean = harness !== 'pi',
+  ompOverrides: { disabled: ReadonlySet<string>; enabled: ReadonlySet<string> } = { disabled: new Set(), enabled: new Set() },
 ): Promise<void> {
   if (Array.isArray(settings.packages)) {
     for (const raw of settings.packages) {
@@ -295,8 +297,10 @@ async function addSettingsMetadata(
     for (const [name, raw] of Object.entries(settings.mcpServers)) {
       if (output.length >= MAX_DISCOVERY_RECORDS) break
       if (!isRecord(raw)) continue
-      const enabled = raw.enabled !== false
-      if ((raw.type === 'http' || harness === 'pi') && typeof raw.url === 'string') {
+      const enabled = !ompOverrides.disabled.has(name)
+        && (raw.enabled !== false || ompOverrides.enabled.has(name))
+        && !isInsecurePersistedMcpDefinition(raw, harness)
+      if ((raw.type === 'http' || (harness === 'omp' && raw.type === 'sse') || harness === 'pi') && typeof raw.url === 'string') {
         let origin = 'remote HTTP server'
         try { const url = new URL(raw.url); origin = url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : 'remote server' } catch { /* omit invalid and potentially secret URL */ }
         output.push({ id: idFor('mcp', location, name), name, description: `HTTP MCP server at ${origin}`, kind: 'mcp', location, enabled, source: origin })
@@ -463,11 +467,19 @@ export async function discoverPlugins(agentDir: string, safeProjectPath: string 
   if (harness !== 'prime') {
     const globalMcp = await readSettings(join(agentDir, 'mcp.json'), 'user')
     if (globalMcp.warning) warnings.push(globalMcp.warning)
-    await addSettingsMetadata(globalMcp.settings, join(agentDir, 'mcp.json'), 'user', result, harness, true)
+    const ompOverrides = harness === 'omp' ? {
+      disabled: new Set(Array.isArray(globalMcp.settings.disabledServers)
+        ? globalMcp.settings.disabledServers.filter((name): name is string => typeof name === 'string')
+        : []),
+      enabled: new Set(Array.isArray(globalMcp.settings.enabledServers)
+        ? globalMcp.settings.enabledServers.filter((name): name is string => typeof name === 'string')
+        : []),
+    } : { disabled: new Set<string>(), enabled: new Set<string>() }
+    await addSettingsMetadata(globalMcp.settings, join(agentDir, 'mcp.json'), 'user', result, harness, true, ompOverrides)
     if (safeProjectPath) {
       const projectMcp = await readSettings(join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json'), 'project')
       if (projectMcp.warning) warnings.push(projectMcp.warning)
-      await addSettingsMetadata(projectMcp.settings, join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json'), 'project', result, harness, true)
+      await addSettingsMetadata(projectMcp.settings, join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json'), 'project', result, harness, true, ompOverrides)
     }
   }
   return { skills: result.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)), warnings }

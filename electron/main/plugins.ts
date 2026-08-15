@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs'
+import { lstat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { HarnessId, PluginCatalog, ProcessOutcome, SkillRecord } from '../../src/types/api'
@@ -7,8 +8,8 @@ import { createAdmissionQueue, createSingleFlight } from './lib/async'
 import { resolveExecutable, type ExecutableSource } from './process-utils'
 import { isRecord, requireString } from './validation'
 import { discoverPlugins } from './plugins/catalog'
-import { readAtMost } from './plugins/file-io'
-import { acquireSettingsLock, prepareProjectSettingsPath, removeMcpDefinition, settingsFingerprint, updateBuiltinMcpState, updateMcpSettings, updateMcpState, updatePackageState, validateCapabilityMutation, validateMcpConnection, validateMcpStateInput } from './plugins/mcp'
+import { errorCode, readAtMost } from './plugins/file-io'
+import { acquireSettingsLock, prepareGlobalSettingsPath, prepareProjectSettingsPath, quarantineInsecureMcpSettings, removeMcpDefinition, settingsFingerprint, updateBuiltinMcpState, updateMcpSettings, updateMcpState, updateOmpMcpOverrides, updatePackageState, validateCapabilityMutation, validateMcpConnection, validateMcpStateInput } from './plugins/mcp'
 import type { ProjectSettingsPath } from './plugins/mcp'
 import { executeOmpPluginAction, executeOmpPluginInstall, executePackageInstall, executePackageRemove, executePiPluginInstall, executePiPluginRemove, validatePackageSource } from './plugins/package-execution'
 import { installOmpExtension, validateExtensionInstallInput } from './plugins/extension-installation'
@@ -315,23 +316,93 @@ export class PluginService {
       settingsTarget = join(this.agentDir, this.harness === 'prime' ? 'settings.json' : 'mcp.json')
     }
     const agentName = HARNESSES[this.harness].agentName
+    const globalPath = join(this.agentDir, this.harness === 'prime' ? 'settings.json' : 'mcp.json')
     const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
     const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
+    const globalTarget = settingsPath === globalPath || this.harness === 'omp'
+      ? await prepareGlobalSettingsPath(globalPath)
+      : undefined
+    const effectiveSettingsTarget = settingsPath === globalPath ? globalTarget! : settingsTarget
     const mutation = this.settingsMutation.then(async () => {
-      const release = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
+      const coordinationTargets = globalPath === settingsPath
+        ? [{ path: `${settingsPath}.gooeypi`, verify: globalTarget!.verify }]
+        : this.harness === 'omp'
+          ? [{ path: `${globalPath}.gooeypi`, verify: globalTarget!.verify }, { path: `${settingsPath}.gooeypi`, verify }]
+          : [{ path: `${settingsPath}.gooeypi`, verify }]
+      const releases: Array<() => Promise<void>> = []
       try {
-        return await updateMcpState(
-          settingsTarget,
+        for (const target of coordinationTargets) releases.push(await acquireSettingsLock(target.path, target.verify))
+        const outcome = await updateMcpState(
+          effectiveSettingsTarget,
           input,
+          (path) => this.settingsFingerprint(path),
+          { agentName, harness: this.harness },
+        )
+        if (this.harness !== 'omp') return outcome
+        if (!input.enabled) {
+          if (outcome.ok) await updateOmpMcpOverrides(globalTarget!, [input.name], true, (path) => this.settingsFingerprint(path))
+          return outcome
+        }
+        const insecure = await quarantineInsecureMcpSettings(
+          effectiveSettingsTarget,
+          this.harness,
           (path) => this.settingsFingerprint(path),
           { agentName },
         )
+        if (insecure.includes(input.name)) {
+          await updateOmpMcpOverrides(globalTarget!, [input.name], true, (path) => this.settingsFingerprint(path))
+          return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” cannot be enabled because its HTTP URL does not use HTTPS or loopback.` } satisfies ProcessOutcome
+        }
+        if (outcome.ok) await updateOmpMcpOverrides(globalTarget!, [input.name], false, (path) => this.settingsFingerprint(path))
+        return outcome
       } finally {
-        await release()
+        for (const release of releases.reverse()) await release()
       }
     })
     this.settingsMutation = mutation.then(() => undefined, () => undefined)
     return await mutation
+  }
+
+  /** Runtime preflight: disable legacy or manually edited plaintext remote definitions before spawn. */
+  async quarantineInsecureMcpServers(projectPath: string): Promise<string[]> {
+    const projectSegments = this.harness === 'prime' ? ['.prime', 'agent'] : [this.harness === 'omp' ? '.omp' : '.pi']
+    const projectFilename = this.harness === 'prime' ? 'settings.json' : 'mcp.json'
+    const projectCandidate = join(projectPath, ...projectSegments, projectFilename)
+    let projectSettings: ProjectSettingsPath | undefined
+    try {
+      await lstat(projectCandidate)
+      projectSettings = await prepareProjectSettingsPath(projectPath, { segments: projectSegments, filename: projectFilename })
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') throw error
+    }
+    const globalPath = join(this.agentDir, this.harness === 'prime' ? 'settings.json' : 'mcp.json')
+    const globalTarget = await prepareGlobalSettingsPath(globalPath)
+    const agentName = HARNESSES[this.harness].agentName
+    const targets: Array<string | ProjectSettingsPath> = projectSettings && globalPath !== projectSettings.path ? [projectSettings, globalTarget] : [globalTarget]
+    const operation = this.settingsMutation.then(async () => {
+      const quarantined: string[] = []
+      for (const target of targets) {
+        const settingsPath = typeof target === 'string' ? target : target.path
+        const verify = typeof target === 'string' ? undefined : target.verify
+        const release = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
+        try {
+          quarantined.push(...await quarantineInsecureMcpSettings(
+            target,
+            this.harness,
+            (path) => this.settingsFingerprint(path),
+            { agentName },
+          ))
+        } finally {
+          await release()
+        }
+      }
+      if (this.harness === 'omp') {
+        await updateOmpMcpOverrides(globalTarget, quarantined, true, (path) => this.settingsFingerprint(path))
+      }
+      return quarantined
+    })
+    this.settingsMutation = operation.then(() => undefined, () => undefined)
+    return await operation
   }
 
   async mutateCapability(inputValue: unknown): Promise<ProcessOutcome> {
@@ -353,7 +424,7 @@ export class PluginService {
         if (input.kind === 'mcp') {
           const protectedUrl = this.protectedMcpServers[input.name]
           if (protectedUrl) return await updateBuiltinMcpState(settingsPath, { ...input, url: protectedUrl }, (path) => this.settingsFingerprint(path))
-          if (input.action !== 'remove') return await updateMcpState(projectSettings ?? settingsPath, { ...input, enabled: input.action === 'enable' }, (path) => this.settingsFingerprint(path), { agentName })
+          if (input.action !== 'remove') return await updateMcpState(projectSettings ?? settingsPath, { ...input, enabled: input.action === 'enable' }, (path) => this.settingsFingerprint(path), { agentName, harness: this.harness })
           if (input.source) {
             const agentPath = resolveExecutable(this.agentPath)
             if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }

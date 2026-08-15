@@ -3,8 +3,10 @@ import { renameSync, type BigIntStats, type Stats } from 'node:fs'
 import { lstat, mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { CapabilityMutationInput, HarnessId, McpConnectionInput, McpStateInput, ProcessOutcome } from '../../../src/types/api'
+import { HARNESSES } from '../harness'
 import { isPathWithin, isRecord, requireHttpsOrLoopbackUrl, requireString } from '../validation'
 import { errorCode, readAtMost } from './file-io'
+import { isInsecurePersistedMcpDefinition } from './mcp-policy'
 
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
 const SETTINGS_LOCK_ATTEMPTS = 40
@@ -24,6 +26,23 @@ type FingerprintSettings = (path: string) => Promise<string>
 export interface ProjectSettingsPath {
   path: string
   verify(): Promise<void>
+}
+
+/** Pins a user settings directory and rejects file symlinks before sensitive rewrites. */
+export async function prepareGlobalSettingsPath(path: string): Promise<ProjectSettingsPath> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  const parent = await realpath(dirname(path))
+  const verify = async (): Promise<void> => {
+    if (await realpath(dirname(path)) !== parent) throw new TypeError('Agent settings directory changed during update')
+    try {
+      const stat = await lstat(path)
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new TypeError('Agent settings file must be a regular file')
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') throw error
+    }
+  }
+  await verify()
+  return { path, verify }
 }
 
 function parseSettingsLockOwner(value: unknown): SettingsLockOwner | null {
@@ -427,9 +446,10 @@ export async function updateMcpState(
   target: string | ProjectSettingsPath,
   input: McpStateInput,
   fingerprint: FingerprintSettings = settingsFingerprint,
-  options: { agentName?: string } = {},
+  options: { agentName?: string; harness?: HarnessId } = {},
 ): Promise<ProcessOutcome> {
   const agentName = options.agentName ?? 'Prime Agent'
+  const harness = options.harness ?? 'prime'
   const settingsPath = typeof target === 'string' ? target : target.path
   const verify = typeof target === 'string' ? undefined : target.verify
   const release = await acquireSettingsLock(settingsPath, verify)
@@ -442,6 +462,16 @@ export async function updateMcpState(
       if (!isRecord(settings.mcpServers)) return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
       const current = settings.mcpServers[input.name]
       if (!isRecord(current)) return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
+      if (input.enabled && isInsecurePersistedMcpDefinition(current, harness)) {
+        if (current.enabled === false) {
+          return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” cannot be enabled because its HTTP URL does not use HTTPS or loopback.` }
+        }
+        settings.mcpServers = { ...settings.mcpServers, [input.name]: { ...current, enabled: false } }
+        if (await writeSettingsAtomically(settingsPath, settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
+          return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was disabled because its HTTP URL does not use HTTPS or loopback.` }
+        }
+        continue
+      }
       const currentlyEnabled = current.enabled !== false
       if (currentlyEnabled === input.enabled) {
         return { ok: true, output: `MCP server “${input.name}” is already ${input.enabled ? 'enabled' : 'disabled'}.` }
@@ -452,6 +482,79 @@ export async function updateMcpState(
       }
     }
     throw new Error(`${agentName} settings changed repeatedly; no MCP configuration was overwritten`)
+  } finally {
+    await release()
+  }
+}
+
+/** Atomically disables persisted plaintext remote HTTP definitions before a harness can load them. */
+export async function quarantineInsecureMcpSettings(
+  target: string | ProjectSettingsPath,
+  harness: HarnessId,
+  fingerprint: FingerprintSettings = settingsFingerprint,
+  options: { agentName?: string } = {},
+): Promise<string[]> {
+  const agentName = options.agentName ?? HARNESSES[harness].agentName
+  const settingsPath = typeof target === 'string' ? target : target.path
+  const verify = typeof target === 'string' ? undefined : target.verify
+  const release = await acquireSettingsLock(settingsPath, verify)
+  try {
+    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
+      await verify?.()
+      const snapshot = await readSettingsForUpdate(settingsPath, agentName)
+      await verify?.()
+      if (snapshot.source === null || snapshot.settings.mcpServers === undefined) return []
+      if (!isRecord(snapshot.settings.mcpServers)) throw new TypeError(`${agentName} mcpServers setting must contain a JSON object`)
+      const currentServers = snapshot.settings.mcpServers
+      const insecure = Object.entries(currentServers)
+        .filter(([, value]) => isInsecurePersistedMcpDefinition(value, harness))
+        .map(([name]) => name)
+      const quarantined = insecure.filter((name) => isRecord(currentServers[name]) && currentServers[name].enabled !== false)
+      if (quarantined.length === 0) return insecure
+      const servers = { ...currentServers }
+      for (const name of quarantined) servers[name] = { ...(servers[name] as Record<string, unknown>), enabled: false }
+      snapshot.settings.mcpServers = servers
+      if (await writeSettingsAtomically(settingsPath, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) return insecure
+    }
+    throw new Error(`${agentName} settings changed repeatedly; insecure MCP definitions could not be quarantined`)
+  } finally {
+    await release()
+  }
+}
+
+/** Reconciles OMP's user-level cross-source allow/deny lists. The denylist always wins. */
+export async function updateOmpMcpOverrides(
+  target: string | ProjectSettingsPath,
+  names: readonly string[],
+  disabled: boolean,
+  fingerprint: FingerprintSettings = settingsFingerprint,
+): Promise<void> {
+  if (names.length === 0) return
+  const settingsPath = typeof target === 'string' ? target : target.path
+  const verify = typeof target === 'string' ? undefined : target.verify
+  const release = await acquireSettingsLock(settingsPath, verify)
+  try {
+    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
+      await verify?.()
+      const snapshot = await readSettingsForUpdate(settingsPath, 'OMP')
+      const denied = new Set(Array.isArray(snapshot.settings.disabledServers)
+        ? snapshot.settings.disabledServers.filter((name): name is string => typeof name === 'string')
+        : [])
+      const forced = new Set(Array.isArray(snapshot.settings.enabledServers)
+        ? snapshot.settings.enabledServers.filter((name): name is string => typeof name === 'string')
+        : [])
+      for (const name of names) {
+        forced.delete(name)
+        if (disabled) denied.add(name)
+        else denied.delete(name)
+      }
+      if (denied.size > 0) snapshot.settings.disabledServers = [...denied].sort()
+      else delete snapshot.settings.disabledServers
+      if (forced.size > 0) snapshot.settings.enabledServers = [...forced].sort()
+      else delete snapshot.settings.enabledServers
+      if (await writeSettingsAtomically(settingsPath, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) return
+    }
+    throw new Error('OMP settings changed repeatedly; MCP enablement overrides could not be reconciled')
   } finally {
     await release()
   }

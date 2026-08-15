@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -88,6 +88,59 @@ describe('agent RPC command frame bounds', () => {
 })
 
 describe('agent RPC responses', () => {
+  it('runs the runtime preflight before spawning the harness and fails closed', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-preflight-'))
+    dirs.push(cwd)
+    const executable = join(cwd, 'preflight-agent.cjs')
+    const started = join(cwd, 'started')
+    writeFileSync(executable, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(started)}, 'started')\n`)
+    chmodSync(executable, 0o755)
+    const manager = managerFor(executable)
+    const preflight = vi.fn(async () => { throw new Error('unsafe persisted MCP definition') })
+    manager.setRuntimePreflight(preflight)
+
+    await expect(manager.start({ cwd })).rejects.toThrow('unsafe persisted MCP definition')
+
+    expect(preflight).toHaveBeenCalledWith({ cwd, interactive: true, sessionPath: undefined })
+    expect(existsSync(started)).toBe(false)
+    expect(manager.list()).toEqual([])
+  })
+
+  it('uses the resumed session cwd for preflight and process launch', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const requestedCwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-requested-'))
+    dirs.push(requestedCwd)
+    const manager = managerFor(fake.executable)
+    const sessionPath = '/sessions/resume.jsonl'
+    manager.setResumeCwdProvider(async (path) => {
+      expect(path).toBe(sessionPath)
+      return fake.cwd
+    })
+    const preflight = vi.fn(async () => undefined)
+    manager.setRuntimePreflight(preflight)
+
+    await expect(manager.start({ cwd: requestedCwd, sessionPath })).resolves.toMatchObject({ cwd: fake.cwd })
+
+    expect(preflight).toHaveBeenCalledWith({ cwd: fake.cwd, interactive: true, sessionPath })
+  })
+
+  it('holds runtime admission through preflight immediately before child construction', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    await manager.start({ cwd: fake.cwd })
+    const preflight = vi.fn(async () => {
+      // Admission retires the idle predecessor before checking persisted MCP
+      // state, leaving no wait window between that check and child creation.
+      expect(manager.list()).toEqual([])
+      throw new Error('unsafe persisted MCP definition')
+    })
+    manager.setRuntimePreflight(preflight)
+
+    await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('unsafe persisted MCP definition')
+    expect(preflight).toHaveBeenCalledOnce()
+    expect(manager.list()).toEqual([])
+  })
+
   it('uses a newly discovered executable for future runtime starts', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
     let executable: string | null = null

@@ -25,6 +25,8 @@ export class AgentRpcManager {
   private disabledModels: () => ReadonlySet<string> = () => new Set()
   private eventSink: (envelope: PrimeEventEnvelope) => void = () => undefined
   private runtimeEnvironmentProvider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv = () => ({})
+  private runtimePreflight: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => Promise<void> = async () => undefined
+  private resumeCwdProvider: (sessionPath: string) => Promise<string | undefined> = async () => undefined
   private runtimeStartListener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void = () => undefined
   private runtimeAdmission: Promise<void> = Promise.resolve()
   private closed = false
@@ -46,6 +48,16 @@ export class AgentRpcManager {
 
   setRuntimeEnvironmentProvider(provider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv): void {
     this.runtimeEnvironmentProvider = provider
+  }
+
+  /** Runs after cwd/session authorization and before any harness process is spawned. */
+  setRuntimePreflight(preflight: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => Promise<void>): void {
+    this.runtimePreflight = preflight
+  }
+
+  /** Resolves the cwd a harness will restore from an exact session file. */
+  setResumeCwdProvider(provider: (sessionPath: string) => Promise<string | undefined>): void {
+    this.resumeCwdProvider = provider
   }
 
   /** Called once per successfully started runtime with the environment it was spawned with, so capability bridges can bind their claims to the runtime's session. */
@@ -70,11 +82,15 @@ export class AgentRpcManager {
     if (!executable) throw new Error(`${this.adapter.agentName} executable was not found`)
     const options = requireRecord(raw, 'options')
     rejectUnknownKeys(options, ['cwd', 'sessionPath', 'model', 'thinking', 'fast'], 'options')
-    const cwd = await this.authorizeCwd(requireString(options.cwd, 'cwd', { min: 1, max: 4096 }))
+    let cwd = await this.authorizeCwd(requireString(options.cwd, 'cwd', { min: 1, max: 4096 }))
     this.requireOpen()
     const sessionPath = options.sessionPath === undefined
       ? undefined
       : await this.validateSessionPath(requireString(options.sessionPath, 'sessionPath', { max: 4096 }))
+    if (sessionPath) {
+      const resumeCwd = await this.resumeCwdProvider(sessionPath)
+      if (resumeCwd !== undefined) cwd = await this.authorizeCwd(resumeCwd)
+    }
     let selectedModel: PrimeModelDescriptor | undefined
     let modelId: string | undefined
     if (options.model !== undefined) {
@@ -102,7 +118,9 @@ export class AgentRpcManager {
       approvalMode: this.approvalMode(),
       environment: runtimeEnvironment,
     })
-    const runtime = await this.admitRuntime(() => {
+    const runtime = await this.admitRuntime(async () => {
+      await this.runtimePreflight({ cwd, sessionPath, interactive })
+      this.requireOpen()
       const created = new RpcRuntime(
         executable,
         args,
@@ -305,7 +323,7 @@ export class AgentRpcManager {
     if (this.closed) throw new Error(`${this.adapter.agentName} manager is shutting down`)
   }
 
-  private async admitRuntime(createRuntime: () => RpcRuntime): Promise<RpcRuntime> {
+  private async admitRuntime(createRuntime: () => Promise<RpcRuntime> | RpcRuntime): Promise<RpcRuntime> {
     let releaseAdmission!: () => void
     const previousAdmission = this.runtimeAdmission
     this.runtimeAdmission = new Promise<void>((resolveAdmission) => { releaseAdmission = resolveAdmission })
@@ -321,7 +339,7 @@ export class AgentRpcManager {
         if (stopped && this.runtimes.get(idle.runtimeId) === idle) this.runtimes.delete(idle.runtimeId)
       }
       this.requireOpen()
-      const runtime = createRuntime()
+      const runtime = await createRuntime()
       this.runtimes.set(runtime.runtimeId, runtime)
       this.startingRuntimes.add(runtime.runtimeId)
       return runtime

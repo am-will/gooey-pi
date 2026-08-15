@@ -269,6 +269,13 @@ export class SessionService {
     return path
   }
 
+  /** Returns the project cwd recorded in an authorized session file. */
+  async requireSessionProjectPath(value: unknown): Promise<string> {
+    const path = await this.requireSessionPath(value)
+    const metadata = await this.readMetadata(path)
+    return await requireExistingDirectory(metadata.projectPath, 'session project path')
+  }
+
   private startWatcher(): void {
     if (this.sessionWatcher || this.watcherRetry || !this.changeListeners.size) return
     try {

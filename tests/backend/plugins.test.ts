@@ -475,6 +475,140 @@ describe('PluginService MCP connections', () => {
     expect(settings.mcpServers.docs.enabled).toBe(true)
   })
 
+  it('surfaces legacy plaintext HTTP servers disabled and quarantines every auth mode on enable', async () => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    mkdirSync(agentDir)
+    writeFileSync(join(agentDir, 'settings.json'), JSON.stringify({ mcpServers: {
+      none: { type: 'http', url: 'http://mcp.example/none' },
+      bearer: { type: 'http', url: 'http://mcp.example/bearer', bearerTokenEnvVar: 'MCP_TOKEN', enabled: false },
+      oauth: { type: 'http', url: 'http://mcp.example/oauth', oauth: true },
+      secure: { type: 'http', url: 'https://mcp.example/secure', enabled: false },
+      loopback: { type: 'http', url: 'http://127.0.0.1:4444/mcp', enabled: false },
+    } }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir })
+
+    const catalog = await service.list()
+    for (const name of ['none', 'bearer', 'oauth']) {
+      expect(catalog.skills.find((item) => item.name === name)).toMatchObject({ kind: 'mcp', enabled: false })
+      await expect(service.setMcpEnabled({ name, scope: 'user', enabled: true })).resolves.toMatchObject({ ok: false, reason: 'blocked' })
+    }
+    await expect(service.setMcpEnabled({ name: 'secure', scope: 'user', enabled: true })).resolves.toMatchObject({ ok: true })
+    await expect(service.setMcpEnabled({ name: 'loopback', scope: 'user', enabled: true })).resolves.toMatchObject({ ok: true })
+
+    const servers = JSON.parse(readFileSync(join(agentDir, 'settings.json'), 'utf8')).mcpServers
+    expect(servers.none.enabled).toBe(false)
+    expect(servers.bearer.enabled).toBe(false)
+    expect(servers.oauth.enabled).toBe(false)
+    expect(servers.secure.enabled).toBe(true)
+    expect(servers.loopback.enabled).toBe(true)
+  })
+
+  it('quarantines insecure user and project definitions before every harness runtime', async () => {
+    for (const harness of ['prime', 'omp', 'pi'] as const) {
+      const root = temp()
+      const agentDir = join(root, `${harness}-agent`)
+      const project = join(root, `${harness}-project`)
+      const projectDir = harness === 'prime' ? join(project, '.prime', 'agent') : join(project, `.${harness}`)
+      const filename = harness === 'prime' ? 'settings.json' : 'mcp.json'
+      mkdirSync(agentDir, { recursive: true })
+      mkdirSync(projectDir, { recursive: true })
+      const http = (url: string, enabled = true) => harness === 'pi'
+        ? { url, auth: 'bearer', bearerTokenEnv: 'MCP_TOKEN', enabled }
+        : { type: 'http', url, bearerTokenEnvVar: 'MCP_TOKEN', enabled }
+      const stdio = harness === 'pi' ? { command: 'npx', enabled: true } : { type: 'stdio', command: 'npx', enabled: true }
+      writeFileSync(join(agentDir, filename), JSON.stringify({ mcpServers: {
+        legacy: http('http://legacy.example/mcp'),
+        secure: http('https://secure.example/mcp'),
+        loopback: http('http://localhost:4444/mcp'),
+        stdio,
+      } }))
+      writeFileSync(join(projectDir, filename), JSON.stringify({ mcpServers: {
+        projectLegacy: http('http://project.example/mcp'),
+        alreadyDisabled: http('http://disabled.example/mcp', false),
+      } }))
+      const service = new PluginService(null, async (path) => resolve(path), { agentDir, harness })
+
+      await expect(service.quarantineInsecureMcpServers(project)).resolves.toEqual(expect.arrayContaining(['legacy', 'projectLegacy']))
+      await expect(service.setMcpEnabled({ name: 'legacy', scope: 'user', enabled: true })).resolves.toMatchObject({ ok: false, reason: 'blocked' })
+      await expect(service.setMcpEnabled({ name: 'secure', scope: 'user', enabled: true })).resolves.toMatchObject({ ok: true })
+      await expect(service.setMcpEnabled({ name: 'loopback', scope: 'user', enabled: true })).resolves.toMatchObject({ ok: true })
+
+      const userServers = JSON.parse(readFileSync(join(agentDir, filename), 'utf8')).mcpServers
+      const projectServers = JSON.parse(readFileSync(join(projectDir, filename), 'utf8')).mcpServers
+      expect(userServers.legacy.enabled).toBe(false)
+      expect(userServers.secure.enabled).toBe(true)
+      expect(userServers.loopback.enabled).toBe(true)
+      expect(userServers.stdio.enabled).toBe(true)
+      expect(projectServers.projectLegacy.enabled).toBe(false)
+      expect(projectServers.alreadyDisabled.enabled).toBe(false)
+    }
+  })
+
+  it('quarantines OMP HTTP and SSE definitions despite force-enable overrides', async () => {
+    const root = temp()
+    const agentDir = join(root, 'omp-agent')
+    const project = join(root, 'project')
+    const projectDir = join(project, '.omp')
+    mkdirSync(agentDir, { recursive: true })
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(join(agentDir, 'mcp.json'), JSON.stringify({
+      enabledServers: ['legacyHttp', 'legacySse', 'projectLegacy', 'secureSse'],
+      disabledServers: ['secureDenied'],
+      mcpServers: {
+        legacyHttp: { type: 'http', url: 'http://remote.example/mcp', headers: { Authorization: 'Bearer ${OMP_TOKEN}' }, enabled: false },
+        legacySse: { type: 'sse', url: 'http://events.example/sse', headers: { Authorization: 'Bearer secret' } },
+        secureSse: { type: 'sse', url: 'https://events.example/sse', enabled: false },
+        loopbackSse: { type: 'sse', url: 'http://localhost:9999/sse' },
+        secureDenied: { type: 'http', url: 'https://denied.example/mcp' },
+      },
+    }))
+    writeFileSync(join(projectDir, 'mcp.json'), JSON.stringify({ mcpServers: {
+      projectLegacy: { type: 'http', url: 'http://project.example/mcp', enabled: false },
+      projectSecure: { type: 'http', url: 'https://project.example/mcp', enabled: false },
+    } }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir, harness: 'omp' })
+
+    const catalog = await service.list(project)
+    for (const name of ['legacyHttp', 'legacySse', 'projectLegacy', 'secureDenied']) {
+      expect(catalog.skills.find((item) => item.name === name)).toMatchObject({ kind: 'mcp', enabled: false })
+    }
+    expect(catalog.skills.find((item) => item.name === 'secureSse')).toMatchObject({ enabled: true })
+    expect(catalog.skills.find((item) => item.name === 'loopbackSse')).toMatchObject({ enabled: true })
+
+    await expect(service.quarantineInsecureMcpServers(project)).resolves.toEqual(expect.arrayContaining(['legacyHttp', 'legacySse', 'projectLegacy']))
+    const user = JSON.parse(readFileSync(join(agentDir, 'mcp.json'), 'utf8'))
+    expect(user.enabledServers).toEqual(['secureSse'])
+    expect(user.disabledServers).toEqual(expect.arrayContaining(['legacyHttp', 'legacySse', 'projectLegacy', 'secureDenied']))
+    expect(user.mcpServers.legacyHttp.enabled).toBe(false)
+    expect(user.mcpServers.legacySse.enabled).toBe(false)
+
+    await expect(service.setMcpEnabled({ name: 'legacySse', scope: 'user', enabled: true })).resolves.toMatchObject({ ok: false, reason: 'blocked' })
+    await expect(service.setMcpEnabled({ name: 'projectSecure', scope: 'project', projectPath: project, enabled: true })).resolves.toMatchObject({ ok: true })
+    const updatedUser = JSON.parse(readFileSync(join(agentDir, 'mcp.json'), 'utf8'))
+    expect(updatedUser.disabledServers).not.toContain('projectSecure')
+    expect(updatedUser.enabledServers ?? []).not.toContain('projectSecure')
+    expect(JSON.parse(readFileSync(join(projectDir, 'mcp.json'), 'utf8')).mcpServers.projectSecure.enabled).toBe(true)
+  })
+
+  it('fails closed without replacing a symlinked global MCP settings file', async () => {
+    const root = temp()
+    const agentDir = join(root, 'omp-agent')
+    const project = join(root, 'project')
+    const external = join(root, 'external-mcp.json')
+    mkdirSync(agentDir, { recursive: true })
+    mkdirSync(project, { recursive: true })
+    const source = JSON.stringify({ mcpServers: { legacy: { type: 'sse', url: 'http://remote.example/sse' } } })
+    writeFileSync(external, source)
+    symlinkSync(external, join(agentDir, 'mcp.json'))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir, harness: 'omp' })
+
+    await expect(service.quarantineInsecureMcpServers(project)).rejects.toThrow('regular file')
+
+    expect(lstatSync(join(agentDir, 'mcp.json')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(external, 'utf8')).toBe(source)
+  })
+
   it('does not create a missing MCP definition while changing state', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
