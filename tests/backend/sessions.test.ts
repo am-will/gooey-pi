@@ -1,5 +1,5 @@
 import { appendFileSync, chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -177,9 +177,12 @@ describe('SessionService catalog scaling', () => {
     const names = Array.from({ length: 50_000 }, (_, index) => sessionName(index))
     const canonicalize = vi.fn(async (path: string) => path)
     const inspect = vi.fn(async (path: string) => {
+      if (path === root) {
+        return { isFile: () => false, isDirectory: () => true, mtimeMs: 1, size: 0, dev: 1, ino: 1 } as Stats
+      }
       const name = path.slice(path.lastIndexOf('/') + 1)
       const timestamp = Number.parseInt(name.slice(0, 8) + name.slice(9, 13), 16)
-      return { isFile: () => true, mtimeMs: timestamp, size: 100 } as Stats
+      return { isFile: () => true, isDirectory: () => false, mtimeMs: timestamp, size: 100, dev: 1, ino: timestamp + 2 } as Stats
     })
     const io: SessionCatalogIo = {
       readDirectory: vi.fn(async () => names.map((name) => ({ name }))),
@@ -206,7 +209,7 @@ describe('SessionService catalog scaling', () => {
     const selectedIds = [49_999, 49_998, 49_997].map((value) => sessionName(value).slice(0, -'.jsonl'.length))
     expect(records.map((record) => record.id).sort()).toEqual(selectedIds.sort())
     expect(canonicalize).toHaveBeenCalledTimes(1 + maxSessionFiles)
-    expect(inspect).toHaveBeenCalledTimes(2 * maxSessionFiles)
+    expect(inspect).toHaveBeenCalledTimes(1 + 2 * maxSessionFiles)
     expect(readMetadata).toHaveBeenCalledTimes(maxSessionFiles)
     expect(inspect.mock.calls.flat().join(' ')).not.toContain(sessionName(0))
   })
@@ -222,9 +225,12 @@ describe('SessionService catalog scaling', () => {
       readDirectory: vi.fn(async () => [...identities.keys()].map((name) => ({ name }))),
       canonicalize,
       inspect: vi.fn(async (path: string) => {
+        if (path === root) {
+          return { isFile: () => false, isDirectory: () => true, mtimeMs: 1, size: 0, dev: 1, ino: 1 } as Stats
+        }
         const name = path.slice(path.lastIndexOf('/') + 1)
         const identity = identities.get(name) ?? { dev: 1, ino: 99 }
-        return { isFile: () => true, mtimeMs: 1, size: 100, dev: identity.dev, ino: identity.ino } as Stats
+        return { isFile: () => true, isDirectory: () => false, mtimeMs: 1, size: 100, dev: identity.dev, ino: identity.ino } as Stats
       }),
     }
     const catalog = new SessionMetadataCatalog(
@@ -379,6 +385,27 @@ describe('SessionService user-message ordering', () => {
 })
 
 describe('SessionMetadataCatalog live synchronization', () => {
+  it('keeps live overlays when a known-file reconcile refreshes JSONL metadata', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-live-reconcile-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const file = join(root, 'live.jsonl')
+    writeSession(file, project, 'live-v0')
+    const executable = join(dir, 'prime-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ sessions: [{ sessionFile: ${JSON.stringify(file)}, isStreaming: true }] }))
+`)
+    chmodSync(executable, 0o755)
+    const reader = createSessionMetadataReader()
+    const catalog = new SessionMetadataCatalog(() => root, executable, 20, reader)
+    expect(await catalog.all()).toMatchObject([{ id: 'live-v0', status: 'running' }])
+
+    writeSession(file, project, 'live-v1', '2025-02-01T00:00:00.000Z')
+    await expect(catalog.reconcileKnownChanges(['live.jsonl'])).resolves.toMatchObject({ kind: 'reconciled' })
+
+    expect(await catalog.all()).toMatchObject([{ id: 'live-v1', status: 'running' }])
+  })
+
   it('does not join an in-flight scan owned by the previous executable', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-scan-executable-race-')); dirs.push(dir)
     const root = join(dir, 'sessions'); mkdirSync(root)
@@ -547,6 +574,79 @@ process.exit(0)
 
 
 describe('SessionService live changes', () => {
+  it('reconciles a known watched file without enumerating the session directory again', async () => {
+    const readDirectory = vi.fn(async (path: string) => readdir(path, { withFileTypes: true }))
+    const canonicalize = vi.fn(async (path: string): Promise<string> => realpath(path))
+    const inspect = vi.fn(async (path: string): Promise<Stats> => stat(path))
+    const inspectLink = vi.fn(async (path: string): Promise<Stats> => lstat(path))
+    const watchDirectory: NonNullable<SessionServiceOptions['watchDirectory']> = () => {
+      const watcher = { close: vi.fn(), on: () => watcher }
+      return watcher
+    }
+    const { root, project, service } = setup(undefined, {
+      catalogIo: { readDirectory, canonicalize, inspect, inspectLink },
+      watchDirectory,
+    })
+    const file = join(root, 'known.jsonl')
+    writeSession(file, project, 'known-v0')
+    expect(await service.list()).toMatchObject([{ id: 'known-v0' }])
+    const enumerationCount = readDirectory.mock.calls.length
+    const canonicalizationCount = canonicalize.mock.calls.length
+
+    const events: Array<{ filePath?: string }> = []
+    const unsubscribe = service.onDidChange((event) => events.push(event))
+    try {
+      writeSession(file, project, 'known-v1', '2025-02-01T00:00:00.000Z')
+      const watcherHarness = service as unknown as { queueSessionChange(filename: string): void }
+      watcherHarness.queueSessionChange('known.jsonl')
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
+
+      expect(await service.list()).toMatchObject([{ id: 'known-v1' }])
+      expect(readDirectory).toHaveBeenCalledTimes(enumerationCount)
+      expect(canonicalize).toHaveBeenCalledTimes(canonicalizationCount + 2)
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('falls back to a full scan after a watcher error loses the changed file name', async () => {
+    const readDirectory = vi.fn(async (path: string) => readdir(path, { withFileTypes: true }))
+    let reportWatchError: ((error: Error) => void) | undefined
+    const watchDirectory: NonNullable<SessionServiceOptions['watchDirectory']> = () => {
+      const watcher = {
+        close: vi.fn(),
+        on: (_event: 'error', listener: (error: Error) => void) => {
+          reportWatchError = listener
+          return watcher
+        },
+      }
+      return watcher
+    }
+    const { root, project, service } = setup(undefined, {
+      catalogIo: {
+        readDirectory,
+        canonicalize: async (path) => realpath(path),
+        inspect: async (path) => stat(path),
+        inspectLink: async (path) => lstat(path),
+      },
+      watchDirectory,
+    })
+    writeSession(join(root, 'known.jsonl'), project, 'known')
+    await service.list()
+    expect(readDirectory).toHaveBeenCalledOnce()
+
+    const events: Array<{ filePath?: string }> = []
+    const unsubscribe = service.onDidChange((event) => events.push(event))
+    try {
+      reportWatchError?.(new Error('watch overflow'))
+      await waitUntil(() => events.some((event) => event.filePath === undefined), 4_000)
+      await service.list()
+      expect(readDirectory).toHaveBeenCalledTimes(2)
+    } finally {
+      unsubscribe()
+    }
+  })
+
   it('installs a one-level watcher and resolves bucketed session changes', async () => {
     const watched = new Map<string, (eventType: string, filename: string | Buffer | null) => void>()
     const { root, project, service } = setup(undefined, {

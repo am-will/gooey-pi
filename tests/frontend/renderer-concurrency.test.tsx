@@ -735,7 +735,7 @@ describe('extension UI runtime ownership', () => {
     expect(state.extensionUi).toBeNull()
   })
 
-  it('auto-continues an unanswered ask_user questionnaire after thirty seconds', async () => {
+  it('auto-continues an unanswered ask_user questionnaire after two minutes', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const command = vi.fn().mockResolvedValue({})
@@ -758,9 +758,9 @@ describe('extension UI runtime ownership', () => {
           options: ['__prime_ask_user__group-1:0:1', 'A', 'B'],
         })
       })
-      expect(state.extensionUi?.request.method === 'questionnaire' ? state.extensionUi.request.timeout : undefined).toBe(30_000)
+      expect(state.extensionUi?.request.method === 'questionnaire' ? state.extensionUi.request.timeout : undefined).toBe(120_000)
 
-      await act(async () => { vi.advanceTimersByTime(29_999) })
+      await act(async () => { vi.advanceTimersByTime(119_999) })
       expect(state.extensionUi).not.toBeNull()
       await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve() })
 

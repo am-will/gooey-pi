@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ModelCatalogProvider } from '../../electron/main/model-catalog'
 import { PI_NOT_INSTALLED_WARNING, PiModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-pi'
+import type { PrimeModelCatalog } from '../../src/types/api'
 import { waitUntil } from '../helpers/wait'
 
 const dirs: string[] = []
@@ -68,6 +69,22 @@ const processExists = (pid: number): boolean => {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+function expectRelationalIntegrity(catalog: PrimeModelCatalog): void {
+  const providerIds = catalog.providers.map((provider) => provider.id)
+  expect(new Set(providerIds).size).toBe(providerIds.length)
+  const providerIdSet = new Set(providerIds)
+  for (const model of catalog.models) expect(providerIdSet.has(model.provider)).toBe(true)
+  for (const provider of catalog.providers) {
+    const models = catalog.models.filter((model) => model.provider === provider.id)
+    expect(provider.modelCount).toBe(models.length)
+    expect(provider.availableModelCount).toBe(models.filter((model) => model.available).length)
+  }
+}
+
+function piModel(provider: string, id: string): Record<string, unknown> {
+  return { provider, id, name: `${provider} ${id}`, reasoning: false, input: ['text'], contextWindow: 1, maxTokens: 1 }
+}
+
 describe('Pi model catalog service', () => {
   it('invalidates the unavailable cache when discovery finds an executable', async () => {
     let executable: string | null = null
@@ -123,6 +140,9 @@ describe('Pi model catalog service', () => {
     expect(google.modelCount).toBe(3)
     expect(google.availableModelCount).toBe(3)
     expect(google.enabled).toBe(true)
+    const cached = await service.catalog()
+    expect(cached.models).toEqual(catalog.models)
+    expect(cached.providers).toEqual(catalog.providers)
   })
 
   it('resolves availability, capabilities, and desktop provider enablement', async () => {
@@ -331,15 +351,63 @@ process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_a
     expect(catalog.providers.map((provider) => provider.id)).toEqual(['openai-codex', 'zai'])
   })
 
-  it('caps runaway catalogs at the model and provider limits', async () => {
+  it('keeps an exact-boundary catalog unchanged and relationally consistent', async () => {
     const models: unknown[] = []
-    // Provider overflow entries come first so they land inside the 5,000-model
-    // cap and exercise the 256-provider cap independently.
+    for (let index = 0; index < MAX_CATALOG_PROVIDERS; index += 1) {
+      models.push(piModel(`provider-${String(index).padStart(3, '0')}`, 'model'))
+    }
+    for (let index = MAX_CATALOG_PROVIDERS; index < 5_000; index += 1) {
+      models.push(piModel('provider-000', `model-${index}`))
+    }
+
+    const service = new PiModelCatalogService(fakePiWithCatalog({ models }))
+    const catalog = await service.catalog(true)
+
+    expect(catalog.models).toHaveLength(5_000)
+    expect(catalog.providers).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(catalog.warning).toBeUndefined()
+    expectRelationalIntegrity(catalog)
+  })
+
+  it('caps provider-only overflow without returning orphan models', async () => {
+    const models = Array.from({ length: MAX_CATALOG_PROVIDERS + 1 }, (_, index) => (
+      piModel(`provider-${String(index).padStart(3, '0')}`, 'model')
+    ))
+    const service = new PiModelCatalogService(fakePiWithCatalog({ models }))
+    const catalog = await service.catalog(true)
+
+    expect(catalog.providers).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(catalog.models).toHaveLength(MAX_CATALOG_PROVIDERS)
+    expect(catalog.warning).toMatch(/257 valid providers.*retained 256.*1 omitted/)
+    expect(catalog.warning).toMatch(/257 valid unique models.*retained 256.*1 omitted/)
+    expect(catalog.warning).toContain('1 omitted by catalog limits: 1 with omitted providers and 0 beyond the model limit')
+    expectRelationalIntegrity(catalog)
+    await expect(service.requireAvailableModel('provider-256/model')).rejects.toThrow(/not found/)
+    expect(await service.capabilities('provider-256', 'model')).toBeUndefined()
+  })
+
+  it('caps model-only overflow while keeping visibility and launch validation aligned', async () => {
+    const models = Array.from({ length: 5_001 }, (_, index) => piModel('provider-000', `model-${index}`))
+    const service = new PiModelCatalogService(fakePiWithCatalog({ models }))
+    const catalog = await service.catalog(true, new Set(), new Set(['provider-000/model-0']))
+
+    expect(catalog.providers).toHaveLength(1)
+    expect(catalog.models).toHaveLength(5_000)
+    expect(catalog.models[0]?.enabled).toBe(false)
+    expect(catalog.warning).toMatch(/5,001 valid unique models.*retained 5,000.*1 omitted/)
+    expect(catalog.warning).toContain('1 omitted by catalog limits: 0 with omitted providers and 1 beyond the model limit')
+    expectRelationalIntegrity(catalog)
+    await expect(service.requireAvailableModel('provider-000/model-5000')).rejects.toThrow(/not found/)
+    await expect(service.requireAvailableModel('provider-000/model-0', new Set(), new Set(['provider-000/model-0']))).rejects.toThrow(/disabled/)
+  })
+
+  it('applies simultaneous model and provider caps as one relational operation', async () => {
+    const models: unknown[] = []
     for (let index = 0; index < 300; index += 1) {
-      models.push({ provider: `overflow-${String(index).padStart(3, '0')}`, id: 'model', name: `Overflow ${index}`, reasoning: false, input: ['text'], contextWindow: 1, maxTokens: 1 })
+      models.push(piModel(`overflow-${String(index).padStart(3, '0')}`, 'model'))
     }
     for (let index = 0; index < 5_010; index += 1) {
-      models.push({ provider: 'google', id: `model-${index}`, name: `Model ${index}`, reasoning: false, input: ['text'], contextWindow: 1, maxTokens: 1 })
+      models.push(piModel('google', `model-${index}`))
     }
     const service = new PiModelCatalogService(fakePiWithCatalog({ models }))
     const catalog = await service.catalog(true)
@@ -348,6 +416,11 @@ process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_a
     expect(catalog.providers).toHaveLength(MAX_CATALOG_PROVIDERS)
     const names = catalog.providers.map((provider) => provider.name)
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)))
-    expect(catalog.warning).toMatch(/models/)
+    expect(catalog.warning).toMatch(/301 valid providers.*retained 256.*45 omitted/)
+    expect(catalog.warning).toMatch(/5,310 valid unique models.*retained 5,000.*310 omitted/)
+    expect(catalog.warning).toContain('310 omitted by catalog limits: 45 with omitted providers and 265 beyond the model limit')
+    expectRelationalIntegrity(catalog)
+    expect(catalog.models.some((model) => model.provider === 'overflow-299')).toBe(false)
+    await expect(service.requireAvailableModel('overflow-299/model')).rejects.toThrow(/not found/)
   })
 })

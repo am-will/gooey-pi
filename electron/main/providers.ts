@@ -8,12 +8,12 @@ import type { Api, Model } from 'prime-agent-ai'
 import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor, ProviderAuthEvent, ProviderAuthMethod, ProviderAuthSource, SkillRecord } from '../../src/types/api'
 import { errorCode, readAtMost } from './plugins/file-io'
+import { catalogLimitWarnings, limitCatalogRelations } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
 import { isRecord, requireString, requireWebUrl } from './validation'
 
 const CATALOG_TTL_MS = 30_000
-const MAX_CATALOG_MODELS = 5_000
-export const MAX_CATALOG_PROVIDERS = 256
+export { MAX_CATALOG_PROVIDERS } from './model-catalog'
 const EXTERNAL_AUTH_PROVIDERS = new Set(['amazon-bedrock', 'google-vertex'])
 const OAUTH_TIMEOUT_MS = 10 * 60_000
 const MAX_MCP_SETTINGS_BYTES = 4 * 1024 * 1024
@@ -218,11 +218,9 @@ export class PrimeProviderService {
     const authStatuses = new Map([...providerIds].map((id) => [id, this.registry.getProviderAuthStatus(id)]))
     const configuredProviders = new Set([...authStatuses].filter(([, status]) => status.configured).map(([id]) => id))
     const { keys: available, fallbackProviders } = resolveAvailableModelKeys(eligibleModels, executableModels, configuredProviders)
-    const models = eligibleModels.slice(0, MAX_CATALOG_MODELS).map((model) => toModelDescriptor(model, available))
     const validProviderIds = [...providerIds].filter(safeProviderId)
-    const providers = validProviderIds.map((id): PrimeProviderDescriptor => {
+    const relation = limitCatalogRelations(eligibleModels.map((model) => toModelDescriptor(model, available)), validProviderIds.map((id): PrimeProviderDescriptor => {
       const authStatus = authStatuses.get(id) ?? this.registry.getProviderAuthStatus(id)
-      const providerModels = models.filter((model) => model.provider === id)
       const authMethod: ProviderAuthMethod = oauthProviders.has(id) ? 'oauth' : EXTERNAL_AUTH_PROVIDERS.has(id) ? 'external' : 'api_key'
       return {
         id,
@@ -231,20 +229,18 @@ export class PrimeProviderService {
         configured: authStatus.configured,
         authSource: authStatus.source as ProviderAuthSource | undefined,
         authLabel: authStatus.label?.slice(0, 200),
-        modelCount: providerModels.length,
-        availableModelCount: providerModels.filter((model) => model.available).length,
+        modelCount: 0,
+        availableModelCount: 0,
         enabled: true,
       }
-    }).sort((a, b) => a.name.localeCompare(b.name)).slice(0, MAX_CATALOG_PROVIDERS)
+    }))
 
     const warnings = [
-      snapshot.models.length > models.length
-        ? `Prime Agent returned ${snapshot.models.length.toLocaleString()} models; GooeyPi loaded the first ${models.length.toLocaleString()} valid entries.`
+      ...catalogLimitWarnings('Prime Agent', relation, { uniqueModels: true }),
+      snapshot.models.length > eligibleModels.length
+        ? `Prime Agent returned ${(snapshot.models.length - eligibleModels.length).toLocaleString('en-US')} model entries GooeyPi could not validate; they were skipped.`
         : undefined,
-      validProviderIds.length > providers.length
-        ? `Prime Agent returned ${validProviderIds.length.toLocaleString()} providers; GooeyPi loaded the first ${providers.length.toLocaleString()} sorted by name.`
-        : undefined,
-      fallbackProviders.includes('openai-codex')
+      fallbackProviders.includes('openai-codex') && relation.models.some((model) => model.provider === 'openai-codex')
         ? 'ChatGPT subscription model discovery was unavailable or incomplete; GooeyPi is showing Prime Agent’s configured Codex catalogue.'
         : undefined,
       executableDiscoveryWarning,
@@ -254,8 +250,8 @@ export class PrimeProviderService {
     this.cachedCatalog = {
       primeVersion: VERSION,
       refreshedAt: new Date().toISOString(),
-      models,
-      providers,
+      models: relation.models,
+      providers: relation.providers,
       warning: warnings.length ? warnings.join(' ') : undefined,
     }
     this.cachedAt = Date.now()

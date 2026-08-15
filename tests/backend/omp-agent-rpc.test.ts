@@ -11,6 +11,8 @@ import {
   type RpcChunkAssemblyTiming,
 } from '../../electron/main/agent-rpc/runtime'
 import { RPC_READ_FRAME_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
+import { OmpModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-omp'
+import { ScheduledRunExecutor } from '../../electron/main/schedules/executor'
 import type { PrimeModelDescriptor } from '../../src/types/api'
 import { waitUntil } from '../helpers/wait'
 
@@ -32,6 +34,8 @@ interface FakeOmpOptions {
   /** When false the fake rejects negotiate_protocol like an unsupported version. */
   acceptNegotiate?: boolean
   sessionActions?: Record<string, unknown>
+  /** Optional model payload served when the same fake is probed as an OMP catalog CLI. */
+  catalogModels?: unknown[]
 }
 
 function fakeOmpAgent(options: FakeOmpOptions = {}): { cwd: string; executable: string } {
@@ -39,6 +43,8 @@ function fakeOmpAgent(options: FakeOmpOptions = {}): { cwd: string; executable: 
   dirs.push(cwd)
   const executable = join(cwd, 'fake-omp.cjs')
   writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv[2] === '--version') { process.stdout.write('omp/1.2.3\\n'); process.exit(0) }
+if (process.argv[2] === 'models' && process.argv[3] === '--json') { process.stdout.write(${JSON.stringify(JSON.stringify({ models: options.catalogModels ?? [] }))}); process.exit(0) }
 const readline = require('node:readline')
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
 const sessionActions = ${JSON.stringify(options.sessionActions)}
@@ -335,6 +341,38 @@ describe('OMP RPC handshake', () => {
     await waitUntil(() => events.some((event) => event.type === 'fake_argv'))
     const argv = (events.find((event) => event.type === 'fake_argv') as { argv: string[] }).argv
     expect(argv).not.toContain('--approval-mode')
+  })
+
+  it('uses the real capped catalog for scheduled validation, launch, and set_model', async () => {
+    const models = Array.from({ length: MAX_CATALOG_PROVIDERS + 1 }, (_, index) => ({
+      provider: `provider-${String(index).padStart(3, '0')}`,
+      id: 'model',
+      name: `Provider ${index} model`,
+      reasoning: false,
+      thinking: null,
+      input: ['text'],
+      contextWindow: 1,
+      maxTokens: 1,
+    }))
+    const fake = fakeOmpAgent({ catalogModels: models })
+    const catalog = new OmpModelCatalogService(fake.executable)
+    const manager = ompManager(fake.executable, { providers: catalog })
+    const schedules = new ScheduledRunExecutor({} as never, {} as never, manager, catalog, () => new Set(), () => new Set())
+    const retainedExecution = { model: 'provider-000/model', thinking: 'off', speed: 'normal' } as const
+    const omittedExecution = { model: 'provider-256/model', thinking: 'off', speed: 'normal' } as const
+
+    await expect(schedules.validateExecution(retainedExecution)).resolves.toBeUndefined()
+    await expect(schedules.validateExecution(omittedExecution)).rejects.toThrow(/not found in the OMP catalog/)
+    await expect(manager.start({ cwd: fake.cwd, model: omittedExecution.model })).rejects.toThrow(/not found in the OMP catalog/)
+    expect(manager.list()).toEqual([])
+
+    const events: Array<Record<string, unknown>> = []
+    manager.setEventSink(({ event }) => events.push(event))
+    const runtime = await manager.start({ cwd: fake.cwd, model: retainedExecution.model })
+    await waitUntil(() => events.some((event) => event.type === 'fake_argv'))
+    const argv = (events.find((event) => event.type === 'fake_argv') as { argv: string[] }).argv
+    expect(argv[argv.indexOf('--model') + 1]).toBe(retainedExecution.model)
+    await expect(manager.command(runtime.runtimeId, { type: 'set_model', provider: 'provider-256', modelId: 'model' })).rejects.toThrow(/not found in the OMP catalog/)
   })
 })
 
