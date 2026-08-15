@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
+import { bootstrapNpm, persistNpmShimDirectory, resolveNpmGlobalLayout } from '../scripts/release/bootstrap-npm.mjs'
 import { installAppDependencies } from '../scripts/release/install-app-deps.mjs'
 import {
   artifactArchitectures,
@@ -20,6 +21,7 @@ import {
   parseToolchainMetadata,
   parseArchitectures,
   parseTeamIdentifier,
+  readNpmOutput,
   readNpmVersion,
   readRepositoryToolchain,
   requireReleaseArtifacts,
@@ -236,14 +238,155 @@ describe('release preflight', () => {
     }
   })
 
+  test('derives the exact npm CLI and shim from POSIX and Windows global layouts', () => {
+    expect(resolveNpmGlobalLayout('/opt/npm', '/opt/npm/lib/node_modules', 'linux')).toEqual({
+      prefix: '/opt/npm',
+      root: '/opt/npm/lib/node_modules',
+      cliPath: '/opt/npm/lib/node_modules/npm/bin/npm-cli.js',
+      shimDirectory: '/opt/npm/bin',
+      shimPath: '/opt/npm/bin/npm',
+    })
+    expect(resolveNpmGlobalLayout('C:\\npm\\prefix', 'C:\\npm\\prefix\\node_modules', 'win32')).toEqual({
+      prefix: 'C:\\npm\\prefix',
+      root: 'C:\\npm\\prefix\\node_modules',
+      cliPath: 'C:\\npm\\prefix\\node_modules\\npm\\bin\\npm-cli.js',
+      shimDirectory: 'C:\\npm\\prefix',
+      shimPath: 'C:\\npm\\prefix\\npm.cmd',
+    })
+  })
+
+  test('rejects unsafe or inconsistent npm global layout metadata', () => {
+    expect(() => resolveNpmGlobalLayout('relative', '/opt/npm/lib/node_modules', 'linux')).toThrow(/absolute single-line path/)
+    expect(() => resolveNpmGlobalLayout('/opt/npm\n/injected', '/opt/npm/lib/node_modules', 'linux')).toThrow(/absolute single-line path/)
+    expect(() => resolveNpmGlobalLayout('/opt/npm', '/elsewhere/node_modules', 'linux')).toThrow(/does not match.*prefix/)
+    expect(() => resolveNpmGlobalLayout('C:\\npm\\prefix', 'D:\\other\\node_modules', 'win32')).toThrow(/does not match.*prefix/)
+  })
+
+  test('exact npm CLI verification ignores a stale lifecycle npm_execpath', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi exact npm & version-'))
+    const staleCli = join(directory, 'stale-npm-cli.mjs')
+    const installedCli = join(directory, 'installed-npm-cli.mjs')
+    writeFileSync(staleCli, "process.stdout.write('11.12.1\\n')\n")
+    writeFileSync(installedCli, "process.stdout.write('12.0.2\\n')\n")
+    const env = { ...process.env, npm_execpath: staleCli }
+    try {
+      expect(readNpmOutput(['--version'], { env })).toBe('11.12.1')
+      expect(readNpmOutput(['--version'], { env, npmCliPath: installedCli })).toBe('12.0.2')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('bootstraps at the invoked npm prefix and verifies the installed CLI, not stale lifecycle state', () => {
+    const staleCli = '/runner/node/lib/node_modules/npm/bin/npm-cli.js'
+    const githubPath = '/runner/github-path'
+    const calls: Array<{ args: string[]; npmCliPath: string | undefined }> = []
+    const runs: Array<{ command: string; args: string[] }> = []
+    const persisted: Array<{ shimDirectory: string; destination: string | undefined }> = []
+    let installed = false
+    const result = bootstrapNpm({
+      env: { npm_execpath: staleCli, GITHUB_PATH: githubPath },
+      nodeVersion: 'v24.15.0',
+      platform: 'linux',
+      toolchain: { node: '24.15.0', npm: '12.0.2' },
+      readOutput: (args: string[], options: { npmCliPath?: string }) => {
+        calls.push({ args, npmCliPath: options.npmCliPath })
+        if (args[0] === 'prefix') return '/runner/npm-global'
+        if (args[0] === 'root') return '/runner/npm-global/lib/node_modules'
+        return options.npmCliPath && installed ? '12.0.2' : '11.12.1'
+      },
+      run: (command: string, args: string[]) => {
+        installed = true
+        return runs.push({ command, args })
+      },
+      fileExists: () => true,
+      persist: (shimDirectory: string, destination: string | undefined) => {
+        persisted.push({ shimDirectory, destination })
+        return true
+      },
+    })
+
+    expect(runs).toEqual([
+      {
+        command: 'npm',
+        args: ['install', '--global', '--prefix', '/runner/npm-global', 'npm@12.0.2'],
+      },
+    ])
+    expect(calls.at(-1)).toEqual({
+      args: ['--version'],
+      npmCliPath: '/runner/npm-global/lib/node_modules/npm/bin/npm-cli.js',
+    })
+    expect(persisted).toEqual([{ shimDirectory: '/runner/npm-global/bin', destination: githubPath }])
+    expect(result).toMatchObject({ installed: '12.0.2', shimDirectory: '/runner/npm-global/bin', githubPathUpdated: true })
+  })
+
+  test('executes the installed npm CLI and selects its shim for the next workflow step', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi stale npm & bootstrap-'))
+    const prefix = join(directory, 'configured global')
+    const root = process.platform === 'win32' ? join(prefix, 'node_modules') : join(prefix, 'lib', 'node_modules')
+    const layout = resolveNpmGlobalLayout(prefix, root)
+    const staleCli = join(directory, 'stale npm-cli.mjs')
+    const githubPath = join(directory, 'github-path')
+    const expectedInstallArgs = ['install', '--global', '--prefix', prefix, 'npm@12.0.2']
+    mkdirSync(dirname(staleCli), { recursive: true })
+    writeFileSync(githubPath, '')
+    writeFileSync(
+      staleCli,
+      `import { mkdirSync, writeFileSync } from 'node:fs'
+const args = process.argv.slice(2)
+if (args[0] === '--version') process.stdout.write('11.12.1\\n')
+else if (args[0] === 'prefix') process.stdout.write(${JSON.stringify(`${prefix}\n`)})
+else if (args[0] === 'root') process.stdout.write(${JSON.stringify(`${root}\n`)})
+else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstallArgs))}) {
+  mkdirSync(${JSON.stringify(dirname(layout.cliPath))}, { recursive: true })
+  mkdirSync(${JSON.stringify(layout.shimDirectory)}, { recursive: true })
+  writeFileSync(${JSON.stringify(layout.cliPath)}, "process.stdout.write('12.0.2\\\\n')\\n")
+  writeFileSync(${JSON.stringify(layout.shimPath)}, 'npm shim')
+} else {
+  process.stderr.write(\`unexpected fake npm arguments: \${JSON.stringify(args)}\`)
+  process.exitCode = 2
+}
+`,
+    )
+
+    try {
+      const result = bootstrapNpm({ env: { ...process.env, GITHUB_PATH: githubPath, npm_execpath: staleCli } })
+      expect(result).toMatchObject({ current: '11.12.1', installed: '12.0.2', ...layout, githubPathUpdated: true })
+      expect(readFileSync(githubPath, 'utf8')).toBe(`${layout.shimDirectory}\n`)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('persists only a validated npm shim directory for the next GitHub Actions step', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-github-path-'))
+    const githubPath = join(directory, 'github-path')
+    writeFileSync(githubPath, '/existing/tool\n')
+    try {
+      expect(persistNpmShimDirectory('/opt/repository-npm/bin', githubPath, 'linux')).toBe(true)
+      const entries = readFileSync(githubPath, 'utf8').trimEnd().split('\n')
+      expect(entries).toEqual(['/existing/tool', '/opt/repository-npm/bin'])
+      // GitHub prepends GITHUB_PATH entries to PATH for subsequent steps, so
+      // the persisted entry becomes the npm selected by the next npm command.
+      expect(entries.at(-1)).toBe('/opt/repository-npm/bin')
+      expect(() => persistNpmShimDirectory('/opt/npm\n/injected', githubPath, 'linux')).toThrow(/absolute single-line path/)
+      expect(() => persistNpmShimDirectory('/opt/npm/bin', 'relative/github-path', 'linux')).toThrow(/absolute single-line path/)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   test('keeps contributor instructions aligned with the enforced engines', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
     const toolchain = readRepositoryToolchain()
     expect(packageJson.engines).toEqual({ node: `>=${toolchain.node}`, npm: `>=${toolchain.npm}` })
     expect(packageJson.packageManager).toBe(`npm@${toolchain.npm}`)
     expect(readFileSync('.nvmrc', 'utf8').trim()).toBe(toolchain.node)
-    expect(readFileSync('README.md', 'utf8')).toContain(`Node.js ${toolchain.node} or newer and npm ${toolchain.npm} or newer`)
-    expect(readFileSync('README.md', 'utf8')).toContain('npm run toolchain:bootstrap')
+    const readme = readFileSync('README.md', 'utf8')
+    expect(readme).toContain(`Node.js ${toolchain.node} or newer and npm ${toolchain.npm} or newer`)
+    expect(readme).toContain('npm run toolchain:bootstrap')
+    expect(readme).toContain("invoked npm's configured global prefix")
+    expect(readme).not.toContain('into the active Node installation')
     expect(readFileSync('scripts/release/package.mjs', 'utf8')).toContain('assertSupportedToolchain()')
     expect(readFileSync('scripts/release/preflight.mjs', 'utf8')).toContain('assertSupportedToolchain()')
   })
