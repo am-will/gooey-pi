@@ -5,14 +5,8 @@ interface PiFastModeContext {
 }
 
 export interface PiFastModeExtensionApi {
-  on(
-    event: 'before_provider_request',
-    handler: (event: { payload: unknown }, context: PiFastModeContext) => unknown,
-  ): void
-  registerCommand(
-    name: string,
-    options: { description?: string; handler: (args: string) => void | Promise<void> },
-  ): void
+  on(event: 'before_provider_request', handler: (event: { payload: unknown }, context: PiFastModeContext) => unknown): void
+  registerCommand(name: string, options: { description?: string; handler: (args: string) => void | Promise<void> }): void
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

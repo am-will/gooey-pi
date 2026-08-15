@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPackage } from '@electron/asar'
 import { FuseState, FuseV1Options, getCurrentFuseWire } from '@electron/fuses'
+import { assertPackagedExtensionSet } from './extension-inventory.mjs'
 import { artifactArchitectures, assertAsarLayout, assertExactArchitectures, assertUnpackedNativeLayout, parseArchitectures, parseTeamIdentifier, requireReleaseArtifacts } from './lib.mjs'
 import { assertPackageSizeBudgets, collectPackageSizeMetrics, describeSizeMetrics } from './size-budgets.mjs'
 
@@ -82,6 +83,7 @@ async function verifyApp({ app, artifact, mode, expectedTeam }) {
   if (!existsSync(asar)) throw new Error(`${basename(artifact)} application must contain Resources/app.asar`)
   if (existsSync(looseApp)) throw new Error(`${basename(artifact)} contains forbidden loose Resources/app`)
   assertAsarLayout(listPackage(asar, { isPack: false }))
+  assertPackagedExtensionSet(resources)
 
   const appArchitectures = parseArchitectures(run('lipo', ['-archs', executable]))
   assertExactArchitectures(appArchitectures, artifactArchitectures(artifact), basename(artifact))

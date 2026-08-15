@@ -55,13 +55,7 @@ interface OmpToolDefinition<Params> {
   description: string
   parameters: unknown
   executionMode: 'sequential'
-  execute(
-    toolCallId: string,
-    params: Params,
-    signal: AbortSignal | undefined,
-    onUpdate: unknown,
-    context: OmpExtensionContext,
-  ): Promise<OmpToolResult>
+  execute(toolCallId: string, params: Params, signal: AbortSignal | undefined, onUpdate: unknown, context: OmpExtensionContext): Promise<OmpToolResult>
 }
 
 export interface OmpExtensionApi {
@@ -110,15 +104,17 @@ function trimmed(value: unknown, maxLength: number): string | undefined {
 
 function isOtherOption(value: string): boolean {
   const normalized = value.trim().toLowerCase()
-  return normalized === 'other'
-    || normalized.startsWith('other (')
-    || normalized.startsWith('other:')
-    || normalized === 'something else'
-    || normalized.startsWith('something else (')
-    || normalized === 'something different'
-    || normalized.startsWith('something different (')
-    || normalized === 'none of the above'
-    || normalized === 'freeform'
+  return (
+    normalized === 'other' ||
+    normalized.startsWith('other (') ||
+    normalized.startsWith('other:') ||
+    normalized === 'something else' ||
+    normalized.startsWith('something else (') ||
+    normalized === 'something different' ||
+    normalized.startsWith('something different (') ||
+    normalized === 'none of the above' ||
+    normalized === 'freeform'
+  )
 }
 
 function normalizeQuestions(value: unknown): AskQuestion[] {
@@ -181,7 +177,9 @@ export default function (pi: OmpExtensionApi): void | Promise<void> {
     registerTools(pi, injected)
     return
   }
-  return resolveHostTypebox().then((hostType) => { registerTools(pi, hostType) })
+  return resolveHostTypebox().then((hostType) => {
+    registerTools(pi, hostType)
+  })
 }
 
 function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
@@ -197,7 +195,8 @@ function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
   pi.registerTool<{ questions: AskQuestion[] }>({
     name: 'ask_user',
     label: 'Ask user',
-    description: 'Ask one to five focused multiple-choice questions in one questionnaire. Use this when the user must choose among concrete options before work can continue. The user can add context or provide a free-form answer.',
+    description:
+      'Ask one to five focused multiple-choice questions in one questionnaire. Use this when the user must choose among concrete options before work can continue. The user can add context or provide a free-form answer.',
     parameters: Type.Object({
       questions: Type.Array(question, {
         description: 'One to five questions to ask in a single questionnaire',
@@ -216,11 +215,7 @@ function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
       }
 
       const id = groupId()
-      const values = await Promise.all(questions.map((item, index) => context.ui.select(
-        item.question,
-        [`${ASK_USER_RPC_MARKER}${id}:${index}:${questions.length}`, ...item.options],
-        { signal },
-      )))
+      const values = await Promise.all(questions.map((item, index) => context.ui.select(item.question, [`${ASK_USER_RPC_MARKER}${id}:${index}:${questions.length}`, ...item.options], { signal })))
       if (values.some((value) => value === undefined)) {
         return {
           content: [{ type: 'text', text: NO_ANSWER_GUIDANCE }],
@@ -232,11 +227,13 @@ function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
         question: questions[index].question,
         ...decodeAnswer(value as string, questions[index]),
       }))
-      const text = answers.map((answer, index) => {
-        const label = answer.answerSource === 'freeform' ? 'The user answered' : 'The user selected'
-        const contextText = answer.context ? `\nAdditional context: ${answer.context}` : ''
-        return `${index + 1}. ${label}: ${answer.answer}${contextText}`
-      }).join('\n\n')
+      const text = answers
+        .map((answer, index) => {
+          const label = answer.answerSource === 'freeform' ? 'The user answered' : 'The user selected'
+          const contextText = answer.context ? `\nAdditional context: ${answer.context}` : ''
+          return `${index + 1}. ${label}: ${answer.answer}${contextText}`
+        })
+        .join('\n\n')
       return {
         content: [{ type: 'text', text }],
         details: { questions, answers, cancelled: answers.some((answer) => !answer.answer) },

@@ -4,6 +4,7 @@ import { existsSync, lstatSync, readdirSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPackage } from '@electron/asar'
+import { assertPackagedExtensionSet } from './extension-inventory.mjs'
 import { assertAsarLayout } from './lib.mjs'
 
 function requireOption(value, label, allowed) {
@@ -150,6 +151,7 @@ export function verifyPackage(target, architecture, { unpackedOnly = false, mode
   if (existsSync(join(resources, 'app'))) throw new Error('Packaged application contains forbidden loose resources/app')
   if (!existsSync(unpacked)) throw new Error('Packaged application must contain resources/app.asar.unpacked')
   assertAsarLayout(listPackage(asar, { isPack: false }))
+  assertPackagedExtensionSet(resources)
   assertUnpackedNativeLayout(unpacked, target, architecture)
   if (!unpackedOnly && target === 'win' && mode === 'public') {
     const installer = artifacts.find((name) => name.endsWith('.exe'))

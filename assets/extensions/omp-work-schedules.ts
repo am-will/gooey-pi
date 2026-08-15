@@ -13,7 +13,9 @@
  * use runtime specifiers inside try/catch so neither host hard-fails at load.
  */
 
-interface OmpSchemaOptions { description?: string }
+interface OmpSchemaOptions {
+  description?: string
+}
 
 interface OmpTypebox {
   Object(properties: Record<string, unknown>): unknown
@@ -23,16 +25,13 @@ interface OmpTypebox {
   Optional(schema: unknown): unknown
 }
 
-interface OmpToolResult { content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }
+interface OmpToolResult {
+  content: Array<{ type: 'text'; text: string }>
+  details: Record<string, unknown>
+}
 export interface OmpExtensionApi {
   typebox?: { Type: OmpTypebox }
-  registerTool<Params>(tool: {
-    name: string
-    label: string
-    description: string
-    parameters: unknown
-    execute(toolCallId: string, params: Params): Promise<OmpToolResult>
-  }): void
+  registerTool<Params>(tool: { name: string; label: string; description: string; parameters: unknown; execute(toolCallId: string, params: Params): Promise<OmpToolResult> }): void
 }
 
 async function importHostModule(specifier: string): Promise<Record<string, unknown> | undefined> {
@@ -44,12 +43,8 @@ async function importHostModule(specifier: string): Promise<Record<string, unkno
 }
 
 async function resolveHostTypebox(): Promise<OmpTypebox> {
-  const hostType = (await importHostModule('typebox'))?.Type as
-    | (OmpTypebox & { Unsafe?(schema: unknown): unknown })
-    | undefined
-  const stringEnum = (await importHostModule('@earendil-works/pi-ai'))?.StringEnum as
-    | ((values: readonly string[], options?: OmpSchemaOptions) => unknown)
-    | undefined
+  const hostType = (await importHostModule('typebox'))?.Type as (OmpTypebox & { Unsafe?(schema: unknown): unknown }) | undefined
+  const stringEnum = (await importHostModule('@earendil-works/pi-ai'))?.StringEnum as ((values: readonly string[], options?: OmpSchemaOptions) => unknown) | undefined
   const Enum = (values: readonly string[], options?: OmpSchemaOptions): unknown => {
     if (stringEnum) return stringEnum(values, options)
     const schema = { type: 'string', enum: [...values], ...(options ?? {}) }
@@ -84,7 +79,11 @@ async function resolveHostTypebox(): Promise<OmpTypebox> {
   }
 }
 
-interface BridgeResult { ok: boolean; result?: unknown; error?: string }
+interface BridgeResult {
+  ok: boolean
+  result?: unknown
+  error?: string
+}
 interface ScheduleRecord {
   id?: string
   title?: string
@@ -121,7 +120,7 @@ function execution(params: { model?: string; thinking?: string; fast?: boolean }
   return {
     model: params.model ?? current?.execution?.model ?? 'auto',
     thinking: params.thinking ?? current?.execution?.thinking ?? 'auto',
-    speed: params.fast === undefined ? current?.execution?.speed ?? 'normal' : params.fast ? 'fast' : 'normal',
+    speed: params.fast === undefined ? (current?.execution?.speed ?? 'normal') : params.fast ? 'fast' : 'normal',
   }
 }
 
@@ -135,7 +134,9 @@ export default function (pi: OmpExtensionApi): void | Promise<void> {
     registerTools(pi, injected)
     return
   }
-  return resolveHostTypebox().then((hostType) => { registerTools(pi, hostType) })
+  return resolveHostTypebox().then((hostType) => {
+    registerTools(pi, hostType)
+  })
 }
 
 function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
@@ -150,16 +151,24 @@ function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
     label: 'List scheduled tasks',
     description: 'List durable GooeyPi tasks belonging to this OMP project or thread. Use this before editing or managing an existing schedule.',
     parameters: Type.Object({}),
-    async execute() { return text(await call('list')) },
+    async execute() {
+      return text(await call('list'))
+    },
   })
 
   pi.registerTool({
     name: 'scheduled_task_create_once',
     label: 'Create one-time task',
-    description: 'Create a durable one-time GooeyPi task for the current OMP project or thread. Use current_project for a fresh thread per run and current_session to preserve this thread context. The app must remain running for local scheduled work.',
+    description:
+      'Create a durable one-time GooeyPi task for the current OMP project or thread. Use current_project for a fresh thread per run and current_session to preserve this thread context. The app must remain running for local scheduled work.',
     parameters: Type.Object({ prompt: Type.String(), at: Type.String({ description: 'ISO timestamp with timezone' }), target, title, model, thinking, fast }),
     async execute(_id, params: { prompt: string; at: string; target?: string; title?: string; model?: string; thinking?: string; fast?: boolean }) {
-      return text(await call('create', { target: params.target ?? 'current_project', input: { title: params.title, prompt: params.prompt, timing: { kind: 'once', at: params.at }, execution: execution(params) } }))
+      return text(
+        await call('create', {
+          target: params.target ?? 'current_project',
+          input: { title: params.title, prompt: params.prompt, timing: { kind: 'once', at: params.at }, execution: execution(params) },
+        }),
+      )
     },
   })
 
@@ -169,17 +178,42 @@ function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
     description: 'Create a durable recurring GooeyPi task for the current OMP project or thread. RRULE is RFC 5545 without DTSTART; provide a local start time and IANA timezone separately.',
     parameters: Type.Object({ prompt: Type.String(), rrule: Type.String(), dtstart_local: Type.String(), time_zone: Type.String(), target, title, model, thinking, fast }),
     async execute(_id, params: { prompt: string; rrule: string; dtstart_local: string; time_zone: string; target?: string; title?: string; model?: string; thinking?: string; fast?: boolean }) {
-      return text(await call('create', { target: params.target ?? 'current_project', input: { title: params.title, prompt: params.prompt, timing: { kind: 'rrule', rrule: params.rrule, dtstartLocal: params.dtstart_local, timeZone: params.time_zone }, execution: execution(params) } }))
+      return text(
+        await call('create', {
+          target: params.target ?? 'current_project',
+          input: {
+            title: params.title,
+            prompt: params.prompt,
+            timing: { kind: 'rrule', rrule: params.rrule, dtstartLocal: params.dtstart_local, timeZone: params.time_zone },
+            execution: execution(params),
+          },
+        }),
+      )
     },
   })
 
   pi.registerTool({
     name: 'scheduled_task_update',
     label: 'Update scheduled task',
-    description: 'Update a durable task in this OMP project/thread. List tasks first. Omitted fields retain their current values; pass either at for one-time timing or all three recurring fields for recurring timing.',
-    parameters: Type.Object({ id: Type.String(), title, prompt: Type.Optional(Type.String()), at: Type.Optional(Type.String()), rrule: Type.Optional(Type.String()), dtstart_local: Type.Optional(Type.String()), time_zone: Type.Optional(Type.String()), model, thinking, fast }),
-    async execute(_toolId, params: { id: string; title?: string; prompt?: string; at?: string; rrule?: string; dtstart_local?: string; time_zone?: string; model?: string; thinking?: string; fast?: boolean }) {
-      const tasks = await call('list') as ScheduleRecord[]
+    description:
+      'Update a durable task in this OMP project/thread. List tasks first. Omitted fields retain their current values; pass either at for one-time timing or all three recurring fields for recurring timing.',
+    parameters: Type.Object({
+      id: Type.String(),
+      title,
+      prompt: Type.Optional(Type.String()),
+      at: Type.Optional(Type.String()),
+      rrule: Type.Optional(Type.String()),
+      dtstart_local: Type.Optional(Type.String()),
+      time_zone: Type.Optional(Type.String()),
+      model,
+      thinking,
+      fast,
+    }),
+    async execute(
+      _toolId,
+      params: { id: string; title?: string; prompt?: string; at?: string; rrule?: string; dtstart_local?: string; time_zone?: string; model?: string; thinking?: string; fast?: boolean },
+    ) {
+      const tasks = (await call('list')) as ScheduleRecord[]
       const current = tasks.find((task) => task.id === params.id)
       if (!current) throw new Error('Scheduled task was not found in this OMP scope')
       const patch: Record<string, unknown> = {}
@@ -198,7 +232,8 @@ function registerTools(pi: OmpExtensionApi, Type: OmpTypebox): void {
   pi.registerTool({
     name: 'scheduled_task_manage',
     label: 'Manage scheduled task',
-    description: 'Pause, resume, run now, or delete a durable task in this OMP project/thread. List tasks first and use the exact id. Delete is permanent and should match the user\'s explicit request.',
+    description:
+      "Pause, resume, run now, or delete a durable task in this OMP project/thread. List tasks first and use the exact id. Delete is permanent and should match the user's explicit request.",
     parameters: Type.Object({ id: Type.String(), action: Type.Enum(['pause', 'resume', 'run_now', 'delete']) }),
     async execute(_toolId, params: { id: string; action: 'pause' | 'resume' | 'run_now' | 'delete' }) {
       return text(await call(params.action, { id: params.id }))
