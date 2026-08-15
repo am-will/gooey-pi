@@ -52,16 +52,14 @@ describe('Prime provider adapter', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp?read_only=true', expect.objectContaining({ method: 'GET' }))
   })
 
-  it('ignores MCP protected-resource metadata advertised on another origin', async () => {
+  it('rejects MCP protected-resource metadata advertised on another origin', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response('', {
       status: 401,
-      headers: { 'www-authenticate': 'Bearer resource_metadata="http://127.0.0.1:9000/.well-known/oauth-protected-resource"' },
+      headers: { 'www-authenticate': 'Bearer error="invalid_request", resource_metadata="http://127.0.0.1:9000/.well-known/oauth-protected-resource"' },
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(resolveMcpOAuthDiscovery('https://mcp.example.com/mcp')).resolves.toEqual({
-      url: 'https://mcp.example.com/mcp',
-    })
+    await expect(resolveMcpOAuthDiscovery('https://mcp.example.com/mcp')).rejects.toThrow(/HTTPS|same origin/)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

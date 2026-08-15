@@ -23,6 +23,14 @@ function serviceWithSettings(settings?: string): PrimeProviderService {
 }
 
 describe('resolveMcpOAuthDiscovery', () => {
+  it('rejects a remote plaintext server before making a discovery request', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(resolveMcpOAuthDiscovery('http://mcp.example.test/mcp')).rejects.toThrow(/HTTPS/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('falls back to the server URL when the challenge fails or advertises no metadata', async () => {
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(new Error('network unreachable'))
@@ -90,6 +98,38 @@ describe('resolveMcpOAuthDiscovery', () => {
   it('rejects a metadata URL that is not a web URL', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(challenge('file:///etc/passwd')))
     await expect(resolveMcpOAuthDiscovery('https://mcp.test/mcp')).rejects.toThrow('URL scheme is not allowed')
+  })
+
+  it('fails closed on cross-origin protected-resource metadata', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(challenge('https://metadata.example.test/.well-known/oauth-protected-resource'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(resolveMcpOAuthDiscovery('https://mcp.example.test/mcp')).rejects.toThrow(/same origin/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects plaintext protected-resource metadata and authorization servers', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(challenge('http://mcp.example.test/.well-known/oauth-protected-resource')))
+    await expect(resolveMcpOAuthDiscovery('https://mcp.example.test/mcp')).rejects.toThrow(/HTTPS/)
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(challenge('https://mcp.example.test/.well-known/oauth-protected-resource'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ authorization_servers: ['http://auth.example.test'] }))))
+    await expect(resolveMcpOAuthDiscovery('https://mcp.example.test/mcp')).rejects.toThrow(/HTTPS/)
+  })
+
+  it('allows loopback HTTP throughout protected-resource discovery', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(challenge('http://metadata.localhost:4444/.well-known/oauth-protected-resource'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ authorization_servers: ['http://127.42.7.9:5555'] })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(resolveMcpOAuthDiscovery('http://metadata.localhost:4444/mcp')).resolves.toEqual({
+      url: 'http://127.42.7.9:5555/',
+      scopes: undefined,
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://metadata.localhost:4444/mcp', expect.objectContaining({ redirect: 'error' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://metadata.localhost:4444/.well-known/oauth-protected-resource', expect.objectContaining({ redirect: 'error' }))
   })
 })
 

@@ -47,7 +47,7 @@
     "js-yaml": "^5.3.0",
     "node-pty": "^1.1.0",
     "prime-agent": "file:vendor/prime-agent-0.7.0-gooeypi.2.tgz",
-    "prime-agent-ai": "file:vendor/prime-agent-ai-0.7.0-gooeypi.1.tgz",
+    "prime-agent-ai": "file:vendor/prime-agent-ai-0.7.0-gooeypi.2.tgz",
     "rrule": "^2.8.1",
     "zeromq": "^6.1.2"
   },

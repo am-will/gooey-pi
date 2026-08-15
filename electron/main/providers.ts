@@ -9,7 +9,7 @@ import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor, ProviderAuthEvent, ProviderAuthMethod, ProviderAuthSource, SkillRecord } from '../../src/types/api'
 import { errorCode, readAtMost } from './plugins/file-io'
 import { withModelVisibility } from './model-visibility'
-import { isRecord, requireString, requireWebUrl } from './validation'
+import { isRecord, requireHttpsOrLoopbackUrl, requireString, requireWebUrl } from './validation'
 
 const CATALOG_TTL_MS = 30_000
 const MAX_CATALOG_MODELS = 5_000
@@ -44,27 +44,27 @@ async function responseTextAtMost(response: Response, maxBytes: number): Promise
 }
 
 export async function resolveMcpOAuthDiscovery(serverUrl: string): Promise<{ url: string; scopes?: string }> {
+  const endpoint = requireHttpsOrLoopbackUrl(serverUrl, { label: 'MCP server URL' })
   let challenge: Response
   try {
-    challenge = await fetch(serverUrl, {
+    challenge = await fetch(endpoint, {
       method: 'GET',
       redirect: 'error',
       signal: AbortSignal.timeout(OAUTH_DISCOVERY_TIMEOUT_MS),
     })
   } catch {
-    return { url: serverUrl }
+    return { url: endpoint }
   }
   const authenticate = challenge.headers.get('www-authenticate') ?? ''
   await challenge.body?.cancel()
   const metadataMatch = /(?:^|,\s*)resource_metadata="([^"]+)"/i.exec(authenticate)
-  if (!metadataMatch) return { url: serverUrl }
+  if (!metadataMatch) return { url: endpoint }
 
-  const metadataUrl = requireWebUrl(metadataMatch[1])
+  const metadataUrl = requireHttpsOrLoopbackUrl(metadataMatch[1], { label: 'OAuth protected-resource metadata URL' })
   // RFC 9728 places protected-resource metadata on the resource server's own origin; refusing
   // anything else keeps a hostile challenge from pointing discovery at an unrelated host.
-  if (new URL(metadataUrl).origin !== new URL(serverUrl).origin) {
-    console.warn(`Ignoring cross-origin OAuth protected-resource metadata advertised by ${new URL(serverUrl).origin}`)
-    return { url: serverUrl }
+  if (new URL(metadataUrl).origin !== new URL(endpoint).origin) {
+    throw new TypeError('OAuth protected-resource metadata URL must use the MCP server\'s same origin')
   }
   const response = await fetch(metadataUrl, {
     method: 'GET',
@@ -78,7 +78,7 @@ export async function resolveMcpOAuthDiscovery(serverUrl: string): Promise<{ url
   if (!isRecord(metadata) || !Array.isArray(metadata.authorization_servers) || typeof metadata.authorization_servers[0] !== 'string') {
     throw new TypeError('OAuth protected-resource metadata has no authorization server')
   }
-  const authorizationServer = requireWebUrl(metadata.authorization_servers[0])
+  const authorizationServer = requireHttpsOrLoopbackUrl(metadata.authorization_servers[0], { label: 'OAuth authorization server URL' })
   const scopes = Array.isArray(metadata.scopes_supported)
     ? metadata.scopes_supported.filter((scope): scope is string => typeof scope === 'string' && scope.length > 0 && scope.length <= 256).slice(0, 100).join(' ')
     : ''
@@ -351,7 +351,7 @@ export class PrimeProviderService {
     const configured = await this.configuredMcpServer(server)
     if (configured) {
       if (!isRecord(configured) || configured.type !== 'http' || configured.oauth !== true) throw new Error(`MCP server ${server} is not configured for OAuth`)
-      const endpoint = requireWebUrl(configured.url)
+      const endpoint = requireHttpsOrLoopbackUrl(configured.url, { label: 'MCP server URL' })
       const discovery = await resolveMcpOAuthDiscovery(endpoint)
       const provider = createMcpOAuthProvider({ server, label: server, ...discovery })
       registerOAuthProvider(provider)

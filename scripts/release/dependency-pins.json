@@ -6,8 +6,8 @@
       "integrity": "sha512-lx+juh3pTKb8hVFjtVEKjcVttsNBpKh8anWO15cQ4uuYVeHOFXYs/SjHPEEO7/m1PbmuXHpz1E3qEBxoM6AwaQ=="
     },
     "node_modules/@earendil-works/pi-ai": {
-      "resolved": "file:vendor/prime-agent-ai-0.7.0-gooeypi.1.tgz",
-      "integrity": "sha512-TdQwiJ46eWwao40lXOW01SGY4K4je7+lm/llIcC+KTwU0gP0C91xQnZTxA8+ncBNsNiJ4KgfJAwKSL711Oyhlw=="
+      "resolved": "file:vendor/prime-agent-ai-0.7.0-gooeypi.2.tgz",
+      "integrity": "sha512-wx9pGU03TF5w9Uxky9SVKkFw0FY4onXDbD3A3BEowRBPDLERKfiiF/sHqMtzAI4CHjmd40sDki3ZmgbQHR1Uaw=="
     },
     "node_modules/@earendil-works/pi-tui": {
       "resolved": "file:vendor/prime-agent-tui-0.7.0.tgz",
@@ -22,8 +22,8 @@
       "integrity": "sha512-Ylitnx182ue076jyVty39hhtzi6XJN7/q+SssERV5gtTbIRJwSC8ZTGbDFF4VfiRJKRdV/sqSu/LP6JR6zOKvA=="
     },
     "node_modules/prime-agent-ai": {
-      "resolved": "file:vendor/prime-agent-ai-0.7.0-gooeypi.1.tgz",
-      "integrity": "sha512-TdQwiJ46eWwao40lXOW01SGY4K4je7+lm/llIcC+KTwU0gP0C91xQnZTxA8+ncBNsNiJ4KgfJAwKSL711Oyhlw=="
+      "resolved": "file:vendor/prime-agent-ai-0.7.0-gooeypi.2.tgz",
+      "integrity": "sha512-wx9pGU03TF5w9Uxky9SVKkFw0FY4onXDbD3A3BEowRBPDLERKfiiF/sHqMtzAI4CHjmd40sDki3ZmgbQHR1Uaw=="
     }
   }
 }

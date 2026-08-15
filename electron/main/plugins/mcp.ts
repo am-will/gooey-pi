@@ -3,7 +3,7 @@ import { renameSync, type BigIntStats, type Stats } from 'node:fs'
 import { lstat, mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { CapabilityMutationInput, HarnessId, McpConnectionInput, McpStateInput, ProcessOutcome } from '../../../src/types/api'
-import { isPathWithin, isRecord, requireString } from '../validation'
+import { isPathWithin, isRecord, requireHttpsOrLoopbackUrl, requireString } from '../validation'
 import { errorCode, readAtMost } from './file-io'
 
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
@@ -272,18 +272,14 @@ export function validateMcpConnection(value: unknown, harness: HarnessId = 'prim
   if (scope !== 'user' && scope !== 'project') throw new TypeError('MCP scope must be user or project')
   const projectPath = scope === 'project' ? requireString(value.projectPath, 'projectPath', { min: 1, max: 4096 }) : undefined
   if (value.type === 'http') {
-    const urlValue = requireString(value.url, 'MCP server URL', { min: 1, max: 2_048, trim: true })
-    let url: URL
-    try { url = new URL(urlValue) } catch { throw new TypeError('MCP server URL is invalid') }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('MCP server URL must use http or https')
-    if (url.username || url.password) throw new TypeError('MCP server URL credentials are not allowed')
+    const url = requireHttpsOrLoopbackUrl(value.url, { label: 'MCP server URL', max: 2_048 })
     const auth = value.auth ?? 'none'
     if (auth !== 'none' && auth !== 'oauth' && auth !== 'bearer') throw new TypeError('MCP authentication must be none, oauth, or bearer')
     const bearerTokenEnvVar = auth === 'bearer'
       ? requireString(value.bearerTokenEnvVar, 'Bearer token environment variable', { min: 1, max: 128, trim: true })
       : undefined
     if (bearerTokenEnvVar && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(bearerTokenEnvVar)) throw new TypeError('Bearer token environment variable is invalid')
-    return { name, scope, projectPath, type: 'http', url: url.toString(), auth, bearerTokenEnvVar }
+    return { name, scope, projectPath, type: 'http', url, auth, bearerTokenEnvVar }
   }
   if (value.type === 'stdio') {
     if (harness === 'prime') throw new TypeError('Prime Agent MCP integrations support remote HTTP servers only')
