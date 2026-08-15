@@ -1,12 +1,20 @@
 import { spawnSync } from 'node:child_process'
 import { accessSync, constants, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, win32 } from 'node:path'
+import { dirname, join, posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const localRequire = createRequire(import.meta.url)
 const packageJsonPath = fileURLToPath(new URL('../../package.json', import.meta.url))
 const nvmrcPath = fileURLToPath(new URL('../../.nvmrc', import.meta.url))
+
+export function validateAbsoluteSingleLinePath(value, label, platform = process.platform) {
+  const pathApi = platform === 'win32' ? win32 : posix
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || /[\0\r\n]/.test(value) || !pathApi.isAbsolute(value)) {
+    throw new Error(`${label} must be an absolute single-line path`)
+  }
+  return value
+}
 
 /**
  * Resolves a release-script command to a spawn invocation that works on every platform.
@@ -24,11 +32,11 @@ export function resolveCommandInvocation(command, args, platform = process.platf
   if (command === 'npm') {
     const npmCli = env.npm_execpath
     if (npmCli) {
-      const absolute = platform === 'win32' ? win32.isAbsolute(npmCli) : isAbsolute(npmCli)
-      if (!absolute || !/\.[cm]?js$/i.test(npmCli)) {
+      const validatedNpmCli = validateAbsoluteSingleLinePath(npmCli, 'npm_execpath', platform)
+      if (!/\.[cm]?js$/i.test(validatedNpmCli)) {
         throw new Error('npm_execpath must identify an absolute JavaScript npm CLI path')
       }
-      return { file: process.execPath, args: [npmCli, ...args], shell: false }
+      return { file: process.execPath, args: [validatedNpmCli, ...args], shell: false }
     }
     if (platform === 'win32') {
       const adjacentCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
@@ -41,10 +49,11 @@ export function resolveCommandInvocation(command, args, platform = process.platf
 }
 
 export function runCommand(command, args, options = {}) {
-  const invocation = resolveCommandInvocation(command, args)
+  const env = options.env ?? process.env
+  const invocation = resolveCommandInvocation(command, args, options.platform ?? process.platform, env)
   const result = spawnSync(invocation.file, invocation.args, {
     stdio: 'inherit',
-    env: options.env ?? process.env,
+    env,
     shell: invocation.shell,
   })
   if (result.error) throw result.error
@@ -121,24 +130,41 @@ function assertMinimumVersion(label, version, minimum, allowLeadingV = false) {
   }
 }
 
-export function readNpmVersion(options = {}) {
+function removeFinalLineEnding(output) {
+  if (output.endsWith('\r\n')) return output.slice(0, -2)
+  if (output.endsWith('\n') || output.endsWith('\r')) return output.slice(0, -1)
+  return output
+}
+
+export function readNpmOutput(args, options = {}) {
   const platform = options.platform ?? process.platform
   const env = options.env ?? process.env
-  const invocation = resolveCommandInvocation('npm', ['--version'], platform, env)
+  const invocation = options.npmCliPath
+    ? {
+        file: process.execPath,
+        args: [validateAbsoluteSingleLinePath(options.npmCliPath, 'npm CLI path', platform), ...args],
+        shell: false,
+      }
+    : resolveCommandInvocation('npm', args, platform, env)
   const result = spawnSync(invocation.file, invocation.args, {
     encoding: 'utf8',
     env,
     shell: invocation.shell,
     windowsHide: true,
   })
-  if (result.error) throw new Error(`Cannot run npm --version: ${result.error.message}`)
+  const command = `npm ${args.join(' ')}`
+  if (result.error) throw new Error(`Cannot run ${command}: ${result.error.message}`)
   if (result.status !== 0) {
     const detail = result.stderr?.trim()
-    throw new Error(`npm --version failed with exit code ${result.status ?? `signal ${result.signal}`}${detail ? `: ${detail}` : ''}`)
+    throw new Error(`${command} failed with exit code ${result.status ?? `signal ${result.signal}`}${detail ? `: ${detail}` : ''}`)
   }
-  const version = result.stdout?.trim()
-  if (!version) throw new Error('npm --version returned no version')
-  return version
+  const output = removeFinalLineEnding(result.stdout ?? '')
+  if (!output) throw new Error(`${command} returned no output`)
+  return output
+}
+
+export function readNpmVersion(options = {}) {
+  return readNpmOutput(['--version'], options)
 }
 
 export function assertSupportedNode(version = process.version, toolchain = readRepositoryToolchain()) {
