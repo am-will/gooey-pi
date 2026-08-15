@@ -140,16 +140,15 @@ describe('AutomationService', () => {
     }
   })
 
-  it('revalidates a queued task against persisted state immediately before dispatch', async () => {
-    const stateStore = store()
-    const started: string[] = []
+  it('cancels a stale queued generation before dispatch and runs the updated generation', async () => {
+    const started: Array<{ id: string; prompt: string; revision: number }> = []
     const releases: Array<() => void> = []
-    const run = vi.fn((task: { id: string }) => {
-      started.push(task.id)
+    const run = vi.fn((task: { id: string; prompt: string; revision: number }) => {
+      started.push({ id: task.id, prompt: task.prompt, revision: task.revision })
       if (started.length > 2) return Promise.resolve({})
       return new Promise<Record<string, never>>((resolveRun) => releases.push(() => resolveRun({})))
     })
-    const service = new AutomationService(stateStore, {
+    const service = new AutomationService(store(), {
       validateTarget: async () => undefined,
       validateExecution: async () => undefined,
       run,
@@ -158,26 +157,28 @@ describe('AutomationService', () => {
     await service.start()
     const first = await service.create({ prompt: 'First blocker', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
     const second = await service.create({ prompt: 'Second blocker', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
-    const stale = await service.create({ prompt: 'Stale queued task', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
-    const next = await service.create({ prompt: 'Run after stale entry', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const v1 = await service.create({ prompt: 'Generation v1', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
 
     try {
       await service.runNow(first.id)
       await service.runNow(second.id)
-      await eventually(() => expect(started).toEqual([first.id, second.id]))
-      await service.runNow(stale.id)
-      // Model a queued entry whose persisted task disappears without the
-      // in-memory queue receiving the public delete notification.
-      await stateStore.update((state) => {
-        const index = state.schedules.findIndex((task) => task.id === stale.id)
-        state.schedules.splice(index, 1)
-      })
-      await service.runNow(next.id)
+      await eventually(() => expect(started.map(({ id }) => id)).toEqual([first.id, second.id]))
+      const staleRun = await service.runNow(v1.id)
+      const v2 = await service.update(v1.id, { revision: v1.revision, prompt: 'Generation v2' })
+      const currentRun = await service.runNow(v2.id)
 
       releases[0]()
-      await eventually(() => expect(started).toHaveLength(3))
-      expect(started[2]).toBe(next.id)
-      expect(run).not.toHaveBeenCalledWith(expect.objectContaining({ id: stale.id }))
+      await eventually(() => expect(service.get(v2.id).runs.find(({ id }) => id === currentRun.id)?.status).toBe('succeeded'))
+      expect(started).toContainEqual({ id: v2.id, prompt: 'Generation v2', revision: 2 })
+      const runs = service.get(v2.id).runs
+      expect(runs.find(({ id }) => id === staleRun.id)).toMatchObject({
+        taskRevision: 1,
+        status: 'cancelled',
+        finishedAt: '2030-01-01T00:00:00.000Z',
+        error: 'Scheduled task changed before this queued run could start.',
+      })
+      expect(runs.find(({ id }) => id === currentRun.id)).toMatchObject({ taskRevision: 2, status: 'succeeded' })
+      expect(started).not.toContainEqual(expect.objectContaining({ id: v1.id, revision: 1 }))
     } finally {
       for (const release of releases) release()
       await service.stop()

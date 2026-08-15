@@ -447,7 +447,10 @@ export class AutomationService {
 
   private async dispatch(task: AutomationScheduleRecord, runId: string): Promise<void> {
     const startedAt = this.now().toISOString()
-    if (!await this.markRunStarted(task.id, runId, startedAt)) return
+    if (!await this.markRunStarted(task.id, runId, task.revision, startedAt)) {
+      this.changed({ taskId: task.id, reason: 'run' })
+      return
+    }
     try {
       const result = await this.options.run(task)
       await this.updateRun(task.id, runId, { status: 'succeeded', finishedAt: this.now().toISOString(), ...result })
@@ -468,11 +471,19 @@ export class AutomationService {
     this.changed({ taskId: task.id, reason: 'run' })
   }
 
-  private async markRunStarted(taskId: string, runId: string, startedAt: string): Promise<boolean> {
+  private async markRunStarted(taskId: string, runId: string, expectedRevision: number, startedAt: string): Promise<boolean> {
     return this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === taskId)
-      const run = task?.runs.find((candidate) => candidate.id === runId)
+      if (!task) return false
+      const run = task.runs.find((candidate) => candidate.id === runId)
       if (run?.status !== 'queued') return false
+      if (run.taskRevision !== expectedRevision || task.revision !== expectedRevision) {
+        Object.assign(run, {
+          status: 'cancelled', finishedAt: startedAt,
+          error: 'Scheduled task changed before this queued run could start.',
+        })
+        return false
+      }
       Object.assign(run, { status: 'running', startedAt })
       return true
     })
