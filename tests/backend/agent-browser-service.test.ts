@@ -6,6 +6,12 @@ import type { AgentBrowserPointerEvent, AgentBrowserState } from '../../src/type
 
 let nextGuestId = 1000
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise })
+  return { promise, resolve }
+}
+
 class FakeGuest extends EventEmitter {
   readonly id = nextGuestId++
   url = 'about:blank'
@@ -15,6 +21,7 @@ class FakeGuest extends EventEmitter {
   throttling: boolean | null = null
   audioMuted = false
   closeOptions: Electron.CloseOpts | null = null
+  deferClose = false
   readonly loadedUrls: string[] = []
   /** CDP commands dispatched through the debugger, flattened as {method, ...params}. */
   readonly inputEvents: Array<Record<string, unknown>> = []
@@ -80,7 +87,7 @@ class FakeGuest extends EventEmitter {
   }
   close(options: Electron.CloseOpts) {
     this.closeOptions = options
-    this.destroy()
+    if (!this.deferClose) this.destroy()
   }
 }
 
@@ -141,6 +148,23 @@ describe('AgentBrowserService', () => {
     expect(() => service.attachTab(pending.tabId, guest.id)).toThrow(/already bound/)
     service.closeTab(pending.tabId)
     await expect(opening).rejects.toThrow()
+  })
+
+  it('promptly rejects actions waiting for attachment when their session is revoked', async () => {
+    const { service } = fixture()
+    const opening = service.openTab('/sessions/a.jsonl', {})
+    const pending = service.state().tabs.find((tab) => tab.sessionFile === '/sessions/a.jsonl')
+    expect(pending).toBeDefined()
+    const action = service.evaluate('/sessions/a.jsonl', { tabId: pending!.tabId, code: "'never-executed'" })
+    const openingOutcome = opening.then(() => null, (error: unknown) => error)
+    const actionOutcome = action.then(() => null, (error: unknown) => error)
+    await Promise.resolve()
+
+    expect(service.closeForSession('/sessions/a.jsonl')).toBe(true)
+    const [openingError, actionError] = await Promise.all([openingOutcome, actionOutcome])
+    expect(String(openingError)).toMatch(/browser tab access changed/i)
+    expect(String(actionError)).toMatch(/browser tab access changed/i)
+    expect(service.state().tabs).toEqual([])
   })
 
   it('scopes agent actions to the owning session', async () => {
@@ -248,6 +272,38 @@ describe('AgentBrowserService', () => {
     expect(service.state().tabs.find((tab) => tab.tabId === first.tabId)?.active).toBe(true)
   })
 
+  it('rejects work queued for a destroyed guest while fresh work follows reattachment', async () => {
+    const { service, newGuest, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    guest.scriptResult = (code) => {
+      if (code.includes('running-before-destroy')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'running-before-destroy'" })
+    await started.promise
+    const stale = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-before-destroy'" })
+    guest.destroy()
+    const fresh = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-after-destroy'" })
+    const replacement = newGuest()
+    service.attachTab(tabId, replacement.id)
+    const staleRejected = expect(stale).rejects.toThrow(/browser tab access changed/i)
+    await Promise.resolve()
+    expect(replacement.executedScripts).toEqual([])
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+    await staleRejected
+    await expect(fresh).resolves.toEqual({})
+    expect(replacement.executedScripts.some((code) => code.includes('queued-before-destroy'))).toBe(false)
+    expect(replacement.executedScripts.some((code) => code.includes('queued-after-destroy'))).toBe(true)
+  })
+
   it('closes every browser guest owned by a session without disturbing other sessions', async () => {
     const { service, newGuest, openAttached } = fixture()
     const first = await openAttached('/sessions/a.jsonl', 'https://game.example/one')
@@ -290,6 +346,120 @@ describe('AgentBrowserService', () => {
     await expect(service.closeTabScoped('/sessions/a.jsonl', { tabId: 'preview' })).rejects.toThrow(/belongs to the user/)
     expect(service.setPreviewContext(null, null)).toBe(true)
     await expect(service.click('/sessions/a.jsonl', { x: 1, y: 1 })).rejects.toThrow(/no browser tab yet/)
+  })
+
+  it('rejects queued Preview work after the user clears the binding', async () => {
+    const { service, newGuest } = fixture()
+    const preview = newGuest()
+    service.setPreviewContext(preview.id, '/sessions/a.jsonl')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    preview.scriptResult = (code) => {
+      if (code.includes('running-before-clear')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { code: "'running-before-clear'" })
+    await started.promise
+    const queued = service.evaluate('/sessions/a.jsonl', { code: "'queued-after-clear'" })
+    expect(service.setPreviewContext(null, null)).toBe(true)
+    const queuedRejected = expect(queued).rejects.toThrow(/browser tab access changed/i)
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+    await queuedRejected
+    expect(preview.executedScripts.some((code) => code.includes('queued-after-clear'))).toBe(false)
+  })
+
+  it('revokes the old owner while preserving Preview serialization across reassignment', async () => {
+    const { service, newGuest } = fixture()
+    const preview = newGuest()
+    service.setPreviewContext(preview.id, '/sessions/a.jsonl')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    const executionOrder: string[] = []
+    preview.scriptResult = (code) => {
+      if (code.includes('running-owner-a')) {
+        executionOrder.push('running-owner-a')
+        started.resolve()
+        return release.promise
+      }
+      if (code.includes('queued-owner-a')) executionOrder.push('queued-owner-a')
+      if (code.includes('next-owner-b')) executionOrder.push('next-owner-b')
+      return JSON.stringify({ completed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { code: "'running-owner-a'" })
+    await started.promise
+    const stale = service.evaluate('/sessions/a.jsonl', { code: "'queued-owner-a'" })
+    expect(service.setPreviewContext(preview.id, '/sessions/b.jsonl')).toBe(true)
+    const nextOwner = service.evaluate('/sessions/b.jsonl', { code: "'next-owner-b'" })
+    const staleRejected = expect(stale).rejects.toThrow(/browser tab access changed/i)
+    await Promise.resolve()
+    expect(executionOrder).toEqual(['running-owner-a'])
+    release.resolve(JSON.stringify({ completed: true }))
+
+    // Already-running work is not retroactively cancelled, but all work that
+    // was still queued under the previous owner loses authority.
+    await expect(running).resolves.toEqual({ completed: true })
+    await staleRejected
+    await expect(nextOwner).resolves.toEqual({ completed: true })
+    expect(executionOrder).toEqual(['running-owner-a', 'next-owner-b'])
+  })
+
+  it('rejects queued work when its session closes before guest teardown completes', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    guest.deferClose = true
+    const started = deferred<void>()
+    const release = deferred<string>()
+    guest.scriptResult = (code) => {
+      if (code.includes('running-before-session-close')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'running-before-session-close'" })
+    await started.promise
+    const queued = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-after-session-close'" })
+    expect(service.closeForSession('/sessions/a.jsonl')).toBe(true)
+    const queuedRejected = expect(queued).rejects.toThrow(/browser tab access changed/i)
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+    await queuedRejected
+    expect(guest.executedScripts.some((code) => code.includes('queued-after-session-close'))).toBe(false)
+    guest.destroy()
+  })
+
+  it('rejects queued work when an ordinary attached tab is closed', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    guest.scriptResult = (code) => {
+      if (code.includes('running-before-tab-close')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'running-before-tab-close'" })
+    await started.promise
+    const queued = service.evaluate('/sessions/a.jsonl', { tabId, code: "'queued-after-tab-close'" })
+    expect(service.closeTab(tabId)).toBe(true)
+    const queuedRejected = expect(queued).rejects.toThrow(/browser tab access changed/i)
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+    await queuedRejected
+    expect(guest.executedScripts.some((code) => code.includes('queued-after-tab-close'))).toBe(false)
   })
 
   it('announces every agent action so the UI can surface the Browser panel', async () => {

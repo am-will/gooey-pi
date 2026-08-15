@@ -123,6 +123,10 @@ export abstract class CapabilityBridge {
       const input = requireRecord(JSON.parse(raw), 'request')
       const method = requireString(input.method, 'method', { min: 1, max: 32, trim: true })
       const params = input.params === undefined ? {} : requireRecord(input.params, 'params')
+      // Authentication above happens before an arbitrarily slow body arrives. Re-check
+      // the exact claim object at the dispatch boundary so revocation cannot be raced.
+      if (this.claims.get(claim.token) !== claim) { send(response, 401, { ok: false, error: 'Capability expired' }); return }
+      if (claim.expiresAt <= Date.now()) { this.revoke(claim.token); send(response, 401, { ok: false, error: 'Capability expired' }); return }
       const result = await this.dispatch(method, params, claim)
       send(response, 200, { ok: true, result })
     } catch (error) {
