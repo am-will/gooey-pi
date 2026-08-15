@@ -407,6 +407,18 @@ export class PluginService {
 
   async mutateCapability(inputValue: unknown): Promise<ProcessOutcome> {
     const input = validateCapabilityMutation(inputValue, this.harness)
+    // OMP's user-level allow/deny lists override per-entry state across every
+    // source. Route both UI mutation entrypoints through the same pinned,
+    // globally coordinated state transition so a later /mcp reload cannot
+    // resurrect a server the user disabled (or suppress a corrected one).
+    if (this.harness === 'omp' && input.kind === 'mcp' && input.action !== 'remove') {
+      return await this.setMcpEnabled({
+        name: input.name,
+        scope: input.scope,
+        projectPath: input.projectPath,
+        enabled: input.action === 'enable',
+      })
+    }
     const safeProjectPath = input.scope === 'project'
       ? await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
       : undefined

@@ -945,6 +945,60 @@ const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(installStarted)},'
 })
 
 describe('PluginService OMP parity', () => {
+  it.each(['user', 'project'] as const)('reconciles OMP %s MCP capability mutations across reloads', async (scope) => {
+    const root = temp()
+    const agentDir = join(root, '.omp', 'agent')
+    const project = join(root, 'project')
+    const projectDir = join(project, '.omp')
+    const name = `${scope}Legacy`
+    mkdirSync(agentDir, { recursive: true })
+    mkdirSync(projectDir, { recursive: true })
+    const userPath = join(agentDir, 'mcp.json')
+    const projectPath = join(projectDir, 'mcp.json')
+    const definition = { type: 'sse', url: 'http://remote.example/sse', enabled: false }
+    writeFileSync(userPath, JSON.stringify({
+      enabledServers: [name],
+      mcpServers: scope === 'user' ? { [name]: definition } : {},
+    }))
+    writeFileSync(projectPath, JSON.stringify({
+      mcpServers: scope === 'project' ? { [name]: definition } : {},
+    }))
+    const inputScope = scope === 'project' ? { scope, projectPath: project } : { scope }
+    const service = new PluginService(null, async (path) => realpathSync(path), { agentDir, harness: 'omp' })
+
+    await expect(service.mutateCapability({
+      kind: 'mcp', action: 'disable', name, ...inputScope,
+    })).resolves.toMatchObject({ ok: true })
+
+    let userConfig = JSON.parse(readFileSync(userPath, 'utf8'))
+    expect(userConfig.enabledServers ?? []).not.toContain(name)
+    expect(userConfig.disabledServers).toContain(name)
+
+    // Even if a still-running harness retained or rewrote entry.enabled=true,
+    // its next MCP reload remains suppressed by the persisted global denylist.
+    const definitionPath = scope === 'user' ? userPath : projectPath
+    const reloadedDefinition = JSON.parse(readFileSync(definitionPath, 'utf8'))
+    reloadedDefinition.mcpServers[name].enabled = true
+    writeFileSync(definitionPath, JSON.stringify(reloadedDefinition))
+    const reloadedService = new PluginService(null, async (path) => realpathSync(path), { agentDir, harness: 'omp' })
+    expect((await reloadedService.list(project)).skills.find((item) => item.name === name)).toMatchObject({ enabled: false })
+
+    // Once the persisted endpoint is corrected, enable clears both global
+    // overrides even when the entry itself already says enabled.
+    const corrected = JSON.parse(readFileSync(definitionPath, 'utf8'))
+    corrected.mcpServers[name].url = 'https://remote.example/sse'
+    writeFileSync(definitionPath, JSON.stringify(corrected))
+    await expect(service.mutateCapability({
+      kind: 'mcp', action: 'enable', name, ...inputScope,
+    })).resolves.toMatchObject({ ok: true })
+
+    userConfig = JSON.parse(readFileSync(userPath, 'utf8'))
+    expect(userConfig.enabledServers ?? []).not.toContain(name)
+    expect(userConfig.disabledServers ?? []).not.toContain(name)
+    expect((await new PluginService(null, async (path) => realpathSync(path), { agentDir, harness: 'omp' }).list(project))
+      .skills.find((item) => item.name === name)).toMatchObject({ enabled: true })
+  })
+
   it('discovers OMP-native user, project, MCP, and installed plugin surfaces', async () => {
     const root = temp()
     const agentDir = join(root, '.omp', 'agent')
