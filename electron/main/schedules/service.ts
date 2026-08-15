@@ -285,6 +285,11 @@ export class AutomationService {
     return updated
   }
 
+  /**
+   * Deleting a task cancels work that has not started. A run that already
+   * crossed the persisted `running` transition is allowed to finish because
+   * schedule executors do not expose a reliable cancellation primitive.
+   */
   async delete(idValue: unknown): Promise<boolean> {
     const id = requireId(idValue, 'schedule id')
     const removed = await this.store.update((state) => {
@@ -293,7 +298,12 @@ export class AutomationService {
       state.schedules.splice(index, 1)
       return true
     })
-    if (removed) this.changed({ taskId: id, reason: 'deleted' })
+    if (removed) {
+      for (let index = this.pending.length - 1; index >= 0; index -= 1) {
+        if (this.pending[index].task.id === id) this.pending.splice(index, 1)
+      }
+      this.changed({ taskId: id, reason: 'deleted' })
+    }
     this.armTimer()
     return removed
   }
@@ -437,7 +447,7 @@ export class AutomationService {
 
   private async dispatch(task: AutomationScheduleRecord, runId: string): Promise<void> {
     const startedAt = this.now().toISOString()
-    await this.updateRun(task.id, runId, { status: 'running', startedAt })
+    if (!await this.markRunStarted(task.id, runId, startedAt)) return
     try {
       const result = await this.options.run(task)
       await this.updateRun(task.id, runId, { status: 'succeeded', finishedAt: this.now().toISOString(), ...result })
@@ -456,6 +466,16 @@ export class AutomationService {
       }
     }
     this.changed({ taskId: task.id, reason: 'run' })
+  }
+
+  private async markRunStarted(taskId: string, runId: string, startedAt: string): Promise<boolean> {
+    return this.store.update((state) => {
+      const task = state.schedules.find((candidate) => candidate.id === taskId)
+      const run = task?.runs.find((candidate) => candidate.id === runId)
+      if (run?.status !== 'queued') return false
+      Object.assign(run, { status: 'running', startedAt })
+      return true
+    })
   }
 
   private async updateRun(taskId: string, runId: string, patch: Partial<ScheduleRunRecord>): Promise<void> {
