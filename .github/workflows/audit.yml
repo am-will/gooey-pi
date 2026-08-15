@@ -22,6 +22,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm run toolchain:bootstrap
-      - run: npm run release:preflight -- --toolchain-only
+      - run: npm run release:preflight:toolchain
       - name: Audit production dependencies for high and critical advisories
         run: npm run audit:production

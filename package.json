@@ -37,6 +37,7 @@
     "package:win": "node scripts/release/package.mjs --public --platform win",
     "package:win:local-qa": "node scripts/release/package.mjs --qa --platform win",
     "release:preflight": "node scripts/release/preflight.mjs",
+    "release:preflight:toolchain": "node scripts/release/preflight.mjs --toolchain-only",
     "toolchain:bootstrap": "node scripts/release/bootstrap-npm.mjs",
     "postinstall": "node scripts/release/install-app-deps.mjs"
   },

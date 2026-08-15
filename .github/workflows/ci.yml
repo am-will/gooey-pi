@@ -35,7 +35,7 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npm run release:preflight -- --toolchain-only
+      - run: npm run release:preflight:toolchain
       - run: npm run typecheck
       - run: npm run check
       - run: npm run test:coverage
@@ -67,7 +67,7 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npm run release:preflight -- --toolchain-only
+      - run: npm run release:preflight:toolchain
       - run: npm run build:bundle
       - run: npm run test:e2e:hermetic
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -131,7 +131,7 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npm run release:preflight -- --toolchain-only
+      - run: npm run release:preflight:toolchain
       - run: npm run build:bundle
       - run: node node_modules/electron-builder/cli.js --dir --${{ matrix.target }} --${{ matrix.arch }} --publish=never --config.directories.output=release/${{ matrix.target }}/${{ matrix.arch }} ${{ matrix.extra_args }}
         env:
@@ -187,7 +187,7 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npm run release:preflight -- --toolchain-only
+      - run: npm run release:preflight:toolchain
       - run: ${{ matrix.package }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
