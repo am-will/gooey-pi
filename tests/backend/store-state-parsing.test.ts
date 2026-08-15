@@ -50,7 +50,7 @@ describe('persisted project parsing', () => {
       version: 3,
       projects: [{
         id: 'project-1',
-        harness: 'legacy-harness',
+        harness: 'prime',
         name: 'GooeyPi',
         path: '/repos/gooey-pi',
         primaryFolder: '/repos/gooey-pi',
@@ -78,6 +78,7 @@ describe('persisted project parsing', () => {
       version: 3,
       projects: [{
         id: 'project-1',
+        harness: 'prime',
         name: 'GooeyPi',
         path: '/repos/gooey-pi',
         folders: ['/repos/gooey-pi', 7],
@@ -95,6 +96,39 @@ describe('persisted project parsing', () => {
       '/repos/gooey-pi': { dev: '1', ino: '2', birthtimeNs: '1700000000000000000' },
       '/repos/other': { dev: '1', ino: '3', birthtimeNs: undefined },
     })
+  })
+
+  it.each([1, 2])('migrates only absent harnesses from recognized pre-harness version %s to Prime', (version) => {
+    const legacyProject = {
+      id: 'legacy-project',
+      name: 'Legacy',
+      path: '/repos/legacy',
+      folders: ['/repos/legacy'],
+      primaryFolder: '/repos/legacy',
+    }
+    const { projects } = loadState({
+      version,
+      projects: [legacyProject, { ...legacyProject, id: 'unknown-project', harness: 'future-harness' }],
+    })
+
+    expect(projects).toHaveLength(1)
+    expect(projects[0]).toMatchObject({ id: 'legacy-project', harness: 'prime' })
+  })
+
+  it.each([3, 4])('drops version %s projects whose harness is absent or unknown', (version) => {
+    const project = {
+      id: 'project-1',
+      name: 'GooeyPi',
+      path: '/repos/gooey-pi',
+      folders: ['/repos/gooey-pi'],
+      primaryFolder: '/repos/gooey-pi',
+    }
+    const { projects } = loadState({
+      version,
+      projects: [project, { ...project, id: 'unknown-project', harness: 'future-harness' }, { ...project, id: 'prime-project', harness: 'prime' }],
+    })
+
+    expect(projects.map(({ id, harness }) => ({ id, harness }))).toEqual([{ id: 'prime-project', harness: 'prime' }])
   })
 })
 
@@ -137,11 +171,33 @@ describe('persisted settings parsing', () => {
 })
 
 describe('persisted schedule parsing', () => {
-  it('keeps a well-formed schedule and normalizes its harness', () => {
+  it('keeps a well-formed schedule and drops an unknown harness', () => {
     const { schedules } = loadState({ version: 3, schedules: [validSchedule, { ...validSchedule, id: 'schedule-2', harness: 'unknown' }] })
-    expect(schedules).toHaveLength(2)
+    expect(schedules).toHaveLength(1)
     expect(schedules[0]).toMatchObject({ id: 'schedule-1', harness: 'omp', revision: 2, runs: [] })
-    expect(schedules[1].harness).toBe('prime')
+  })
+
+  it('migrates an absent version 2 schedule harness to Prime', () => {
+    const { harness: _harness, ...legacySchedule } = validSchedule
+    const { schedules } = loadState({ version: 2, schedules: [legacySchedule, { ...legacySchedule, id: 'unknown-schedule', harness: 'future-harness' }] })
+
+    expect(schedules).toHaveLength(1)
+    expect(schedules[0]).toMatchObject({ id: 'schedule-1', harness: 'prime' })
+  })
+
+  it('ignores every schedule in version 1, which predates schedules', () => {
+    const { harness: _harness, ...missingHarness } = validSchedule
+    expect(loadState({ version: 1, schedules: [missingHarness, validSchedule] }).schedules).toEqual([])
+  })
+
+  it.each([3, 4])('drops version %s schedules whose harness is absent or unknown', (version) => {
+    const { harness: _harness, ...missingHarness } = validSchedule
+    const { schedules } = loadState({
+      version,
+      schedules: [missingHarness, { ...validSchedule, id: 'unknown-schedule', harness: 'future-harness' }, validSchedule],
+    })
+
+    expect(schedules.map(({ id, harness }) => ({ id, harness }))).toEqual([{ id: 'schedule-1', harness: 'omp' }])
   })
 
   it('drops schedules with an unusable envelope, status, or authorship', () => {

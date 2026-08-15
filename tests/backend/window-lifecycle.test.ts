@@ -17,13 +17,30 @@ const electron = vi.hoisted(() => ({
 
 vi.mock('electron', () => electron)
 
-import { activeShutdownWork, confirmAppClose, hardenRenderer, loadInitialRenderer, mainWindowChromeOptions, resolveRendererAssetPath, settleShutdown, shutdownPrompt } from '../../electron/main/index'
+import { activeShutdownWork, confirmAppClose, hardenRenderer, loadInitialRenderer, mainWindowChromeOptions, resolveRendererAssetPath, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/index'
+import { StateMigrationError, UnsupportedStateVersionError } from '../../electron/main/store'
 import type { RuntimeInfo } from '../../src/types/api'
 import type { BrowserWindow } from 'electron'
 
 type Handler = (...args: never[]) => void
 
 describe('application window lifecycle', () => {
+  it('gives migration failures a dedicated actionable startup dialog', () => {
+    const migration = new StateMigrationError(
+      'Legacy authority retirement failed.',
+      'C:\\Users\\alice\\GooeyPi\\prime-work-state-v4.json',
+      'C:\\Users\\alice\\GooeyPi\\prime-work-state.json',
+      'C:\\Users\\alice\\GooeyPi\\prime-work-state.json.migrated-v4-backup',
+    )
+
+    expect(startupFailureDialog(migration)).toMatchObject({
+      title: 'GooeyPi state migration failed',
+      detail: expect.stringMatching(/startup stopped.*retry.*prime-work-state-v4\.json.*prime-work-state\.json.*migrated-v4-backup.*do not delete/i),
+    })
+    expect(startupFailureDialog(new UnsupportedStateVersionError(99, '/tmp/state.json'))?.title).toBe('GooeyPi update required')
+    expect(startupFailureDialog(new Error('ordinary startup failure'))).toBeNull()
+  })
+
   it('uses one overlay title bar on Windows and Linux while preserving native macOS chrome', () => {
     expect(mainWindowChromeOptions('linux')).toEqual({
       titleBarStyle: 'hidden',

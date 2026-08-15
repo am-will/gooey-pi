@@ -1,11 +1,16 @@
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { lstat, realpath } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
-import { ProjectService } from '../../electron/main/projects'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isBroadProjectRoot, ProjectService } from '../../electron/main/projects'
 import { JsonStateStore } from '../../electron/main/store'
+
+const electronMocks = vi.hoisted(() => ({
+  dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() },
+}))
+vi.mock('electron', () => electronMocks)
 
 const dirs: string[] = []
 function identity(path: string): { dev: string; ino: string; birthtimeNs?: string } {
@@ -17,7 +22,11 @@ function identity(path: string): { dev: string; ino: string; birthtimeNs?: strin
   }
 }
 const identities = (...paths: string[]) => Object.fromEntries(paths.map((path) => [realpathSync(path), identity(path)]))
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  electronMocks.dialog.showOpenDialog.mockReset()
+  electronMocks.dialog.showSaveDialog.mockReset()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
 
 function setup(): { root: string; service: ProjectService; store: JsonStateStore } {
   const dir = mkdtempSync(join(tmpdir(), 'prime-work-files-')); dirs.push(dir)
@@ -26,6 +35,76 @@ function setup(): { root: string; service: ProjectService; store: JsonStateStore
   const service = new ProjectService(store, () => null)
   return { root, service, store }
 }
+
+describe('broad project root authorization', () => {
+  it.each([
+    ['POSIX filesystem root', '/', { platform: 'linux', homePath: '/Users/alice' }],
+    ['POSIX home directory', '/Users/alice', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['Windows system drive root', 'C:\\', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows secondary drive root', 'D:/', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows UNC share root', '\\\\server\\share', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows extended UNC share root', '\\\\?\\UNC\\server\\share\\', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows home directory case-insensitively', 'c:\\users\\alice', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+  ] as const)('classifies %s as too broad', (_label, path, options) => {
+    expect(isBroadProjectRoot(path, options)).toBe(true)
+  })
+
+  it.each([
+    ['POSIX project', '/Users/alice/work/app', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['POSIX home-name sibling', '/Users/alice-other', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['Windows project', 'C:\\Users\\Alice\\work\\app', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['Windows UNC project', '\\\\server\\share\\work\\app', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+  ] as const)('allows %s', (_label, path, options) => {
+    expect(isBroadProjectRoot(path, options)).toBe(false)
+  })
+
+  it.each([
+    ['filesystem root', realpathSync(resolve('/'))],
+    ['home directory', realpathSync(homedir())],
+  ])('rejects a direct grant for the %s before persisting it', async (_label, path) => {
+    const { service, store } = setup()
+    electronMocks.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [path] })
+
+    await expect(service.add()).rejects.toThrow(/Broad filesystem roots cannot be added as projects/)
+    expect(store.snapshot().projects).toEqual([])
+  })
+
+  it.each([
+    ['filesystem root', realpathSync(resolve('/'))],
+    ['home directory', realpathSync(homedir())],
+  ])('keeps a persisted %s visible but quarantined from authorization', async (_label, path) => {
+    const { root, service, store } = setup()
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push({
+      id: 'broad-project', harness: 'prime', name: 'Broad project', path, folders: [path], primaryFolder: path,
+      pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(path),
+    }) })
+
+    expect((await service.list()).map((project) => project.id)).toEqual(['broad-project'])
+    await expect(service.authorizeCwd(path === resolve('/') ? root : path)).rejects.toThrow(/unsafe broad.*remove it and add a narrower project folder/i)
+  })
+
+  it('does not reauthorize a quarantined broad grant while rebuilding after removal', async () => {
+    const { root, service, store } = setup()
+    const filesystemRoot = realpathSync(resolve('/'))
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push(
+      {
+        id: 'broad-project', harness: 'prime', name: 'Broad project', path: filesystemRoot, folders: [filesystemRoot], primaryFolder: filesystemRoot,
+        pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(filesystemRoot),
+      },
+      {
+        id: 'narrow-project', harness: 'prime', name: 'Narrow project', path: root, folders: [root], primaryFolder: root,
+        pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root),
+      },
+    ) })
+
+    await service.list()
+    await expect(service.authorizeCwd(root)).resolves.toBe(realpathSync(root))
+    await expect(service.remove('narrow-project')).resolves.toBe(true)
+    await expect(service.authorizeCwd(root)).rejects.toThrow(/unsafe broad.*remove it and add a narrower project folder/i)
+  })
+})
 
 describe('ProjectService file listing', () => {
   it('lists project files while excluding generated trees and symlinks', async () => {
