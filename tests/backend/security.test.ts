@@ -42,7 +42,7 @@ describe('security boundaries', () => {
     await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
   })
 
-  it('lists an inferred project without recursively authorizing it for Git execution', async () => {
+  it('authorizes an inferred project discovered from sessions for cwd and Git execution', async () => {
     const dir = temp('prime-work-inferred-')
     const folder = join(dir, 'project'); mkdirSync(folder)
     const store = new JsonStateStore(join(dir, 'state.json'))
@@ -55,7 +55,9 @@ describe('security boundaries', () => {
     const listed = await service.list()
     expect(listed).toHaveLength(1)
     expect(listed[0].inferred).toBe(true)
-    expect(branchCalls).toBe(0)
+    expect(branchCalls).toBe(1)
+    expect(await service.authorizeCwd(folder)).toBe(realpathSync(folder))
+    expect(await service.remove(listed[0].id)).toBe(true)
     await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
   })
 

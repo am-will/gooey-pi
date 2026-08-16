@@ -322,25 +322,22 @@ export class ProjectService {
       if (primaryGranted) branchTargets.push({ record, cwd: project.primaryFolder })
     }
 
-    // Persist any legacy/remount identity upgrades before exposing them as
-    // grants. The previous complete map keeps serving while this is in flight.
-    if (authorizationRevision === this.authorizationRevision && identityRefreshes.length) {
-      const refreshed = await this.persistFolderIdentityRefreshes(identityRefreshes, authorizationRevision)
-      for (const refresh of identityRefreshes) if (!refreshed.has(refresh.configured)) nextAuthorized.delete(refresh.configured)
-    }
-    if (authorizationRevision === this.authorizationRevision) {
-      this.authorizedRoots = nextAuthorized
-      this.quarantinedBroadRoots = nextQuarantinedBroadRoots
-    }
-
     for (const projectPath of sessionPaths) {
       if (!projectPath || !existingSessionPaths.has(projectPath)) continue
       const canonical = canonicalSessionPaths.get(projectPath)!
       if (represented.has(canonical) || dismissed.has(canonical)) continue
       if (await this.isBroadRoot(canonical)) continue
       represented.add(canonical)
+      let sessionGranted = false
+      try {
+        const { identity } = await this.captureFolderIdentity(canonical)
+        nextAuthorized.set(canonical, identity)
+        sessionGranted = true
+      } catch {
+        // Stale or symlinked directories remain unauthorized
+      }
       const stats = sessionStats.get(canonical)
-      records.push({
+      const record: ProjectRecord = {
         id: inferredId(canonical),
         harness: this.harness,
         name: basename(canonical) || canonical,
@@ -353,7 +350,20 @@ export class ProjectService {
         sessionCount: stats?.count ?? 0,
         gitBranch: undefined,
         inferred: true,
-      })
+      }
+      records.push(record)
+      if (sessionGranted) branchTargets.push({ record, cwd: canonical })
+    }
+
+    // Persist any legacy/remount identity upgrades before exposing them as
+    // grants. The previous complete map keeps serving while this is in flight.
+    if (authorizationRevision === this.authorizationRevision && identityRefreshes.length) {
+      const refreshed = await this.persistFolderIdentityRefreshes(identityRefreshes, authorizationRevision)
+      for (const refresh of identityRefreshes) if (!refreshed.has(refresh.configured)) nextAuthorized.delete(refresh.configured)
+    }
+    if (authorizationRevision === this.authorizationRevision) {
+      this.authorizedRoots = nextAuthorized
+      this.quarantinedBroadRoots = nextQuarantinedBroadRoots
     }
     // Branch enrichment runs after the swap: authorization must never wait on
     // git subprocesses.
@@ -552,6 +562,21 @@ export class ProjectService {
         }
       }
     }
+    const snapshot = this.store.snapshot()
+    const dismissed = new Set(await Promise.all(snapshot.dismissedProjectPaths.map(async (path) => {
+      try { return await requireExistingDirectory(path, 'dismissed project path') } catch { return resolve(path) }
+    })))
+    const sessions = await this.sessionProvider()
+    const sessionPaths = [...new Set(sessions.map((session) => session.projectPath))]
+    for (const projectPath of sessionPaths) {
+      if (!projectPath || authorizationRevision !== this.authorizationRevision) break
+      try {
+        const canonical = await requireExistingDirectory(projectPath, 'session project path')
+        if (dismissed.has(canonical) || (await this.isBroadRoot(canonical))) continue
+        const { identity } = await this.captureFolderIdentity(canonical)
+        nextAuthorized.set(canonical, identity)
+      } catch { /* skip stale or invalid */ }
+    }
     if (authorizationRevision === this.authorizationRevision && identityRefreshes.length) {
       const refreshed = await this.persistFolderIdentityRefreshes(identityRefreshes, authorizationRevision)
       for (const refresh of identityRefreshes) if (!refreshed.has(refresh.configured)) nextAuthorized.delete(refresh.configured)
@@ -646,7 +671,19 @@ export class ProjectService {
       roots.push(verified.path)
     }
     if (authorizationRevision !== this.authorizationRevision) throw new TypeError('project authorization changed while the request was being checked')
-    const authorizedRoot = roots.filter((root) => isPathWithin(root, path)).sort((a, b) => b.length - a.length)[0]
+    let authorizedRoot = roots.filter((root) => isPathWithin(root, path)).sort((a, b) => b.length - a.length)[0]
+    if (!authorizedRoot) {
+      await this.list()
+      const recheckedRoots: string[] = []
+      for (const [configured, expected] of this.authorizedRoots) {
+        if (this.removalRoots.has(configured)) continue
+        const verified = await this.verifyFolderIdentity(configured, expected)
+        if (verified && !this.removalRoots.has(verified.path)) {
+          recheckedRoots.push(verified.path)
+        }
+      }
+      authorizedRoot = recheckedRoots.filter((root) => isPathWithin(root, path)).sort((a, b) => b.length - a.length)[0]
+    }
     if (!authorizedRoot) {
       const productName = HARNESSES[this.harness].productName
       if ([...this.removalRoots].some((root) => isPathWithin(root, path))) throw new TypeError(`path is not inside an added ${productName} project because its project is being removed`)

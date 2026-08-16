@@ -368,6 +368,116 @@ describe('ProjectService file listing', () => {
     await expect(service.listFiles(root)).rejects.toThrow(/not inside an added Prime Work project/)
   })
 
+  it('lists files for an inferred project discovered from sessions without manual addition', async () => {
+    const { root, service } = setup()
+    writeFileSync(join(root, 'README.md'), 'inferred project readme')
+    mkdirSync(join(root, 'src'))
+    writeFileSync(join(root, 'src', 'main.ts'), 'console.log("hello")')
+    service.bindProviders({
+      sessions: async () => [session('session-1', root, '2026-03-01T00:00:00.000Z', '2026-03-02T00:00:00.000Z')],
+      branch: async () => undefined,
+    })
+
+    const listing = await service.listFiles(root)
+    expect(listing).toEqual({
+      entries: [
+        { path: 'src', type: 'directory' },
+        { path: 'src/main.ts', type: 'file' },
+        { path: 'README.md', type: 'file' },
+      ],
+      skipped: 0,
+    })
+  })
+
+  it('lists files for an inferred Pi Work project discovered from Pi agent sessions', async () => {
+    const { root, store } = setup()
+    const piService = new ProjectService(store, () => null, 'pi')
+    writeFileSync(join(root, 'config.json'), '{}')
+    piService.bindProviders({
+      sessions: async () => [{
+        id: 'pi-session-1',
+        harness: 'pi',
+        filePath: join(root, 'pi-session-1.jsonl'),
+        projectPath: root,
+        title: 'Pi Session',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+        status: 'idle',
+        depth: 0,
+        archived: false,
+      }],
+      branch: async () => undefined,
+    })
+
+    const listing = await piService.listFiles(root)
+    expect(listing).toEqual({
+      entries: [
+        { path: 'config.json', type: 'file' },
+      ],
+      skipped: 0,
+    })
+  })
+
+  it('lists files for an inferred OMP project discovered from OMP sessions', async () => {
+    const { root, store } = setup()
+    const ompService = new ProjectService(store, () => null, 'omp')
+    writeFileSync(join(root, 'omp-config.yaml'), 'version: 1')
+    ompService.bindProviders({
+      sessions: async () => [{
+        id: 'omp-session-1',
+        harness: 'omp',
+        filePath: join(root, 'omp-session-1.jsonl'),
+        projectPath: root,
+        title: 'OMP Session',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+        status: 'idle',
+        depth: 0,
+        archived: false,
+      }],
+      branch: async () => undefined,
+    })
+
+    const listing = await ompService.listFiles(root)
+    expect(listing).toEqual({
+      entries: [
+        { path: 'omp-config.yaml', type: 'file' },
+      ],
+      skipped: 0,
+    })
+  })
+
+  it('revokes file listing authorization when an inferred project is dismissed', async () => {
+    const { root, service } = setup()
+    writeFileSync(join(root, 'README.md'), 'readme')
+    service.bindProviders({
+      sessions: async () => [session('session-1', root, '2026-03-01T00:00:00.000Z', '2026-03-02T00:00:00.000Z')],
+      branch: async () => undefined,
+    })
+
+    const listed = await service.list()
+    expect(listed).toHaveLength(1)
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0 })
+
+    expect(await service.remove(listed[0].id)).toBe(true)
+    await expect(service.listFiles(root)).rejects.toThrow(/not inside an added Prime Work project/)
+  })
+
+  it('safely ignores stale and nonexistent session project paths during file listing', async () => {
+    const { root, service } = setup()
+    writeFileSync(join(root, 'index.ts'), 'export {}')
+    const nonexistent = join(root, 'does-not-exist')
+    service.bindProviders({
+      sessions: async () => [
+        session('stale-session', nonexistent, '2026-03-01T00:00:00.000Z', '2026-03-02T00:00:00.000Z'),
+        session('valid-session', root, '2026-03-01T00:00:00.000Z', '2026-03-02T00:00:00.000Z'),
+      ],
+      branch: async () => undefined,
+    })
+
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'index.ts', type: 'file' }], skipped: 0 })
+  })
+
   it.skipIf(process.platform === 'win32')('preserves backslashes in POSIX filenames', async () => {
     const { root, service, store } = setup()
     writeFileSync(join(root, 'weird\\name.txt'), 'posix filename with a backslash')

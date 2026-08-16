@@ -538,4 +538,32 @@ describe('FilesPanel component', () => {
 
     expect(container.textContent).toContain('No files match “non-existent-file-name”.')
   })
+
+  it('lists files for an inferred project discovered from sessions without error', async () => {
+    const inferredProject: ProjectRecord = {
+      ...sampleProject,
+      id: 'inferred-123',
+      harness: 'pi',
+      inferred: true,
+    }
+
+    const listFiles = vi.fn(async () => ({
+      entries: sampleEntries,
+      skipped: 0,
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={inferredProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'pi')
+    expect(container.textContent).toContain('test-project')
+    expect(container.textContent).toContain('src')
+    expect(container.textContent).toContain('package.json')
+  })
 })
