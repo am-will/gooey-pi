@@ -11,6 +11,7 @@ import { createAppKeydownHandler } from '@/lib/app-shortcuts'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
 import { activityNotificationSignature, readClearedActivity, readClearedAttention, sessionCompanionNotificationSignature } from '@/app/session-attention'
 import { errorMessage } from '@/lib/errors'
+import { I18nProvider } from '@/lib/i18n'
 import { openExternalUrl, revealPath } from '@/lib/desktop-actions'
 import { createSingleFlightAdmission, findProjectForSession, gitStatusForWorkspace, shouldRefreshGitOnSessionTransition, workspaceCwd } from '@/lib/workspace'
 import { waitForVoiceSession } from '@/lib/voice'
@@ -502,7 +503,7 @@ export default function App() {
         setBrowserGeneration((value) => value + 1)
       }} onOpenDocs={() => openExternal(HARNESS_PROVIDER_DOCS[activeHarness])} /> : null
 
-  return <div className="app-shell" aria-busy={!initialized} data-platform={platform} data-ready={initialized ? 'true' : 'false'}>
+  return <I18nProvider preference={settingsState.settings.locale}><div className="app-shell" aria-busy={!initialized} data-platform={platform} data-ready={initialized ? 'true' : 'false'}>
     {sidebarVisible && initialized ? <Sidebar projects={projects} sessions={sessions} clearedAttention={clearedAttention} activeProjectId={activeProject?.id} activeSessionId={workspace.activeSessionId} activeView={view} activeHarness={activeHarness} harnesses={meta?.harnesses ?? null} updateState={appUpdates.state} onUpdateAction={appUpdates.act} onSelectHarness={selectHarness} {...sidebarActions} overlay={layout.compactLayout} platform={platform} /> : null}
     {sidebarVisible && initialized ? <button type="button" className="panel-scrim panel-scrim--sidebar" aria-label="Close sidebar" onClick={toggleSidebar} /> : null}
     <div className="workbench" inert={layout.compactLayout && sidebarVisible ? true : undefined}>
@@ -540,5 +541,5 @@ export default function App() {
     ) : null}
     {toast ? <div className="toast" role="status">{toast}<button type="button" aria-label="Dismiss" onClick={() => setToast(null)}>×</button></div> : null}
     {bridge ? <AgentBrowserLayer tabs={agentBrowser.tabs} visibleTabId={agentTabVisible ? activeAgentTabId : null} rect={agentTabVisible ? agentSlotRect : null} pointerEvent={agentBrowser.pointerEvent} onAttach={agentBrowser.attach} /> : null}
-  </div>
+  </div></I18nProvider>
 }

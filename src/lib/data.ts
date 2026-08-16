@@ -10,6 +10,7 @@ import type {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
+  locale: 'system',
   interfaceFontScale: 110,
   activeHarness: 'omp',
   ompApprovalMode: 'inherit',

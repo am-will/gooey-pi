@@ -54,6 +54,17 @@ describe('JsonStateStore', () => {
     expect(new JsonStateStore(path).getSettings().askUserEnabled).toBe(true)
   })
 
+  it('defaults, persists, and validates the locale preference', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    const settings = { ...defaultSettings(), locale: 'zh-CN' as const }
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).getSettings().locale).toBe('zh-CN')
+
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings: { ...settings, locale: 'fr' }, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).getSettings().locale).toBe('system')
+  })
+
   it('serializes concurrent updates without losing data', async () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')

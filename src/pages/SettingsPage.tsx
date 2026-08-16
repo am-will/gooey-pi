@@ -1,6 +1,7 @@
 import { AudioLines, Bot, Boxes, ChevronRight, Info, LockKeyhole, PawPrint, Settings2, Sun, Terminal } from 'lucide-react'
 import { useEffect, useState, type ComponentType } from 'react'
 import { errorMessage } from '@/lib/errors'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
 import { BrowserGlobe, Modal } from '@/components/ui'
 import type { AppMeta, AppSettings, PrimeModelCatalog, PrimeWorkApi } from '@/types/api'
@@ -16,17 +17,17 @@ import { ProvidersSettings } from './settings/ProviderSettings'
 import { TerminalSettings } from './settings/TerminalSettings'
 import { VoiceSettings } from './settings/VoiceSettings'
 
-const sections: Array<{ id: SettingsSection; label: string; icon: ComponentType<{ size?: number }> }> = [
-  { id: 'general', label: 'General', icon: Settings2 },
-  { id: 'appearance', label: 'Appearance', icon: Sun },
-  { id: 'agent', label: 'Agent', icon: Bot },
-  { id: 'providers', label: 'Providers', icon: Boxes },
-  { id: 'voice', label: 'Voice', icon: AudioLines },
-  { id: 'pets', label: 'Pets', icon: PawPrint },
-  { id: 'browser', label: 'Browser', icon: BrowserGlobe },
-  { id: 'terminal', label: 'Terminal', icon: Terminal },
-  { id: 'privacy', label: 'Privacy', icon: LockKeyhole },
-  { id: 'about', label: 'About', icon: Info },
+const sections: Array<{ id: SettingsSection; label: MessageKey; icon: ComponentType<{ size?: number }> }> = [
+  { id: 'general', label: 'settings.general', icon: Settings2 },
+  { id: 'appearance', label: 'settings.appearance', icon: Sun },
+  { id: 'agent', label: 'settings.harness', icon: Bot },
+  { id: 'providers', label: 'settings.providers', icon: Boxes },
+  { id: 'voice', label: 'settings.voice', icon: AudioLines },
+  { id: 'pets', label: 'settings.pets', icon: PawPrint },
+  { id: 'browser', label: 'settings.browser', icon: BrowserGlobe },
+  { id: 'terminal', label: 'settings.terminal', icon: Terminal },
+  { id: 'privacy', label: 'settings.privacy', icon: LockKeyhole },
+  { id: 'about', label: 'settings.about', icon: Info },
 ]
 
 interface SettingsPageProps {
@@ -57,6 +58,7 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onU
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [resetError, setResetError] = useState('')
+  const { t } = useI18n()
   const platform = meta?.platform ?? detectRendererPlatform()
 
   useEffect(() => { setSection(initialSection) }, [initialSection, initialSectionRequestId])
@@ -91,13 +93,12 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onU
 
   return (
     <div className="settings-page">
-      <nav className="settings-nav" aria-label="Settings sections">
+      <nav className="settings-nav" aria-label={t('settings.sections')}>
         {sections.map((item) => {
           const Icon = item.icon
-          const label = item.id === 'agent' ? 'Harness' : item.label
           return (
             <button type="button" key={item.id} className={section === item.id ? 'is-active' : ''} onClick={() => setSection(item.id)}>
-              <Icon size={14} /><span>{label}</span><ChevronRight size={12} />
+              <Icon size={14} /><span>{t(item.label)}</span><ChevronRight size={12} />
             </button>
           )
         })}

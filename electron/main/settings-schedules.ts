@@ -19,6 +19,10 @@ export class SettingsService {
         if (value !== 'system' && value !== 'light' && value !== 'dark') throw new TypeError('Invalid theme')
         return value
       },
+      locale: (value) => {
+        if (value !== 'system' && value !== 'en' && value !== 'zh-CN') throw new TypeError('Invalid locale')
+        return value
+      },
       interfaceFontScale: (value) => {
         if (!INTERFACE_FONT_SCALES.includes(value as AppSettings['interfaceFontScale'])) throw new TypeError('Invalid interface font scale')
         return value as AppSettings['interfaceFontScale']
