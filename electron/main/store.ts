@@ -101,6 +101,7 @@ export function defaultSettings(): AppSettings {
     : (process.env.SHELL?.startsWith('/') ? process.env.SHELL : '/bin/zsh')
   return {
     theme: 'system',
+    locale: 'system',
     interfaceFontScale: 110,
     sidebarOpen: true,
     inspectorOpen: true,
@@ -215,6 +216,7 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     : legacyState ? 'prime' : defaults.activeHarness
   return {
     theme: value.theme === 'light' || value.theme === 'dark' || value.theme === 'system' ? value.theme : defaults.theme,
+    locale: value.locale === 'en' || value.locale === 'zh-CN' || value.locale === 'system' ? value.locale : defaults.locale,
     interfaceFontScale: INTERFACE_FONT_SCALES.includes(value.interfaceFontScale as AppSettings['interfaceFontScale'])
       ? value.interfaceFontScale as AppSettings['interfaceFontScale']
       : defaults.interfaceFontScale,

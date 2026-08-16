@@ -21,6 +21,7 @@ describe('SettingsService.update', () => {
     const service = makeService()
     const next = await service.update({
       theme: 'dark',
+      locale: 'zh-CN',
       interfaceFontScale: 105,
       sidebarOpen: false,
       inspectorOpen: true,
@@ -62,7 +63,7 @@ describe('SettingsService.update', () => {
       voiceRealtimeVoice: 'cedar',
     })
     expect(next).toMatchObject({
-      theme: 'dark', interfaceFontScale: 105, sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, terminalOpen: true,
+      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, terminalOpen: true,
       defaultInspectorTab: 'changes', browserHome: 'https://example.test/',
       browserAskForDownloads: false, terminalShell: '/bin/zsh', reduceMotion: true,
       showReasoningSummaries: false, showToolCalls: false, messageEnterAction: 'steer',
@@ -90,6 +91,7 @@ describe('SettingsService.update', () => {
     await expect(service.update({ nope: true })).rejects.toThrow(/not supported/)
     await expect(service.update('dark')).rejects.toThrow(/must be an object/)
     await expect(service.update({ theme: 'solarized' })).rejects.toThrow(/Invalid theme/)
+    await expect(service.update({ locale: 'fr' })).rejects.toThrow(/Invalid locale/)
     await expect(service.update({ interfaceFontScale: 111 })).rejects.toThrow(/Invalid interface font scale/)
     await expect(service.update({ defaultInspectorTab: 'tools' })).rejects.toThrow(/Invalid inspector tab/)
     await expect(service.update({ messageEnterAction: 'send' })).rejects.toThrow(/Invalid message Enter action/)

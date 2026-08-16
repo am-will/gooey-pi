@@ -399,9 +399,12 @@ export interface SessionActionSnapshot {
 
 export const INTERFACE_FONT_SCALES = [105, 110, 115] as const
 export type InterfaceFontScale = typeof INTERFACE_FONT_SCALES[number]
+export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN'] as const
+export type LocalePreference = typeof LOCALE_PREFERENCES[number]
 
 export interface AppSettings {
   theme: ThemeMode
+  locale: LocalePreference
   /** Bounded interface text scale; 110 is the designed default. */
   interfaceFontScale: InterfaceFontScale
   sidebarOpen: boolean
