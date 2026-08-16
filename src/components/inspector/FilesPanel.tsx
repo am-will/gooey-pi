@@ -49,10 +49,7 @@ export function buildTreeFromEntries(
   const nodeMap = new Map<string, FileTreeNode>()
 
   const getOrCreateDir = (dirPath: string): FileTreeNode => {
-    const normalized = dirPath
-      .replace(/\\/g, '/')
-      .replace(/^\/+|\/+$/g, '')
-      .replace(/\/+/g, '/')
+    const normalized = dirPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
     let node = nodeMap.get(normalized)
     if (node) return node
 
@@ -74,24 +71,16 @@ export function buildTreeFromEntries(
     nodeMap.set(normalized, node)
 
     if (parentPath) {
-      const parent = getOrCreateDir(parentPath)
-      if (!parent.children.some((child) => child.id === node?.id)) {
-        parent.children.push(node)
-      }
+      getOrCreateDir(parentPath).children.push(node)
     } else {
-      if (!rootNodes.some((item) => item.id === node?.id)) {
-        rootNodes.push(node)
-      }
+      rootNodes.push(node)
     }
     return node
   }
 
   for (const entry of entries) {
     if (!entry.path) continue
-    const normalized = entry.path
-      .replace(/\\/g, '/')
-      .replace(/^\/+|\/+$/g, '')
-      .replace(/\/+/g, '/')
+    const normalized = entry.path.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
     if (!normalized) continue
     const lastSlash = normalized.lastIndexOf('/')
     const parentPath = lastSlash === -1 ? '' : normalized.slice(0, lastSlash)
@@ -115,14 +104,9 @@ export function buildTreeFromEntries(
       nodeMap.set(normalized, node)
 
       if (parentPath) {
-        const parent = getOrCreateDir(parentPath)
-        if (!parent.children.some((child) => child.id === node?.id)) {
-          parent.children.push(node)
-        }
+        getOrCreateDir(parentPath).children.push(node)
       } else {
-        if (!rootNodes.some((item) => item.id === node?.id)) {
-          rootNodes.push(node)
-        }
+        rootNodes.push(node)
       }
     }
   }
@@ -387,7 +371,7 @@ export function FilesPanel({
                     style={{ paddingLeft: `${8 + node.depth * 14}px` }}
                     title={node.path || node.name}
                     aria-expanded={isExpanded}
-                    onClick={() => toggleExpand(node.id)}
+                    onClick={isSearching ? undefined : () => toggleExpand(node.id)}
                     onDoubleClick={(e) => {
                       e.stopPropagation()
                       onReveal(node.fullPath)

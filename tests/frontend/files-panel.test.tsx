@@ -118,18 +118,26 @@ describe('FilesPanel tree building logic', () => {
     expect(tree[0].children[0].children[0].children[0].depth).toBe(3)
   })
 
-  it('normalizes Windows backslashes, leading/trailing and duplicate slashes', () => {
+  it('normalizes slashes while preserving backslashes in POSIX filenames', () => {
     const entries: ProjectFileEntry[] = [
-      { path: 'src\\components\\chat\\', type: 'directory' },
+      { path: '/src///components/chat/', type: 'directory' },
       { path: '/src///components/chat/AgentProgress.tsx', type: 'file' },
+      { path: 'weird\\name.txt', type: 'file' },
     ]
     const tree = buildTreeFromEntries(entries, '/workspace', 0)
-    expect(tree.length).toBe(1)
+    expect(tree.length).toBe(2)
     expect(tree[0].name).toBe('src')
     expect(tree[0].children[0].name).toBe('components')
     expect(tree[0].children[0].children[0].name).toBe('chat')
     expect(tree[0].children[0].children[0].children[0].name).toBe('AgentProgress.tsx')
     expect(tree[0].children[0].children[0].children[0].depth).toBe(3)
+    expect(tree[1]).toMatchObject({
+      name: 'weird\\name.txt',
+      path: 'weird\\name.txt',
+      fullPath: '/workspace/weird\\name.txt',
+      type: 'file',
+      depth: 0,
+    })
   })
 
   it('filters tree nodes keeping matching files and their ancestors', () => {
@@ -379,6 +387,16 @@ describe('FilesPanel component', () => {
     ].map((el) => el.querySelector('.file-tree__name')?.textContent)
 
     expect(filteredNames).toEqual(['src', 'components', 'chat', 'AgentProgress.tsx'])
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click()
+    })
+    await enter(searchInput, '')
+
+    const namesAfterSearch = [
+      ...container.querySelectorAll<HTMLButtonElement>('.file-tree__item'),
+    ].map((el) => el.querySelector('.file-tree__name')?.textContent)
+    expect(namesAfterSearch).toEqual(['src', 'package.json', 'README.md'])
   })
 
   it('displays skipped folder message when skipped > 0', async () => {
