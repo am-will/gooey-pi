@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { assertNoMcpAuthenticationCommand, NETWORK_MCP_AUTH_UNAVAILABLE } from '../../src/lib/mcp-policy'
 import type { ScheduleExecution, ScheduleTarget } from '../../src/types/api'
 import { AutomationService } from '../../electron/main/schedules/service'
 import { JsonStateStore } from '../../electron/main/store'
@@ -52,6 +53,84 @@ describe('AutomationService', () => {
     expect(resumed).toMatchObject({ revision: 4, status: 'active', nextRunAt: '2030-01-03T09:00:00.000Z' })
     expect(await service.delete(created.id)).toBe(true)
     expect(service.list()).toEqual([])
+  })
+
+  it('rejects forbidden prompts on create, update, resume, and run now before validation or persistence', async () => {
+    const stateStore = store()
+    const legacy = new AutomationService(stateStore, {
+      validateTarget: async () => undefined,
+      validateExecution: async () => undefined,
+      run: async () => ({}),
+      now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const normal = await legacy.create({ prompt: 'Allowed', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const forbidden = await legacy.create({ prompt: '/mcp login notion', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    await legacy.pause(forbidden.id)
+    const validateTarget = vi.fn(async () => undefined)
+    const validateExecution = vi.fn(async () => undefined)
+    const run = vi.fn(async () => ({}))
+    const service = new AutomationService(stateStore, {
+      validatePrompt: assertNoMcpAuthenticationCommand,
+      validateTarget,
+      validateExecution,
+      run,
+      now: () => new Date('2030-01-01T01:00:00Z'),
+    })
+
+    await expect(service.create({ prompt: '/mcp login create', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })).rejects.toThrow(NETWORK_MCP_AUTH_UNAVAILABLE)
+    await expect(service.update(normal.id, { revision: normal.revision, prompt: '/mcp login update' })).rejects.toThrow(NETWORK_MCP_AUTH_UNAVAILABLE)
+    await expect(service.resume(forbidden.id)).rejects.toThrow(NETWORK_MCP_AUTH_UNAVAILABLE)
+    await expect(service.runNow(forbidden.id)).rejects.toThrow(NETWORK_MCP_AUTH_UNAVAILABLE)
+
+    expect(validateTarget).not.toHaveBeenCalled()
+    expect(validateExecution).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    expect(service.list()).toHaveLength(2)
+    expect(service.get(normal.id)).toMatchObject({ revision: 1, prompt: 'Allowed', runs: [] })
+    expect(service.get(forbidden.id)).toMatchObject({ revision: 2, status: 'paused', nextRunAt: undefined, runs: [] })
+  })
+
+  it('blocks legacy active prompts once on startup while leaving paused cleanup records unchanged', async () => {
+    const stateStore = store()
+    const legacy = new AutomationService(stateStore, {
+      validateTarget: async () => undefined,
+      validateExecution: async () => undefined,
+      run: async () => ({}),
+      now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const active = await legacy.create({ prompt: '/mcp login active', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const paused = await legacy.create({ prompt: '/mcp login paused', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const pausedRecord = await legacy.pause(paused.id)
+    const validateTarget = vi.fn(async () => undefined)
+    const validateExecution = vi.fn(async () => undefined)
+    const run = vi.fn(async () => ({}))
+    const service = new AutomationService(stateStore, {
+      validatePrompt: assertNoMcpAuthenticationCommand,
+      validateTarget,
+      validateExecution,
+      run,
+      now: () => new Date('2030-01-01T01:00:00Z'),
+    })
+
+    await service.start()
+    expect(service.get(active.id)).toMatchObject({
+      revision: active.revision + 1,
+      status: 'blocked',
+      blockedReason: NETWORK_MCP_AUTH_UNAVAILABLE,
+      nextRunAt: undefined,
+      updatedAt: '2030-01-01T01:00:00.000Z',
+      runs: [],
+    })
+    expect(service.get(paused.id)).toEqual(pausedRecord)
+    await service.stop()
+    await service.start()
+    expect(service.get(active.id).revision).toBe(active.revision + 1)
+    await expect(service.resume(paused.id)).rejects.toThrow(NETWORK_MCP_AUTH_UNAVAILABLE)
+    expect(service.get(paused.id)).toEqual(pausedRecord)
+    expect(validateTarget).not.toHaveBeenCalled()
+    expect(validateExecution).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    await service.stop()
   })
 
   it('keeps OMP and pi schedules isolated and routes validation and runs by harness', async () => {

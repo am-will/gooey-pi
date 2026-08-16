@@ -35,7 +35,11 @@ export class ScheduledRunExecutor {
   }
 
   async run(task: AutomationScheduleRecord): Promise<ScheduleRunResult> {
-    assertNoMcpAuthenticationCommand(task.prompt, this.sessions.harness)
+    try { assertNoMcpAuthenticationCommand(task.prompt, this.sessions.harness) }
+    catch (error) {
+      if (error instanceof TypeError) throw new ScheduleBlockedError(error.message)
+      throw error
+    }
     const target = await this.resolveTarget(task.target)
     await this.validateExecution(task.execution)
     return target.sessionPath

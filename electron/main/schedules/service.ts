@@ -37,6 +37,7 @@ export interface ScheduleRunResult {
 export interface AutomationServiceOptions {
   validateTarget(target: ScheduleTarget, harness: HarnessId): Promise<void>
   validateExecution(execution: ScheduleExecution, harness: HarnessId): Promise<void>
+  validatePrompt?(prompt: string, harness: HarnessId): void
   run(task: AutomationScheduleRecord): Promise<ScheduleRunResult>
   now?: () => Date
 }
@@ -127,8 +128,28 @@ export class AutomationService {
   async start(): Promise<void> {
     this.closed = false
     await this.reconcileInterruptedRuns()
+    await this.blockInvalidActivePrompts()
     await this.recoverMissed()
     this.armTimer()
+  }
+
+  private async blockInvalidActivePrompts(): Promise<void> {
+    if (!this.options.validatePrompt) return
+    const updatedAt = this.now().toISOString()
+    await this.store.update((state) => {
+      for (const task of state.schedules) {
+        if (task.status !== 'active') continue
+        try { this.options.validatePrompt!(task.prompt, task.harness) }
+        catch (error) {
+          if (!(error instanceof TypeError)) throw error
+          task.status = 'blocked'
+          task.blockedReason = error.message
+          task.nextRunAt = undefined
+          task.revision += 1
+          task.updatedAt = updatedAt
+        }
+      }
+    })
   }
 
   /**
@@ -192,6 +213,7 @@ export class AutomationService {
   async create(inputValue: unknown, createdBy: 'user' | 'agent' = 'user', harness: HarnessId = 'prime'): Promise<AutomationScheduleRecord> {
     const now = this.now()
     const input = parseInput(inputValue, now)
+    this.options.validatePrompt?.(input.prompt, harness)
     await Promise.all([this.options.validateTarget(input.target, harness), this.options.validateExecution(input.execution, harness)])
     const nextRunAt = nextScheduleOccurrence(input.timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new TypeError('Schedule has no future occurrence')
@@ -229,6 +251,8 @@ export class AutomationService {
     if (current.revision !== patch.revision) throw new Error('Scheduled task changed; reload it before saving')
     const target = patch.target ?? current.target
     const execution = patch.execution ?? current.execution
+    const prompt = patch.prompt ?? current.prompt
+    this.options.validatePrompt?.(prompt, current.harness)
     await Promise.all([this.options.validateTarget(target, current.harness), this.options.validateExecution(execution, current.harness)])
     const timing = patch.timing ?? current.timing
     const nextRunAt = nextScheduleOccurrence(timing, new Date(now.getTime() - 1))
@@ -242,7 +266,7 @@ export class AutomationService {
         ...task,
         revision: task.revision + 1,
         title: patch.title ?? task.title,
-        prompt: patch.prompt ?? task.prompt,
+        prompt,
         target,
         timing,
         execution,
@@ -264,6 +288,7 @@ export class AutomationService {
     const id = requireId(idValue, 'schedule id')
     const now = this.now()
     const current = this.get(id)
+    this.options.validatePrompt?.(current.prompt, current.harness)
     await Promise.all([this.options.validateTarget(current.target, current.harness), this.options.validateExecution(current.execution, current.harness)])
     const nextRunAt = nextScheduleOccurrence(current.timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new Error('This schedule has no future occurrence')
@@ -308,6 +333,7 @@ export class AutomationService {
 
   async runNow(idValue: unknown): Promise<ScheduleRunRecord> {
     const task = this.get(idValue)
+    this.options.validatePrompt?.(task.prompt, task.harness)
     await Promise.all([this.options.validateTarget(task.target, task.harness), this.options.validateExecution(task.execution, task.harness)])
     return this.enqueue(task, 'manual', this.now().toISOString())
   }

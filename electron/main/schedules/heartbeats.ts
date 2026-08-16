@@ -69,7 +69,7 @@ export class HeartbeatService {
     if (actionValue !== 'pause' && actionValue !== 'resume' && actionValue !== 'stop') throw new TypeError('Invalid heartbeat action')
     const heartbeat = (await this.list()).find((candidate) => candidate.id === id)
     if (!heartbeat) throw new Error('Heartbeat was not found')
-    if (actionValue === 'resume' && heartbeat.status === 'paused') assertNoMcpAuthenticationCommand(heartbeat.prompt, 'prime')
+    if (actionValue === 'resume') assertNoMcpAuthenticationCommand(heartbeat.prompt, 'prime')
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
     const runtime = heartbeat.runtimeId
       ? this.agents.list().find((candidate) => candidate.runtimeId === heartbeat.runtimeId)

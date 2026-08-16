@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ScheduledRunExecutor } from '../../electron/main/schedules/executor'
+import { ScheduleBlockedError } from '../../electron/main/schedules/service'
 import type { AutomationScheduleRecord, HarnessId } from '../../src/types/api'
 
 function task(harness: HarnessId, prompt: string): AutomationScheduleRecord {
@@ -33,7 +34,9 @@ describe('ScheduledRunExecutor MCP auth policy', () => {
     const providers = { requireAvailableModel: vi.fn() }
     const executor = new ScheduledRunExecutor(projects as never, sessions as never, agents as never, providers as never, () => new Set())
 
-    await expect(executor.run(task(harness, prompt))).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
+    const result = executor.run(task(harness, prompt))
+    await expect(result).rejects.toBeInstanceOf(ScheduleBlockedError)
+    await expect(result).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
     expect(projects.list).not.toHaveBeenCalled()
     expect(agents.startUnattended).not.toHaveBeenCalled()
   })

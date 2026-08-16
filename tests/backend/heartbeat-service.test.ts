@@ -29,9 +29,9 @@ describe('HeartbeatService', () => {
     expect(agents.command).toHaveBeenCalledWith('runtime-one', expect.objectContaining({ type: 'manage_heartbeat', action: 'stop' }))
   })
 
-  it('rejects resuming a paused MCP authentication heartbeat before sending a command', async () => {
+  it.each(['paused', 'active'] as const)('rejects resuming an MCP authentication heartbeat observed as %s before sending a command', async (status) => {
     const { service, agents } = fixture({ heartbeat })
-    vi.spyOn(service, 'list').mockResolvedValue([{ ...heartbeat, schedule: 'every 10s', runtimeId: 'runtime-one', status: 'paused', prompt: '/mcp login notion' }])
+    vi.spyOn(service, 'list').mockResolvedValue([{ ...heartbeat, schedule: 'every 10s', runtimeId: 'runtime-one', status, prompt: '/mcp login notion' }])
 
     await expect(service.manage('heartbeat-one', 'resume')).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
     expect(agents.command).not.toHaveBeenCalled()
