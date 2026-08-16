@@ -173,6 +173,16 @@ describe('MacBackgroundController', () => {
     expect(electron.app.setLoginItemSettings).not.toHaveBeenCalled()
   })
 
+  it('removes a packaged login item when launch at login is disabled', () => {
+    electron.app.getLoginItemSettings.mockReturnValueOnce({ openAtLogin: true })
+    const packaged = makeController({ packaged: true })
+    const enabled = { ...defaultSettings(), launchAtLogin: true }
+
+    packaged.controller.applySettings(enabled, { ...enabled, launchAtLogin: false })
+
+    expect(electron.app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: false })
+  })
+
   it('adds and removes the menu-bar item as the keep-running setting changes', () => {
     const { controller, setSettings } = makeController()
     const previous = defaultSettings()
