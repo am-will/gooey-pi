@@ -547,6 +547,14 @@ async function bootstrap(): Promise<void> {
       throw error
     }
   }
+  const authorizeEitherReadOnlyCwd = async (cwd: string): Promise<string> => {
+    try { return await projects.authorizeReadOnlyCwd(cwd) } catch (error) {
+      for (const fallback of [ompProjects, piProjects]) {
+        try { return await fallback.authorizeReadOnlyCwd(cwd) } catch { /* try the next harness; the Prime error is rethrown */ }
+      }
+      throw error
+    }
+  }
   const requireEitherSessionPath = async (path: string): Promise<string> => {
     try { return await sessions.requireSessionPath(path) } catch (error) {
       for (const fallback of [ompSessions, piSessions]) {
@@ -555,7 +563,7 @@ async function bootstrap(): Promise<void> {
       throw error
     }
   }
-  const git = new GitService(authorizeEitherCwd)
+  const git = new GitService(authorizeEitherCwd, authorizeEitherReadOnlyCwd)
   // This matches the renderer's startup query so both consumers share SessionService's coalesced catalog scan.
   const listCatalogSessions = (): ReturnType<SessionService['list']> => sessions.list(undefined, true)
 

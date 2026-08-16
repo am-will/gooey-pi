@@ -382,7 +382,10 @@ export async function createGitWorktree(cwd: string, targetPath: string, branchV
 }
 
 export class GitService {
-  constructor(private readonly authorizeCwd: (cwd: string) => Promise<string>) {}
+  constructor(
+    private readonly authorizeCwd: (cwd: string) => Promise<string>,
+    private readonly authorizeReadOnlyCwd: (cwd: string) => Promise<string> = authorizeCwd,
+  ) {}
 
   /**
    * Entry guard for every repository operation: authorizes and canonicalizes
@@ -392,8 +395,13 @@ export class GitService {
    * whole call graph of one operation reuses this context instead of
    * re-resolving the toplevel or re-reading the configuration.
    */
-  private async withRepositoryGuards(cwdValue: unknown, paths?: readonly string[]): Promise<RepositoryContext> {
-    const cwd = await this.repositoryCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }))
+  private async withRepositoryGuards(
+    cwdValue: unknown,
+    paths?: readonly string[],
+    options?: { readOnly?: boolean },
+  ): Promise<RepositoryContext> {
+    const authorizer = options?.readOnly ? this.authorizeReadOnlyCwd : this.authorizeCwd
+    const cwd = await this.repositoryCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }), authorizer)
     const config = await repositoryConfig(cwd)
     const overrides = filterOverridesFromConfig(config)
     if (paths?.length) await rejectFilteredPaths(cwd, paths, overrides)
@@ -402,7 +410,7 @@ export class GitService {
 
   async branch(cwd: string): Promise<string | undefined> {
     try {
-      const safeCwd = await this.repositoryCwd(cwd)
+      const safeCwd = await this.repositoryCwd(cwd, this.authorizeReadOnlyCwd)
       const result = await runGit(safeCwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
       if (result.code === 0 && !result.timedOut && !result.outputExceeded) return result.stdout.trim() || undefined
       const detached = await runGit(safeCwd, ['rev-parse', '--verify', '--short', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
@@ -412,7 +420,7 @@ export class GitService {
 
   async status(cwdValue: unknown): Promise<GitStatus> {
     try {
-      const { cwd, overrides } = await this.withRepositoryGuards(cwdValue)
+      const { cwd, overrides } = await this.withRepositoryGuards(cwdValue, undefined, { readOnly: true })
       const statusResult = await runGit(cwd, ['status', '--porcelain=v1', '--branch', '--untracked-files=all', '--ignore-submodules=all', '-z'], { timeoutMs: 15_000, maxBytes: GIT_STATUS_OUTPUT_LIMIT }, overrides)
       requireProcessSuccess('Git status', statusResult)
       await rejectFilteredPaths(cwd, [...changedPathStatesFromStatus(statusResult.stdout).keys()], overrides)
@@ -440,7 +448,7 @@ export class GitService {
     const args = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all']
     if (staged) args.push('--cached')
     if (path) args.push('--', path)
-    const { cwd, overrides } = await this.withRepositoryGuards(cwdValue, path ? [path] : undefined)
+    const { cwd, overrides } = await this.withRepositoryGuards(cwdValue, path ? [path] : undefined, { readOnly: true })
     if (!path) {
       const statusResult = await runGit(cwd, ['status', '--porcelain=v1', '--untracked-files=no', '--ignore-submodules=all', '-z'], { timeoutMs: 15_000, maxBytes: GIT_STATUS_OUTPUT_LIMIT }, overrides)
       requireProcessSuccess('Git status', statusResult)
@@ -520,13 +528,16 @@ export class GitService {
     return { ok: true, output: output || 'Commit created.' }
   }
 
-  private async repositoryCwd(value: string): Promise<string> {
-    const cwd = await this.authorizeCwd(value)
+  private async repositoryCwd(
+    value: string,
+    authorizer: (cwd: string) => Promise<string> = this.authorizeCwd,
+  ): Promise<string> {
+    const cwd = await authorizer(value)
     const result = await runGit(cwd, ['rev-parse', '--show-toplevel'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
     requireProcessSuccess('Git repository root inspection', result)
     const repositoryRoot = result.stdout.trim()
     if (!repositoryRoot) throw new Error('Git repository root inspection returned no path')
-    return this.authorizeCwd(repositoryRoot)
+    return authorizer(repositoryRoot)
   }
 
   private validPaths(value: unknown): string[] {

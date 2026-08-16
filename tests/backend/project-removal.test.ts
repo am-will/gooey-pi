@@ -210,4 +210,71 @@ describe('project removal', () => {
     expect(store.snapshot().projects).toEqual([])
   })
 
+  it('revokes inferred project authorization synchronously while session discovery is pending during removal', async () => {
+    const { folder, store, session } = fixture()
+    // Service has not cached the inferred root in memory yet
+    const service = new ProjectService(store, () => null)
+
+    let releaseSessions!: () => void
+    let markSessionsStarted!: () => void
+    const sessionsStarted = new Promise<void>((resolve) => { markSessionsStarted = resolve })
+    const sessionsGate = new Promise<void>((resolve) => { releaseSessions = resolve })
+
+    service.bindProviders({
+      sessions: async () => {
+        markSessionsStarted()
+        await sessionsGate
+        return [session]
+      },
+      branch: async () => undefined,
+    })
+
+    // Generate deterministic inferred ID for the folder
+    const inferredId = (await (async () => {
+      const crypto = await import('node:crypto')
+      return `inferred-${crypto.createHash('sha256').update(realpathSync(folder)).digest('hex').slice(0, 24)}`
+    })())
+
+    const removal = service.remove(inferredId)
+    // Even while session discovery inside remove is still in flight,
+    // pendingRemovalIds immediately prevents any authorization.
+    await sessionsStarted
+    await expect(service.authorizeReadOnlyCwd(folder)).rejects.toThrow(/not inside|being removed/)
+
+    releaseSessions()
+    await expect(removal).resolves.toBe(true)
+    await expect(service.authorizeReadOnlyCwd(folder)).rejects.toThrow(/not inside/)
+  })
+
+  it('keeps authorization revoked while rebuildAuthorizedRoots awaits a deferred session provider', async () => {
+    const { folder, session, service } = fixture()
+    const [inferred] = await service.list()
+    expect(inferred.inferred).toBe(true)
+    await expect(service.authorizeReadOnlyCwd(folder)).resolves.toBe(realpathSync(folder))
+
+    let releaseRebuildSessions!: () => void
+    let markRebuildStarted!: () => void
+    const rebuildStarted = new Promise<void>((resolve) => { markRebuildStarted = resolve })
+    const rebuildGate = new Promise<void>((resolve) => { releaseRebuildSessions = resolve })
+
+    service.bindProviders({
+      sessions: async () => {
+        markRebuildStarted()
+        await rebuildGate
+        return [session]
+      },
+      branch: async () => undefined,
+    })
+
+    const removal = service.remove(inferred.id)
+    await rebuildStarted
+    // While rebuild is pending on session provider, authorization must not leak from the pre-removal map
+    await expect(service.authorizeReadOnlyCwd(folder)).rejects.toThrow(/not inside|being removed/)
+    await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside|being removed/)
+
+    releaseRebuildSessions()
+    await expect(removal).resolves.toBe(true)
+    await expect(service.authorizeReadOnlyCwd(folder)).rejects.toThrow(/not inside/)
+  })
+
 })

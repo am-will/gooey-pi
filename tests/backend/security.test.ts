@@ -42,23 +42,32 @@ describe('security boundaries', () => {
     await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
   })
 
-  it('authorizes an inferred project discovered from sessions for cwd and Git execution', async () => {
+  it('grants read-only access for inferred session projects and requires an explicit grant for cwd execution', async () => {
     const dir = temp('prime-work-inferred-')
     const folder = join(dir, 'project'); mkdirSync(folder)
+    writeFileSync(join(folder, 'README.md'), 'test')
     const store = new JsonStateStore(join(dir, 'state.json'))
     const service = new ProjectService(store, () => null)
     let branchCalls = 0
     service.bindProviders({
       sessions: async () => [{ id: 'session', harness: 'prime', filePath: join(dir, 'session.jsonl'), projectPath: folder, title: 'session', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: 'idle', depth: 0, pinned: false, unread: false } satisfies SessionRecord],
-      branch: async (cwd) => { branchCalls += 1; await service.authorizeCwd(cwd); return undefined },
+      branch: async (cwd) => { branchCalls += 1; await service.authorizeReadOnlyCwd(cwd); return undefined },
     })
     const listed = await service.list()
     expect(listed).toHaveLength(1)
     expect(listed[0].inferred).toBe(true)
     expect(branchCalls).toBe(1)
-    expect(await service.authorizeCwd(folder)).toBe(realpathSync(folder))
-    expect(await service.remove(listed[0].id)).toBe(true)
+    expect(await service.authorizeReadOnlyCwd(folder)).toBe(realpathSync(folder))
+    expect(await service.listFiles(folder)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0 })
     await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
+
+    const granted = await service.grantInferred(folder)
+    expect(granted.inferred).not.toBe(true)
+    expect(await service.authorizeCwd(folder)).toBe(realpathSync(folder))
+
+    expect(await service.remove(granted.id)).toBe(true)
+    await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
+    await expect(service.authorizeReadOnlyCwd(folder)).rejects.toThrow(/not inside/)
   })
 
   it('awaits TERM/KILL escalation for an RPC child that refuses graceful shutdown', async () => {
