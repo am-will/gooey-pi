@@ -427,6 +427,10 @@ export interface AppSettings {
   runtimePaths: Record<HarnessId, string>
   /** Legacy visibility preference retained for state compatibility; executable detection is authoritative. */
   enabledHarnesses: HarnessId[]
+  /**
+   * Legacy diagnostics preference retained for persisted-state compatibility.
+   * The Privacy UI deliberately ignores this field; any reporting use needs separate review.
+   */
   telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
