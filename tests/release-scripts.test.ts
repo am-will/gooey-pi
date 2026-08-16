@@ -1135,6 +1135,21 @@ describe('post-package verification helpers', () => {
     expect(packageJson.build.mac.icon).toBe('assets/icon.icns')
     expect(packageJson.build.linux.icon).toBe('assets/icon.png')
     expect(packageJson.build.win.icon).toBe('assets/icon.png')
+    const macIcon = readFileSync('assets/icon.icns')
+    expect(macIcon.subarray(0, 4).toString('ascii')).toBe('icns')
+    const macIconChunks = new Map<string, Buffer>()
+    for (let offset = 8; offset < macIcon.length; ) {
+      const type = macIcon.subarray(offset, offset + 4).toString('ascii')
+      const size = macIcon.readUInt32BE(offset + 4)
+      expect(size).toBeGreaterThanOrEqual(8)
+      macIconChunks.set(type, macIcon.subarray(offset + 8, offset + size))
+      offset += size
+    }
+    // The previous checked-in ICNS silently contained Prime artwork. Anchor
+    // its full-size layer to GooeyPi's canonical PNG and retain small layers.
+    expect(macIconChunks.get('ic10')).toEqual(readFileSync('assets/icon.png'))
+    expect(macIconChunks.has('ic04')).toBe(true)
+    expect(macIconChunks.has('ic11')).toBe(true)
     expect(packageJson.build.asarUnpack).toBeUndefined()
     expect(packageJson.build.mac.asarUnpack).toEqual([
       '**/node_modules/node-pty/build/Release/pty.node',
