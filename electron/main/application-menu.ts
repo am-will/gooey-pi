@@ -2,6 +2,7 @@ import { app, Menu, type MenuItemConstructorOptions } from 'electron'
 
 interface ApplicationMenuOptions {
   checkForUpdates(): void
+  closeWindow(): void
   /** Manual checks are only possible in builds where the update service runs. */
   updatesEnabled?: boolean
   platform?: NodeJS.Platform
@@ -40,7 +41,7 @@ export function buildApplicationMenuTemplate(options: ApplicationMenuOptions): M
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit' },
+        { label: `Quit ${appName}`, accelerator: 'CommandOrControl+Q', click: () => options.closeWindow() },
       ],
     }, ...standardMenus]
   }

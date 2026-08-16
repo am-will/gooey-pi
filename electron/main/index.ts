@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, session, shell, webContents } from 'electron'
-import type { BrowserWindowConstructorOptions, WebContents } from 'electron'
+import type { BrowserWindowConstructorOptions, Input, WebContents } from 'electron'
 import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -325,6 +325,19 @@ export function mainWindowChromeOptions(platform: NodeJS.Platform = process.plat
   return { titleBarStyle: 'default' }
 }
 
+export function isMacWindowCloseShortcut(
+  input: Pick<Input, 'type' | 'key' | 'shift' | 'control' | 'alt' | 'meta'>,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === 'darwin'
+    && input.type === 'keyDown'
+    && input.key.toLowerCase() === 'q'
+    && input.meta
+    && !input.shift
+    && !input.control
+    && !input.alt
+}
+
 export function popupApplicationMenu(sender: WebContents, menuName: ApplicationMenuName, x: number, y: number): boolean {
   const window = BrowserWindow.fromWebContents(sender)
   const applicationMenu = Menu.getApplicationMenu()
@@ -369,6 +382,11 @@ async function createWindow(): Promise<BrowserWindow | null> {
   const renderer = window.webContents
   const rendererId = renderer.id
   hardenRenderer(window)
+  renderer.on('before-input-event', (event, input) => {
+    if (!isMacWindowCloseShortcut(input)) return
+    event.preventDefault()
+    if (!window.isDestroyed()) window.close()
+  })
   renderer.on('did-finish-load', () => {
     if (renderer.isDestroyed()) return
     // A reload resets the zoom factor, so the persisted scale is re-applied
@@ -527,6 +545,15 @@ function requestWindow(reason: 'activation' | 'second instance' | 'menu bar' | '
 function revealApplication(reason: 'activation' | 'second instance'): void {
   if (backgroundMode) backgroundMode.open()
   else requestWindow(reason)
+}
+
+export function routeAllWindowsClosed(
+  shutdownInProgress: boolean,
+  background: Pick<MacBackgroundController, 'handleAllWindowsClosed'> | null,
+  quit: () => void,
+): void {
+  if (shutdownInProgress) return
+  if (!background?.handleAllWindowsClosed()) quit()
 }
 
 async function bootstrap(): Promise<void> {
@@ -1018,6 +1045,11 @@ async function bootstrap(): Promise<void> {
   installApplicationMenu({
     appName: 'GooeyPi',
     updatesEnabled: updates.isEnabled(),
+    closeWindow: () => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) app.quit()
+      else window.close()
+    },
     checkForUpdates: createManualUpdateCheck(() => updates.check(), async (notification) => {
       await dialog.showMessageBox({
         type: notification.type,
@@ -1041,8 +1073,10 @@ else void app.whenReady().then(async () => {
     try { wasOpenedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin } catch { /* The explicit flag remains available if the OS lookup fails. */ }
   }
   startInBackground = shouldStartInBackground(process.argv, wasOpenedAtLogin)
-  if (startInBackground) app.setActivationPolicy('accessory')
-  else if (process.platform === 'darwin') app.dock?.setIcon(appIconPath())
+  if (process.platform === 'darwin') {
+    app.setActivationPolicy(startInBackground ? 'accessory' : 'regular')
+    if (!startInBackground) app.dock?.setIcon(appIconPath())
+  }
   const browserSession = session.defaultSession
   browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const mediaTypes = permission === 'media' && 'mediaTypes' in details ? details.mediaTypes : undefined
@@ -1078,7 +1112,7 @@ else void app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (!backgroundMode?.handleAllWindowsClosed()) app.quit()
+  routeAllWindowsClosed(shutdownStarted, backgroundMode, () => app.quit())
 })
 
 app.on('before-quit', (event) => {

@@ -101,6 +101,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
+        "LSUIElement": true,
         "NSMicrophoneUsageDescription": "GooeyPi uses the microphone for dictation and realtime voice sessions you start."
       },
       "notarize": true,

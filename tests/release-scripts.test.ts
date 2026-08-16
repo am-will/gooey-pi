@@ -1133,6 +1133,7 @@ describe('post-package verification helpers', () => {
     expect(packageJson.build.linux.synopsis).toBe(packageJson.description)
     expect(packageJson.build.linux.syncDesktopName).toBe(true)
     expect(packageJson.build.mac.icon).toBe('assets/icon.icns')
+    expect(packageJson.build.mac.extendInfo.LSUIElement).toBe(true)
     expect(packageJson.build.linux.icon).toBe('assets/icon.png')
     expect(packageJson.build.win.icon).toBe('assets/icon.png')
     const macIcon = readFileSync('assets/icon.icns')

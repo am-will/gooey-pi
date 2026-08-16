@@ -170,7 +170,7 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
       pinned: false, createdAt: '2025-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
       folderIdentities: { [canonicalProject]: identity(canonicalProject), [canonicalSecondary]: identity(canonicalSecondary) },
     }],
-    settings: { activeHarness: 'prime', browserHome: 'about:blank', telemetry: true },
+    settings: { activeHarness: 'prime', browserHome: 'about:blank', telemetry: true, locale: 'en' },
     archivedSessions: [],
     dismissedProjectPaths: [],
   }))
@@ -506,10 +506,12 @@ test.describe('Prime Work desktop smoke', () => {
         for (const executable of [fixture.executable, fixture.ompExecutable, fixture.piExecutable]) renameSync(executable, `${executable}.pending`)
       }
       try {
+        const environment = hermeticEnvironment(fixture.home, fixture.executable, fixture.ompExecutable, fixture.piExecutable, fixture.cuaExecutable, liveInstall || noHarnesses)
+        if (testInfo.title === 'Command-Q backgrounds the window and menu-bar Open restores it') environment.PRIME_WORK_E2E_HIDE_WINDOWS = '0'
         app = await electron.launch({
           args: ['.', `--user-data-dir=${fixture.userData}`],
           cwd: process.cwd(),
-          env: hermeticEnvironment(fixture.home, fixture.executable, fixture.ompExecutable, fixture.piExecutable, fixture.cuaExecutable, liveInstall || noHarnesses) as Record<string, string>,
+          env: environment as Record<string, string>,
           timeout: 20_000,
         })
         app.context().on('page', attachDiagnostics)
@@ -2133,6 +2135,70 @@ test.describe('Prime Work desktop smoke', () => {
     })
     expect(dialogCalls).toBe(0)
     await closed
+    app = undefined
+  })
+
+  test('Command-Q backgrounds the window and menu-bar Open restores it', async () => {
+    test.skip(process.platform !== 'darwin', 'macOS menu-bar lifecycle')
+    await app!.evaluate(({ Menu }) => {
+      const scope = globalThis as { __trayOpen?: () => void }
+      const originalBuildFromTemplate = Menu.buildFromTemplate.bind(Menu)
+      Menu.buildFromTemplate = ((template) => {
+        const items = template as Array<{ label?: string; type?: string; click?: () => void }>
+        if (items.map((item) => item.label ?? item.type).join('|') === 'Open GooeyPi|separator|Settings...|Quit') {
+          scope.__trayOpen = items.find((item) => item.label === 'Open GooeyPi')?.click
+        }
+        return originalBuildFromTemplate(template)
+      }) as typeof Menu.buildFromTemplate
+    })
+    await page.evaluate(() => window.prime.settings.update({ keepRunningInBackground: true }))
+    await expect.poll(() => app!.evaluate(() => typeof (globalThis as { __trayOpen?: unknown }).__trayOpen)).toBe('function')
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible())).toBe(true)
+
+    await app!.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      if (!window) throw new Error('Main window is missing')
+      window.focus()
+      window.webContents.focus()
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Q', modifiers: ['meta'] })
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Q', modifiers: ['meta'] })
+    })
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      return { count: BrowserWindow.getAllWindows().length, visible: window?.isVisible(), destroyed: window?.isDestroyed() }
+    })).toEqual({ count: 1, visible: false, destroyed: false })
+    expect(app!.process().exitCode).toBeNull()
+
+    await app!.evaluate(() => {
+      const open = (globalThis as { __trayOpen?: () => void }).__trayOpen
+      if (!open) throw new Error('Menu-bar Open was not captured')
+      open()
+    })
+    await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible())).toBe(true)
+    await expect(page.locator('.app-shell')).toBeVisible()
+  })
+
+  test('does not recreate the menu-bar item while Quit is shutting down', async () => {
+    test.skip(process.platform !== 'darwin', 'macOS menu-bar lifecycle')
+    const trayBuildsPath = join(fixtureRoot, 'tray-menu-builds.log')
+    await app!.evaluate(({ Menu }, markerPath) => {
+      const originalBuildFromTemplate = Menu.buildFromTemplate.bind(Menu)
+      Menu.buildFromTemplate = ((template) => {
+        const items = template as Array<{ label?: string; type?: string }>
+        if (items.map((item) => item.label ?? item.type).join('|') === 'Open GooeyPi|separator|Settings...|Quit') {
+          process.getBuiltinModule('node:fs').appendFileSync(markerPath, 'tray\n')
+        }
+        return originalBuildFromTemplate(template)
+      }) as typeof Menu.buildFromTemplate
+    }, trayBuildsPath)
+    await page.evaluate(() => window.prime.settings.update({ keepRunningInBackground: true }))
+    await expect.poll(() => existsSync(trayBuildsPath) ? readFileSync(trayBuildsPath, 'utf8').trim().split('\n').length : 0).toBe(1)
+
+    const closed = app!.waitForEvent('close', { timeout: 45_000 })
+    await app!.evaluate(({ app: electronApp }) => { electronApp.quit() })
+    await closed
+
+    expect(readFileSync(trayBuildsPath, 'utf8').trim().split('\n')).toHaveLength(1)
     app = undefined
   })
 
