@@ -323,11 +323,12 @@ describe('broad project root authorization', () => {
 describe('ProjectService file listing', () => {
   it('lists project files while excluding generated trees and symlinks', async () => {
     const { root, service, store } = setup()
-    mkdirSync(join(root, 'src')); mkdirSync(join(root, '.git')); mkdirSync(join(root, 'node_modules')); mkdirSync(join(root, 'release'))
+    mkdirSync(join(root, 'src')); mkdirSync(join(root, '.git')); mkdirSync(join(root, 'node_modules')); mkdirSync(join(root, 'vendor')); mkdirSync(join(root, 'release'))
     writeFileSync(join(root, 'README.md'), 'read me')
     writeFileSync(join(root, 'src', 'index.ts'), 'export {}')
     writeFileSync(join(root, '.git', 'config'), 'private metadata')
     writeFileSync(join(root, 'node_modules', 'dependency.js'), 'generated')
+    writeFileSync(join(root, 'vendor', 'autoload.php'), 'generated vendor file')
     writeFileSync(join(root, 'release', 'Prime Work.dmg'), 'generated')
     symlinkSync('/etc/hosts', join(root, 'hosts-link'))
     await store.update((state) => { state.projects.push({ id: 'project', harness: 'prime', name: 'Project', path: root, folders: [root], primaryFolder: root, pinned: false, createdAt: new Date().toISOString(), lastOpenedAt: new Date().toISOString(), folderIdentities: identities(root) }) })

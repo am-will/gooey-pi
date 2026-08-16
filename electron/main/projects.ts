@@ -576,7 +576,18 @@ export class ProjectService {
     const root = await this.authorizeCwd(rootValue as string)
     const entries: ProjectFileEntry[] = []
     let skipped = 0
-    const ignoredDirectories = new Set(['.git', 'node_modules', 'out', 'dist', 'build', 'release', 'coverage', '.next', '.venv'])
+    const ignoredDirectories = new Set([
+      '.git',
+      'node_modules',
+      'vendor',
+      'out',
+      'dist',
+      'build',
+      'release',
+      'coverage',
+      '.next',
+      '.venv',
+    ])
     const maxEntries = 5_000
 
     const visit = async (directory: string): Promise<void> => {

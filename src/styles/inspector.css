@@ -152,16 +152,26 @@
 .files-search { height: 43px; flex: 0 0 43px; display: flex; align-items: center; gap: 6px; padding: 0 12px; border-bottom: 1px solid var(--border); color: var(--text-tertiary); }
 .files-search input { min-width: 0; flex: 1; width: auto; height: 28px; border: 0; outline: 0; background: transparent; font-size: 11.5px; }
 .file-tree { flex: 1; overflow: auto; padding: 7px; }
-.tree-root, .file-tree > button { width: 100%; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 7px; border-radius: 6px; color: var(--text-secondary); background: transparent; text-align: left; }
-.tree-root { color: var(--text); }
-.tree-root strong { font-size: 11.5px; }
-.file-tree > button { padding-left: 23px; }
-.file-tree > button:hover { color: var(--text); background: var(--surface-hover); }
-.file-tree > button span { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 10.5px/1.2 "SFMono-Regular", Menlo, monospace; }
-.file-tree > button small { color: var(--text-tertiary); font-size: 9.5px; }
+.tree-root { width: 100%; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 7px; border: 0; border-radius: 6px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.tree-root:hover { background: var(--surface-hover); }
+.tree-root strong { font-size: 11.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.file-tree__item { width: 100%; height: 28px; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 6px; color: var(--text-secondary); background: transparent; text-align: left; cursor: pointer; }
+.file-tree__item:hover { color: var(--text); background: var(--surface-hover); }
+.file-tree__item.is-directory { color: var(--text); }
+.file-tree__chevron { width: 13px; height: 13px; flex: 0 0 13px; display: grid; place-items: center; color: var(--text-tertiary); }
+.file-tree__expander-placeholder { width: 13px; flex: 0 0 13px; }
+.file-tree__icon { width: 14px; height: 14px; flex: 0 0 14px; display: grid; place-items: center; color: var(--text-tertiary); }
+.file-tree__item.is-directory .file-tree__icon { color: var(--text-secondary); }
+.file-tree__name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 10.5px/1.2 "SFMono-Regular", Menlo, monospace; }
+.file-tree__status { margin-left: auto; padding: 0 4px; color: var(--text-tertiary); font: 9.5px/1.2 "SFMono-Regular", Menlo, monospace; }
+.file-tree__status--modified { color: var(--prime, #3b82f6); }
+.file-tree__status--added { color: var(--success, #22c55e); }
+.file-tree__status--deleted { color: var(--danger, #ef4444); }
+.file-tree__skipped { padding: 8px 10px; color: var(--text-tertiary); font-size: 10.5px; }
 .tree-section { margin: 10px 7px 4px; color: var(--text-tertiary); font-size: 10px; font-weight: 550; }
 .file-tree > p { padding: 20px; color: var(--text-tertiary); text-align: center; font-size: 11px; }
-.file-tree > .file-tree__show-more { justify-content: center; padding-left: 7px; border: 1px solid var(--border); margin-top: 6px; }
+.file-tree > .file-tree__show-more { width: 100%; height: 30px; display: flex; align-items: center; justify-content: center; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-secondary); background: transparent; margin-top: 6px; font-size: 11px; cursor: pointer; }
+.file-tree > .file-tree__show-more:hover { color: var(--text); background: var(--surface-hover); }
 
 
 
