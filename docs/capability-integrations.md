@@ -107,15 +107,23 @@ API remain visible but non-actionable, with direct-harness management detail.
   overwritten.
 - Network MCP definitions fail closed at the service admission and settings
   writer boundaries. State mutation also rejects externally configured network
-  entries. The local stdio settings path retains the existing lock, conflict
-  retry, project-directory pinning, atomic replacement, and rollback protections;
-  definition removal re-verifies the project directory immediately before and
-  after reading each update snapshot.
+  entries. The local stdio settings path uses GooeyPi's cooperative lock,
+  fingerprint-based conflict retries, project-directory pinning, atomic
+  replacement, and rollback protections; definition removal re-verifies the
+  project directory immediately before and after reading each update snapshot.
+  This is not a filesystem compare-and-swap: a same-user writer that ignores the
+  lock can replace the file after the final fingerprint check and race GooeyPi's
+  rename, so that writer's update may be overwritten.
 - The main-process RPC manager rejects harness authentication commands for
-  prompt, steer, follow-up, and heartbeat delivery. Session-daemon follow-up,
-  scheduled execution, voice task launch, collaboration creation, and peer
-  delivery preflight the same shared policy before queuing, wake-up, delivery,
-  or runtime start.
+  prompt, steer, follow-up, and heartbeat delivery, including every resume
+  request regardless of the heartbeat status observed. Scheduled prompts are
+  checked at create, update, resume, and run-now admission before project
+  validation or queuing; startup blocks forbidden persisted active schedules
+  before missed-run recovery and timer arming, while paused records remain
+  available for cleanup and are checked if resumed. The executor repeats the
+  check as defense in depth. Session-daemon follow-up, voice task launch,
+  collaboration creation, and peer delivery preflight the same shared policy
+  before queuing, wake-up, delivery, or runtime start.
 - MCP rows use an independent 2,500-definition-per-settings-file discovery
   budget. Unrelated catalog records cannot consume it, and exceeding it emits
   an explicit scope-and-path warning.
