@@ -64,6 +64,9 @@
 .work-disclosure__live { min-width: 0; }
 .work-disclosure__status { min-height: 20px; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--text-tertiary); font-size: 10.5px; font-weight: 560; }
 .work-disclosure__status .thinking-dots { min-width: 29px; }
+/* Live elapsed clock on running work rows: tabular digits keep the 1-second
+   updates from shifting the adjacent dots around. */
+.live-elapsed { font-variant-numeric: tabular-nums; opacity: 0.78; }
 .work-timeline { display: flex; flex-direction: column; gap: 2px; padding: 3px 0 8px 5px; }
 .work-disclosure.is-running .work-timeline { padding: 0 0 8px; }
 .work-disclosure.is-running .activity-line--reasoning { color: var(--text-tertiary); font-size: 12.5px; line-height: 1.55; }

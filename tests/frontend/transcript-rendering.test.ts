@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { Transcript } from '../../src/components/Transcript'
+import { LiveElapsed } from '../../src/components/transcript/timeline'
 import { replayPrimeEvents } from '../../src/lib/events/reduce'
 import type { TranscriptMessage } from '../../src/types/api'
 
@@ -346,6 +347,34 @@ describe('transcript rendering', () => {
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('Large diagnostic details.')
     expect(html).not.toContain('message--system')
+  })
+
+  it('shows live elapsed time while work is running and keeps the final duration once finished', () => {
+    const running = render([{
+      id: 'live-active',
+      role: 'assistant',
+      timestamp: Date.now() - 65_000,
+      startedAt: Date.now() - 65_000,
+      streaming: true,
+      parts: [{ type: 'thinking', text: 'Still thinking.' }],
+    }], true)
+    expect(running).toContain('live-elapsed')
+    expect(running).toContain('1m05s')
+
+    const finished = render([{
+      id: 'live-done',
+      role: 'assistant',
+      timestamp: Date.now() - 66_000,
+      startedAt: Date.now() - 66_000,
+      completedAt: Date.now() - 1_000,
+      parts: [{ type: 'thinking', text: 'Done thinking.' }],
+    }], false)
+    expect(finished).toContain('Worked for 1m05s')
+    expect(finished).not.toContain('live-elapsed')
+  })
+
+  it('omits the live elapsed label when no start time is available', () => {
+    expect(renderToStaticMarkup(createElement(LiveElapsed, {}))).toBe('')
   })
 
 })

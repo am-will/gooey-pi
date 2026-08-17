@@ -8,7 +8,7 @@ import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { OmpMark, PiMark, PrimeMark } from './ui'
 import { ActivityMessage, AgentMessage, AssistantMessage, GoalMessage, SteerReadMarker, UserMessage } from './transcript/messages'
 import { useTranscriptScroll } from './transcript/scroll'
-import { ThinkingDots, WorkDisclosure } from './transcript/timeline'
+import { LiveElapsed, ThinkingDots, WorkDisclosure } from './transcript/timeline'
 
 export { classifyTool, formatWorkedDuration } from './transcript/timeline'
 export { tokenizeSyntax } from './transcript/syntax'
@@ -71,7 +71,7 @@ function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: 
           ? <WorkDisclosure message={message} parts={message.parts} showReasoning={showReasoning} showTools={showTools} running />
           : <>
             {message.parts.map((part, index) => part.type === 'text' ? <MarkdownText key={index} text={part.text} /> : null)}
-            <div className="streaming-state" aria-live="polite"><ThinkingDots /> {HARNESS_SHORT_NAMES[harness]} is working</div>
+            <div className="streaming-state" aria-live="polite"><ThinkingDots /> {HARNESS_SHORT_NAMES[harness]} is working <LiveElapsed since={message.startedAt ?? message.timestamp} /></div>
           </>}
       </div>
     </article>

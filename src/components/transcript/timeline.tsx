@@ -86,6 +86,25 @@ export function ThinkingDots({ labelled = false }: { labelled?: boolean }) {
   )
 }
 
+/**
+ * Self-ticking elapsed clock for a live work phase. The timer lives inside
+ * this leaf component so only the small label re-renders every second, not
+ * the whole transcript row. `aria-hidden` keeps the 1-second churn out of
+ * screen-reader announcements; the neighbouring state text already carries
+ * the semantic (thinking/working), the duration is decorative.
+ */
+export function LiveElapsed({ since }: { since?: string | number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(id)
+  }, [])
+  const startedAt = timestamp(since)
+  if (startedAt === undefined) return null
+  return <span className="live-elapsed" aria-hidden="true">{formatWorkedDuration(Math.max(0, now - startedAt))}</span>
+}
+
 function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall' }>; next?: MessagePart }) {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -246,7 +265,7 @@ export function WorkDisclosure({ message, parts, showReasoning, showTools, runni
     return <section className="work-disclosure is-running" aria-label="Agent work activity">
       <span className="work-disclosure__rail" aria-hidden="true" />
       <div className="work-disclosure__live">
-        <div className="work-disclosure__status" role="status"><span>{status}</span><ThinkingDots /></div>
+        <div className="work-disclosure__status" role="status"><span>{status}</span><LiveElapsed since={message.startedAt ?? message.timestamp} /><ThinkingDots /></div>
         <WorkTimeline parts={parts} showReasoning={showReasoning} showTools={showTools} streaming />
       </div>
     </section>
