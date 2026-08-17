@@ -7,6 +7,7 @@ import {
   requireExistingPath,
   requireGitPath,
   requireId,
+  requireSelfHostedVoiceUrl,
   requireString,
   requireWebUrl,
 } from '../../electron/main/validation'
@@ -186,5 +187,46 @@ describe('requireId', () => {
     expect(() => requireId('')).toThrow(/too short/)
     expect(() => requireId('x'.repeat(257))).toThrow(/too long/)
     expect(requireId('x'.repeat(256))).toHaveLength(256)
+  })
+})
+
+describe('requireSelfHostedVoiceUrl', () => {
+  it('accepts loopback and private-network HTTP hosts', () => {
+    for (const url of [
+      'http://127.0.0.1:8000/',
+      'http://localhost:8000/',
+      'http://[::1]:8000/',
+      'http://192.168.124.8:8000/',
+      'http://10.0.0.5:9000',
+      'http://172.16.0.1:9000',
+      'http://172.31.255.254:9000',
+      'http://[fd12::1]:8000/',
+      'http://[fc00::5]:8000/',
+      'http://[fe80::1]:8000/',
+    ]) expect(requireSelfHostedVoiceUrl(url), url).toMatch(/^https?:/)
+  })
+
+  it('rejects public HTTP hosts but still allows them over HTTPS', () => {
+    for (const url of [
+      'http://1.2.3.4:8000/',
+      'http://8.8.8.8:8000/',
+      'http://9.255.255.255/',
+      'http://172.15.0.1/',
+      'http://172.32.0.1/',
+      'http://192.169.0.1/',
+      'http://example.com/',
+      'http://[2001:db8::1]:8000/',
+    ]) expect(() => requireSelfHostedVoiceUrl(url), url).toThrow(/private network/)
+    expect(requireSelfHostedVoiceUrl('https://example.com/v1/')).toBe('https://example.com/v1/')
+    expect(requireSelfHostedVoiceUrl('https://1.2.3.4:8000/')).toBe('https://1.2.3.4:8000/')
+  })
+
+  it('rejects query and fragment on self-hosted voice URLs', () => {
+    expect(() => requireSelfHostedVoiceUrl('http://192.168.1.2:8000/?x=1')).toThrow(/query or fragment/)
+    expect(() => requireSelfHostedVoiceUrl('http://192.168.1.2:8000/#frag')).toThrow(/query or fragment/)
+  })
+
+  it('normalizes the accepted URL', () => {
+    expect(requireSelfHostedVoiceUrl('http://192.168.124.8:8000')).toBe('http://192.168.124.8:8000/')
   })
 })

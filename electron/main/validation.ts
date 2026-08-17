@@ -82,11 +82,26 @@ export function isLoopbackHostname(value: string): boolean {
   return host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '[::1]' || host === '::1'
 }
 
+/** Private-network (RFC1918/ULA) or loopback hosts: the safe scope for plaintext-HTTP voice traffic. */
+export function isPrivateOrLoopbackHostname(value: string): boolean {
+  const host = value.toLowerCase()
+  if (isLoopbackHostname(host)) return true
+  const bare = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host
+  if (bare === '::1' || bare.startsWith('fe80:') || bare.startsWith('fc') || bare.startsWith('fd')) return true
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) {
+    const first = Number(ipv4[1])
+    const second = Number(ipv4[2])
+    return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168)
+  }
+  return false
+}
+
 export function requireSelfHostedVoiceUrl(value: unknown): string {
   const normalized = requireWebUrl(value, { max: 2_048 })
   const parsed = new URL(normalized)
   if (parsed.search || parsed.hash) throw new TypeError('Self-hosted voice URL cannot contain a query or fragment')
-  if (parsed.protocol === 'http:' && !isLoopbackHostname(parsed.hostname)) throw new TypeError('Self-hosted voice HTTP is allowed only on this computer; use HTTPS or an SSH tunnel for another host')
+  if (parsed.protocol === 'http:' && !isPrivateOrLoopbackHostname(parsed.hostname)) throw new TypeError('Self-hosted voice HTTP is allowed on this computer or private network addresses (10.x, 172.16-31.x, 192.168.x); use HTTPS for public hosts')
   return parsed.toString()
 }
 
