@@ -77,6 +77,8 @@ interface MetadataAccumulator {
   preview: string
   lifecycle?: string
   taskState?: string
+  taskStateBasedOnMessageCount?: number
+  messageCount: number
   lastRole?: string
   stopReason?: string
   records: number
@@ -92,6 +94,7 @@ function createAccumulator(filePath: string, fileStat: Stats): MetadataAccumulat
     depth: 0,
     firstUser: '',
     preview: '',
+    messageCount: 0,
     records: 0,
   }
 }
@@ -142,12 +145,21 @@ function ingestMetadataLine(state: MetadataAccumulator, line: string): void {
   } else if (value.type === 'thinking_level_change' && typeof value.thinkingLevel === 'string') state.thinkingLevel = value.thinkingLevel
   else if (value.type === 'session_info' && typeof value.name === 'string') state.sessionName = value.name
   else if (value.type === 'session_state' && isRecord(value.state) && typeof value.state.status === 'string') state.lifecycle = value.state.status
-  else if (value.type === 'agent_status' && isRecord(value.status) && typeof value.status.taskState === 'string') state.taskState = value.status.taskState
-  else if (value.type === 'message') ingestMessageActivity(state, value)
+  else if (value.type === 'agent_status' && isRecord(value.status)) {
+    state.taskState = typeof value.status.taskState === 'string' ? value.status.taskState : undefined
+    state.taskStateBasedOnMessageCount = typeof value.status.basedOnMessageCount === 'number'
+      ? value.status.basedOnMessageCount
+      : undefined
+  } else if (value.type === 'message') {
+    state.messageCount += 1
+    ingestMessageActivity(state, value)
+  }
 }
 
 function metadataFromAccumulator(state: MetadataAccumulator, filePath: string, fallbackUpdated: string): SessionMetadata {
   const title = compactText(state.sessionName || state.firstUser, 100) || 'Untitled session'
+  // Prime verdicts describe exactly the message count they were generated from.
+  const taskState = state.taskStateBasedOnMessageCount === state.messageCount ? state.taskState : undefined
   return {
     id: state.id,
     filePath,
@@ -156,7 +168,7 @@ function metadataFromAccumulator(state: MetadataAccumulator, filePath: string, f
     createdAt: state.createdAt,
     updatedAt: state.sawRecordTimestamp ? state.updatedAt : fallbackUpdated,
     lastUserMessageAt: state.lastUserMessageAt ?? state.createdAt,
-    status: statusFrom(state.taskState, state.lifecycle, state.lastRole, state.stopReason),
+    status: statusFrom(taskState, state.lifecycle, state.lastRole, state.stopReason),
     model: state.model,
     provider: state.provider,
     thinkingLevel: state.thinkingLevel,

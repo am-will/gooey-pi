@@ -353,6 +353,30 @@ describe('incremental session metadata reads', () => {
   })
 })
 
+describe('Prime task-state freshness', () => {
+  it('ignores a persisted verdict after later messages and accepts a current verdict', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-task-state-')); dirs.push(dir)
+    const file = join(dir, 'task-state.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'task-state', cwd: '/project', timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'question' } }),
+      JSON.stringify({ type: 'agent_status', status: { summary: 'Waiting', taskState: 'needs_input', basedOnMessageCount: 1 } }),
+      '',
+    ].join('\n'))
+    const reader = createSessionMetadataReader()
+
+    expect((await reader(file)).status).toBe('waiting')
+
+    appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'assistant', parentId: 'user', message: { role: 'assistant', content: 'answered' } })}\n`)
+    const staleVerdict = await reader(file)
+    expect(staleVerdict.status).toBe('complete')
+    expect(staleVerdict).toEqual(await readSessionMetadata(file))
+
+    appendFileSync(file, `${JSON.stringify({ type: 'agent_status', status: { summary: 'Waiting again', taskState: 'needs_input', basedOnMessageCount: 2 } })}\n`)
+    expect((await reader(file)).status).toBe('waiting')
+  })
+})
+
 describe('SessionService user-message ordering', () => {
   it('ignores later assistant activity until a new user message is sent', async () => {
     const { root, project, service, store } = setup()
