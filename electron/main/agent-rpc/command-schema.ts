@@ -1,4 +1,4 @@
-import { PRIME_THINKING_LEVELS, type PrimeThinkingLevel } from '../../../src/types/api'
+import { PRIME_THINKING_LEVELS, SUBAGENT_SUBSCRIPTION_LEVELS, type PrimeThinkingLevel } from '../../../src/types/api'
 import { rejectUnknownKeys, requireBoolean, requireId, requireRecord, requireString } from '../validation'
 import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from './limits'
 import type { RpcObject } from './types'
@@ -7,9 +7,10 @@ const SIMPLE_COMMANDS = new Set([
   'abort', 'new_session', 'get_state', 'cycle_model', 'get_available_models', 'cycle_thinking_level',
   'abort_retry', 'get_session_stats', 'clone', 'get_fork_messages', 'get_last_assistant_text',
   'get_messages', 'agent_messages_status', 'agent_messages_pause', 'agent_messages_resume',
-  'agent_messages_clear', 'list_heartbeats', 'get_heartbeat', 'get_commands',
+  'agent_messages_clear', 'list_heartbeats', 'get_heartbeat', 'get_commands', 'get_subagents',
 ])
 const THINKING_LEVELS: ReadonlySet<string> = new Set(PRIME_THINKING_LEVELS)
+const SUBSCRIPTION_LEVELS: ReadonlySet<string> = new Set(SUBAGENT_SUBSCRIPTION_LEVELS)
 
 function validateImageData(data: string, mimeType: string): void {
   if (data.length % 4 !== 0 || !/^[a-z\d+/]*={0,2}$/i.test(data)) throw new TypeError('Image data must be canonical base64')
@@ -130,6 +131,15 @@ export async function validateRpcCommand(raw: unknown, validateSessionPath: (pat
   if (type === 'observe' || type === 'unobserve') {
     rejectUnknownKeys(command, ['type', 'activeSessionId'], 'command')
     return { type, activeSessionId: requireId(command.activeSessionId, 'activeSessionId') }
+  }
+  if (type === 'set_subagent_subscription') {
+    // OMP itself ignores unknown keys on this command and reads only `level`,
+    // so the strictness here is GooeyPi's: an unknown key is a renderer bug,
+    // not something to forward silently.
+    rejectUnknownKeys(command, ['type', 'level'], 'command')
+    const level = requireString(command.level, 'level', { min: 1, max: 16 })
+    if (!SUBSCRIPTION_LEVELS.has(level)) throw new TypeError('Invalid subagent subscription level')
+    return { type, level }
   }
   if (type === 'extension_ui_response') {
     const id = requireId(command.id, 'id')

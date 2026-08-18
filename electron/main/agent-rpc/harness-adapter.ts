@@ -43,6 +43,14 @@ export interface HarnessRpcAdapter {
    * spawn the child with the authorized cwd as its working directory.
    */
   readonly spawnsInCwd?: boolean
+  /**
+   * Harness exposes the subagent roster RPC family (`get_subagents`,
+   * `set_subagent_subscription`). Absent means the renderer never offers the
+   * Subagents inspector tab and `translateCommand` rejects the family: pi ships
+   * only illustrative subprocess subagent extensions (`docs/session-collaboration.md`)
+   * and Prime's `observe` is family-scoped, so neither can answer the roster query.
+   */
+  readonly subagentInspection?: boolean
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
   translateCommand(command: RpcObject): RpcObject
@@ -63,6 +71,13 @@ export function parseContextUsage(raw: unknown): PrimeContextUsage | null {
 }
 
 const unsafeArgValue = (value: string): boolean => value.startsWith('-') || /[\r\n]/.test(value)
+
+/**
+ * Subagent roster RPC, currently OMP-only. Harnesses without
+ * `subagentInspection` reject the family rather than forwarding a command the
+ * child would answer with an unknown-command error mid-session.
+ */
+const SUBAGENT_RPC_COMMANDS = new Set(['get_subagents', 'set_subagent_subscription'])
 
 export const PRIME_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
@@ -89,7 +104,13 @@ export const PRIME_RPC_ADAPTER: HarnessRpcAdapter = {
     }
     return args
   },
-  translateCommand: (command) => command,
+  translateCommand: (command) => {
+    // Prime's observation vocabulary is family-scoped and has no roster query,
+    // so the subagent family fails closed here rather than reaching the child.
+    const type = String(command.type)
+    if (SUBAGENT_RPC_COMMANDS.has(type)) throw new Error(`RPC command ${type} is not supported by the Prime Agent harness`)
+    return command
+  },
   normalizeEvent: (event) => event,
   buildServiceTierCommand: (serviceTier) => ({ type: 'set_service_tier', serviceTier }),
   readState: (data) => data.serviceTier === 'default' || data.serviceTier === 'priority' ? { serviceTier: data.serviceTier } : {},
@@ -108,6 +129,7 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
   agentName: HARNESSES.omp.agentName,
   negotiateProtocolVersion: 2,
   chunkedFrames: true,
+  subagentInspection: true,
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc', '--cwd', input.cwd]
     if (input.sessionPath) args.push('--resume', input.sessionPath)
@@ -206,6 +228,9 @@ export const PI_RPC_ADAPTER: HarnessRpcAdapter = {
     // untranslated) but lacks the same Prime-only daemon/heartbeat family OMP
     // rejects, clone included.
     if (OMP_UNSUPPORTED_COMMANDS.has(type)) throw new Error(`RPC command ${type} is not supported by the Pi harness`)
+    // pi's subagents are illustrative subprocess extensions rather than a
+    // first-class roster the runtime can enumerate (docs/session-collaboration.md).
+    if (SUBAGENT_RPC_COMMANDS.has(type)) throw new Error(`RPC command ${type} is not supported by the Pi harness`)
     return command
   },
   normalizeEvent: (event) => event,

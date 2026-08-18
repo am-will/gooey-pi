@@ -7,7 +7,15 @@ export const BROWSER_PARTITION = 'persist:prime-work-browser'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type WorkspaceView = 'session' | 'projects' | 'activity' | 'scheduled' | 'plugins' | 'settings'
-export type InspectorTab = 'summary' | 'changes' | 'browser' | 'files'
+export type InspectorTab = 'summary' | 'changes' | 'browser' | 'files' | 'subagents'
+
+/**
+ * Inspector tabs that only exist for harnesses whose runtime reports the
+ * matching capability. A stored `defaultInspectorTab` can therefore name a tab
+ * the active harness cannot render, so tab resolution is capability-gated
+ * rather than trusting the persisted value.
+ */
+export const CAPABILITY_INSPECTOR_TABS = ['subagents'] as const
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'complete' | 'failed' | 'unknown'
 
 export const HARNESS_IDS = ['omp', 'prime', 'pi'] as const
@@ -185,6 +193,58 @@ export interface RuntimeInfo {
   fastModeAvailable?: boolean
   serviceTier?: PrimeServiceTier
   contextUsage?: PrimeContextUsage
+  /** Harness exposes the subagent roster RPC family; absent means the Subagents inspector tab stays hidden. */
+  subagentInspectionSupported?: boolean
+}
+
+/**
+ * OMP subagent push-frame subscription levels, verified against `omp 17.2.9`
+ * (`set_subagent_subscription`; every other value is rejected by the harness).
+ *
+ * - `off`      — no `subagent_*` push frames at all. GooeyPi's resting state.
+ * - `progress` — `subagent_lifecycle` + coalesced `subagent_progress` only.
+ * - `events`   — the above plus `subagent_event`, which re-broadcasts each
+ *   subagent's own `message_update`/`tool_execution_*` stream. GooeyPi never
+ *   requests this: see SUBAGENT_SUBSCRIPTION_FOR_INSPECTION.
+ */
+export const SUBAGENT_SUBSCRIPTION_LEVELS = ['off', 'progress', 'events'] as const
+export type SubagentSubscriptionLevel = (typeof SUBAGENT_SUBSCRIPTION_LEVELS)[number]
+
+export type SubagentStatus = 'started' | 'running' | 'completed' | 'failed' | 'unknown'
+
+/** One tool the subagent recently finished, newest first. */
+export interface SubagentRecentTool {
+  tool: string
+  args?: string
+  endMs?: number
+}
+
+/** Live roster row for one subagent of the active session. */
+export interface SubagentRecord {
+  id: string
+  /** Parent-assigned ordinal; stable for the lifetime of the parent tool call. */
+  index?: number
+  /** Agent type that was spawned ("task", "scout", ...), not the instance name. */
+  agent?: string
+  agentSource?: string
+  /** Human-readable instance name OMP shows for this subagent. */
+  description?: string
+  status: SubagentStatus
+  /** Tool call in the parent transcript that spawned this subagent. */
+  parentToolCallId?: string
+  resolvedModel?: string
+  toolCount?: number
+  requests?: number
+  tokens?: number
+  contextTokens?: number
+  contextWindow?: number
+  cost?: number
+  durationMs?: number
+  /** OMP's own one-line summary of what the subagent is doing now. */
+  lastIntent?: string
+  recentTools?: SubagentRecentTool[]
+  /** Wall-clock of the last frame that touched this row, for staleness display. */
+  updatedAt: number
 }
 
 export const PRIME_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
