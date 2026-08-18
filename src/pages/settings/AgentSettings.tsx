@@ -6,6 +6,7 @@ import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '@/lib/harness'
 import { detectRendererPlatform, shortcutLabel } from '@/lib/platform-shortcuts'
 import type { SettingsMetaSectionProps } from './contracts'
 import { DraftSettingField } from './DraftSettingField'
+import { ModelRoleSettings } from './ModelRoleSettings'
 import { SettingsToggle } from './SettingsToggle'
 
 const APPROVAL_MODE_LABELS: Record<OmpApprovalMode, string> = {
@@ -15,7 +16,7 @@ const APPROVAL_MODE_LABELS: Record<OmpApprovalMode, string> = {
   'yolo': 'YOLO (never prompt)',
 }
 
-export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: SettingsMetaSectionProps) {
+export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses, agentConfig, providerCatalog }: SettingsMetaSectionProps) {
   const activeHarness = settings.activeHarness
   const detectedHarnesses = HARNESS_IDS.filter((harness) => Boolean(meta?.harnesses[harness].path))
   const [refreshing, setRefreshing] = useState(false)
@@ -91,6 +92,7 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
           }}
         />)}
       </section>
+      <ModelRoleSettings harness={activeHarness} agentConfig={agentConfig ?? null} catalog={providerCatalog ?? null} />
       <section className="settings-group">
         <h2>Transcript</h2>
         <SettingsToggle checked={settings.showReasoningSummaries} onChange={(showReasoningSummaries) => { void onUpdate({ showReasoningSummaries }) }} label="Show reasoning summaries" description="Display reasoning summaries and traces while an agent works. Completed work stays collapsed." />

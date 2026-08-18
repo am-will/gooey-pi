@@ -189,6 +189,7 @@ export function ModelRoleSettings({ harness, agentConfig, catalog }: ModelRoleSe
           <label className="settings-row">
             <span><strong>Catch-up threshold</strong><small>Pause the main agent briefly when the advisor falls this many turns behind.</small></span>
             <select
+              aria-label="Catch-up threshold"
               value={advisor.syncBacklog}
               disabled={saving}
               onChange={(event) => changeAdvisor({ syncBacklog: event.target.value as AdvisorSyncBacklog })}
@@ -199,6 +200,7 @@ export function ModelRoleSettings({ harness, agentConfig, catalog }: ModelRoleSe
           <label className="settings-row">
             <span><strong>Immune turns</strong><small>After an advisor interruption, route further concerns non-interruptingly for this many turns.</small></span>
             <input
+              aria-label="Immune turns"
               type="number"
               min={0}
               max={ADVISOR_MAX_IMMUNE_TURNS}

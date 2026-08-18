@@ -496,6 +496,7 @@ describe('harness settings surfaces', () => {
         settings={DEFAULT_SETTINGS}
         meta={meta}
         providerCatalog={null}
+        agentConfig={null}
         voice={null}
         pets={null}
         initialSection={initialSection}

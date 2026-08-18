@@ -174,3 +174,5 @@
 .provider-auth-options button { min-height: 34px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-raised); text-align: left; }
 .provider-auth-options button:hover { border-color: var(--border-strong); background: var(--surface-hover); }
 .settings-empty { margin: 14px 0; color: var(--text-tertiary); font-size: 10.5px; text-align: center; }
+.model-role-choice { display: flex !important; flex-direction: row !important; gap: 6px; flex: 0 0 auto; }
+.model-role-choice select { min-width: 136px; }

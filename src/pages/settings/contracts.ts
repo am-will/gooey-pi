@@ -1,4 +1,4 @@
-import type { AppMeta, AppSettings } from '@/types/api'
+import type { AppMeta, AppSettings, PrimeModelCatalog, PrimeWorkApi } from '@/types/api'
 
 export type SettingsSection = 'general' | 'appearance' | 'agent' | 'providers' | 'voice' | 'pets' | 'browser' | 'terminal' | 'privacy' | 'about'
 
@@ -12,6 +12,10 @@ export interface SettingsSectionProps {
 export interface SettingsMetaSectionProps extends SettingsSectionProps {
   meta?: AppMeta | null
   onRefreshHarnesses(): Promise<void>
+  /** Harness-owned model-role configuration; absent outside the desktop app. */
+  agentConfig?: PrimeWorkApi['agentConfig'] | null
+  /** Active harness catalog, used to label and validate model-role choices. */
+  providerCatalog?: PrimeModelCatalog | null
 }
 
 export const SETTINGS_FIELD_SECTIONS = {
