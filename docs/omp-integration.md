@@ -117,5 +117,82 @@ Same rules as `docs/security.md`, applied to the second harness: argv arrays onl
   rather than forwards `/mcp reauth`, so authentication must be run in OMP itself;
   OMP keeps ownership of profile-scoped credentials.
 - Prime heartbeat RPC tools on OMP; OMP schedules use the local extension bridge instead.
-- Host tools / host URI schemes, subagent transcript streaming, native OMP relay-room UI, and handoff. GooeyPi-owned top-level session collaboration is documented separately in `docs/session-collaboration.md`.
+- Host tools / host URI schemes, subagent transcript streaming, native OMP relay-room UI, and handoff. GooeyPi-owned top-level session collaboration is documented separately in `docs/session-collaboration.md`. Subagent transcript streaming remains a non-goal; the subagent *roster* is a separate, narrower surface described in "Subagent inspection" below.
 - Importing sessions across harnesses (`--from-claude`/`--from-codex` style).
+
+## Subagent inspection
+
+When a session delegates to `task` subagents, the transcript shows the tool call
+and, some minutes later, the self-delivered result. Nothing in between is
+visible, and the Activity page keys one row on `session.status`, so a session
+running six subagents reads as a single "running" row. The Subagents inspector
+tab closes that gap with a live roster: which subagent is running, which tool it
+last finished, how long it has been going, and whether it failed.
+
+Scope, and what it deliberately is not:
+
+- The roster only. Reading a subagent's transcript stays the v1 non-goal above,
+  so `get_subagent_messages` is not exposed to the renderer. That also keeps
+  GooeyPi from handing the harness an arbitrary `sessionFile` path to read.
+- Not session collaboration. The roster is read-only observation of the parent's
+  own children over the parent's own RPC channel. It grants a subagent no
+  authority, so the collaboration broker's rule that only top-level sessions
+  (`depth === 0`) may call it is untouched — see
+  `tests/backend/agent-collaboration-bridge.test.ts`.
+
+Harness support is a capability, not an assumption. `HarnessRpcAdapter.subagentInspection`
+is set only for OMP; `translateCommand` fails closed for Prime (whose `observe`
+is family-scoped) and pi (whose subagents are illustrative subprocess
+extensions, `docs/session-collaboration.md`). The renderer hides the tab unless
+`RuntimeInfo.subagentInspectionSupported` is true, and `resolveInspectorTab`
+falls back to Summary when a persisted `defaultInspectorTab` names it on a
+harness that cannot feed it.
+
+### Wire contract
+
+Verified by capture against `omp 17.2.9` (the integration plan above targets
+17.2.11; these commands and frames were present and stable at 17.2.9, but the
+field list is what 17.2.9 emits, not a published schema):
+
+- `get_subagents` → `{ subagents: [...] }`. Each entry carries `id`, `index`,
+  `agent` (the agent *type*, e.g. `task`/`scout`), `agentSource`, `description`
+  (the display name), `status`, `task`, `assignment`, `sessionFile`,
+  `lastUpdate`, `parentToolCallId`, and a nested `progress` object.
+- `set_subagent_subscription` takes `level`, and accepts exactly
+  `off` | `progress` | `events`. Anything else is rejected by the harness.
+- `subagent_lifecycle` → `payload` with `id`, `status`, `index`, `agent`,
+  `agentSource`, `description`, `sessionFile`, `parentToolCallId`, `detached`.
+  Observed statuses: `started`, `completed`, `failed`.
+- `subagent_progress` → `payload` with `index`, `agent`, `task`, `assignment`
+  and a nested `progress` object holding `id`, `status`, `toolCount`,
+  `requests`, `tokens`, `contextTokens`, `contextWindow`, `cost`, `durationMs`,
+  `resolvedModel`, `lastIntent`, `recentTools`, `recentOutput`. Note the
+  payload has **no** top-level `id`: identity lives on `payload.progress.id`.
+- `subagent_event` → `payload` with `id` and a nested `event`, which is the
+  subagent's own agent event (`message_update`, `tool_execution_*`, ...).
+
+Outbound commands are validated strictly in `command-schema.ts` because that is
+a privilege boundary. Inbound frames are coerced defensively in
+`src/lib/subagents.ts`, the same split `src/lib/events/parse.ts` already uses
+for transcript frames, so a harness that renames a field degrades the panel
+rather than throwing inside the event pump.
+
+### Event volume
+
+`subagent_*` frames are non-critical and share one budget with the parent's own
+transcript stream in `AgentEventForwarder` (500 events per 1s window, minus a
+64 KiB byte reserve); overflow emits `transport_limit`, which drops events and
+forces an authoritative transcript re-read. Subscribing at `events` multiplies
+that traffic by subagent count. Measured on omp 17.2.9, same two-subagent
+workload, counting frames the runtime forwarded:
+
+| level | `subagent_event` | `subagent_progress` | `subagent_lifecycle` | peak frames/s |
+|---|---|---|---|---|
+| `progress` | 0 | 82 | 4 | 9 |
+| `events` | 196 | 90 | 4 | 43 |
+
+128 of those 196 event frames were `message_update`. So GooeyPi rests at `off`,
+requests `progress` only while the tab is open, and never requests `events` —
+the roster answers every question the panel asks without it. A harness that
+refuses the subscription degrades to polling `get_subagents`, which adds no push
+frames at all.

@@ -1,11 +1,14 @@
 import { PanelRightClose } from 'lucide-react'
+import { useMemo } from 'react'
 import type { BrowserAnnotationsApi } from '@/hooks/useBrowserAnnotations'
 import type { StampedPointerEvent } from '@/hooks/useAgentBrowserTabs'
-import type { AgentBrowserTabRecord, AutomationScheduleRecord, GitStatus, InspectorTab, NativeHeartbeatRecord, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
+import { useSubagents } from '@/hooks/useSubagents'
+import type { AgentBrowserTabRecord, AutomationScheduleRecord, GitStatus, InspectorTab, NativeHeartbeatRecord, PrimeWorkApi, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
 import type { AgentSlotRect } from './AgentBrowserLayer'
 import { BrowserPanel } from './inspector/BrowserPanel'
 import { ChangesPanel } from './inspector/ChangesPanel'
 import { FilesPanel } from './inspector/FilesPanel'
+import { SubagentsPanel } from './inspector/SubagentsPanel'
 import { SummaryPanel } from './inspector/SummaryPanel'
 import { IconButton, useFocusTrap } from './ui'
 
@@ -43,12 +46,43 @@ interface InspectorProps {
   onOpenExternal(url: string): void
   onRevealPath(path: string): void
   overlay?: boolean
+  /** Renderer bridge; the Subagents tab uses it for the roster RPC. */
+  bridge?: PrimeWorkApi | null
 }
 
-const tabs: Array<{ id: InspectorTab; label: string }> = [{ id: 'summary', label: 'Summary' }, { id: 'changes', label: 'Changes' }, { id: 'browser', label: 'Browser' }, { id: 'files', label: 'Files' }]
+interface InspectorTabDescriptor { id: InspectorTab; label: string }
 
-export function Inspector({ activeTab, onTabChange, onClose, agentName, shortName, project, cwd, runtime, messages, git, automations, heartbeats, onOpenAutomation, browserHome, browserAnnotations, agentBrowserTabs, activeAgentTabId, agentPreviewSelected, onSelectAgentTab, onCloseAgentTab, onShowBrowserPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent, onNavigateAgentTab, onRefreshGit, onOpenExternal, onRevealPath, overlay = false, platform = 'darwin' }: InspectorProps) {
+const BASE_TABS: readonly InspectorTabDescriptor[] = [{ id: 'summary', label: 'Summary' }, { id: 'changes', label: 'Changes' }, { id: 'browser', label: 'Browser' }, { id: 'files', label: 'Files' }]
+
+const SUBAGENTS_TAB: InspectorTabDescriptor = { id: 'subagents', label: 'Subagents' }
+
+/**
+ * Tabs the active runtime can actually render.
+ *
+ * Every other tab is unconditional, so this is the first inspector tab whose
+ * presence depends on the harness. A runtime that cannot answer the roster
+ * query hides the tab rather than showing an empty one.
+ */
+export function inspectorTabsFor(runtime?: RuntimeInfo | null): InspectorTabDescriptor[] {
+  return runtime?.subagentInspectionSupported === true ? [...BASE_TABS, SUBAGENTS_TAB] : [...BASE_TABS]
+}
+
+/**
+ * Resolves the tab to render. `defaultInspectorTab` is persisted and may name
+ * a capability tab, so a stored 'subagents' has to fall back rather than
+ * render a panel the harness cannot feed; switching OMP to pi hits this.
+ */
+export function resolveInspectorTab(activeTab: InspectorTab, tabs: readonly InspectorTabDescriptor[]): InspectorTab {
+  return tabs.some((tab) => tab.id === activeTab) ? activeTab : 'summary'
+}
+
+export function Inspector({ activeTab: requestedTab, onTabChange, onClose, agentName, shortName, project, cwd, runtime, messages, git, automations, heartbeats, onOpenAutomation, browserHome, browserAnnotations, agentBrowserTabs, activeAgentTabId, agentPreviewSelected, onSelectAgentTab, onCloseAgentTab, onShowBrowserPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent, onNavigateAgentTab, onRefreshGit, onOpenExternal, onRevealPath, overlay = false, platform = 'darwin', bridge = null }: InspectorProps) {
   const inspectorRef = useFocusTrap<HTMLElement>(overlay, onClose)
+  const tabs = useMemo(() => inspectorTabsFor(runtime), [runtime])
+  const activeTab = resolveInspectorTab(requestedTab, tabs)
+  // The subscription follows the visible tab, not the session: a closed panel
+  // must cost the harness nothing.
+  const subagents = useSubagents({ bridge, runtime: runtime ?? null, active: activeTab === 'subagents' })
   const moveTab = (current: number, key: string) => {
     let next = current
     if (key === 'ArrowRight') next = (current + 1) % tabs.length
@@ -71,6 +105,7 @@ export function Inspector({ activeTab, onTabChange, onClose, agentName, shortNam
       {activeTab === 'changes' ? <ChangesPanel key={cwd ?? 'no-workspace'} cwd={cwd} git={git} onRefreshGit={onRefreshGit}/> : null}
       {activeTab === 'browser' ? <BrowserPanel platform={platform} home={browserHome} onOpenExternal={onOpenExternal} annotations={browserAnnotations} agentTabs={agentBrowserTabs} activeAgentTabId={activeAgentTabId} previewSelected={agentPreviewSelected} onSelectAgentTab={onSelectAgentTab} onCloseAgentTab={onCloseAgentTab} onShowPreview={onShowBrowserPreview} onAgentSlotRect={onAgentSlotRect} agentSessionKey={agentSessionKey} onPreviewContext={onPreviewContext} previewPointerEvent={previewPointerEvent} onNavigateAgentTab={onNavigateAgentTab}/> : null}
       {activeTab === 'files' ? <FilesPanel project={project} git={git} onReveal={onRevealPath}/> : null}
+      {activeTab === 'subagents' ? <SubagentsPanel shortName={shortName} subagents={subagents.subagents} mode={subagents.mode} error={subagents.error}/> : null}
     </div>
   </aside>
 }

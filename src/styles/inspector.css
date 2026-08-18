@@ -185,3 +185,19 @@
 .summary-automation-icon { width: 1.75rem; height: 1.75rem; display: grid; place-items: center; flex: 0 0 auto; border-radius: 0.45rem; color: var(--prime); background: var(--prime-soft); }
 .summary-automation-icon.is-heartbeat { color: var(--success); background: var(--success-soft); }
 .summary-automation-list > .summary-automation-more { min-height: 2.25rem; justify-content: center; color: var(--text-secondary); font-size: 0.68rem; }
+
+/* Subagents panel: live roster of delegated work for the active session. */
+.subagents-panel { padding: 16px 18px; }
+.subagent-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.subagent-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 0.55rem; background: var(--surface); }
+.subagent-icon { width: 1.5rem; height: 1.5rem; display: grid; place-items: center; flex: 0 0 auto; border-radius: 0.4rem; color: var(--prime); background: var(--prime-soft); }
+.subagent-icon--completed { color: var(--success); background: var(--success-soft); }
+.subagent-icon--failed { color: var(--danger); background: var(--danger-soft); }
+.subagent-main { min-width: 0; flex: 1; display: grid; gap: 0.2rem; }
+.subagent-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.subagent-title strong { overflow: hidden; font-size: 0.74rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-title i { flex: 0 0 auto; padding: 0 5px; border-radius: 7px; color: var(--text-secondary); background: var(--surface-hover); font-size: 0.6rem; font-style: normal; }
+.subagent-intent { overflow: hidden; color: var(--text-secondary); font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; color: var(--text-tertiary); font-size: 0.63rem; }
+.subagent-meta > span { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-note { margin: 12px 0 0; color: var(--text-tertiary); font-size: 0.63rem; }

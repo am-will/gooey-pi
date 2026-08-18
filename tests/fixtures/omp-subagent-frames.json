@@ -1,0 +1,588 @@
+{
+  "source": "Captured from a live `omp --mode rpc` session, omp 17.2.9, two parallel `task` subagents.",
+  "note": "Absolute session paths and long task/assignment prose are redacted; every field name and nesting level is verbatim.",
+  "frames": [
+    {
+      "type": "subagent_lifecycle",
+      "payload": {
+        "id": "AlphaReader",
+        "agent": "task",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "agentSource": "bundled",
+        "description": "AlphaReader",
+        "status": "started",
+        "sessionFile": "<redacted-session-file>",
+        "index": 0
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 0,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+        "progress": {
+          "index": 0,
+          "id": "AlphaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+          "description": "AlphaReader",
+          "recentTools": [],
+          "recentOutput": [],
+          "toolCount": 0,
+          "requests": 0,
+          "tokens": 0,
+          "cost": 0,
+          "durationMs": 116,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low"
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_lifecycle",
+      "payload": {
+        "id": "BetaReader",
+        "agent": "task",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "agentSource": "bundled",
+        "description": "BetaReader",
+        "status": "started",
+        "sessionFile": "<redacted-session-file>",
+        "index": 1
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 1,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+        "progress": {
+          "index": 1,
+          "id": "BetaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+          "description": "BetaReader",
+          "recentTools": [],
+          "recentOutput": [],
+          "toolCount": 0,
+          "requests": 0,
+          "tokens": 0,
+          "cost": 0,
+          "durationMs": 136,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low"
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 1,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+        "progress": {
+          "index": 1,
+          "id": "BetaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+          "description": "BetaReader",
+          "lastIntent": "Search for \"beta\" in working directory",
+          "recentTools": [
+            {
+              "tool": "grep",
+              "args": ".",
+              "endMs": 1787069845222
+            }
+          ],
+          "recentOutput": [
+            "I'll complete this assignment by reading the file, listing t <redacted-for-fixture>"
+          ],
+          "toolCount": 3,
+          "requests": 1,
+          "tokens": 4529,
+          "cost": 0.012772499999999999,
+          "durationMs": 3761,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low",
+          "contextTokens": 32714
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 1,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+        "progress": {
+          "index": 1,
+          "id": "BetaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+          "description": "BetaReader",
+          "lastIntent": "Search for \"beta\" in working directory",
+          "recentTools": [
+            {
+              "tool": "yield",
+              "args": "",
+              "endMs": 1787069865597
+            },
+            {
+              "tool": "grep",
+              "args": ".",
+              "endMs": 1787069845222
+            }
+          ],
+          "recentOutput": [],
+          "toolCount": 4,
+          "requests": 3,
+          "tokens": 6414,
+          "cost": 0.0250043,
+          "durationMs": 24137,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low",
+          "contextTokens": 33876,
+          "extractedToolData": {
+            "yield": [
+              {
+                "data": {
+                  "task": "Read and analyze beta.txt",
+                  "status": "complete",
+                  "findings": {
+                    "beta_txt_content": "Line 1: beta file\nLine 2: (blank)",
+                    "directory_listing": [
+                      "beta.txt (10B)",
+                      "alpha.txt (11B)"
+                    ],
+                    "grep_results": [
+                      {
+                        "file": "beta.txt",
+                        "line": 1,
+                        "text": "beta file",
+                        "path": "./beta.txt"
+                      }
+                    ],
+                    "summary": "Word 'beta' found 1 time in working directory at ./beta.txt:1"
+                  }
+                },
+                "status": "success"
+              }
+            ]
+          }
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 1,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+        "progress": {
+          "index": 1,
+          "id": "BetaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "completed",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+          "description": "BetaReader",
+          "lastIntent": "Search for \"beta\" in working directory",
+          "recentTools": [
+            {
+              "tool": "yield",
+              "args": "",
+              "endMs": 1787069865597
+            },
+            {
+              "tool": "grep",
+              "args": ".",
+              "endMs": 1787069845222
+            }
+          ],
+          "recentOutput": [],
+          "toolCount": 4,
+          "requests": 3,
+          "tokens": 6414,
+          "cost": 0.0250043,
+          "durationMs": 24174,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low",
+          "contextTokens": 33876,
+          "extractedToolData": {
+            "yield": [
+              {
+                "data": {
+                  "task": "Read and analyze beta.txt",
+                  "status": "complete",
+                  "findings": {
+                    "beta_txt_content": "Line 1: beta file\nLine 2: (blank)",
+                    "directory_listing": [
+                      "beta.txt (10B)",
+                      "alpha.txt (11B)"
+                    ],
+                    "grep_results": [
+                      {
+                        "file": "beta.txt",
+                        "line": 1,
+                        "text": "beta file",
+                        "path": "./beta.txt"
+                      }
+                    ],
+                    "summary": "Word 'beta' found 1 time in working directory at ./beta.txt:1"
+                  }
+                },
+                "status": "success"
+              }
+            ]
+          }
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_lifecycle",
+      "payload": {
+        "id": "BetaReader",
+        "agent": "task",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "agentSource": "bundled",
+        "description": "BetaReader",
+        "status": "completed",
+        "sessionFile": "<redacted-session-file>",
+        "index": 1
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 0,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+        "progress": {
+          "index": 0,
+          "id": "AlphaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+          "description": "AlphaReader",
+          "lastIntent": "Search for word alpha in working directory",
+          "recentTools": [
+            {
+              "tool": "grep",
+              "args": ".",
+              "endMs": 1787069889363
+            }
+          ],
+          "recentOutput": [
+            "I'll complete this assignment by reading alpha.txt, listing <redacted-for-fixture>"
+          ],
+          "toolCount": 3,
+          "requests": 1,
+          "tokens": 4571,
+          "cost": 0.013027500000000001,
+          "durationMs": 47911,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low",
+          "contextTokens": 32756
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 0,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+        "progress": {
+          "index": 0,
+          "id": "AlphaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+          "description": "AlphaReader",
+          "lastIntent": "Search for word alpha in working directory",
+          "recentTools": [
+            {
+              "tool": "yield",
+              "args": "",
+              "endMs": 1787069892989
+            },
+            {
+              "tool": "grep",
+              "args": ".",
+              "endMs": 1787069889363
+            }
+          ],
+          "recentOutput": [],
+          "toolCount": 4,
+          "requests": 2,
+          "tokens": 5373,
+          "cost": 0.018654200000000003,
+          "durationMs": 51537,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low",
+          "contextTokens": 33189,
+          "extractedToolData": {
+            "yield": [
+              {
+                "data": {
+                  "alpha_txt_content": "Line 1: alpha file\nLine 2: (empty)",
+                  "directory_listing": [
+                    "alpha.txt (11B)",
+                    "beta.txt (10B)"
+                  ],
+                  "grep_results": [
+                    {
+                      "file": "alpha.txt",
+                      "line": 1,
+                      "match": "alpha file",
+                      "context": "Line 1 contains the word 'alpha' as part of 'alpha file'"
+                    }
+                  ],
+                  "summary": "The word 'alpha' appears 1 time in the working directory at <redacted-path>"
+                },
+                "status": "success"
+              }
+            ]
+          }
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_progress",
+      "payload": {
+        "index": 0,
+        "agent": "task",
+        "agentSource": "bundled",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+        "progress": {
+          "index": 0,
+          "id": "AlphaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "completed",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+          "description": "AlphaReader",
+          "lastIntent": "Search for word alpha in working directory",
+          "recentTools": [
+            {
+              "tool": "yield",
+              "args": "",
+              "endMs": 1787069892989
+            },
+            {
+              "tool": "grep",
+              "args": ".",
+              "endMs": 1787069889363
+            }
+          ],
+          "recentOutput": [],
+          "toolCount": 4,
+          "requests": 2,
+          "tokens": 5373,
+          "cost": 0.018654200000000003,
+          "durationMs": 51547,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low",
+          "contextTokens": 33189,
+          "extractedToolData": {
+            "yield": [
+              {
+                "data": {
+                  "alpha_txt_content": "Line 1: alpha file\nLine 2: (empty)",
+                  "directory_listing": [
+                    "alpha.txt (11B)",
+                    "beta.txt (10B)"
+                  ],
+                  "grep_results": [
+                    {
+                      "file": "alpha.txt",
+                      "line": 1,
+                      "match": "alpha file",
+                      "context": "Line 1 contains the word 'alpha' as part of 'alpha file'"
+                    }
+                  ],
+                  "summary": "The word 'alpha' appears 1 time in the working directory at <redacted-path>"
+                },
+                "status": "success"
+              }
+            ]
+          }
+        },
+        "sessionFile": "<redacted-session-file>"
+      }
+    },
+    {
+      "type": "subagent_lifecycle",
+      "payload": {
+        "id": "AlphaReader",
+        "agent": "task",
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "detached": true,
+        "agentSource": "bundled",
+        "description": "AlphaReader",
+        "status": "completed",
+        "sessionFile": "<redacted-session-file>",
+        "index": 0
+      }
+    }
+  ],
+  "getSubagentsResponseData": {
+    "subagents": [
+      {
+        "id": "AlphaReader",
+        "index": 0,
+        "agent": "task",
+        "agentSource": "bundled",
+        "description": "AlphaReader",
+        "status": "running",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+        "sessionFile": "<redacted-session-file>",
+        "lastUpdate": 1787069841724,
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "progress": {
+          "index": 0,
+          "id": "AlphaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze alpha.txt in the current working d <redacted-for-fixture>",
+          "description": "AlphaReader",
+          "recentTools": [],
+          "recentOutput": [],
+          "toolCount": 0,
+          "requests": 0,
+          "tokens": 0,
+          "cost": 0,
+          "durationMs": 270,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low"
+        }
+      },
+      {
+        "id": "BetaReader",
+        "index": 1,
+        "agent": "task",
+        "agentSource": "bundled",
+        "description": "BetaReader",
+        "status": "running",
+        "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+        "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+        "sessionFile": "<redacted-session-file>",
+        "lastUpdate": 1787069843108,
+        "parentToolCallId": "toolu_0174qgKDTmX2ri8i5izzy9x3",
+        "progress": {
+          "index": 1,
+          "id": "BetaReader",
+          "agent": "task",
+          "agentSource": "bundled",
+          "status": "running",
+          "task": "Complete the assignment below, thoroughly:\n\n# Target\nRead an <redacted-for-fixture>",
+          "assignment": "# Target\nRead and analyze beta.txt in the current working di <redacted-for-fixture>",
+          "description": "BetaReader",
+          "recentTools": [],
+          "recentOutput": [],
+          "toolCount": 0,
+          "requests": 0,
+          "tokens": 0,
+          "cost": 0,
+          "durationMs": 1647,
+          "modelOverride": [
+            "anthropic/claude-haiku-4-5:low"
+          ],
+          "contextWindow": 200000,
+          "resolvedModel": "anthropic/claude-haiku-4-5:low"
+        }
+      }
+    ]
+  }
+}
