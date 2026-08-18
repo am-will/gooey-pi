@@ -43,6 +43,14 @@ export interface HarnessRpcAdapter {
    * spawn the child with the authorized cwd as its working directory.
    */
   readonly spawnsInCwd?: boolean
+  /**
+   * Subcommand of the harness CLI that reads and writes the harness's own
+   * agent configuration (`<cli> <command> get|set <key>`), or absent when the
+   * harness has no such surface — which the model-role settings report as
+   * unsupported instead of rendering an empty form. Declared here so one
+   * per-harness record answers what a harness supports.
+   */
+  readonly agentConfigCommand?: string
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
   translateCommand(command: RpcObject): RpcObject
@@ -68,6 +76,9 @@ export const PRIME_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
   agentName: HARNESSES.prime.agentName,
   chunkedFrames: false,
+  // No agentConfigCommand: Prime Agent has no model-role or advisor concept —
+  // the vendored prime-agent package contains no such setting — so the
+  // model-role settings section is not offered for this harness.
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc', '--cwd', input.cwd]
     if (input.sessionPath) args.push('--resume', input.sessionPath)
@@ -108,6 +119,10 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
   agentName: HARNESSES.omp.agentName,
   negotiateProtocolVersion: 2,
   chunkedFrames: true,
+  // `omp config get|set <key>` is a first-class CLI surface (verified against
+  // omp 17.2.9): `modelRoles` is a whole-record setting and `advisor.*` are
+  // individual leaves.
+  agentConfigCommand: 'config',
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc', '--cwd', input.cwd]
     if (input.sessionPath) args.push('--resume', input.sessionPath)
@@ -175,6 +190,9 @@ export const PI_RPC_ADAPTER: HarnessRpcAdapter = {
   // pi has no --cwd flag: the session bucket derives from the child process
   // working directory, which the runtime sets to the authorized cwd.
   spawnsInCwd: true,
+  // No agentConfigCommand: pi's own config CLI was not verified against a live
+  // pi during this work, and an unverified surface must not be driven blind.
+  // Declaring it here is the only change needed once it is checked.
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc']
     // pi's --resume is an interactive selector; an exact session file rides --session.

@@ -71,6 +71,10 @@ const api: PrimeWorkApi = {
     cancelOAuth: (flowId) => ipcRenderer.invoke('providers:cancel-oauth', flowId),
     onAuthEvent: (callback) => subscribe<ProviderAuthEvent>('providers:auth-event', callback),
   },
+  agentConfig: {
+    get: (harness) => ipcRenderer.invoke('agent-config:get', harness),
+    set: (patch, harness) => ipcRenderer.invoke('agent-config:set', patch, harness),
+  },
   voice: {
     credentialStatus: () => ipcRenderer.invoke('voice:credential-status'),
     saveApiKey: (provider, apiKey) => ipcRenderer.invoke('voice:save-api-key', provider, apiKey),
