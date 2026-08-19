@@ -626,6 +626,10 @@ async function bootstrap(): Promise<void> {
   // Model roles are validated against OMP's own catalog, so the config service
   // reuses the catalog service rather than resolving models a second way.
   const ompAgentConfig = new OmpAgentConfigService(ompExecutable, ompCatalog)
+  // Five `omp config get` boots cost several seconds, so pay them during startup
+  // rather than the first time Settings is opened. Failures are irrelevant here:
+  // the panel still reads on mount and reports its own error.
+  ompAgentConfig.warm()
   agents = new AgentRpcManager(
     primeExecutable,
     (cwd) => projects.authorizeCwd(cwd),

@@ -20,9 +20,17 @@ import { rejectUnknownKeys, requireBoolean, requireInteger, requireRecord, requi
  * interface, one instance per harness that supports it, and no per-call
  * harness branching in the IPC layer.
  */
+export interface AgentConfigReadOptions {
+  /** Bypass any cached value and read the harness configuration from disk. */
+  refresh?: boolean
+}
+
 export interface AgentConfigProvider {
-  /** Reads the harness's global model-role and advisor configuration. */
-  read(): Promise<AgentRoleConfig>
+  /**
+   * Reads the harness's global model-role and advisor configuration. Implementations
+   * may answer from a cache; `refresh` demands a live read of the harness config.
+   */
+  read(options?: AgentConfigReadOptions): Promise<AgentRoleConfig>
   /** Applies an explicit, already-untrusted patch and answers the re-read configuration. */
   write(patch: AgentRoleConfigPatch): Promise<AgentRoleConfig>
 }

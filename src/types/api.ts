@@ -782,7 +782,7 @@ export interface PrimeWorkApi {
     onAuthEvent(callback: (event: ProviderAuthEvent) => void): () => void
   }
   agentConfig: {
-    get(harness?: HarnessId): Promise<AgentRoleConfig>
+    get(harness?: HarnessId, options?: { refresh?: boolean }): Promise<AgentRoleConfig>
     set(patch: AgentRoleConfigPatch, harness?: HarnessId): Promise<AgentRoleConfig>
   }
   voice: {

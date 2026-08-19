@@ -8,7 +8,7 @@ import {
   type AgentRoleConfigPatch,
 } from '../../src/types/api'
 import { parseModelRoleSelector } from '../../src/lib/model-roles'
-import { harnessAgentConfigCommand, isAdvisorSyncBacklog, isAgentModelRole, UNSUPPORTED_AGENT_CONFIG, type AgentConfigProvider } from './agent-config'
+import { harnessAgentConfigCommand, isAdvisorSyncBacklog, isAgentModelRole, UNSUPPORTED_AGENT_CONFIG, type AgentConfigProvider, type AgentConfigReadOptions } from './agent-config'
 import type { ModelCatalogProvider } from './model-catalog'
 import { resolveExecutable, runProcess, safeChildEnvironment, type ExecutableSource } from './process-utils'
 import { isRecord } from './validation'
@@ -60,6 +60,8 @@ function unsafeArgValue(value: string): boolean {
 export class OmpAgentConfigService implements AgentConfigProvider {
   private readonly timeoutMs: number
   private readonly maxOutputBytes: number
+  private cached: AgentRoleConfig | null = null
+  private inflight: Promise<AgentRoleConfig> | null = null
 
   constructor(
     private readonly executable: ExecutableSource,
@@ -70,7 +72,36 @@ export class OmpAgentConfigService implements AgentConfigProvider {
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_CONFIG_MAX_OUTPUT_BYTES
   }
 
-  async read(): Promise<AgentRoleConfig> {
+  /**
+   * Serves the last known configuration immediately and refreshes behind it. One read
+   * costs five `omp config get` boots, several seconds in total, which is why an
+   * uncached Settings visit used to render an empty section first. A caller that needs
+   * certainty (the panel's own second pass, and every write) asks for `refresh`.
+   */
+  async read(options: AgentConfigReadOptions = {}): Promise<AgentRoleConfig> {
+    if (!options.refresh && this.cached) {
+      if (!this.inflight) this.inflight = this.readFresh().finally(() => { this.inflight = null })
+      return this.cached
+    }
+    if (!options.refresh && this.inflight) return this.inflight
+    this.inflight ??= this.readFresh().finally(() => { this.inflight = null })
+    return this.inflight
+  }
+
+  /** Fills the cache before anything asks for it, so the first Settings visit is instant. */
+  warm(): void {
+    if (this.cached || this.inflight) return
+    this.inflight = this.readFresh().catch(() => UNSUPPORTED_AGENT_CONFIG).finally(() => { this.inflight = null })
+  }
+
+  private async readFresh(): Promise<AgentRoleConfig> {
+    const config = await this.readUncached()
+    // An "OMP is missing" answer is a transient environment fact, never a cached truth.
+    if (config.installed) this.cached = config
+    return config
+  }
+
+  private async readUncached(): Promise<AgentRoleConfig> {
     const command = harnessAgentConfigCommand('omp')
     if (!command) return UNSUPPORTED_AGENT_CONFIG
     const executable = resolveExecutable(this.executable)
@@ -123,7 +154,7 @@ export class OmpAgentConfigService implements AgentConfigProvider {
       if (immuneTurns !== undefined) writes.push(['advisor.immuneTurns', String(immuneTurns)])
     }
     for (const [key, value] of writes) await this.setSetting(executable, command, key, value)
-    return this.read()
+    return this.read({ refresh: true })
   }
 
   /** The stored record with unknown keys preserved, so a write never drops a role this build cannot name. */

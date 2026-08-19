@@ -1,5 +1,5 @@
 import { RefreshCw } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
 import { formatModelRoleSelector, parseModelRoleSelector } from '@/lib/model-roles'
@@ -57,6 +57,8 @@ export function ModelRoleSettings({ harness, agentConfig, catalog }: ModelRoleSe
   const [saveError, setSaveError] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  /** Read inside the load effect, which must not clobber an edit in progress. */
+  const dirtyRef = useRef(false)
 
   useEffect(() => {
     if (!agentConfig) return
@@ -65,12 +67,25 @@ export function ModelRoleSettings({ harness, agentConfig, catalog }: ModelRoleSe
     setLoadError('')
     setSaveError('')
     setSaved(false)
-    void agentConfig.get(harness).then((next) => {
+    // Two passes: the first is served from the main process's cache and paints at once,
+    // the second is a live read that corrects it if the harness config changed outside
+    // GooeyPi. The second never overwrites edits the operator has already started.
+    const apply = (next: AgentRoleConfig, isRefresh: boolean): void => {
       if (cancelled) return
-      setConfig(next)
-      setRoles(next.roles)
-      setAdvisor(next.advisor)
-    }).catch((error: unknown) => { if (!cancelled) setLoadError(errorMessage(error)) })
+      setConfig((current) => {
+        if (isRefresh && current && dirtyRef.current) return current
+        setRoles(next.roles)
+        setAdvisor(next.advisor)
+        return next
+      })
+    }
+    void agentConfig.get(harness)
+      .then((next) => {
+        apply(next, false)
+        return agentConfig.get(harness, { refresh: true })
+      })
+      .then((fresh) => { apply(fresh, true) })
+      .catch((error: unknown) => { if (!cancelled) setLoadError(errorMessage(error)) })
     return () => { cancelled = true }
   }, [agentConfig, harness])
 
@@ -96,6 +111,7 @@ export function ModelRoleSettings({ harness, agentConfig, catalog }: ModelRoleSe
   }, [advisor, config])
 
   const dirty = Object.keys(rolePatch).length > 0 || Object.keys(advisorPatch).length > 0
+  dirtyRef.current = dirty
 
   if (!agentConfig || (config && !config.supported)) return null
 

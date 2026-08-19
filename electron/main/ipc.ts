@@ -17,7 +17,7 @@ import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
 import { harnessAgentConfigCommand, requireAgentRoleConfigPatch, UNSUPPORTED_AGENT_CONFIG, type AgentConfigProvider } from './agent-config'
-import { requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { isRecord, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -363,7 +363,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   }
   const agentConfigFor = (harness: HarnessId): AgentConfigProvider | null =>
     harnessAgentConfigCommand(harness) ? agentConfigServices[harness] : null
-  handle('agent-config:get', (_event, harness) => agentConfigFor(requireHarness(harness))?.read() ?? UNSUPPORTED_AGENT_CONFIG)
+  handle('agent-config:get', (_event, harness, options) => agentConfigFor(requireHarness(harness))?.read({ refresh: isRecord(options) && options.refresh === true }) ?? UNSUPPORTED_AGENT_CONFIG)
   handle('agent-config:set', (_event, patch, harness) => {
     const target = requireHarness(harness)
     const service = agentConfigFor(target)

@@ -72,7 +72,7 @@ const api: PrimeWorkApi = {
     onAuthEvent: (callback) => subscribe<ProviderAuthEvent>('providers:auth-event', callback),
   },
   agentConfig: {
-    get: (harness) => ipcRenderer.invoke('agent-config:get', harness),
+    get: (harness, options) => ipcRenderer.invoke('agent-config:get', harness, options),
     set: (patch, harness) => ipcRenderer.invoke('agent-config:set', patch, harness),
   },
   voice: {
