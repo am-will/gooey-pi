@@ -93,12 +93,12 @@ describe('VoiceService', () => {
   it('stores encrypted API keys and only returns credential status', async () => {
     const { service } = makeService()
     expect(await service.credentialStatus()).toEqual({
-      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: {},
       storage: { available: true },
     })
     expect(await service.saveApiKey('openai', 'sk-secret-value')).toEqual({
-      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: { openai: 'saved' },
       storage: { available: true },
     })
@@ -125,7 +125,7 @@ describe('VoiceService', () => {
     storageAvailable = false
 
     await expect(service.credentialStatus()).resolves.toEqual({
-      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: { openai: 'saved' },
       storage: { available: false, message },
     })
@@ -133,7 +133,7 @@ describe('VoiceService', () => {
     expect(decrypt).not.toHaveBeenCalled()
 
     await expect(service.saveApiKey('openai', 'sk-session-value')).resolves.toEqual({
-      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: { openai: 'session' },
       storage: { available: false, message },
     })
@@ -155,7 +155,7 @@ describe('VoiceService', () => {
 
     const status = await service.saveApiKey('groq', 'gsk-session-secret')
     expect(status).toEqual({
-      configured: { openai: false, groq: true, deepgram: false, 'self-hosted': false },
+      configured: { openai: false, groq: true, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: { groq: 'session' },
       storage: { available: false, message },
     })
@@ -165,7 +165,7 @@ describe('VoiceService', () => {
 
     const restartedService = new VoiceService(options)
     await expect(restartedService.credentialStatus()).resolves.toEqual({
-      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: {},
       storage: { available: false, message },
     })
@@ -241,6 +241,67 @@ describe('VoiceService', () => {
     await service.saveApiKey('openai', 'sk-test')
     await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'omp' })).resolves.toContain('o=answer')
     expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('uses an independent self-hosted realtime endpoint, token, model, voice, and local tool set', async () => {
+    const settings = {
+      ...defaultSettings(),
+      voiceRealtimeProvider: 'self-hosted' as const,
+      voiceRealtimeSelfHostedUrl: 'https://api.example.test',
+      voiceRealtimeSelfHostedModel: 'lfm2.5-1.2b-instruct',
+      voiceRealtimeSelfHostedVoice: 'adrian',
+    }
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.example.test/v1/realtime/calls')
+      expect(init?.redirect).toBe('error')
+      expect(init?.headers).toEqual({ Authorization: 'Bearer realtime-only-token' })
+      const form = init?.body as FormData
+      expect(form.get('sdp')).toBe('v=0\r\no=offer-value')
+      const session = JSON.parse(String(form.get('session'))) as {
+        model: string
+        audio: { output: { voice: string } }
+        instructions: string
+        tools: Array<{ name: string }>
+      }
+      expect(session.model).toBe('lfm2.5-1.2b-instruct')
+      expect(session.audio.output.voice).toBe('adrian')
+      expect(session.instructions).toContain('web access that is unavailable in this connection')
+      expect(session.tools.map((tool) => tool.name)).toEqual(['list_projects', 'list_models', 'start_task', 'get_local_context'])
+      expect(session.tools.map((tool) => tool.name)).not.toContain('search_web')
+      return new Response('v=0\r\no=self-hosted-answer')
+    })
+    const { service, options } = makeService({ settings: () => settings, fetch: fetchMock as typeof fetch })
+    await service.saveApiKey('self-hosted', 'dictation-only-token')
+    await service.saveApiKey('self-hosted-realtime', 'realtime-only-token')
+
+    await expect(service.createRealtimeCall({
+      mode: 'conversation', setupId: 'self-hosted-setup', sdp: 'v=0\r\no=offer-value', harness: 'omp',
+    })).resolves.toEqual({ sdp: 'v=0\r\no=self-hosted-answer', protocol: 'openai' })
+    expect(options.codexVoiceAuth).not.toHaveBeenCalled()
+  })
+
+  it('tests self-hosted realtime without a microphone, tools, token, or client-selected defaults', async () => {
+    const settings = {
+      ...defaultSettings(),
+      voiceRealtimeProvider: 'self-hosted' as const,
+      voiceRealtimeSelfHostedUrl: 'http://127.0.0.1:4000/v1/realtime/calls',
+      voiceRealtimeSelfHostedModel: '',
+      voiceRealtimeSelfHostedVoice: '',
+    }
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toBeUndefined()
+      const form = init?.body as FormData
+      const session = JSON.parse(String(form.get('session'))) as Record<string, unknown>
+      expect(session).toMatchObject({ type: 'realtime', tool_choice: 'none', tools: [] })
+      expect(session).not.toHaveProperty('model')
+      expect(session).not.toHaveProperty('audio')
+      return new Response('v=0\r\no=test-answer')
+    })
+    const { service } = makeService({ settings: () => settings, fetch: fetchMock as typeof fetch })
+
+    await expect(service.createRealtimeCall({
+      mode: 'test', setupId: 'connection-test', sdp: 'v=0\r\no=offer-value', harness: 'prime',
+    })).resolves.toEqual({ sdp: 'v=0\r\no=test-answer', protocol: 'openai' })
   })
 
   it('uses the selected native streaming transcription model', async () => {
