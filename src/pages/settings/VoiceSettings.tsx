@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Modal } from '@/components/ui'
 import { errorMessage } from '@/lib/errors'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
-import { waitForDataChannelOpen, waitForIceGathering } from '@/lib/realtime-webrtc'
+import { probeRealtimeToolSupport, waitForDataChannelOpen, waitForIceGathering } from '@/lib/realtime-webrtc'
 import {
   DEEPGRAM_MODELS,
   GROQ_MODELS,
@@ -34,7 +34,7 @@ interface VoiceSettingsProps extends SettingsSectionProps {
 }
 
 type VoiceServiceState = 'checking' | 'ready' | 'restart-required' | 'error'
-type SelfHostedTestState = 'idle' | 'testing' | 'connected' | 'error'
+type SelfHostedTestState = 'idle' | 'testing' | 'connected' | 'warning' | 'error'
 
 function needsDesktopRestart(error: unknown): boolean {
   return /No handler registered for ['"]voice:/i.test(errorMessage(error))
@@ -168,8 +168,11 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
       setupPending = false
       await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
       await waitForDataChannelOpen(channel)
-      setRealtimeTestState('connected')
-      setRealtimeMessage('Connected. GooeyPi established an OpenAI-compatible realtime session.')
+      const toolsSupported = await probeRealtimeToolSupport(channel)
+      setRealtimeTestState(toolsSupported ? 'connected' : 'warning')
+      setRealtimeMessage(toolsSupported
+        ? 'Connected. GooeyPi established an OpenAI-compatible realtime session with tool support.'
+        : 'Self-hosted realtime server connected, but tool support was not detected.')
     } catch (error) {
       if (setupPending) await voice.cancelRealtimeCall(setupId).catch(() => undefined)
       setRealtimeTestState('error')
@@ -347,7 +350,7 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
                 </span>
               </div>
               <div className="voice-self-hosted-connect">
-                <span><strong>Connection check</strong><small>Creates a microphone-free WebRTC session against this exact endpoint.</small></span>
+                <span><strong>Connection check</strong><small>Creates a microphone-free WebRTC session and requires one harmless function call.</small></span>
                 <button type="button" className="button button--primary" disabled={!voice || !realtimeSelfHostedUrl.trim() || realtimeTestState === 'testing'} onClick={() => void testRealtimeSelfHosted()}>{realtimeTestState === 'testing' ? <LoaderCircle className="is-spinning" size={13} /> : <Radio size={13} />} {realtimeTestState === 'testing' ? 'Testing…' : 'Connect & test'}</button>
               </div>
               {realtimeMessage ? <p className={`voice-self-hosted-result is-${realtimeTestState}`} role={realtimeTestState === 'error' ? 'alert' : 'status'}>{realtimeTestState === 'connected' ? <Check size={13} /> : <ShieldAlert size={13} />}{realtimeMessage}</p> : null}

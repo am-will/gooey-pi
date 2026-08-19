@@ -83,6 +83,7 @@
 .voice-self-hosted-auth__actions i { padding: 3px 6px; border-radius: 999px; color: var(--text-tertiary); background: var(--surface-selected); font-size: 8.5px; font-style: normal; }
 .voice-self-hosted-result { min-height: 34px; display: flex; align-items: center; gap: 7px; margin: 8px 0 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; font-size: 9.5px; line-height: 1.4; }
 .voice-self-hosted-result.is-connected { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); color: var(--success); background: color-mix(in srgb, var(--success) 5%, transparent); }
+.voice-self-hosted-result.is-warning { border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); color: var(--warning); background: color-mix(in srgb, var(--warning) 5%, transparent); }
 .voice-self-hosted-result.is-error { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, transparent); }
 .voice-self-hosted-note { margin: 8px 0 0; color: var(--text-tertiary); font-size: 9px; line-height: 1.45; }
 .voice-requirement { min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 13px; color: var(--warning); background: color-mix(in srgb, var(--warning) 5%, transparent); font-size: 9.5px; }

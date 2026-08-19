@@ -120,7 +120,7 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
         const offer = await peer.createOffer()
         await peer.setLocalDescription(offer)
         const answer = await voice.createRealtimeCall({ mode: 'transcription', sdp: offer.sdp ?? '' })
-        await peer.setRemoteDescription({ type: 'answer', sdp: answer })
+        await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
         await waitForChannel(channel)
       } else {
         const context = new AudioContext()

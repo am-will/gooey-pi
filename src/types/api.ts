@@ -505,6 +505,7 @@ export interface AppSettings {
 
 export const VOICE_TRANSCRIPTION_PROVIDERS = ['openai-live', 'openai', 'groq', 'deepgram', 'self-hosted', 'local-whisper'] as const
 export type VoiceTranscriptionProvider = typeof VOICE_TRANSCRIPTION_PROVIDERS[number]
+export const REALTIME_TOOL_PROBE_NAME = 'gooeypi_realtime_tool_test'
 export const VOICE_CREDENTIAL_PROVIDERS = ['openai', 'groq', 'deepgram', 'self-hosted', 'self-hosted-realtime'] as const
 export type VoiceCredentialProvider = typeof VOICE_CREDENTIAL_PROVIDERS[number]
 export const VOICE_REALTIME_PROVIDERS = ['openai', 'self-hosted'] as const

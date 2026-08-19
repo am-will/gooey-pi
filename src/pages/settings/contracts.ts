@@ -59,6 +59,7 @@ export const SETTINGS_FIELD_SECTIONS = {
   voiceSelfHostedModel: 'voice',
   voiceLocalWhisperExecutable: 'voice',
   voiceLocalWhisperModel: 'voice',
+  voiceRealtimeProvider: 'voice',
   voiceRealtimeModel: 'voice',
   voiceRealtimeVoice: 'voice',
   voiceRealtimeSelfHostedUrl: 'voice',
