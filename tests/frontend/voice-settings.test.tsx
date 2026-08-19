@@ -11,13 +11,14 @@ vi.mock('../../src/components/ui', () => ({
 }))
 
 const emptyStatus: VoiceCredentialStatus = {
-  configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
+  configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
   source: {},
   storage: { available: true },
 }
 
 let root: Root
 let container: HTMLDivElement
+const realtimePeerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'RTCPeerConnection')
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -30,6 +31,8 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.restoreAllMocks()
+  if (realtimePeerDescriptor) Object.defineProperty(globalThis, 'RTCPeerConnection', realtimePeerDescriptor)
+  else Reflect.deleteProperty(globalThis, 'RTCPeerConnection')
 })
 
 async function render(node: ReactNode) {
@@ -90,7 +93,7 @@ describe('Voice settings setup flow', () => {
 
   it('opens an enabled API-key flow and saves through the voice bridge', async () => {
     const saveApiKey = vi.fn().mockResolvedValue({
-      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: { openai: 'saved' },
       storage: { available: true },
     } satisfies VoiceCredentialStatus)
@@ -120,13 +123,13 @@ describe('Voice settings setup flow', () => {
   it('allows a session key and warns that it will not persist without secure Linux storage', async () => {
     const message = 'GooeyPi will not save voice API keys because this Linux desktop is using unprotected basic-text storage. Install and unlock GNOME Keyring (libsecret) or KWallet, then restart GooeyPi.'
     const saveApiKey = vi.fn().mockResolvedValue({
-      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
+      configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
       source: { openai: 'session' },
       storage: { available: false, message },
     } satisfies VoiceCredentialStatus)
     await render(<Harness voice={voiceBridge({
       credentialStatus: vi.fn().mockResolvedValue({
-        configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
+        configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false },
         source: { openai: 'saved' },
         storage: { available: false, message },
       } satisfies VoiceCredentialStatus),
@@ -167,7 +170,7 @@ describe('Voice settings setup flow', () => {
   it('connects and tests a self-hosted Parakeet or Whisper endpoint with an optional token', async () => {
     const testSelfHosted = vi.fn().mockResolvedValue(true)
     const saveApiKey = vi.fn().mockResolvedValue({
-      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': true },
+      configured: { openai: false, groq: false, deepgram: false, 'self-hosted': true, 'self-hosted-realtime': false },
       source: { 'self-hosted': 'saved' },
       storage: { available: true },
     } satisfies VoiceCredentialStatus)
@@ -196,6 +199,54 @@ describe('Voice settings setup flow', () => {
     await click([...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Connect & test'))!)
     expect(testSelfHosted).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9000', model: 'nvidia/parakeet-tdt-0.6b-v3' })
     expect(container.textContent).toContain('Connected. GooeyPi successfully transcribed a test audio clip.')
+  })
+
+  it('keeps self-hosted realtime settings and credentials separate and performs a WebRTC connection test', async () => {
+    class TestChannel extends EventTarget {
+      readyState: RTCDataChannelState = 'open'
+    }
+    class TestPeer extends EventTarget {
+      iceGatheringState: RTCIceGatheringState = 'complete'
+      localDescription: RTCSessionDescription | null = null
+      channel = new TestChannel()
+      addTransceiver = vi.fn()
+      createDataChannel = vi.fn(() => this.channel as unknown as RTCDataChannel)
+      createOffer = vi.fn(async () => ({ type: 'offer' as const, sdp: 'v=0\r\no=realtime-test-offer' }))
+      setLocalDescription = vi.fn(async (description: RTCSessionDescriptionInit) => { this.localDescription = description as RTCSessionDescription })
+      setRemoteDescription = vi.fn(async () => undefined)
+      close = vi.fn()
+    }
+    Object.defineProperty(globalThis, 'RTCPeerConnection', { configurable: true, writable: true, value: TestPeer })
+    const createRealtimeCall = vi.fn().mockResolvedValue({ sdp: 'v=0\r\no=realtime-test-answer', protocol: 'openai' })
+    const saveApiKey = vi.fn().mockResolvedValue({
+      ...emptyStatus,
+      configured: { ...emptyStatus.configured, 'self-hosted-realtime': true },
+      source: { 'self-hosted-realtime': 'saved' },
+    } satisfies VoiceCredentialStatus)
+    await render(<Harness voice={voiceBridge({ createRealtimeCall, saveApiKey })} />)
+
+    const realtime = container.querySelector<HTMLElement>('[aria-labelledby="voice-realtime-title"]')!
+    await choose(realtime.querySelector<HTMLSelectElement>('select[aria-label="Realtime connection"]')!, 'self-hosted')
+    expect(realtime.textContent).toContain('separate from the self-hosted dictation service')
+    expect(realtime.textContent).toContain('never falls back to a hosted voice provider')
+    await enter(realtime.querySelector<HTMLInputElement>('input[aria-label="Self-hosted realtime server URL"]')!, 'https://api.kortexa.ai')
+    await enter(realtime.querySelector<HTMLInputElement>('input[aria-label="Self-hosted realtime model ID"]')!, 'lfm2.5-1.2b-instruct')
+    await enter(realtime.querySelector<HTMLInputElement>('input[aria-label="Self-hosted realtime voice ID"]')!, 'adrian')
+
+    await click([...realtime.querySelectorAll('button')].find((button) => button.textContent?.includes('Add token'))!)
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!
+    await enter(dialog.querySelector<HTMLInputElement>('input[type="password"]')!, 'realtime-token')
+    await click([...dialog.querySelectorAll('button')].find((button) => button.textContent?.includes('Save token'))!)
+    expect(saveApiKey).toHaveBeenCalledWith('self-hosted-realtime', 'realtime-token')
+
+    await click([...realtime.querySelectorAll('button')].find((button) => button.textContent?.includes('Connect & test'))!)
+    await vi.waitFor(() => expect(createRealtimeCall).toHaveBeenCalledWith({
+      mode: 'test',
+      setupId: expect.any(String),
+      sdp: 'v=0\r\no=realtime-test-offer',
+      harness: DEFAULT_SETTINGS.activeHarness,
+    }))
+    expect(realtime.textContent).toContain('Connected. GooeyPi established an OpenAI-compatible realtime session.')
   })
 
   it('turns a missing Voice IPC handler into a restart state instead of checking forever', async () => {

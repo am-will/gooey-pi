@@ -13,6 +13,7 @@ import type {
   VoiceCredentialProvider,
   VoiceCredentialStorageStatus,
   VoiceCredentialStatus,
+  VoiceRealtimeCallResult,
   VoiceTaskStarted,
   VoiceToolResult,
 } from '../../src/types/api'
@@ -81,7 +82,7 @@ function voiceSecretStorageStatus(platform: NodeJS.Platform, encryptionAvailable
 }
 
 function credentialProvider(value: unknown): VoiceCredentialProvider {
-  if (value !== 'openai' && value !== 'groq' && value !== 'deepgram' && value !== 'self-hosted') throw new TypeError('Invalid voice credential provider')
+  if (value !== 'openai' && value !== 'groq' && value !== 'deepgram' && value !== 'self-hosted' && value !== 'self-hosted-realtime') throw new TypeError('Invalid voice credential provider')
   return value
 }
 
@@ -93,6 +94,27 @@ function selfHostedConfiguration(urlValue: unknown, modelValue: unknown): { endp
   const model = requireString(modelValue, 'self-hosted voice model', { max: 128, trim: true })
   if (model && !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(model)) throw new TypeError('Self-hosted voice model is not valid')
   return { endpoint: url.toString(), model }
+}
+
+function selfHostedRealtimeConfiguration(
+  urlValue: unknown,
+  modelValue: unknown,
+  voiceValue: unknown,
+): { endpoint: string; model: string; voice: string } {
+  const url = new URL(requireSelfHostedVoiceUrl(urlValue))
+  const suffix = '/v1/realtime/calls'
+  const path = url.pathname.replace(/\/+$/, '')
+  if (!path.endsWith(suffix)) url.pathname = path.endsWith('/v1') ? `${path}/realtime/calls` : `${path}${suffix}`
+  const checkedId = (value: unknown, label: string): string => {
+    const id = requireString(value, label, { max: 128, trim: true })
+    if (id && !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(id)) throw new TypeError(`${label} is not valid`)
+    return id
+  }
+  return {
+    endpoint: url.toString(),
+    model: checkedId(modelValue, 'self-hosted realtime model'),
+    voice: checkedId(voiceValue, 'self-hosted realtime voice'),
+  }
 }
 
 function silentWav(): Uint8Array {
@@ -180,7 +202,8 @@ class VoiceSecretStore {
     const key = this.environment[
       provider === 'openai' ? 'OPENAI_API_KEY'
         : provider === 'groq' ? 'GROQ_API_KEY'
-          : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : 'VOICE_SELF_HOSTED_API_KEY'
+          : provider === 'deepgram' ? 'DEEPGRAM_API_KEY'
+            : provider === 'self-hosted' ? 'VOICE_SELF_HOSTED_API_KEY' : 'VOICE_REALTIME_SELF_HOSTED_API_KEY'
     ]
     return key?.trim() || undefined
   }
@@ -188,7 +211,7 @@ class VoiceSecretStore {
   async status(): Promise<VoiceCredentialStatus> {
     await this.load()
     const storage = this.codec.status()
-    const configured = { openai: false, groq: false, deepgram: false, 'self-hosted': false }
+    const configured = { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false }
     const source: VoiceCredentialStatus['source'] = {}
     for (const provider of VOICE_CREDENTIAL_PROVIDERS) {
       if (this.sessionValues[provider]) {
@@ -352,6 +375,25 @@ function realtimeSession(settings: AppSettings, harness: HarnessId): Record<stri
   }
 }
 
+function selfHostedRealtimeSession(settings: AppSettings, harness: HarnessId, testOnly: boolean): Record<string, unknown> {
+  const { model, voice } = selfHostedRealtimeConfiguration(
+    settings.voiceRealtimeSelfHostedUrl,
+    settings.voiceRealtimeSelfHostedModel,
+    settings.voiceRealtimeSelfHostedVoice,
+  )
+  const { model: _model, audio: _audio, ...base } = realtimeSession(settings, harness)
+  return {
+    ...base,
+    ...(model ? { model } : {}),
+    instructions: testOnly
+      ? 'This is a connection check. Do not speak or call tools.'
+      : orchestrationInstructions(harness),
+    ...(voice ? { audio: { output: { voice } } } : {}),
+    tool_choice: testOnly ? 'none' : 'auto',
+    tools: testOnly ? [] : base.tools,
+  }
+}
+
 function transcriptionSession(settings: AppSettings): Record<string, unknown> {
   return {
     type: 'transcription',
@@ -373,6 +415,7 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export class VoiceService {
   private readonly secrets: VoiceSecretStore
   private readonly fetchImpl: typeof fetch
+  private readonly realtimeSetups = new Map<string, AbortController>()
 
   constructor(private readonly options: VoiceServiceOptions) {
     this.secrets = new VoiceSecretStore(options.secretPath, options.secretCodec, options.environment ?? process.env)
@@ -383,28 +426,62 @@ export class VoiceService {
   saveApiKey(provider: unknown, key: unknown): Promise<VoiceCredentialStatus> { return this.secrets.save(provider, key) }
   deleteApiKey(provider: unknown): Promise<VoiceCredentialStatus> { return this.secrets.delete(provider) }
 
-  async createRealtimeCall(raw: unknown): Promise<string> {
+  async createRealtimeCall(raw: unknown): Promise<VoiceRealtimeCallResult> {
     const request = requireRecord(raw, 'realtime call')
-    if (request.mode !== 'conversation' && request.mode !== 'transcription') throw new TypeError('Invalid realtime call mode')
+    if (request.mode !== 'conversation' && request.mode !== 'test' && request.mode !== 'transcription') throw new TypeError('Invalid realtime call mode')
     const sdp = requireString(request.sdp, 'sdp', { min: 16, max: MAX_SDP_BYTES })
     if (!sdp.startsWith('v=0')) throw new TypeError('Invalid WebRTC session description')
-    const key = await this.secrets.get('openai')
-    const form = new FormData()
-    form.set('sdp', sdp)
+    const setupId = request.mode === 'conversation' || request.mode === 'test' ? requireId(request.setupId, 'setupId') : undefined
+    const abort = setupId ? new AbortController() : undefined
+    if (setupId) {
+      if (this.realtimeSetups.has(setupId)) throw new Error('Realtime setup is already active')
+      this.realtimeSetups.set(setupId, abort!)
+    }
+    try { return await this.establishRealtimeCall(request, sdp, abort?.signal) }
+    finally { if (setupId && this.realtimeSetups.get(setupId) === abort) this.realtimeSetups.delete(setupId) }
+  }
+
+  cancelRealtimeCall(raw: unknown): void {
+    this.realtimeSetups.get(requireId(raw, 'setupId'))?.abort()
+  }
+
+  private async establishRealtimeCall(request: Record<string, unknown>, sdp: string, signal?: AbortSignal): Promise<VoiceRealtimeCallResult> {
     const settings = this.options.settings()
-    const session = request.mode === 'conversation'
-      ? realtimeSession(settings, harnessId(request.harness))
-      : transcriptionSession(settings)
-    form.set('session', JSON.stringify(session))
-    const response = await this.withTimeout('https://api.openai.com/v1/realtime/calls', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-    }, 30_000)
-    const answer = await response.text()
-    if (!response.ok) throw new Error(`OpenAI realtime setup failed (${response.status}): ${answer.slice(0, 512)}`)
-    if (!answer.startsWith('v=0')) throw new Error('OpenAI realtime setup returned an invalid session description')
-    return answer
+    let response: Response
+    let providerLabel: string
+    if (request.mode === 'transcription' || settings.voiceRealtimeProvider === 'openai') {
+      if (request.mode === 'test') throw new Error('Select the self-hosted realtime connection before testing it')
+      const key = await this.secrets.get('openai')
+      const form = new FormData()
+      form.set('sdp', sdp)
+      form.set('session', JSON.stringify(request.mode === 'conversation' ? realtimeSession(settings, harnessId(request.harness)) : transcriptionSession(settings)))
+      response = await this.withTimeout('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form,
+      }, 30_000, signal)
+      providerLabel = 'OpenAI realtime'
+    } else {
+      const harness = harnessId(request.harness)
+      const configuration = selfHostedRealtimeConfiguration(
+        settings.voiceRealtimeSelfHostedUrl,
+        settings.voiceRealtimeSelfHostedModel,
+        settings.voiceRealtimeSelfHostedVoice,
+      )
+      const token = await this.secrets.getOptional('self-hosted-realtime')
+      const form = new FormData()
+      form.set('sdp', sdp)
+      form.set('session', JSON.stringify(selfHostedRealtimeSession(settings, harness, request.mode === 'test')))
+      response = await this.withTimeout(configuration.endpoint, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: form,
+        redirect: 'error',
+      }, 30_000, signal)
+      providerLabel = 'Self-hosted realtime'
+    }
+    const answer = await this.boundedResponseText(response, 'Realtime setup', MAX_SDP_BYTES)
+    if (!response.ok) throw new Error(`${providerLabel} setup failed (${response.status}): ${answer.slice(0, 512)}`)
+    if (!answer.startsWith('v=0')) throw new Error('Realtime setup returned an invalid session description')
+    return { sdp: answer, protocol: 'openai' }
   }
 
   async transcribe(raw: unknown): Promise<string> {

@@ -2,6 +2,7 @@ import { Mic, MicOff, X } from 'lucide-react'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import type { HarnessId, PrimeWorkApi, VoiceTaskStarted, VoiceToolRequest } from '@/types/api'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { waitForIceGathering } from '@/lib/realtime-webrtc'
 import { DesktopPet, type DesktopPetProps } from './DesktopPet'
 import type { PetActivity } from './PetAvatar'
 
@@ -85,6 +86,8 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
 
   useEffect(() => {
     let active = true
+    let setupPending = false
+    const setupId = crypto.randomUUID()
     const handledCalls = new Set<string>()
     let responseActive = false
     let pendingToolCalls = 0
@@ -208,9 +211,13 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
         for (const track of stream.getTracks()) peer.addTrack(track, stream)
         const offer = await peer.createOffer()
         await peer.setLocalDescription(offer)
-        const answer = await voice.createRealtimeCall({ mode: 'conversation', sdp: offer.sdp ?? '', harness: harnessRef.current })
+        const localDescription = await waitForIceGathering(peer)
         if (!active) return
-        await peer.setRemoteDescription({ type: 'answer', sdp: answer })
+        setupPending = true
+        const answer = await voice.createRealtimeCall({ mode: 'conversation', setupId, sdp: localDescription.sdp ?? '', harness: harnessRef.current })
+        setupPending = false
+        if (!active) return
+        await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
       } catch (failure) {
         if (!active) return
         setError(failure instanceof Error ? failure.message : 'Could not start realtime voice.')
@@ -220,6 +227,7 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
 
     return () => {
       active = false
+      if (setupPending) void voice.cancelRealtimeCall(setupId).catch(() => undefined)
       channelRef.current = null
       try { channel.close() } catch { /* already closed */ }
       peer.close()
