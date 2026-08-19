@@ -40,6 +40,9 @@ function toolRequest(name: unknown, args: unknown): VoiceToolRequest | null {
   if (name === 'list_models') return { name, arguments: args as { query?: string } }
   if (name === 'start_task') return { name, arguments: args as { project_id: string; prompt: string; title?: string; model?: string; reasoning?: string } }
   if (name === 'get_local_context') return { name, arguments: {} }
+  if (name === 'list_agents') return { name, arguments: args as { filter?: 'active' | 'running' | 'needs_attention' | 'all'; project_id?: string; query?: string } }
+  if (name === 'get_agent') return { name, arguments: args as { session_id: string } }
+  if (name === 'send_agent_message') return { name, arguments: args as { session_id: string; message: string } }
   if (name === 'search_web') return { name, arguments: args as { query: string } }
   return null
 }

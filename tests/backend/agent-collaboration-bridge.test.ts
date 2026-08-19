@@ -222,6 +222,49 @@ describe('AgentCollaborationBridge', () => {
     expect(archivedDenied.body.error).toContain('not found in this working directory')
   })
 
+  it('reuses scoped catalog, read, wake, and delivery behavior for user-owned surfaces', async () => {
+    const transcript: TranscriptMessage[] = Array.from({ length: 12 }, (_, index) => ({
+      id: `message-${index}`, role: index % 2 === 0 ? 'user' : 'assistant', parts: [{ type: 'text', text: `Message ${index}` }],
+    }))
+    const { bridge, primeManager } = await fixture(true, transcript)
+    const scope = { harness: 'prime' as const, projectPaths: ['/project'] }
+
+    const listed = await bridge.listAccessibleSessions(scope)
+    expect(listed.map(({ id }) => id)).toEqual([target.id, source.id])
+    expect(listed).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: foreign.id }),
+      expect.objectContaining({ id: child.id }),
+      expect.objectContaining({ id: archived.id }),
+    ]))
+
+    const read = await bridge.readAccessibleSession(scope, target.id)
+    expect(read).toMatchObject({
+      projectPath: '/project', session: { id: target.id }, token_limit: 2_000, truncated: true, live: true,
+    })
+    expect(read.messages).toHaveLength(10)
+    expect(read.messages[0]?.id).toBe('message-2')
+    await expect(bridge.readAccessibleSession(scope, foreign.id)).rejects.toThrow('not found in an explicitly granted project')
+
+    await expect(bridge.sendUserMessage(scope, target.id, '/mcp login notion')).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
+    expect(primeManager.command).not.toHaveBeenCalled()
+    primeManager.getForSession.mockReturnValue({
+      runtimeId: 'runtime-target', harness: 'prime', sessionId: target.id, sessionFile: target.filePath, cwd: '/project', isStreaming: true,
+    })
+    const sent = await bridge.sendUserMessage(scope, target.id, 'Please use the compact response shape.')
+    expect(sent).toEqual({ delivered: true, target_session_id: target.id, awakened: false, queued: true })
+    expect(primeManager.command).toHaveBeenCalledWith('runtime-target', {
+      type: 'follow_up', message: 'Please use the compact response shape.',
+    })
+  })
+
+  it('safely wakes an authorized saved session for a user-owned send', async () => {
+    const { bridge, primeManager } = await fixture(false)
+    const sent = await bridge.sendUserMessage({ harness: 'prime', projectPaths: ['/project'] }, target.id, 'Please continue.')
+    expect(sent).toEqual({ delivered: true, target_session_id: target.id, awakened: true, queued: false })
+    expect(primeManager.start).toHaveBeenCalledWith({ cwd: '/project', sessionPath: target.filePath })
+    expect(primeManager.command).toHaveBeenCalledWith('runtime-awakened', { type: 'prompt', message: 'Please continue.' })
+  })
+
   it('reads conversational I/O and thinking without exposing execution traces', async () => {
     const toolOnly: TranscriptMessage[] = Array.from({ length: 45 }, (_, index) => ({
       id: `tool-${index}`,
