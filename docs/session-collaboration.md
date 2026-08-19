@@ -38,3 +38,15 @@ Using Prime's daemon transport only for Prime would create three different seman
 Native Prime subagent messaging, OMP task subagents/relay rooms, and pi extensions remain unchanged. Session collaboration is an additional top-level coordination surface.
 
 Incoming peer prompts use a signed, app-local envelope. New envelopes expose only the sender UUID, a `session_send` reply hint, envelope-authenticity fields, and the actual message to the recipient model; they never include the sender title, harness, opening prompt, or transcript context. The signature survives app restarts and is verified before the transcript can render a user record with native agent-message styling, so ordinary prompt text cannot impersonate another session. The signing key stays in Electron's user-data directory with owner-only permissions and is never exposed to a harness or the renderer. Saved version-1 envelopes remain readable for transcript compatibility, but are never newly emitted.
+
+## Realtime voice access
+
+Realtime voice reuses the same main-process catalog, bounded transcript reader,
+wake-up, serialization, and runtime delivery code through three client-owned
+tools: `list_agents`, `get_agent`, and `send_agent_message`. Voice has no source
+agent session, so its access scope is the selected harness across explicitly
+granted projects. Lists contain stable session UUIDs; reads are further bounded
+to 10 conversational messages and 2,000 estimated tokens; and messages are
+delivered as user prompts or queued follow-ups rather than signed peer-agent
+envelopes. A voice message cannot approve a permission prompt or complete an
+extension UI form.

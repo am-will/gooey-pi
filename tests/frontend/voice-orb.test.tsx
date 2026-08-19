@@ -45,8 +45,8 @@ describe('realtime voice surface', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+    window.localStorage?.clear()
     vi.unstubAllGlobals()
-    localStorage.clear()
   })
 
   it('places the waveform toggle immediately before the terminal button', () => {
@@ -162,6 +162,30 @@ describe('realtime voice surface', () => {
       await Promise.resolve()
     })
     expect(executeTool).toHaveBeenCalledWith({ name: 'list_models', arguments: { query: 'sonnet' } }, 'omp')
+  })
+
+  it('forwards agent collaboration calls through the pinned harness', async () => {
+    const executeTool = vi.fn(async () => ({ output: '{"delivered":true}' }))
+    const voice = { createRealtimeCall: vi.fn(async () => 'v=0\r\no=test-answer-value'), executeTool } as unknown as PrimeWorkApi['voice']
+    await act(async () => root.render(<VoiceOrb voice={voice} harness="pi" onClose={vi.fn()} onTaskStarted={vi.fn()} />))
+    await act(async () => {
+      FakePeer.latest.channel.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'response.function_call_arguments.done', call_id: 'call-agents', name: 'list_agents',
+        arguments: JSON.stringify({ filter: 'needs_attention', project_id: 'project-1' }),
+      }) }))
+      FakePeer.latest.channel.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'response.function_call_arguments.done', call_id: 'call-agent', name: 'get_agent',
+        arguments: JSON.stringify({ session_id: 'session-1' }),
+      }) }))
+      FakePeer.latest.channel.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'response.function_call_arguments.done', call_id: 'call-send', name: 'send_agent_message',
+        arguments: JSON.stringify({ session_id: 'session-1', message: 'Please continue.' }),
+      }) }))
+      await Promise.resolve()
+    })
+    expect(executeTool).toHaveBeenCalledWith({ name: 'list_agents', arguments: { filter: 'needs_attention', project_id: 'project-1' } }, 'pi')
+    expect(executeTool).toHaveBeenCalledWith({ name: 'get_agent', arguments: { session_id: 'session-1' } }, 'pi')
+    expect(executeTool).toHaveBeenCalledWith({ name: 'send_agent_message', arguments: { session_id: 'session-1', message: 'Please continue.' } }, 'pi')
   })
 
   it('waits for the active response to finish before continuing after a tool call', async () => {
