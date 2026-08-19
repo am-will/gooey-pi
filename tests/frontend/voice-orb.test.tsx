@@ -94,11 +94,12 @@ describe('realtime voice surface', () => {
 
   it('shows mute and close controls and disables the microphone track when muted', async () => {
     const voice = {
-      createRealtimeCall: vi.fn(async () => 'v=0\r\no=test-answer-value'),
+      createRealtimeCall: vi.fn(async () => ({ sdp: 'v=0\r\no=test-answer-value', protocol: 'openai' as const })),
+      cancelRealtimeCall: vi.fn(),
       executeTool: vi.fn(),
     } as unknown as PrimeWorkApi['voice']
     await act(async () => root.render(<VoiceOrb voice={voice} harness="omp" onClose={vi.fn()} onTaskStarted={vi.fn()} />))
-    expect(voice.createRealtimeCall).toHaveBeenCalledWith({ mode: 'conversation', sdp: 'v=0\r\no=test-offer-value', harness: 'omp' })
+    expect(voice.createRealtimeCall).toHaveBeenCalledWith({ mode: 'conversation', setupId: expect.any(String), sdp: 'v=0\r\no=test-offer-value', harness: 'omp' })
     const mute = container.querySelector<HTMLButtonElement>('[aria-label="Mute realtime voice"]')!
     expect(container.querySelector('[aria-label="Close realtime voice"]')).not.toBeNull()
     await act(async () => mute.click())

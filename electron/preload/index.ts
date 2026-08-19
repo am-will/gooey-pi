@@ -90,6 +90,7 @@ const api: PrimeWorkApi = {
     saveApiKey: (provider, apiKey) => ipcRenderer.invoke('voice:save-api-key', provider, apiKey),
     deleteApiKey: (provider) => ipcRenderer.invoke('voice:delete-api-key', provider),
     createRealtimeCall: (request) => ipcRenderer.invoke('voice:create-realtime-call', request),
+    cancelRealtimeCall: (setupId) => ipcRenderer.invoke('voice:cancel-realtime-call', setupId),
     transcribe: (request) => ipcRenderer.invoke('voice:transcribe', request),
     testSelfHosted: (request) => ipcRenderer.invoke('voice:test-self-hosted', request),
     executeTool: (request, harness) => ipcRenderer.invoke('voice:execute-tool', request, harness),

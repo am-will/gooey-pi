@@ -129,7 +129,7 @@ describe('VoiceService', () => {
       source: { openai: 'saved' },
       storage: { available: false, message },
     })
-    await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'prime' })).rejects.toThrow(message)
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'locked-storage', sdp: 'v=0\r\no=offer-value', harness: 'prime' })).rejects.toThrow(message)
     expect(decrypt).not.toHaveBeenCalled()
 
     await expect(service.saveApiKey('openai', 'sk-session-value')).resolves.toEqual({
@@ -137,7 +137,7 @@ describe('VoiceService', () => {
       source: { openai: 'session' },
       storage: { available: false, message },
     })
-    await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'prime' })).resolves.toContain('o=answer')
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'session-key', sdp: 'v=0\r\no=offer-value', harness: 'prime' })).resolves.toMatchObject({ sdp: expect.stringContaining('o=answer') })
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(decrypt).not.toHaveBeenCalled()
   })
@@ -202,7 +202,7 @@ describe('VoiceService', () => {
       expect(init?.headers).toBeUndefined()
       const form = init?.body as FormData
       expect(form.get('model')).toBeNull()
-      expect(form.get('language')).toBe('en-US')
+      expect(form.get('language')).toBe('en')
       expect((form.get('file') as Blob).size).toBeGreaterThan(44)
       return Response.json({ text: '' })
     })
@@ -239,7 +239,7 @@ describe('VoiceService', () => {
     })
     const { service } = makeService({ fetch: fetchMock as typeof fetch })
     await service.saveApiKey('openai', 'sk-test')
-    await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'omp' })).resolves.toContain('o=answer')
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'hosted-openai', sdp: 'v=0\r\no=offer-value', harness: 'omp' })).resolves.toMatchObject({ sdp: expect.stringContaining('o=answer') })
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
@@ -270,17 +270,16 @@ describe('VoiceService', () => {
       expect(session.tools.map((tool) => tool.name)).not.toContain('search_web')
       return new Response('v=0\r\no=self-hosted-answer')
     })
-    const { service, options } = makeService({ settings: () => settings, fetch: fetchMock as typeof fetch })
+    const { service } = makeService({ settings: () => settings, fetch: fetchMock as typeof fetch })
     await service.saveApiKey('self-hosted', 'dictation-only-token')
     await service.saveApiKey('self-hosted-realtime', 'realtime-only-token')
 
     await expect(service.createRealtimeCall({
       mode: 'conversation', setupId: 'self-hosted-setup', sdp: 'v=0\r\no=offer-value', harness: 'omp',
     })).resolves.toEqual({ sdp: 'v=0\r\no=self-hosted-answer', protocol: 'openai' })
-    expect(options.codexVoiceAuth).not.toHaveBeenCalled()
   })
 
-  it('tests self-hosted realtime without a microphone, tools, token, or client-selected defaults', async () => {
+  it('tests self-hosted realtime without a microphone, token, or client-selected defaults', async () => {
     const settings = {
       ...defaultSettings(),
       voiceRealtimeProvider: 'self-hosted' as const,
@@ -292,7 +291,12 @@ describe('VoiceService', () => {
       expect(init?.headers).toBeUndefined()
       const form = init?.body as FormData
       const session = JSON.parse(String(form.get('session'))) as Record<string, unknown>
-      expect(session).toMatchObject({ type: 'realtime', tool_choice: 'none', tools: [] })
+      expect(session).toMatchObject({
+        type: 'realtime',
+        tool_choice: 'required',
+        tools: [{ type: 'function', name: 'gooeypi_realtime_tool_test' }],
+      })
+      expect(session.instructions).toContain('gooeypi_realtime_tool_test')
       expect(session).not.toHaveProperty('model')
       expect(session).not.toHaveProperty('audio')
       return new Response('v=0\r\no=test-answer')

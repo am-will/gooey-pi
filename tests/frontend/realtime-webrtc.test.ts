@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { waitForDataChannelOpen, waitForIceGathering } from '../../src/lib/realtime-webrtc'
+import { probeRealtimeToolSupport, waitForDataChannelOpen, waitForIceGathering } from '../../src/lib/realtime-webrtc'
 
 class FakePeer extends EventTarget {
   iceGatheringState: RTCIceGatheringState = 'complete'
@@ -14,6 +14,7 @@ class FakePeer extends EventTarget {
 
 class FakeChannel extends EventTarget {
   readyState: RTCDataChannelState = 'connecting'
+  send = vi.fn()
 }
 
 afterEach(() => vi.useRealTimers())
@@ -82,5 +83,33 @@ describe('realtime WebRTC setup waits', () => {
     const assertion = expect(waitForDataChannelOpen(channel as unknown as RTCDataChannel, 25)).rejects.toThrow(/did not open/)
     await vi.advanceTimersByTimeAsync(25)
     await assertion
+  })
+
+  it('requires the harmless GooeyPi function call to prove tool support', async () => {
+    const channel = new FakeChannel()
+    channel.readyState = 'open'
+    channel.send.mockImplementation(() => {
+      channel.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'response.function_call_arguments.done',
+        name: 'gooeypi_realtime_tool_test',
+        arguments: '{}',
+      }) }))
+    })
+
+    await expect(probeRealtimeToolSupport(channel as unknown as RTCDataChannel)).resolves.toBe(true)
+    expect(channel.send).toHaveBeenCalledWith(JSON.stringify({ type: 'response.create' }))
+  })
+
+  it('reports an otherwise connected endpoint that does not call the probe tool', async () => {
+    const channel = new FakeChannel()
+    channel.readyState = 'open'
+    channel.send.mockImplementation(() => {
+      channel.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        type: 'response.done',
+        response: { status: 'completed', output: [] },
+      }) }))
+    })
+
+    await expect(probeRealtimeToolSupport(channel as unknown as RTCDataChannel)).resolves.toBe(false)
   })
 })

@@ -63,6 +63,7 @@ function voiceBridge(overrides: Partial<PrimeWorkApi['voice']> = {}): PrimeWorkA
     saveApiKey: vi.fn().mockResolvedValue(emptyStatus),
     deleteApiKey: vi.fn().mockResolvedValue(emptyStatus),
     createRealtimeCall: vi.fn(),
+    cancelRealtimeCall: vi.fn().mockResolvedValue(undefined),
     transcribe: vi.fn(),
     testSelfHosted: vi.fn().mockResolvedValue(true),
     executeTool: vi.fn(),
@@ -178,10 +179,11 @@ describe('Voice settings setup flow', () => {
 
     const service = container.querySelector<HTMLSelectElement>('select[aria-label="Dictation service"]')!
     await choose(service, 'self-hosted')
-    expect(container.textContent).toContain('Connect your transcription server')
-    expect(container.textContent).toContain('Parakeet, Whisper')
+    const dictation = container.querySelector<HTMLElement>('[aria-labelledby="voice-dictation-title"]')!
+    expect(dictation.textContent).toContain('Connect your transcription server')
+    expect(dictation.textContent).toContain('Parakeet, Whisper')
     expect(container.querySelector('input[aria-label="whisper-cli executable"]')).toBeNull()
-    expect(container.textContent).not.toContain('API key required')
+    expect(dictation.textContent).not.toContain('API key required')
 
     const url = container.querySelector<HTMLInputElement>('input[aria-label="Self-hosted server URL"]')!
     const model = container.querySelector<HTMLInputElement>('input[aria-label="Self-hosted model ID"]')!
@@ -204,6 +206,13 @@ describe('Voice settings setup flow', () => {
   it('keeps self-hosted realtime settings and credentials separate and performs a WebRTC connection test', async () => {
     class TestChannel extends EventTarget {
       readyState: RTCDataChannelState = 'open'
+      send = vi.fn(() => {
+        this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+          type: 'response.function_call_arguments.done',
+          name: 'gooeypi_realtime_tool_test',
+          arguments: '{}',
+        }) }))
+      })
     }
     class TestPeer extends EventTarget {
       iceGatheringState: RTCIceGatheringState = 'complete'
@@ -246,7 +255,7 @@ describe('Voice settings setup flow', () => {
       sdp: 'v=0\r\no=realtime-test-offer',
       harness: DEFAULT_SETTINGS.activeHarness,
     }))
-    expect(realtime.textContent).toContain('Connected. GooeyPi established an OpenAI-compatible realtime session.')
+    await vi.waitFor(() => expect(realtime.textContent).toContain('Connected. GooeyPi established an OpenAI-compatible realtime session with tool support.'))
   })
 
   it('turns a missing Voice IPC handler into a restart state instead of checking forever', async () => {
