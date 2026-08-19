@@ -312,7 +312,7 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
             <span className="voice-choice-control">
               <select aria-label="Realtime connection" value={realtimeProvider} onChange={(event) => { update('voiceRealtimeProvider', event.target.value as VoiceRealtimeProvider); setRealtimeTestState('idle'); setRealtimeMessage('') }}>
                 <option value="openai">OpenAI API key</option>
-                <option value="self-hosted">Self-hosted endpoint</option>
+                <option value="self-hosted">Self-hosted · OpenAI compatible</option>
               </select>
               <small>{realtimeProvider === 'openai'
                 ? 'Uses GooeyPi’s existing realtime API connection.'

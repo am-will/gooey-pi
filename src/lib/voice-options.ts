@@ -17,7 +17,7 @@ export const VOICE_PROVIDER_OPTIONS: VoiceProviderOption[] = [
   { value: 'openai', label: 'OpenAI · Recorded', detail: 'Records first, then transcribes the complete clip.', credential: 'openai' },
   { value: 'groq', label: 'Groq', detail: 'Fast recorded transcription with Whisper.', credential: 'groq' },
   { value: 'deepgram', label: 'Deepgram', detail: 'Recorded transcription with Nova speech models.', credential: 'deepgram' },
-  { value: 'self-hosted', label: 'Self-hosted · Parakeet / Whisper', detail: 'Connect to your own OpenAI-compatible transcription server.' },
+  { value: 'self-hosted', label: 'Self-hosted · OpenAI compatible', detail: 'Connect to your own OpenAI-compatible transcription server.' },
   { value: 'local-whisper', label: 'Local · whisper.cpp', detail: 'Runs entirely on this Mac with your own model file.' },
 ]
 
