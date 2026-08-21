@@ -144,8 +144,20 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     if (!runtime?.model?.provider || !runtime.model.id || !catalog) return
     const effectiveModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false)
     if (effectiveModel) updateModel(effectiveModel.key)
+    // Only adopt the runtime's level when the operator actually picked one. OMP reports
+    // the session's *configured* level, which is its own default when nothing was
+    // configured - so adopting it would make the selector claim "Standard" for a session
+    // the role suffix is actually running at xhigh. Leaving it on Auto is the true answer.
+    if (effortRef.current === AUTO_THINKING) return
     if (runtime.thinkingLevel && effectiveModel?.availableThinkingLevels.includes(runtime.thinkingLevel as PrimeThinkingLevel)) updateEffort(runtime.thinkingLevel as PrimeThinkingLevel)
   }, [catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, updateEffort, updateModel])
+
+  // With no runtime there is nothing that has resolved a level, so the selector goes
+  // back to inheriting. Without this, the first session to report a concrete level
+  // pinned every later session in the same app run - including brand new ones.
+  useEffect(() => {
+    if (!runtime) updateEffort(AUTO_THINKING)
+  }, [runtime, updateEffort])
 
   // Scoped to the runtime's reported tier so a catalog refresh cannot revert
   // an optimistic fast-mode toggle that the runtime has not confirmed yet.
