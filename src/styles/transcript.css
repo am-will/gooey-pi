@@ -46,9 +46,10 @@
 .prose li + li { margin-top: 3px; }
 .prose blockquote { padding-left: 11px; border-left: 3px solid var(--border-strong); color: var(--text-secondary); }
 .prose a { color: var(--annotation); text-decoration: underline; text-underline-offset: 2px; }
-.prose code { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-subtle); font-size: .9em; }
-.prose pre { max-width: 100%; padding: 11px 13px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); font-size: 12px; line-height: 1.55; }
+.prose code { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; direction: ltr; unicode-bidi: isolate; background: var(--surface-subtle); font-size: .9em; }
+.prose pre { max-width: 100%; padding: 11px 13px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; direction: ltr; unicode-bidi: isolate; background: var(--canvas); font-size: 12px; line-height: 1.55; text-align: left; }
 .prose pre code { padding: 0; border: 0; background: transparent; font-size: inherit; white-space: pre; overflow-wrap: normal; }
+.prose a > bdi { unicode-bidi: isolate; }
 .prose table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .prose th, .prose td { padding: 5px 8px; border: 1px solid var(--border); text-align: left; }
 .prose th { background: var(--surface-subtle); font-weight: 600; }
