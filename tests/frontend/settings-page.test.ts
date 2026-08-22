@@ -172,6 +172,7 @@ describe('settings field ownership', () => {
       ompDisabledModels: 'providers',
       piDisabledProviders: 'providers',
       piDisabledModels: 'providers',
+      lastSelectedModels: 'providers',
       activeHarness: 'agent',
       ompApprovalMode: 'agent',
       petEnabled: 'pets',

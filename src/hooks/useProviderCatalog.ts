@@ -24,12 +24,15 @@ interface UseProviderCatalogOptions {
   /** Harness whose model catalog is shown; catalogs are cached per harness. */
   harness?: HarnessId
   runtime: RuntimeInfo | null
+  /** Persisted per-harness model preference. */
+  lastSelectedModel?: string
+  rememberModel?(modelKey: string): void
   syncRuntime(runtimeId: string): Promise<void>
   reportError(error: unknown): void
 }
 
-export function useProviderCatalog({ bridge, ready = true, harness = 'prime', runtime, syncRuntime, reportError }: UseProviderCatalogOptions) {
-  const [model, setModel] = useState('auto')
+export function useProviderCatalog({ bridge, ready = true, harness = 'prime', runtime, lastSelectedModel = '', rememberModel, syncRuntime, reportError }: UseProviderCatalogOptions) {
+  const [model, setModel] = useState('')
   const [effort, setEffort] = useState<PrimeThinkingLevel>('medium')
   const [fast, setFast] = useState(false)
   // Per-harness cache: switching back to a harness shows its last catalog
@@ -86,10 +89,24 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     setCatalogFor(target, await bridge.providers.catalog(force, target))
   }, [bridge, harness, ready, setCatalogFor])
 
+  const rememberSelection = useCallback((value: string) => {
+    if (value && value !== lastSelectedModel) rememberModel?.(value)
+  }, [lastSelectedModel, rememberModel])
+  const rememberSelectionRef = useRef(rememberSelection)
+  useLayoutEffect(() => { rememberSelectionRef.current = rememberSelection })
+
+  const firstUsableModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => (
+    nextCatalog?.models.find((candidate) => candidate.enabled !== false && candidate.available)
+  ), [])
+
+  const fallbackModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => (
+    nextCatalog?.models.find((candidate) => candidate.key === lastSelectedModel && candidate.enabled !== false && candidate.available)
+      ?? firstUsableModel(nextCatalog)
+  ), [firstUsableModel, lastSelectedModel])
+
   const selectedModel = useMemo<PrimeModelDescriptor | undefined>(() => {
-    if (model !== 'auto') return catalog?.models.find((candidate) => candidate.key === model && candidate.enabled !== false)
-    return catalog?.models.find((candidate) => candidate.provider === runtime?.model?.provider && candidate.id === runtime?.model?.id && candidate.enabled !== false)
-  }, [catalog, model, runtime?.model?.id, runtime?.model?.provider])
+    return catalog?.models.find((candidate) => candidate.key === model && candidate.enabled !== false && candidate.available)
+  }, [catalog, model])
   const reasoningLevels = selectedModel?.availableThinkingLevels ?? runtime?.availableThinkingLevels ?? DEFAULT_REASONING_LEVELS
   // Group once per catalog identity so the composer's <option> tree can memoize.
   const modelsByProvider = useMemo(() => groupModelsByProvider(catalog?.models), [catalog?.models])
@@ -107,15 +124,25 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     return () => { cancelled = true }
   }, [bridge, harness, ready, reportError, setCatalogFor])
 
-  // The composer's selection belongs to one harness's catalog; a switch resets
-  // it to auto until the new harness's runtime or the user picks a model.
+  // The composer's selection belongs to one harness's catalog. Clear the old
+  // harness before resolving the new harness's remembered or first model.
   const previousHarnessRef = useRef(harness)
   useEffect(() => {
     if (previousHarnessRef.current === harness) return
     previousHarnessRef.current = harness
-    updateModel('auto')
+    updateModel('')
     updateFast(false)
   }, [harness, updateFast, updateModel])
+
+  useEffect(() => {
+    if (!catalog) return
+    const current = catalog.models.find((candidate) => candidate.key === modelRef.current && candidate.enabled !== false && candidate.available)
+    if (current) return
+    const fallback = fallbackModel(catalog)
+    updateModel(fallback?.key ?? '')
+    if (fallback) rememberSelection(fallback.key)
+    if (!fallback?.fastModeSupported) updateFast(false)
+  }, [catalog, fallbackModel, harness, rememberSelection, updateFast, updateModel])
 
   useEffect(() => {
     if (!bridge) return
@@ -135,8 +162,11 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
 
   useEffect(() => {
     if (!runtime?.model?.provider || !runtime.model.id || !catalog) return
-    const effectiveModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false)
-    if (effectiveModel) updateModel(effectiveModel.key)
+    const effectiveModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false && candidate.available)
+    if (effectiveModel) {
+      updateModel(effectiveModel.key)
+      rememberSelectionRef.current(effectiveModel.key)
+    }
     if (runtime.thinkingLevel && effectiveModel?.availableThinkingLevels.includes(runtime.thinkingLevel as PrimeThinkingLevel)) updateEffort(runtime.thinkingLevel as PrimeThinkingLevel)
   }, [catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, updateEffort, updateModel])
 
@@ -156,16 +186,20 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     updateModel(nextModelKey)
     updateEffort(nextEffort)
     if (!nextModel?.fastModeSupported) updateFast(false)
-    if (!bridge || !runtime || !nextModel) return
+    if (!bridge || !runtime || !nextModel) {
+      if (nextModel) rememberSelection(nextModelKey)
+      return
+    }
     queueRuntimeMutation(
       runtime.runtimeId,
       async () => {
         await bridge.agent.command(runtime.runtimeId, { type: 'set_model', provider: nextModel.provider, modelId: nextModel.id })
         await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort })
+        rememberSelectionRef.current(nextModelKey)
       },
       () => { updateModel(previous.model); updateEffort(previous.effort); updateFast(previous.fast) },
     )
-  }, [bridge, catalog?.models, queueRuntimeMutation, runtime, updateEffort, updateFast, updateModel])
+  }, [bridge, catalog?.models, queueRuntimeMutation, rememberSelection, runtime, updateEffort, updateFast, updateModel])
 
   const changeEffort = useCallback((nextEffort: PrimeThinkingLevel) => {
     const previous = effortRef.current
@@ -207,8 +241,13 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     setCatalogFor(harness, next)
     const disabledProviders = next.providers.filter((provider) => !provider.enabled).map((provider) => provider.id)
     const selectedProvider = catalog?.models.find((candidate) => candidate.key === modelRef.current)?.provider
-    if (selectedProvider && disabledProviders.includes(selectedProvider)) { updateModel('auto'); updateFast(false) }
-  }, [bridge, catalog?.models, harness, setCatalogFor, updateFast, updateModel])
+    if (selectedProvider && disabledProviders.includes(selectedProvider)) {
+      const fallback = fallbackModel(next)
+      updateModel(fallback?.key ?? '')
+      if (fallback) rememberSelection(fallback.key)
+      updateFast(false)
+    }
+  }, [bridge, catalog?.models, fallbackModel, harness, rememberSelection, setCatalogFor, updateFast, updateModel])
 
   const setAllEnabled = useCallback(async () => {
     if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
@@ -222,7 +261,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     setCatalogFor(harness, await bridge.providers.setDisabled(providerIds, harness))
     const selectedProvider = catalog?.models.find((candidate) => candidate.key === modelRef.current)?.provider
     if (selectedProvider && providerIds.includes(selectedProvider)) {
-      updateModel('auto')
+      updateModel('')
       updateFast(false)
     }
   }, [bridge, catalog?.models, catalog?.providers, harness, setCatalogFor, updateFast, updateModel])
@@ -231,8 +270,13 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     if (!bridge) throw new Error('Models can only be configured in the desktop app.')
     const next = await bridge.providers.setModelEnabled(modelKey, enabled, harness)
     setCatalogFor(harness, next)
-    if (!enabled && modelRef.current === modelKey) { updateModel('auto'); updateFast(false) }
-  }, [bridge, harness, setCatalogFor, updateFast, updateModel])
+    if (!enabled && modelRef.current === modelKey) {
+      const fallback = fallbackModel(next)
+      updateModel(fallback?.key ?? '')
+      if (fallback) rememberSelection(fallback.key)
+      updateFast(false)
+    }
+  }, [bridge, fallbackModel, harness, rememberSelection, setCatalogFor, updateFast, updateModel])
 
   const startOAuth = useCallback(async (providerId: string) => {
     if (!bridge) throw new Error('Providers can only be configured in the desktop app.')

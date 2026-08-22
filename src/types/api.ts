@@ -457,6 +457,8 @@ export interface AppSettings {
   piDisabledProviders: string[]
   /** Models hidden from Prime Work's pi model picker; pi config is untouched. */
   piDisabledModels: string[]
+  /** Last usable model selected in each harness; blank falls back to the first usable catalog model. */
+  lastSelectedModels: Record<HarnessId, string>
   /** Harness whose workspace the renderer shows; new installs default to 'omp'. */
   activeHarness: HarnessId
   /** OMP tool-approval override; 'inherit' leaves OMP's own config in charge. */

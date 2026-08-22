@@ -129,6 +129,7 @@ export function defaultSettings(): AppSettings {
     ompDisabledModels: [],
     piDisabledProviders: [],
     piDisabledModels: [],
+    lastSelectedModels: { prime: '', omp: '', pi: '' },
     activeHarness: 'omp',
     ompApprovalMode: 'inherit',
     petEnabled: true,
@@ -216,6 +217,18 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
   const activeHarness = value.activeHarness === 'prime' || value.activeHarness === 'omp' || value.activeHarness === 'pi'
     ? value.activeHarness as HarnessId
     : legacyState ? 'prime' : defaults.activeHarness
+  const parseLastSelectedModel = (model: unknown, fallback: string): string => (
+    typeof model === 'string' && model.length <= 385 && (!model || /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(model))
+      ? model
+      : fallback
+  )
+  const lastSelectedModels = isRecord(value.lastSelectedModels)
+    ? {
+        prime: parseLastSelectedModel(value.lastSelectedModels.prime, defaults.lastSelectedModels.prime),
+        omp: parseLastSelectedModel(value.lastSelectedModels.omp, defaults.lastSelectedModels.omp),
+        pi: parseLastSelectedModel(value.lastSelectedModels.pi, defaults.lastSelectedModels.pi),
+      }
+    : defaults.lastSelectedModels
   return {
     theme: value.theme === 'light' || value.theme === 'dark' || value.theme === 'system' ? value.theme : defaults.theme,
     locale: value.locale === 'en' || value.locale === 'zh-CN' || value.locale === 'system' ? value.locale : defaults.locale,
@@ -254,6 +267,7 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
       ? [...new Set(value.piDisabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 256)
       : defaults.piDisabledProviders,
     piDisabledModels: parseDisabledModels(value.piDisabledModels, defaults.piDisabledModels),
+    lastSelectedModels,
     activeHarness,
     ompApprovalMode: value.ompApprovalMode === 'inherit' || value.ompApprovalMode === 'always-ask' || value.ompApprovalMode === 'write' || value.ompApprovalMode === 'yolo' ? value.ompApprovalMode : defaults.ompApprovalMode,
     petEnabled: typeof value.petEnabled === 'boolean' ? value.petEnabled : defaults.petEnabled,

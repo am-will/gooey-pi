@@ -30,11 +30,47 @@ function openMarkdownLink(event: MouseEvent<HTMLAnchorElement>, href?: string): 
 }
 
 const markdownPlugins = [remarkGfm]
+
+const RTL_STRONG_CHARACTER = /[\u05D0-\u05EA\u05F0-\u05F2\u0621-\u064A\u066E-\u066F\u0671-\u06D3\u06D5\u06EE-\u06EF\u06FA-\u06FC\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFC]/u
+const LTR_STRONG_CHARACTER = /\p{Letter}/u
+
+/**
+ * Removes Markdown code from direction detection: code often starts an
+ * otherwise RTL answer, but it must always retain its own LTR rendering.
+ */
+function proseForDirection(text: string): string {
+  let fence: string | undefined
+  return text.split('\n').map((line) => {
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})/)
+    if (!fence && opening) {
+      fence = opening[1]
+      return ''
+    }
+    if (fence) {
+      const closing = new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`)
+      if (closing.test(line)) fence = undefined
+      return ''
+    }
+    return line.replace(/`[^`\n]*`/g, '')
+  }).join('\n')
+}
+
+/** Find the first strong prose character, defaulting neutral-only text to LTR. */
+export function markdownTextDirection(text: string): 'ltr' | 'rtl' {
+  for (const character of proseForDirection(text)) {
+    if (RTL_STRONG_CHARACTER.test(character)) return 'rtl'
+    if (LTR_STRONG_CHARACTER.test(character)) return 'ltr'
+  }
+  return 'ltr'
+}
+
 const markdownComponents: Components = {
   a: ({ node: _node, href, children, ...props }) => href && (/^(https?:|mailto:|#)/i.test(href))
-    ? <a {...props} href={href} rel="noreferrer" onClick={(event) => openMarkdownLink(event, href)}>{children}</a>
+    ? <a {...props} href={href} rel="noreferrer" onClick={(event) => openMarkdownLink(event, href)}><bdi>{children}</bdi></a>
     : <span className="markdown-link-unsupported" title={href ? `Project-relative link: ${href}` : undefined}>{children}</span>,
+  code: ({ node: _node, children, ...props }) => <code {...props} dir="ltr">{children}</code>,
   img: ({ alt }) => <span className="markdown-image-placeholder">[Image: {alt || 'attachment'}]</span>,
+  pre: ({ node: _node, children, ...props }) => <pre {...props} dir="ltr">{children}</pre>,
 }
 
 export const STREAMING_PARSE_INTERVAL_MS = 100
@@ -105,5 +141,5 @@ export const MarkdownText = memo(function MarkdownText({ text, streaming = false
     () => <ReactMarkdown remarkPlugins={markdownPlugins} skipHtml components={markdownComponents}>{parsedText}</ReactMarkdown>,
     [parsedText],
   )
-  return <div className="prose">{markdown}</div>
+  return <div className="prose" dir={markdownTextDirection(parsedText)}>{markdown}</div>
 })

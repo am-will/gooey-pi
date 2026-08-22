@@ -12,7 +12,7 @@ describe('chat Markdown rendering', () => {
     expect(html).toContain('<h2>Result</h2>')
     expect(html).toContain('<strong>Done</strong>')
     expect(html).toContain('<ul>')
-    expect(html).toContain('<pre><code class="language-ts">')
+    expect(html).toContain('<pre dir="ltr"><code class="language-ts" dir="ltr">')
     expect(html).toContain('<table>')
   })
 

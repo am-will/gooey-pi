@@ -47,6 +47,7 @@ describe('SettingsService.update', () => {
       ompDisabledModels: ['anthropic/claude-sonnet-4'],
       piDisabledProviders: [],
       piDisabledModels: ['openai/gpt-5.6-codex'],
+      lastSelectedModels: { prime: 'openai/gpt-5.6-sol', omp: 'anthropic/claude-opus', pi: '' },
       activeHarness: 'omp',
       ompApprovalMode: 'always-ask',
       petEnabled: true,
@@ -72,6 +73,7 @@ describe('SettingsService.update', () => {
       runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' }, enabledHarnesses: ['prime', 'omp'],
       telemetry: false, askUserEnabled: false, disabledProviders: ['openai', 'google'], disabledModels: ['openai/gpt-5.6'], ompDisabledProviders: ['anthropic'],
       ompDisabledModels: ['anthropic/claude-sonnet-4'], piDisabledModels: ['openai/gpt-5.6-codex'],
+      lastSelectedModels: { prime: 'openai/gpt-5.6-sol', omp: 'anthropic/claude-opus', pi: '' },
       activeHarness: 'omp', ompApprovalMode: 'always-ask', petEnabled: true, petId: 'codex/rocky', petSize: 65,
       voiceTranscriptionProvider: 'groq', voiceSelfHostedUrl: 'https://speech.example.test/v1', voiceSelfHostedModel: 'nvidia/parakeet-tdt-0.6b-v3', voiceRealtimeVoice: 'cedar',
     })
@@ -116,6 +118,8 @@ describe('SettingsService.update', () => {
     await expect(service.update({ piDisabledProviders: ['../evil'] })).rejects.toThrow(/provider ID/)
     await expect(service.update({ piDisabledProviders: Array.from({ length: 257 }, () => 'p') })).rejects.toThrow(/bounded/)
     await expect(service.update({ piDisabledModels: ['provider/model with spaces'] })).rejects.toThrow(/model key/)
+    await expect(service.update({ lastSelectedModels: { prime: 'missing-slash', omp: '', pi: '' } })).rejects.toThrow(/model key/)
+    await expect(service.update({ lastSelectedModels: { prime: '', omp: '', pi: '', hostile: 'openai/gpt' } })).rejects.toThrow(/not supported/)
     await expect(service.update({ activeHarness: 'codex' })).rejects.toThrow(/Invalid harness/)
     await expect(service.update({ ompApprovalMode: 'sudo' })).rejects.toThrow(/Invalid OMP approval mode/)
     await expect(service.update({ petId: '../escape' })).rejects.toThrow(/Invalid pet id/)
