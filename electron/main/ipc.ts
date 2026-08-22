@@ -16,7 +16,8 @@ import type { TerminalService } from './terminal'
 import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
-import { requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { harnessAgentConfigCommand, requireAgentRoleConfigPatch, UNSUPPORTED_AGENT_CONFIG, type AgentConfigProvider } from './agent-config'
+import { isRecord, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -52,6 +53,8 @@ interface HarnessServices {
   agents: AgentRpcManager
   catalog: ModelCatalogProvider
   plugins: PluginService
+  /** Present only for harnesses whose adapter declares an agent-config CLI. */
+  agentConfig: AgentConfigProvider | null
 }
 
 /** Strict enum gate for the untrusted optional harness argument; absence means 'prime'. */
@@ -363,6 +366,23 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   })
   handle('providers:respond-oauth', (_event, flowId, promptId, value) => services.providers.respondOAuth(flowId, promptId, value))
   handle('providers:cancel-oauth', (_event, flowId) => services.providers.cancelOAuth(flowId))
+
+  // Model roles and the advisor live in the harness's own configuration, not
+  // in desktop state. The adapter record decides which harnesses have one at
+  // all, so a harness without the CLI reports unsupported instead of the
+  // renderer having to know the harness list.
+  const agentConfigServices: Record<HarnessId, AgentConfigProvider | null> = {
+    prime: null, omp: services.omp.agentConfig, pi: services.pi.agentConfig,
+  }
+  const agentConfigFor = (harness: HarnessId): AgentConfigProvider | null =>
+    harnessAgentConfigCommand(harness) ? agentConfigServices[harness] : null
+  handle('agent-config:get', (_event, harness, options) => agentConfigFor(requireHarness(harness))?.read({ refresh: isRecord(options) && options.refresh === true }) ?? UNSUPPORTED_AGENT_CONFIG)
+  handle('agent-config:set', (_event, patch, harness) => {
+    const target = requireHarness(harness)
+    const service = agentConfigFor(target)
+    if (!service) throw new Error('This harness does not expose configurable model roles')
+    return service.write(requireAgentRoleConfigPatch(patch))
+  })
 
   handle('voice:credential-status', () => services.voice.credentialStatus())
   handle('voice:save-api-key', (_event, provider, apiKey) => services.voice.saveApiKey(provider, apiKey))

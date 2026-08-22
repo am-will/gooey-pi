@@ -18,6 +18,7 @@ import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-disco
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
+import { OmpAgentConfigService } from './agent-config-omp'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
 import { PACKAGED_RENDERER_URL, PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
@@ -633,6 +634,13 @@ async function bootstrap(): Promise<void> {
   const piDisabledModels = () => new Set(stateStore.getSettings().piDisabledModels)
   const ompCatalog = new OmpModelCatalogService(ompExecutable)
   const piCatalog = new PiModelCatalogService(piExecutable)
+  // Model roles are validated against OMP's own catalog, so the config service
+  // reuses the catalog service rather than resolving models a second way.
+  const ompAgentConfig = new OmpAgentConfigService(ompExecutable, ompCatalog)
+  // Five `omp config get` boots cost several seconds, so pay them during startup
+  // rather than the first time Settings is opened. Failures are irrelevant here:
+  // the panel still reads on mount and reports its own error.
+  ompAgentConfig.warm()
   agents = new AgentRpcManager(
     primeExecutable,
     (cwd) => projects.authorizeCwd(cwd),
@@ -1015,8 +1023,10 @@ async function bootstrap(): Promise<void> {
   ipc = registerIpc({
     meta, refreshHarnesses, projects, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,
     popupApplicationMenu, setTitleBarTheme,
-    omp: { projects: ompProjects, sessions: ompSessions, agents: ompManager, catalog: ompCatalog, plugins: ompPlugins },
-    pi: { projects: piProjects, sessions: piSessions, agents: piManager, catalog: piCatalog, plugins: piPlugins },
+    omp: { projects: ompProjects, sessions: ompSessions, agents: ompManager, catalog: ompCatalog, plugins: ompPlugins, agentConfig: ompAgentConfig },
+    // pi's own config CLI is unverified, so PI_RPC_ADAPTER declares no
+    // agentConfigCommand and there is no service to route to.
+    pi: { projects: piProjects, sessions: piSessions, agents: piManager, catalog: piCatalog, plugins: piPlugins, agentConfig: null },
     applyInterfaceZoom,
   }, trustedRendererUrl)
   // Both managers share the one renderer forwarding path: envelopes carry the

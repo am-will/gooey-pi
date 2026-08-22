@@ -36,7 +36,7 @@ interface ComposerProps {
   loading?: boolean
   disabled?: boolean
   model: string
-  effort: PrimeThinkingLevel
+  effort: PrimeThinkingLevel | 'auto'
   modelsByProvider: ReadonlyMap<string, PrimeModelDescriptor[]>
   providers: PrimeProviderDescriptor[]
   reasoningLevels: PrimeThinkingLevel[]
@@ -738,6 +738,8 @@ export const Composer = memo(function Composer({
               {modelOptions}
             </SelectControl>
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
+              {/* Only shown until the harness reports the effort it resolved from its own roles. */}
+              {effort === 'auto' ? <option value="auto">Auto</option> : null}
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>
                   {reasoningLabels[level]}

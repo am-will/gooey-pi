@@ -21,6 +21,57 @@ export type HarnessId = (typeof HARNESS_IDS)[number]
 export const OMP_APPROVAL_MODES = ['inherit', 'always-ask', 'write', 'yolo'] as const
 export type OmpApprovalMode = (typeof OMP_APPROVAL_MODES)[number]
 
+/**
+ * Roles a harness can assign a model to in its own `modelRoles` configuration.
+ * OMP resolves each role to a model selector; the harness decides which role a
+ * turn uses. Only harnesses whose RPC adapter declares an agent-config CLI
+ * expose this at all.
+ */
+export const AGENT_MODEL_ROLES = ['default', 'slow', 'plan', 'smol', 'task', 'advisor'] as const
+export type AgentModelRole = (typeof AGENT_MODEL_ROLES)[number]
+
+/**
+ * `advisor.syncBacklog` accepts these four values. The CLI reports the numeric
+ * ones as JSON numbers, so the main process normalizes them to strings before
+ * they reach the renderer.
+ */
+export const ADVISOR_SYNC_BACKLOGS = ['off', '1', '3', '5'] as const
+export type AdvisorSyncBacklog = (typeof ADVISOR_SYNC_BACKLOGS)[number]
+
+/** Upper bound accepted for `advisor.immuneTurns` on both read and write. */
+export const ADVISOR_MAX_IMMUNE_TURNS = 1_000
+
+export interface AgentAdvisorSettings {
+  enabled: boolean
+  subagents: boolean
+  syncBacklog: AdvisorSyncBacklog
+  immuneTurns: number
+}
+
+/**
+ * Live read of a harness's own model-role configuration.
+ *
+ * `supported: false` means the harness has no such configuration surface, and
+ * the renderer shows nothing at all. `supported: true` with `installed: false`
+ * means the harness has one but its CLI was not found, which surfaces as a
+ * warning instead of an empty form. Values are always read from the harness's
+ * global configuration, never from a project overlay.
+ */
+export interface AgentRoleConfig {
+  supported: boolean
+  installed: boolean
+  /** Role → the harness's own model selector (`provider/id`, optionally `:thinkingLevel`). */
+  roles: Partial<Record<AgentModelRole, string>>
+  advisor: AgentAdvisorSettings | null
+  warning?: string
+}
+
+/** Explicit save payload; every field is optional and only present fields are written. */
+export interface AgentRoleConfigPatch {
+  roles?: Partial<Record<AgentModelRole, string>>
+  advisor?: Partial<AgentAdvisorSettings>
+}
+
 export interface HarnessStatus {
   path: string | null
   version: string | null
@@ -726,6 +777,10 @@ export interface PrimeWorkApi {
     respondOAuth(flowId: string, promptId: string, value?: string): Promise<boolean>
     cancelOAuth(flowId: string): Promise<boolean>
     onAuthEvent(callback: (event: ProviderAuthEvent) => void): () => void
+  }
+  agentConfig: {
+    get(harness?: HarnessId, options?: { refresh?: boolean }): Promise<AgentRoleConfig>
+    set(patch: AgentRoleConfigPatch, harness?: HarnessId): Promise<AgentRoleConfig>
   }
   voice: {
     credentialStatus(): Promise<VoiceCredentialStatus>

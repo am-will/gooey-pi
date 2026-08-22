@@ -5,6 +5,8 @@ type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
 
 /** Stable fallback identities so consumers can memoize on prop equality. */
 const DEFAULT_REASONING_LEVELS: PrimeThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+/** Sentinel for "inherit the harness's configured effort"; never sent to the CLI. */
+export const AUTO_THINKING = 'auto'
 
 export function groupModelsByProvider(models: readonly PrimeModelDescriptor[] | undefined): Map<string, PrimeModelDescriptor[]> {
   const grouped = new Map<string, PrimeModelDescriptor[]>()
@@ -30,7 +32,10 @@ interface UseProviderCatalogOptions {
 
 export function useProviderCatalog({ bridge, ready = true, harness = 'prime', runtime, syncRuntime, reportError }: UseProviderCatalogOptions) {
   const [model, setModel] = useState('auto')
-  const [effort, setEffort] = useState<PrimeThinkingLevel>('medium')
+  // 'auto' means the operator has not chosen a level, so no --thinking flag is sent and
+  // the harness resolves the effort from its own modelRoles configuration. The runtime
+  // reports the level it actually resolved, and the effect below adopts it.
+  const [effort, setEffort] = useState<PrimeThinkingLevel | 'auto'>(AUTO_THINKING)
   const [fast, setFast] = useState(false)
   // Per-harness cache: switching back to a harness shows its last catalog
   // immediately while the background refresh updates it.
@@ -49,7 +54,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   useLayoutEffect(() => { runtimeIdRef.current = runtime?.runtimeId })
 
   const updateModel = useCallback((value: string) => { modelRef.current = value; setModel(value) }, [])
-  const updateEffort = useCallback((value: PrimeThinkingLevel) => { effortRef.current = value; setEffort(value) }, [])
+  const updateEffort = useCallback((value: PrimeThinkingLevel | 'auto') => { effortRef.current = value; setEffort(value) }, [])
   const updateFast = useCallback((value: boolean) => { fastRef.current = value; setFast(value) }, [])
 
   const queueRuntimeMutation = useCallback((
@@ -95,7 +100,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   const modelsByProvider = useMemo(() => groupModelsByProvider(catalog?.models), [catalog?.models])
 
   useEffect(() => {
-    if (reasoningLevels.includes(effort)) return
+    if (effort === AUTO_THINKING || reasoningLevels.includes(effort)) return
     updateEffort(reasoningLevels.includes('medium') ? 'medium' : reasoningLevels[0] ?? 'off')
   }, [effort, reasoningLevels, updateEffort])
 
@@ -114,8 +119,10 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     if (previousHarnessRef.current === harness) return
     previousHarnessRef.current = harness
     updateModel('auto')
+    // The new harness resolves its own role effort, so drop the level the old one reported.
+    updateEffort(AUTO_THINKING)
     updateFast(false)
-  }, [harness, updateFast, updateModel])
+  }, [harness, updateEffort, updateFast, updateModel])
 
   useEffect(() => {
     if (!bridge) return
@@ -137,8 +144,20 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     if (!runtime?.model?.provider || !runtime.model.id || !catalog) return
     const effectiveModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false)
     if (effectiveModel) updateModel(effectiveModel.key)
+    // Only adopt the runtime's level when the operator actually picked one. OMP reports
+    // the session's *configured* level, which is its own default when nothing was
+    // configured - so adopting it would make the selector claim "Standard" for a session
+    // the role suffix is actually running at xhigh. Leaving it on Auto is the true answer.
+    if (effortRef.current === AUTO_THINKING) return
     if (runtime.thinkingLevel && effectiveModel?.availableThinkingLevels.includes(runtime.thinkingLevel as PrimeThinkingLevel)) updateEffort(runtime.thinkingLevel as PrimeThinkingLevel)
   }, [catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, updateEffort, updateModel])
+
+  // With no runtime there is nothing that has resolved a level, so the selector goes
+  // back to inheriting. Without this, the first session to report a concrete level
+  // pinned every later session in the same app run - including brand new ones.
+  useEffect(() => {
+    if (!runtime) updateEffort(AUTO_THINKING)
+  }, [runtime, updateEffort])
 
   // Scoped to the runtime's reported tier so a catalog refresh cannot revert
   // an optimistic fast-mode toggle that the runtime has not confirmed yet.
@@ -150,9 +169,11 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   const changeModel = useCallback((nextModelKey: string) => {
     const previous = { model: modelRef.current, effort: effortRef.current, fast: fastRef.current }
     const nextModel = catalog?.models.find((candidate) => candidate.key === nextModelKey)
-    const nextEffort = nextModel && !nextModel.availableThinkingLevels.includes(effortRef.current)
+    // A model switch keeps 'auto' as 'auto': the new model's own role effort still applies.
+    const current = effortRef.current
+    const nextEffort = current !== AUTO_THINKING && nextModel && !nextModel.availableThinkingLevels.includes(current)
       ? nextModel.availableThinkingLevels.includes('medium') ? 'medium' : nextModel.availableThinkingLevels[0] ?? 'off'
-      : effortRef.current
+      : current
     updateModel(nextModelKey)
     updateEffort(nextEffort)
     if (!nextModel?.fastModeSupported) updateFast(false)
@@ -161,7 +182,8 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
       runtime.runtimeId,
       async () => {
         await bridge.agent.command(runtime.runtimeId, { type: 'set_model', provider: nextModel.provider, modelId: nextModel.id })
-        await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort })
+        // A live runtime has no 'auto': it already resolved a concrete level.
+        if (nextEffort !== AUTO_THINKING) await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort })
       },
       () => { updateModel(previous.model); updateEffort(previous.effort); updateFast(previous.fast) },
     )
