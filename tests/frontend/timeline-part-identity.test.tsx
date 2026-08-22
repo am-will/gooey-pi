@@ -3,6 +3,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AssistantMessage } from '../../src/components/transcript/messages'
 import { WorkTimeline } from '../../src/components/transcript/timeline'
 import { replayPrimeEvents } from '../../src/lib/events'
 import type { TranscriptMessage } from '../../src/types/api'
@@ -29,6 +30,30 @@ function renderTimeline(message: TranscriptMessage): void {
 }
 
 describe('timeline part identity', () => {
+  it('copies the promoted final report when reasoning trails it', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    act(() => {
+      root.render(createElement(AssistantMessage, {
+        message: {
+          id: 'copy-final-report', role: 'assistant', completedAt: 2_000,
+          parts: [
+            { type: 'thinking', text: 'Earlier reasoning.' },
+            { type: 'text', text: 'Primary final report.' },
+            { type: 'thinking', text: 'Trailing reasoning.' },
+          ],
+        },
+        showReasoning: true,
+        showTools: true,
+      }))
+    })
+
+    const copy = container.querySelector('[aria-label="Copy assistant message"]') as HTMLButtonElement
+    expect(copy).not.toBeNull()
+    await act(async () => { copy.click() })
+    expect(writeText).toHaveBeenCalledWith('Primary final report.')
+  })
+
   it('only shows the tool copy action after expanding and copies its contents', async () => {
     const writeText = vi.fn(async () => undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })

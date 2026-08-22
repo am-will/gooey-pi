@@ -55,6 +55,39 @@ function renderNarrativeWithActivity(parts: MessagePart[], keyPrefix: string, sh
   )
 }
 
+function isNarrative(part: MessagePart): part is Extract<MessagePart, { type: 'text' | 'image' }> {
+  return part.type === 'text' || part.type === 'image'
+}
+
+/**
+ * Completed turns can receive lightweight activity after their final answer.
+ * Anchor the visible tail at the most substantial narrative run, preferring
+ * the later run on ties, so everything after that anchor remains in order and
+ * a short trailing note cannot bury a longer deliverable in the work rail.
+ */
+function primaryNarrativeStart(parts: MessagePart[], start: number): number {
+  let bestStart = -1
+  let bestScore = 0
+  for (let index = start; index < parts.length;) {
+    if (!isNarrative(parts[index])) {
+      index += 1
+      continue
+    }
+    const runStart = index
+    let score = 0
+    while (index < parts.length && isNarrative(parts[index])) {
+      const part = parts[index]
+      score += part.type === 'text' ? part.text.trim().length : 1
+      index += 1
+    }
+    if (score > 0 && score >= bestScore) {
+      bestStart = runStart
+      bestScore = score
+    }
+  }
+  return bestStart
+}
+
 function messageText(message: TranscriptMessage): string {
   return message.parts
     .filter((part) => part.type === 'text')
@@ -107,18 +140,15 @@ function AssistantHarnessMark({ harness, size = 24 }: { harness: HarnessId; size
 export const AssistantMessage = memo(
   function AssistantMessage({ message, harness = 'prime', showReasoning, showTools }: { message: TranscriptMessage; harness?: HarnessId; showReasoning: boolean; showTools: boolean }) {
     const isActivity = (part: MessagePart) => part.type === 'thinking' || part.type === 'toolCall' || part.type === 'toolResult' || part.type === 'agentMessage' || part.type === 'compaction'
-    const isCoreActivity = (part: MessagePart) => part.type === 'thinking' || part.type === 'toolCall' || part.type === 'toolResult' || part.type === 'compaction'
     const firstActivity = message.parts.findIndex(isActivity)
     let lastActivity = -1
-    let lastCoreActivity = -1
     for (let index = message.parts.length - 1; index >= 0; index -= 1) {
-      if (lastActivity < 0 && isActivity(message.parts[index])) lastActivity = index
-      if (isCoreActivity(message.parts[index])) {
-        lastCoreActivity = index
+      if (isActivity(message.parts[index])) {
+        lastActivity = index
         break
       }
     }
-    const finalNarrative = lastCoreActivity < 0 ? -1 : message.parts.findIndex((part, index) => index > lastCoreActivity && (part.type === 'text' || part.type === 'image'))
+    const finalNarrative = firstActivity < 0 ? -1 : primaryNarrativeStart(message.parts, firstActivity + 1)
     const workEnd = finalNarrative >= 0 ? finalNarrative : lastActivity + 1
     const before = firstActivity < 0 ? message.parts : message.parts.slice(0, firstActivity)
     const work = firstActivity < 0 ? [] : message.parts.slice(firstActivity, workEnd)

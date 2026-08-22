@@ -288,6 +288,46 @@ describe('transcript rendering', () => {
     expect(html).toContain('aria-label="Copy assistant message"')
   })
 
+  it('keeps a final report visible when reasoning arrives after it', () => {
+    const html = render([{
+      id: 'trailing-reasoning',
+      role: 'assistant',
+      timestamp: 1_000,
+      completedAt: 2_000,
+      parts: [
+        { type: 'thinking', text: 'Earlier reasoning.' },
+        { type: 'text', text: 'The primary final report stays visible.' },
+        { type: 'thinking', text: 'Trailing lightweight reasoning.' },
+      ],
+    }])
+
+    expect(html).toContain('Worked for 1s')
+    expect(html).toContain('The primary final report stays visible.')
+    expect(html).toContain('Trailing lightweight reasoning.')
+    expect(html).not.toContain('Earlier reasoning.')
+    expect(html).toContain('aria-label="Copy assistant message"')
+  })
+
+  it('promotes a substantive report ahead of trailing activity and an incidental note', () => {
+    const html = render([{
+      id: 'trailing-tool-and-note',
+      role: 'assistant',
+      timestamp: 1_000,
+      completedAt: 2_000,
+      parts: [
+        { type: 'thinking', text: 'Earlier reasoning.' },
+        { type: 'text', text: 'This is the complete substantive report with the requested conclusions and evidence.' },
+        { type: 'toolCall', id: 'cleanup', name: 'update_todo' },
+        { type: 'toolResult', name: 'update_todo', text: 'done' },
+        { type: 'text', text: 'Cleanup complete.' },
+      ],
+    }])
+
+    expect(html).toContain('This is the complete substantive report with the requested conclusions and evidence.')
+    expect(html).toContain('Cleanup complete.')
+    expect(html).toContain('update_todo')
+  })
+
   it('nests agent messages in active work without opening their contents', () => {
     const html = render([{
       id: 'active-agent-message',
