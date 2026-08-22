@@ -139,6 +139,17 @@ export class SettingsService {
         }))]
       },
       piDisabledModels: (value) => this.disabledModels(value, 'piDisabledModels'),
+      lastSelectedModels: (value) => {
+        if (!isRecord(value)) throw new TypeError('lastSelectedModels must be an object')
+        rejectUnknownKeys(value, HARNESS_IDS, 'lastSelectedModels')
+        const models = {} as AppSettings['lastSelectedModels']
+        for (const harness of HARNESS_IDS) {
+          const model = requireString(value[harness], `lastSelectedModels.${harness}`, { max: 385, trim: true })
+          if (model && !/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(model)) throw new TypeError(`lastSelectedModels.${harness} is not a valid model key`)
+          models[harness] = model
+        }
+        return models
+      },
     }
     const keys = Object.keys(validators) as Array<keyof AppSettings>
     rejectUnknownKeys(raw, keys, 'settings patch')

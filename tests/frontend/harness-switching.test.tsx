@@ -451,7 +451,7 @@ describe('provider catalog per harness', () => {
     expect(catalog).toHaveBeenCalledWith(false, 'prime')
   })
 
-  it('fetches per harness, caches catalogs, and resets the model selection on switch', async () => {
+  it('fetches per harness, caches catalogs, and selects the first usable model on switch', async () => {
     const thirdFetch = deferred<PrimeModelCatalog>()
     const catalogMock = vi.fn()
       .mockResolvedValueOnce(primeCatalog)
@@ -477,13 +477,37 @@ describe('provider catalog per harness', () => {
     await act(async () => { root.render(<CatalogProbe harness="omp" />); await Promise.resolve() })
     expect(catalogMock).toHaveBeenNthCalledWith(2, false, 'omp')
     expect(state.catalog).toBe(ompCatalog)
-    expect(state.model).toBe('auto')
+    expect(state.model).toBe('openai-codex/gpt-5.6-luna')
     expect(state.fast).toBe(false)
 
     // Switching back shows the cached prime catalog while the refresh hangs.
     await act(async () => { root.render(<CatalogProbe harness="prime" />) })
     expect(catalogMock).toHaveBeenNthCalledWith(3, false, 'prime')
     expect(state.catalog).toBe(primeCatalog)
+    expect(state.model).toBe('openai-codex/gpt-5.6')
+  })
+
+  it('restores a usable remembered model and replaces a stale preference with the first usable model', async () => {
+    const alternate = { ...primeCatalog.models[0], key: 'openai-codex/gpt-5.5', id: 'gpt-5.5', name: 'GPT-5.5' }
+    const catalog = { ...primeCatalog, models: [primeCatalog.models[0], alternate] }
+    const bridge = {
+      providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn().mockReturnValue(() => undefined) },
+    } as unknown as PrimeWorkApi
+    const rememberModel = vi.fn()
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useProviderCatalog>
+    function CatalogProbe({ lastSelectedModel }: { lastSelectedModel: string }) {
+      state = useProviderCatalog({ bridge, harness: 'prime', runtime: null, lastSelectedModel, rememberModel, syncRuntime: async () => undefined, reportError })
+      return <Probe />
+    }
+
+    await act(async () => { root.render(<CatalogProbe lastSelectedModel={alternate.key} />); await Promise.resolve() })
+    expect(state.model).toBe(alternate.key)
+    expect(rememberModel).not.toHaveBeenCalled()
+
+    await act(async () => { root.render(<CatalogProbe key="stale-preference" lastSelectedModel="missing/model" />); await Promise.resolve() })
+    expect(state.model).toBe(primeCatalog.models[0].key)
+    expect(rememberModel).toHaveBeenLastCalledWith(primeCatalog.models[0].key)
   })
 })
 

@@ -338,7 +338,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         // bootstrap effect's workspace reset would otherwise start the new
         // harness against the old workspace's cwd and session.
         const activeHarness = admitted.project.harness
-        if (images.length > 0 && provider.model !== 'auto' && !provider.selectedModel?.input.includes('image')) {
+        if (images.length > 0 && !provider.selectedModel?.input.includes('image')) {
           reportError('This model does not accept images. Remove the attachment or choose a vision model.')
           return
         }
@@ -389,7 +389,8 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             return
           }
           try {
-            activeRuntime = await bridge.agent.start({ cwd: selected.cwd, sessionPath: selected.sessionFile, model: provider.model === 'auto' ? undefined : provider.model, thinking: provider.effort, fast: provider.fast, harness: activeHarness })
+            if (!provider.model) throw new Error(`No model is available for ${HARNESS_AGENT_NAMES[activeHarness]}. Enable or connect a provider, then try again.`)
+            activeRuntime = await bridge.agent.start({ cwd: selected.cwd, sessionPath: selected.sessionFile, model: provider.model, thinking: provider.effort, fast: provider.fast, harness: activeHarness })
           } catch (startError) {
             if (images.length === 0 && selected.sessionFile && await followUpExternalSession(selected.sessionFile)) {
               if (intent === 'steer') appendUserMessage()

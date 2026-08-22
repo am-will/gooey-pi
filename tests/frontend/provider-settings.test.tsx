@@ -307,7 +307,7 @@ describe('provider runtime mutations', () => {
 
     await act(async () => { await hook.value.setAllDisabled() })
     expect(hook.setDisabled).toHaveBeenCalledWith(['anthropic', 'openai-codex'], 'prime')
-    expect(hook.value.model).toBe('auto')
+    expect(hook.value.model).toBe('')
     expect(hook.value.fast).toBe(false)
   })
 

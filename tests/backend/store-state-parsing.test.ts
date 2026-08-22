@@ -183,6 +183,24 @@ describe('persisted settings parsing', () => {
     expect(settings.piDisabledProviders).toEqual([])
     expect(settings.piDisabledModels).toEqual(['openai/gpt-5'])
   })
+
+  it('keeps valid per-harness model preferences and clears malformed entries', () => {
+    const { settings } = loadState({
+      version: 4,
+      settings: {
+        lastSelectedModels: {
+          prime: 'openai-codex/gpt-5.6-sol',
+          omp: 'missing-slash',
+          pi: 'anthropic/claude-sonnet-4',
+        },
+      },
+    })
+    expect(settings.lastSelectedModels).toEqual({
+      prime: 'openai-codex/gpt-5.6-sol',
+      omp: '',
+      pi: 'anthropic/claude-sonnet-4',
+    })
+  })
 })
 
 describe('persisted schedule parsing', () => {

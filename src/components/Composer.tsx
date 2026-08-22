@@ -734,7 +734,7 @@ export const Composer = memo(function Composer({
               }}
             />
             <SelectControl label="Model" compact icon={<Brain size={14} />} value={model} onChange={(event) => onModelChange(event.target.value)}>
-              <option value="auto">Auto</option>
+              {!model ? <option value="" disabled>No model available</option> : null}
               {modelOptions}
             </SelectControl>
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>

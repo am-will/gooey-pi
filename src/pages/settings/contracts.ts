@@ -44,6 +44,7 @@ export const SETTINGS_FIELD_SECTIONS = {
   ompDisabledModels: 'providers',
   piDisabledProviders: 'providers',
   piDisabledModels: 'providers',
+  lastSelectedModels: 'providers',
   activeHarness: 'agent',
   ompApprovalMode: 'agent',
   petEnabled: 'pets',

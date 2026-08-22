@@ -72,6 +72,7 @@ interface ScheduledPageProps {
   projects: ProjectRecord[]
   sessions: SessionRecord[]
   models: PrimeModelDescriptor[]
+  lastSelectedModel: string
   error?: string
   initialProjectId?: string
   initialSessionId?: string
@@ -130,7 +131,13 @@ function projectForSession(session: SessionRecord, projects: ProjectRecord[]) {
   return projects.find((project) => project.path === session.projectPath)
 }
 
-function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[], initialProjectId?: string, initialSessionId?: string): ScheduleForm {
+function defaultScheduleModel(models: PrimeModelDescriptor[], lastSelectedModel: string): string {
+  return models.find((model) => model.key === lastSelectedModel && model.enabled !== false && model.available)?.key
+    ?? models.find((model) => model.enabled !== false && model.available)?.key
+    ?? ''
+}
+
+function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[], models: PrimeModelDescriptor[], lastSelectedModel: string, initialProjectId?: string, initialSessionId?: string): ScheduleForm {
   const authorizedProjects = projects.filter(isAuthorized)
   const initialSession = sessions.find((session) => session.id === initialSessionId && !session.archived)
   const sessionProject = initialSession ? projectForSession(initialSession, authorizedProjects) : undefined
@@ -152,7 +159,7 @@ function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[], initi
     interval: '1',
     weekdays: [DAY_CODES[new Date().getDay()]],
     advancedRrule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: 'auto',
+    model: defaultScheduleModel(models, lastSelectedModel),
     thinking: 'auto',
     fast: false,
   }
@@ -165,7 +172,7 @@ function rruleParts(rrule: string) {
   }))
 }
 
-function formFromSchedule(item: AutomationScheduleRecord): ScheduleForm {
+function formFromSchedule(item: AutomationScheduleRecord, models: PrimeModelDescriptor[], lastSelectedModel: string): ScheduleForm {
   const start = item.timing.kind === 'once'
     ? localParts(new Date(item.timing.at))
     : { date: item.timing.dtstartLocal.slice(0, 10), time: item.timing.dtstartLocal.slice(11, 16) }
@@ -188,7 +195,7 @@ function formFromSchedule(item: AutomationScheduleRecord): ScheduleForm {
     interval: parts.get('INTERVAL') ?? '1',
     weekdays: parts.get('BYDAY')?.split(',').filter(Boolean) ?? [DAY_CODES[new Date().getDay()]],
     advancedRrule: item.timing.kind === 'rrule' ? item.timing.rrule : 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: item.execution.model,
+    model: item.execution.model === 'auto' ? defaultScheduleModel(models, lastSelectedModel) : item.execution.model,
     thinking: item.execution.thinking,
     fast: item.execution.speed === 'fast',
   }
@@ -295,13 +302,13 @@ function runIcon(status: ScheduleRunRecord['status']) {
 
 
 export function ScheduledPage({
-  harness, schedules, nativeHeartbeats, projects, sessions, models, error, initialProjectId, initialSessionId, selectedScheduleId,
+  harness, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId,
   onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat,
 }: ScheduledPageProps) {
   const [filter, setFilter] = useState<ScheduleFilter>('active')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editor, setEditor] = useState<{ mode: EditorMode; scheduleId?: string } | null>(null)
-  const [form, setForm] = useState<ScheduleForm>(() => defaultForm(projects, sessions, initialProjectId, initialSessionId))
+  const [form, setForm] = useState<ScheduleForm>(() => defaultForm(projects, sessions, models, lastSelectedModel, initialProjectId, initialSessionId))
   const [baseline, setBaseline] = useState('')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
@@ -327,7 +334,7 @@ export function ScheduledPage({
     return project ? sessions.filter((session) => session.projectPath === project.path && !session.archived) : []
   }, [form.projectId, projects, sessions])
   const selectedModel = models.find((model) => model.key === form.model)
-  const availableModels = models.filter((model) => model.available)
+  const availableModels = models.filter((model) => model.enabled !== false && model.available)
   const currentTiming = useMemo(() => timingFromForm(form), [
     form.timingKind, form.date, form.time, form.timeZone, form.frequency,
     form.interval, form.weekdays, form.advancedRrule,
@@ -364,11 +371,11 @@ export function ScheduledPage({
   }, [currentTiming, editor, onPreview])
 
   const openCreate = () => {
-    const next = defaultForm(projects, sessions, initialProjectId, initialSessionId)
+    const next = defaultForm(projects, sessions, models, lastSelectedModel, initialProjectId, initialSessionId)
     setForm(next); setBaseline(JSON.stringify(next)); setFormError(''); setPreview(null); setEditor({ mode: 'create' })
   }
   const openEdit = (item: AutomationScheduleRecord) => {
-    const next = formFromSchedule(item)
+    const next = formFromSchedule(item, models, lastSelectedModel)
     setForm(next); setBaseline(JSON.stringify(next)); setFormError(''); setPreview(null); setEditor({ mode: 'edit', scheduleId: item.id })
   }
   const closeEditor = () => {
@@ -393,6 +400,7 @@ export function ScheduledPage({
   const validate = () => {
     if (!form.title.trim()) return 'Give this schedule a title.'
     if (!form.prompt.trim()) return `Add a prompt for ${HARNESS_SHORT_NAMES[harness]} to run.`
+    if (!form.model || !availableModels.some((model) => model.key === form.model)) return 'Choose an available model.'
     if (!form.projectId || !authorizedProjects.some((project) => project.id === form.projectId)) return 'Choose an authorized project.'
     if (form.targetKind === 'session' && !eligibleSessions.some((session) => session.id === form.sessionId)) return 'Choose an authorized session.'
     if (!currentTiming) {
@@ -487,7 +495,7 @@ export function ScheduledPage({
         <fieldset className="schedule-fieldset schedule-fieldset--execution">
           <legend><Gauge size={14} /> Execution</legend>
           <div className="schedule-execution-grid">
-            <label className="field"><span>Model</span><select value={form.model} onChange={(event) => selectModel(event.target.value)}><option value="auto">Auto-select</option>{form.model !== 'auto' && !models.some((model) => model.key === form.model) ? <option value={form.model}>{form.model} (unavailable)</option> : null}{availableModels.map((model) => <option key={model.key} value={model.key}>{model.name} · {model.provider}</option>)}</select></label>
+            <label className="field"><span>Model</span><select value={form.model} onChange={(event) => selectModel(event.target.value)}>{!form.model ? <option value="" disabled>No model available</option> : null}{form.model && !models.some((model) => model.key === form.model && model.enabled !== false && model.available) ? <option value={form.model}>{form.model} (unavailable)</option> : null}{availableModels.map((model) => <option key={model.key} value={model.key}>{model.name} · {model.provider}</option>)}</select></label>
             <label className="field"><span>Reasoning</span><select value={form.thinking} onChange={(event) => setForm((current) => ({ ...current, thinking: event.target.value as ScheduleForm['thinking'] }))}><option value="auto">Auto</option>{THINKING_LEVELS.filter((level) => !selectedModel || selectedModel.availableThinkingLevels.includes(level) || level === form.thinking).map((level) => <option key={level} value={level}>{level === 'xhigh' ? 'Extra high' : level[0].toUpperCase() + level.slice(1)}</option>)}</select></label>
             <label className={`schedule-fast-toggle ${selectedModel && !selectedModel.fastModeSupported ? 'is-disabled' : ''}`}><input type="checkbox" checked={form.fast} disabled={Boolean(selectedModel && !selectedModel.fastModeSupported)} onChange={(event) => setForm((current) => ({ ...current, fast: event.target.checked }))} /><span><Play size={13} /><strong>Fast</strong><small>{selectedModel && !selectedModel.fastModeSupported ? 'Unavailable for model' : 'Prioritize latency'}</small></span></label>
           </div>

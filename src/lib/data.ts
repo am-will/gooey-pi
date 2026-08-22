@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ompDisabledModels: [],
   piDisabledProviders: [],
   piDisabledModels: [],
+  lastSelectedModels: { prime: '', omp: '', pi: '' },
   voiceTranscriptionProvider: 'openai-live',
   voiceOpenAiLiveTranscriptionModel: 'gpt-live-transcribe',
   voiceOpenAiTranscriptionModel: 'gpt-4o-transcribe',
