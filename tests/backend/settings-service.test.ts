@@ -61,6 +61,7 @@ describe('SettingsService.update', () => {
       voiceSelfHostedModel: 'nvidia/parakeet-tdt-0.6b-v3',
       voiceLocalWhisperExecutable: '/opt/whisper-cli',
       voiceLocalWhisperModel: '/opt/ggml-model.bin',
+      voiceRealtimeProvider: 'openai-codex',
       voiceRealtimeModel: 'gpt-realtime-2.1',
       voiceRealtimeVoice: 'cedar',
     })
@@ -73,7 +74,7 @@ describe('SettingsService.update', () => {
       telemetry: false, askUserEnabled: false, disabledProviders: ['openai', 'google'], disabledModels: ['openai/gpt-5.6'], ompDisabledProviders: ['anthropic'],
       ompDisabledModels: ['anthropic/claude-sonnet-4'], piDisabledModels: ['openai/gpt-5.6-codex'],
       activeHarness: 'omp', ompApprovalMode: 'always-ask', petEnabled: true, petId: 'codex/rocky', petSize: 65,
-      voiceTranscriptionProvider: 'groq', voiceSelfHostedUrl: 'https://speech.example.test/v1', voiceSelfHostedModel: 'nvidia/parakeet-tdt-0.6b-v3', voiceRealtimeVoice: 'cedar',
+      voiceTranscriptionProvider: 'groq', voiceSelfHostedUrl: 'https://speech.example.test/v1', voiceSelfHostedModel: 'nvidia/parakeet-tdt-0.6b-v3', voiceRealtimeProvider: 'openai-codex', voiceRealtimeVoice: 'cedar',
     })
     expect(service.get()).toEqual(next)
   })
@@ -121,6 +122,7 @@ describe('SettingsService.update', () => {
     await expect(service.update({ petId: '../escape' })).rejects.toThrow(/Invalid pet id/)
     await expect(service.update({ petSize: 49 })).rejects.toThrow(/integer from 50 to 125/)
     await expect(service.update({ voiceTranscriptionProvider: 'carrier-pigeon' })).rejects.toThrow(/Invalid voice transcription provider/)
+    await expect(service.update({ voiceRealtimeProvider: 'whichever-works' })).rejects.toThrow(/Invalid realtime voice provider/)
     await expect(service.update({ voiceRealtimeModel: '../bad model' })).rejects.toThrow(/not valid/)
     await expect(service.update({ voiceSelfHostedUrl: 'ftp://speech.example.test' })).rejects.toThrow(/scheme/)
     await expect(service.update({ voiceSelfHostedUrl: 'http://8.8.8.8:9000' })).rejects.toThrow(/use HTTPS for public hosts/)

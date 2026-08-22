@@ -14,6 +14,7 @@ const emptyStatus: VoiceCredentialStatus = {
   configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
   source: {},
   storage: { available: true },
+  codexSubscription: false,
 }
 
 let root: Root
@@ -60,6 +61,7 @@ function voiceBridge(overrides: Partial<PrimeWorkApi['voice']> = {}): PrimeWorkA
     saveApiKey: vi.fn().mockResolvedValue(emptyStatus),
     deleteApiKey: vi.fn().mockResolvedValue(emptyStatus),
     createRealtimeCall: vi.fn(),
+    cancelRealtimeCall: vi.fn(),
     transcribe: vi.fn(),
     testSelfHosted: vi.fn().mockResolvedValue(true),
     executeTool: vi.fn(),
@@ -67,8 +69,8 @@ function voiceBridge(overrides: Partial<PrimeWorkApi['voice']> = {}): PrimeWorkA
   }
 }
 
-function Harness({ voice }: { voice: PrimeWorkApi['voice'] | null }) {
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+function Harness({ voice, initialSettings = DEFAULT_SETTINGS }: { voice: PrimeWorkApi['voice'] | null; initialSettings?: AppSettings }) {
+  const [settings, setSettings] = useState<AppSettings>(initialSettings)
   return <VoiceSettings settings={settings} voice={voice} onUpdate={(patch) => { setSettings((current) => ({ ...current, ...patch })) }} />
 }
 
@@ -93,6 +95,7 @@ describe('Voice settings setup flow', () => {
       configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
       source: { openai: 'saved' },
       storage: { available: true },
+      codexSubscription: false,
     } satisfies VoiceCredentialStatus)
     await render(<Harness voice={voiceBridge({ saveApiKey })} />)
 
@@ -109,12 +112,29 @@ describe('Voice settings setup flow', () => {
     expect(saveApiKey).toHaveBeenCalledWith('openai', 'sk-test-key')
   })
 
-  it('explains secure keychain retrieval in the realtime section', async () => {
+  it('lets the user choose the realtime connection and explains its requirement', async () => {
     await render(<Harness voice={voiceBridge()} />)
 
     const realtime = container.querySelector<HTMLElement>('[aria-labelledby="voice-realtime-title"]')!
-    expect(realtime.textContent).toContain('Saved API keys are encrypted using your operating system’s internal keychain.')
-    expect(realtime.textContent).toContain('may ask for your password to retrieve the key')
+    const connection = realtime.querySelector<HTMLSelectElement>('select[aria-label="Realtime connection"]')!
+    expect(connection.value).toBe('openai')
+    expect(realtime.textContent).toContain('OpenAI API key required')
+    await choose(connection, 'openai-codex')
+    expect(realtime.textContent).toContain('ChatGPT Plus/Pro login required')
+    expect(realtime.textContent).toContain('Connect OpenAI Codex under Prime Work → Providers')
+  })
+
+  it('uses the selected Codex subscription without removing API realtime controls', async () => {
+    const credentialStatus = vi.fn().mockResolvedValue({ ...emptyStatus, codexSubscription: true })
+    await render(<Harness voice={voiceBridge({ credentialStatus })} initialSettings={{ ...DEFAULT_SETTINGS, voiceRealtimeProvider: 'openai-codex' }} />)
+
+    const realtime = container.querySelector<HTMLElement>('[aria-labelledby="voice-realtime-title"]')!
+    expect(realtime.textContent).toContain('ChatGPT subscription connected')
+    expect(realtime.textContent).toContain('GPT Live Codex realtime model and Cove voice')
+    expect(realtime.querySelector('select[aria-label="Realtime model"]')).toBeNull()
+    await choose(realtime.querySelector<HTMLSelectElement>('select[aria-label="Realtime connection"]')!, 'openai')
+    expect(realtime.querySelector('select[aria-label="Realtime model"]')).not.toBeNull()
+    expect(realtime.querySelector('select[aria-label="Speaking voice"]')).not.toBeNull()
   })
 
   it('allows a session key and warns that it will not persist without secure Linux storage', async () => {
@@ -123,12 +143,14 @@ describe('Voice settings setup flow', () => {
       configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
       source: { openai: 'session' },
       storage: { available: false, message },
+      codexSubscription: false,
     } satisfies VoiceCredentialStatus)
     await render(<Harness voice={voiceBridge({
       credentialStatus: vi.fn().mockResolvedValue({
         configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
         source: { openai: 'saved' },
         storage: { available: false, message },
+        codexSubscription: false,
       } satisfies VoiceCredentialStatus),
       saveApiKey,
     })} />)
@@ -170,15 +192,17 @@ describe('Voice settings setup flow', () => {
       configured: { openai: false, groq: false, deepgram: false, 'self-hosted': true },
       source: { 'self-hosted': 'saved' },
       storage: { available: true },
+      codexSubscription: false,
     } satisfies VoiceCredentialStatus)
     await render(<Harness voice={voiceBridge({ testSelfHosted, saveApiKey })} />)
 
     const service = container.querySelector<HTMLSelectElement>('select[aria-label="Dictation service"]')!
     await choose(service, 'self-hosted')
-    expect(container.textContent).toContain('Connect your transcription server')
-    expect(container.textContent).toContain('Parakeet, Whisper')
-    expect(container.querySelector('input[aria-label="whisper-cli executable"]')).toBeNull()
-    expect(container.textContent).not.toContain('API key required')
+    const dictation = container.querySelector<HTMLElement>('[aria-labelledby="voice-dictation-title"]')!
+    expect(dictation.textContent).toContain('Connect your transcription server')
+    expect(dictation.textContent).toContain('Parakeet, Whisper')
+    expect(dictation.querySelector('input[aria-label="whisper-cli executable"]')).toBeNull()
+    expect(dictation.textContent).not.toContain('API key required')
 
     const url = container.querySelector<HTMLInputElement>('input[aria-label="Self-hosted server URL"]')!
     const model = container.querySelector<HTMLInputElement>('input[aria-label="Self-hosted model ID"]')!

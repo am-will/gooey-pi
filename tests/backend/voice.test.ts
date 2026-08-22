@@ -69,6 +69,8 @@ function makeService(overrides: Partial<VoiceServiceOptions> = {}) {
       omp: { catalog: ompCatalog },
       pi: { catalog: vi.fn(catalog) },
     } as unknown as VoiceServiceOptions['catalogs'],
+    codexVoiceAuth: vi.fn(async () => ({ apiKey: 'eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC10ZXN0In19.', baseUrl: 'https://chatgpt.com/backend-api/codex' })),
+    codexVoiceConfigured: vi.fn(() => false),
     runProcess: vi.fn(),
     environment: {},
     ...overrides,
@@ -81,6 +83,11 @@ afterEach(() => {
 })
 
 describe('VoiceService', () => {
+  it('reports whether the Prime Codex subscription can back realtime voice', async () => {
+    const { service } = makeService({ codexVoiceConfigured: () => true })
+    await expect(service.credentialStatus()).resolves.toMatchObject({ codexSubscription: true })
+  })
+
   it('rejects Linux basic-text storage with actionable setup guidance', () => {
     expect(voiceSecretStorageStatus('linux', true, 'basic_text')).toEqual({
       available: false,
@@ -96,11 +103,13 @@ describe('VoiceService', () => {
       configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
       source: {},
       storage: { available: true },
+      codexSubscription: false,
     })
     expect(await service.saveApiKey('openai', 'sk-secret-value')).toEqual({
       configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
       source: { openai: 'saved' },
       storage: { available: true },
+      codexSubscription: false,
     })
     expect(JSON.stringify(await service.credentialStatus())).not.toContain('sk-secret-value')
   })
@@ -128,16 +137,18 @@ describe('VoiceService', () => {
       configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
       source: { openai: 'saved' },
       storage: { available: false, message },
+      codexSubscription: false,
     })
-    await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'prime' })).rejects.toThrow(message)
+    await expect(service.createRealtimeCall({ mode: 'transcription', sdp: 'v=0\r\no=offer-value' })).rejects.toThrow(message)
     expect(decrypt).not.toHaveBeenCalled()
 
     await expect(service.saveApiKey('openai', 'sk-session-value')).resolves.toEqual({
       configured: { openai: true, groq: false, deepgram: false, 'self-hosted': false },
       source: { openai: 'session' },
       storage: { available: false, message },
+      codexSubscription: false,
     })
-    await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'prime' })).resolves.toContain('o=answer')
+    await expect(service.createRealtimeCall({ mode: 'transcription', sdp: 'v=0\r\no=offer-value' })).resolves.toEqual({ sdp: 'v=0\r\no=answer', protocol: 'openai' })
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(decrypt).not.toHaveBeenCalled()
   })
@@ -158,6 +169,7 @@ describe('VoiceService', () => {
       configured: { openai: false, groq: true, deepgram: false, 'self-hosted': false },
       source: { groq: 'session' },
       storage: { available: false, message },
+      codexSubscription: false,
     })
     expect(JSON.stringify(status)).not.toContain('gsk-session-secret')
     expect(encrypt).not.toHaveBeenCalled()
@@ -168,6 +180,7 @@ describe('VoiceService', () => {
       configured: { openai: false, groq: false, deepgram: false, 'self-hosted': false },
       source: {},
       storage: { available: false, message },
+      codexSubscription: false,
     })
   })
 
@@ -221,26 +234,85 @@ describe('VoiceService', () => {
     await expect(oversized.transcribe({ provider: 'self-hosted', audio: new Uint8Array(44) })).rejects.toThrow(/response was too large/)
   })
 
-  it('creates a realtime session with orchestration tools and no confirmation gate', async () => {
-    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const form = init?.body as FormData
-      const session = JSON.parse(String(form.get('session'))) as { instructions: string; tools: Array<{ name: string; parameters: { properties: Record<string, unknown> } }> }
-      expect(session.instructions).toContain('Do not ask for a second confirmation')
+  it('uses the selected Codex subscription even when an API key is also configured', async () => {
+    const settings = { ...defaultSettings(), voiceRealtimeProvider: 'openai-codex' as const }
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas')
+      const headers = init?.headers as Headers
+      expect(headers.get('authorization')).toMatch(/^Bearer /)
+      expect(headers.get('chatgpt-account-id')).toBe('acct-test')
+      expect(headers.get('openai-alpha')).toBe('quicksilver=v2')
+      const body = JSON.parse(String(init?.body)) as { sdp: string; session: { model: string; instructions: string; audio: { output: { voice: string } }; delegation: unknown } }
+      const { session } = body
+      expect(body.sdp).toContain('o=offer-value')
+      expect(session.model).toBe('gpt-live-1-codex')
       expect(session.instructions).toContain('locked to the currently selected OMP harness')
-      expect(session.instructions).toContain('Do not include phrases such as start a session')
-      expect(session.instructions).toContain('"Determine the next logical feature to add to this project and explain why."')
-      expect(session.instructions).toContain('first call get_local_context, then call search_web')
-      expect(session.instructions).toContain('Do not ask the user for a location unless get_local_context returns no usable location_hint')
-      expect(session.instructions).toContain('Choose the closest available model and the closest reasoning level')
-      expect(session.tools.map((tool) => tool.name)).toEqual(['list_projects', 'list_models', 'start_task', 'get_local_context', 'search_web'])
-      expect(session.tools.find((tool) => tool.name === 'start_task')?.parameters.properties).toHaveProperty('model')
-      expect(session.tools.find((tool) => tool.name === 'start_task')?.parameters.properties).toHaveProperty('reasoning')
-      return new Response('v=0\r\no=answer')
+      expect(session.instructions).toContain('The project currently open in GooeyPi is "omp project"')
+      expect(session.instructions).toContain('An explicit request to start work is sufficient authorization')
+      expect(session.instructions).toContain('{"name":"tool_name","arguments":{...}}')
+      expect(session.instructions).toContain('"name":"list_projects"')
+      expect(session.instructions).toContain('"name":"start_task"')
+      expect(session.instructions).not.toContain('"name":"search_web"')
+      expect(session.instructions).toContain('web access that is unavailable in this connection')
+      expect(session.instructions).toContain('"required":["project_id","prompt"]')
+      expect(session.delegation).toEqual({ type: 'client', ack_filler: true })
+      expect(session.audio.output.voice).toBe('cove')
+      return new Response('v=0\r\no=answer', { status: 201 })
     })
+    const { service } = makeService({ settings: () => settings, fetch: fetchMock as typeof fetch })
+    await service.saveApiKey('openai', 'sk-test')
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'codex-setup', sdp: 'v=0\r\no=offer-value', harness: 'omp', projectId: 'omp-project' })).resolves.toEqual({ sdp: 'v=0\r\no=answer', protocol: 'codex-v3' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('allows an unscoped Codex conversation while rejecting an inferred project', async () => {
+    const settings = { ...defaultSettings(), voiceRealtimeProvider: 'openai-codex' as const }
+    const fetchMock = vi.fn(async () => new Response('v=0\r\no=answer', { status: 201 }))
+    const { service } = makeService({
+      settings: () => settings,
+      fetch: fetchMock as typeof fetch,
+      projects: {
+        prime: { list: vi.fn(async () => [project('prime')]) },
+        omp: { list: vi.fn(async () => [project('omp', true)]) },
+        pi: { list: vi.fn(async () => [project('pi')]) },
+      } as unknown as VoiceServiceOptions['projects'],
+    })
+
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'unscoped', sdp: 'v=0\r\no=offer-value', harness: 'omp' }))
+      .resolves.toEqual({ sdp: 'v=0\r\no=answer', protocol: 'codex-v3' })
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'inferred', sdp: 'v=0\r\no=offer-value', harness: 'omp', projectId: 'omp-project' }))
+      .rejects.toThrow(/not explicitly granted/)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('cancels an in-flight realtime setup by setup ID', async () => {
+    const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    }))
     const { service } = makeService({ fetch: fetchMock as typeof fetch })
     await service.saveApiKey('openai', 'sk-test')
-    await expect(service.createRealtimeCall({ mode: 'conversation', sdp: 'v=0\r\no=offer-value', harness: 'omp' })).resolves.toContain('o=answer')
-    expect(fetchMock).toHaveBeenCalledOnce()
+    const setup = service.createRealtimeCall({ mode: 'conversation', setupId: 'cancel-me', sdp: 'v=0\r\no=offer-value', harness: 'omp' })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    service.cancelRealtimeCall('cancel-me')
+    await expect(setup).rejects.toThrow('Realtime setup was cancelled')
+  })
+
+  it('keeps the selected OpenAI API realtime route and tools when Codex is also connected', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.openai.com/v1/realtime/calls')
+      const form = init?.body as FormData
+      const session = JSON.parse(String(form.get('session'))) as { model: string; instructions: string; tools: Array<{ name: string }> }
+      expect(session.model).toBe(defaultSettings().voiceRealtimeModel)
+      expect(session.instructions).toContain('Do not ask for a second confirmation')
+      expect(session.tools.map((tool) => tool.name)).toEqual(['list_projects', 'list_models', 'start_task', 'get_local_context', 'search_web'])
+      return new Response('v=0\r\no=api-answer')
+    })
+    const { service, options } = makeService({ fetch: fetchMock as typeof fetch, codexVoiceConfigured: () => true })
+    await service.saveApiKey('openai', 'sk-test')
+
+    await expect(service.createRealtimeCall({ mode: 'conversation', setupId: 'openai-setup', sdp: 'v=0\r\no=offer-value', harness: 'omp' }))
+      .resolves.toEqual({ sdp: 'v=0\r\no=api-answer', protocol: 'openai' })
+    expect(options.codexVoiceAuth).not.toHaveBeenCalled()
   })
 
   it('uses the selected native streaming transcription model', async () => {

@@ -742,6 +742,8 @@ async function bootstrap(): Promise<void> {
     projects: { prime: projects, omp: ompProjects, pi: piProjects },
     agents: { prime: agents, omp: ompManager, pi: piManager },
     catalogs: { prime: providers, omp: ompCatalog, pi: piCatalog },
+    codexVoiceAuth: () => providers.codexVoiceAuth(),
+    codexVoiceConfigured: () => providers.codexVoiceConfigured(),
     runProcess,
   })
   const pets = new PetService({
