@@ -18,9 +18,13 @@ class FakeDataChannel extends EventTarget {
 class FakePeer extends EventTarget {
   static latest: FakePeer
   channel = new FakeDataChannel()
+  iceGatheringState: RTCIceGatheringState = 'complete'
+  localDescription: RTCSessionDescription | null = null
   close = vi.fn()
   addTrack = vi.fn()
-  setLocalDescription = vi.fn(async () => undefined)
+  setLocalDescription = vi.fn(async (description: RTCSessionDescriptionInit) => {
+    this.localDescription = description as RTCSessionDescription
+  })
   setRemoteDescription = vi.fn(async () => undefined)
   createOffer = vi.fn(async () => ({ type: 'offer' as const, sdp: 'v=0\r\no=test-offer-value' }))
   createDataChannel = vi.fn(() => this.channel as unknown as RTCDataChannel)
@@ -30,12 +34,14 @@ class FakePeer extends EventTarget {
 describe('realtime voice surface', () => {
   let container: HTMLDivElement
   let root: Root
+  let peerDescriptor: PropertyDescriptor | undefined
   const track = { enabled: true, stop: vi.fn() }
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] }
 
   beforeEach(() => {
     track.enabled = true; track.stop.mockReset()
-    vi.stubGlobal('RTCPeerConnection', FakePeer)
+    peerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'RTCPeerConnection')
+    Object.defineProperty(globalThis, 'RTCPeerConnection', { configurable: true, writable: true, value: FakePeer })
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn(async () => stream) } })
     container = document.createElement('div')
     document.body.append(container)
@@ -46,7 +52,10 @@ describe('realtime voice surface', () => {
     act(() => root.unmount())
     container.remove()
     vi.unstubAllGlobals()
-    localStorage.clear()
+    vi.restoreAllMocks()
+    window.localStorage?.clear()
+    if (peerDescriptor) Object.defineProperty(globalThis, 'RTCPeerConnection', peerDescriptor)
+    else Reflect.deleteProperty(globalThis, 'RTCPeerConnection')
   })
 
   it('places the waveform toggle immediately before the terminal button', () => {
@@ -85,11 +94,12 @@ describe('realtime voice surface', () => {
 
   it('shows mute and close controls and disables the microphone track when muted', async () => {
     const voice = {
-      createRealtimeCall: vi.fn(async () => 'v=0\r\no=test-answer-value'),
+      createRealtimeCall: vi.fn(async () => ({ sdp: 'v=0\r\no=test-answer-value', protocol: 'openai' as const })),
+      cancelRealtimeCall: vi.fn(),
       executeTool: vi.fn(),
     } as unknown as PrimeWorkApi['voice']
     await act(async () => root.render(<VoiceOrb voice={voice} harness="omp" onClose={vi.fn()} onTaskStarted={vi.fn()} />))
-    expect(voice.createRealtimeCall).toHaveBeenCalledWith({ mode: 'conversation', sdp: 'v=0\r\no=test-offer-value', harness: 'omp' })
+    expect(voice.createRealtimeCall).toHaveBeenCalledWith({ mode: 'conversation', setupId: expect.any(String), sdp: 'v=0\r\no=test-offer-value', harness: 'omp' })
     const mute = container.querySelector<HTMLButtonElement>('[aria-label="Mute realtime voice"]')!
     expect(container.querySelector('[aria-label="Close realtime voice"]')).not.toBeNull()
     await act(async () => mute.click())

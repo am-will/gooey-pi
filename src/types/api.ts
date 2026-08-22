@@ -480,15 +480,24 @@ export interface AppSettings {
   /** User-managed whisper.cpp installation for offline transcription. */
   voiceLocalWhisperExecutable: string
   voiceLocalWhisperModel: string
-  /** Realtime orb model and synthesized voice. */
+  /** Authentication connection used by the realtime orb. */
+  voiceRealtimeProvider: VoiceRealtimeProvider
+  /** Realtime orb model and synthesized voice for the API-key connection. */
   voiceRealtimeModel: string
   voiceRealtimeVoice: string
+  /** Independent OpenAI-compatible endpoint used by the self-hosted realtime orb. */
+  voiceRealtimeSelfHostedUrl: string
+  voiceRealtimeSelfHostedModel: string
+  voiceRealtimeSelfHostedVoice: string
 }
 
 export const VOICE_TRANSCRIPTION_PROVIDERS = ['openai-live', 'openai', 'groq', 'deepgram', 'self-hosted', 'local-whisper'] as const
 export type VoiceTranscriptionProvider = typeof VOICE_TRANSCRIPTION_PROVIDERS[number]
-export const VOICE_CREDENTIAL_PROVIDERS = ['openai', 'groq', 'deepgram', 'self-hosted'] as const
+export const REALTIME_TOOL_PROBE_NAME = 'gooeypi_realtime_tool_test'
+export const VOICE_CREDENTIAL_PROVIDERS = ['openai', 'groq', 'deepgram', 'self-hosted', 'self-hosted-realtime'] as const
 export type VoiceCredentialProvider = typeof VOICE_CREDENTIAL_PROVIDERS[number]
+export const VOICE_REALTIME_PROVIDERS = ['openai', 'self-hosted'] as const
+export type VoiceRealtimeProvider = typeof VOICE_REALTIME_PROVIDERS[number]
 
 export interface VoiceCredentialStorageStatus {
   available: boolean
@@ -502,8 +511,14 @@ export interface VoiceCredentialStatus {
 }
 
 export type VoiceRealtimeCallRequest =
-  | { mode: 'conversation'; sdp: string; harness: HarnessId }
+  | { mode: 'conversation'; setupId: string; sdp: string; harness: HarnessId; projectId?: string }
+  | { mode: 'test'; setupId: string; sdp: string; harness: HarnessId }
   | { mode: 'transcription'; sdp: string }
+
+export interface VoiceRealtimeCallResult {
+  sdp: string
+  protocol: 'openai'
+}
 
 export interface VoiceTranscriptionRequest {
   provider: Exclude<VoiceTranscriptionProvider, 'openai-live'>
@@ -731,7 +746,8 @@ export interface PrimeWorkApi {
     credentialStatus(): Promise<VoiceCredentialStatus>
     saveApiKey(provider: VoiceCredentialProvider, apiKey: string): Promise<VoiceCredentialStatus>
     deleteApiKey(provider: VoiceCredentialProvider): Promise<VoiceCredentialStatus>
-    createRealtimeCall(request: VoiceRealtimeCallRequest): Promise<string>
+    createRealtimeCall(request: VoiceRealtimeCallRequest): Promise<VoiceRealtimeCallResult>
+    cancelRealtimeCall(setupId: string): Promise<void>
     transcribe(request: VoiceTranscriptionRequest): Promise<string>
     testSelfHosted(request: VoiceSelfHostedTestRequest): Promise<boolean>
     executeTool(request: VoiceToolRequest, harness: HarnessId): Promise<VoiceToolResult>

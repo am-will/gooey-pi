@@ -368,6 +368,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('voice:save-api-key', (_event, provider, apiKey) => services.voice.saveApiKey(provider, apiKey))
   handle('voice:delete-api-key', (_event, provider) => services.voice.deleteApiKey(provider))
   handle('voice:create-realtime-call', (_event, request) => services.voice.createRealtimeCall(request))
+  handle('voice:cancel-realtime-call', (_event, setupId) => services.voice.cancelRealtimeCall({ setupId }))
   handle('voice:transcribe', (_event, request) => services.voice.transcribe(request))
   handle('voice:test-self-hosted', (_event, request) => services.voice.testSelfHosted(request))
   handle('voice:execute-tool', (_event, request, harness) => services.voice.executeTool(request, requireHarness(harness)))

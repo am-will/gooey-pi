@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { VOICE_CREDENTIAL_PROVIDERS } from '../../src/types/api'
+import { REALTIME_TOOL_PROBE_NAME, VOICE_CREDENTIAL_PROVIDERS } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { streamingBehaviorForIntent } from '../../src/lib/session-actions'
 import type {
@@ -13,6 +13,7 @@ import type {
   VoiceCredentialProvider,
   VoiceCredentialStorageStatus,
   VoiceCredentialStatus,
+  VoiceRealtimeCallResult,
   VoiceTaskStarted,
   VoiceToolResult,
 } from '../../src/types/api'
@@ -81,7 +82,7 @@ function voiceSecretStorageStatus(platform: NodeJS.Platform, encryptionAvailable
 }
 
 function credentialProvider(value: unknown): VoiceCredentialProvider {
-  if (value !== 'openai' && value !== 'groq' && value !== 'deepgram' && value !== 'self-hosted') throw new TypeError('Invalid voice credential provider')
+  if (value !== 'openai' && value !== 'groq' && value !== 'deepgram' && value !== 'self-hosted' && value !== 'self-hosted-realtime') throw new TypeError('Invalid voice credential provider')
   return value
 }
 
@@ -93,6 +94,27 @@ function selfHostedConfiguration(urlValue: unknown, modelValue: unknown): { endp
   const model = requireString(modelValue, 'self-hosted voice model', { max: 128, trim: true })
   if (model && !/^[a-z0-9][a-z0-9._:\/-]{0,127}$/i.test(model)) throw new TypeError('Self-hosted voice model is not valid')
   return { endpoint: url.toString(), model }
+}
+
+function selfHostedRealtimeConfiguration(
+  urlValue: unknown,
+  modelValue: unknown,
+  voiceValue: unknown,
+): { endpoint: string; model: string; voice: string } {
+  const url = new URL(requireSelfHostedVoiceUrl(urlValue))
+  const suffix = '/v1/realtime/calls'
+  const path = url.pathname.replace(/\/+$/, '')
+  if (!path.endsWith(suffix)) url.pathname = path.endsWith('/v1') ? `${path}/realtime/calls` : `${path}${suffix}`
+  const checkedId = (value: unknown, label: string): string => {
+    const id = requireString(value, label, { max: 128, trim: true })
+    if (id && !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(id)) throw new TypeError(`${label} is not valid`)
+    return id
+  }
+  return {
+    endpoint: url.toString(),
+    model: checkedId(modelValue, 'self-hosted realtime model'),
+    voice: checkedId(voiceValue, 'self-hosted realtime voice'),
+  }
 }
 
 function silentWav(): Uint8Array {
@@ -180,7 +202,8 @@ class VoiceSecretStore {
     const key = this.environment[
       provider === 'openai' ? 'OPENAI_API_KEY'
         : provider === 'groq' ? 'GROQ_API_KEY'
-          : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : 'VOICE_SELF_HOSTED_API_KEY'
+          : provider === 'deepgram' ? 'DEEPGRAM_API_KEY'
+            : provider === 'self-hosted' ? 'VOICE_SELF_HOSTED_API_KEY' : 'VOICE_REALTIME_SELF_HOSTED_API_KEY'
     ]
     return key?.trim() || undefined
   }
@@ -188,7 +211,7 @@ class VoiceSecretStore {
   async status(): Promise<VoiceCredentialStatus> {
     await this.load()
     const storage = this.codec.status()
-    const configured = { openai: false, groq: false, deepgram: false, 'self-hosted': false }
+    const configured = { openai: false, groq: false, deepgram: false, 'self-hosted': false, 'self-hosted-realtime': false }
     const source: VoiceCredentialStatus['source'] = {}
     for (const provider of VOICE_CREDENTIAL_PROVIDERS) {
       if (this.sessionValues[provider]) {
@@ -277,14 +300,17 @@ class VoiceSecretStore {
   }
 }
 
-function orchestrationInstructions(harness: HarnessId): string {
+function orchestrationInstructions(harness: HarnessId, webSearch: boolean): string {
   const harnessName = HARNESSES[harness].agentName
   return [
     'You are the voice orchestrator inside GooeyPi, a desktop client for the Prime Agent, OMP, and Pi harnesses.',
     `This voice session is locked to the currently selected ${harnessName} harness. Never switch harnesses.`,
     'Be concise and conversational. Answer general questions directly.',
-    'Use get_local_context for the local date, time, time zone, approximate location, locale, or selected harness. Use search_web for current information. Use list_projects to resolve a project within the selected harness. Use list_models to resolve a requested model and its supported reasoning levels.',
-    'For local weather or another location-sensitive lookup when the user did not name a place: first call get_local_context, then call search_web with its location_hint included in the query. Do not ask the user for a location unless get_local_context returns no usable location_hint. Treat the hint as approximate.',
+    'The function schemas supplied with this session are available client tools. Never claim that no tools are available when at least one schema was supplied.',
+    webSearch
+      ? 'Use get_local_context for the local date, time, time zone, approximate location, locale, or selected harness. Use search_web for current information. Use list_projects to resolve a project within the selected harness. Use list_models to resolve a requested model and its supported reasoning levels.'
+      : 'Use get_local_context for the local date, time, time zone, approximate location, locale, or selected harness. Use list_projects to resolve a project within the selected harness. Use list_models to resolve a requested model and its supported reasoning levels. Explain when a current-information request needs web access that is unavailable in this connection.',
+    ...(webSearch ? ['For local weather or another location-sensitive lookup when the user did not name a place: first call get_local_context, then call search_web with its location_hint included in the query. Do not ask the user for a location unless get_local_context returns no usable location_hint. Treat the hint as approximate.'] : []),
     'Call start_task only when the user explicitly asks you to start, create, kick off, delegate, or run a task.',
     'An explicit request to start work is sufficient authorization. Do not ask for a second confirmation.',
     'Only start tasks inside projects returned by list_projects. Never invent project IDs.',
@@ -298,15 +324,9 @@ function orchestrationInstructions(harness: HarnessId): string {
   ].join(' ')
 }
 
-function realtimeSession(settings: AppSettings, harness: HarnessId): Record<string, unknown> {
+function voiceToolContracts(harness: HarnessId, webSearch: boolean): Array<Record<string, unknown>> {
   const harnessName = HARNESSES[harness].agentName
-  return {
-    type: 'realtime',
-    model: settings.voiceRealtimeModel,
-    instructions: orchestrationInstructions(harness),
-    audio: { output: { voice: settings.voiceRealtimeVoice } },
-    tool_choice: 'auto',
-    tools: [
+  const tools: Array<Record<string, unknown>> = [
       {
         type: 'function', name: 'list_projects',
         description: `Find explicitly granted projects in the currently selected ${harnessName} harness. Projects from other harnesses are never returned.`,
@@ -344,19 +364,53 @@ function realtimeSession(settings: AppSettings, harness: HarnessId): Record<stri
       },
       {
         type: 'function', name: 'get_local_context',
-        description: 'Get the local date, time, time zone, timezone-derived approximate location hint, locale, UTC offset, and selected harness. Call this before local weather or another location-sensitive lookup when the user did not name a place.',
+        description: 'Get the local date, time, time zone, timezone-derived approximate location hint, locale, UTC offset, and selected harness.',
         parameters: { type: 'object', additionalProperties: false, properties: {} },
       },
-      {
-        type: 'function', name: 'search_web',
-        description: 'Search the live web for a quick current-information question and return a cited answer. For local weather with no named place, first call get_local_context and include its location_hint in this query.',
-        parameters: {
-          type: 'object', additionalProperties: false,
-          properties: { query: { type: 'string' } },
-          required: ['query'],
-        },
-      },
-    ],
+  ]
+  if (webSearch) tools.push({
+    type: 'function', name: 'search_web',
+    description: 'Search the live web for a quick current-information question and return a cited answer. For local weather with no named place, first call get_local_context and include its location_hint in this query.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { query: { type: 'string' } },
+      required: ['query'],
+    },
+  })
+  return tools
+}
+
+function realtimeSession(settings: AppSettings, harness: HarnessId): Record<string, unknown> {
+  return {
+    type: 'realtime',
+    model: settings.voiceRealtimeModel,
+    instructions: orchestrationInstructions(harness, true),
+    audio: { output: { voice: settings.voiceRealtimeVoice } },
+    tool_choice: 'auto',
+    tools: voiceToolContracts(harness, true),
+  }
+}
+
+function selfHostedRealtimeSession(settings: AppSettings, harness: HarnessId, testOnly: boolean): Record<string, unknown> {
+  const { model, voice } = selfHostedRealtimeConfiguration(
+    settings.voiceRealtimeSelfHostedUrl,
+    settings.voiceRealtimeSelfHostedModel,
+    settings.voiceRealtimeSelfHostedVoice,
+  )
+  return {
+    type: 'realtime',
+    ...(model ? { model } : {}),
+    instructions: testOnly
+      ? `This is a connection check. Immediately call ${REALTIME_TOOL_PROBE_NAME} exactly once. Do not speak or call any other tool.`
+      : orchestrationInstructions(harness, false),
+    ...(voice ? { audio: { output: { voice } } } : {}),
+    tool_choice: testOnly ? 'required' : 'auto',
+    tools: testOnly ? [{
+      type: 'function',
+      name: REALTIME_TOOL_PROBE_NAME,
+      description: 'Confirm that the realtime endpoint and selected model support function calling.',
+      parameters: { type: 'object', additionalProperties: false, properties: {} },
+    }] : voiceToolContracts(harness, false),
   }
 }
 
@@ -381,6 +435,7 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export class VoiceService {
   private readonly secrets: VoiceSecretStore
   private readonly fetchImpl: typeof fetch
+  private readonly realtimeSetups = new Map<string, AbortController>()
 
   constructor(private readonly options: VoiceServiceOptions) {
     this.secrets = new VoiceSecretStore(options.secretPath, options.secretCodec, options.environment ?? process.env)
@@ -391,28 +446,62 @@ export class VoiceService {
   saveApiKey(provider: unknown, key: unknown): Promise<VoiceCredentialStatus> { return this.secrets.save(provider, key) }
   deleteApiKey(provider: unknown): Promise<VoiceCredentialStatus> { return this.secrets.delete(provider) }
 
-  async createRealtimeCall(raw: unknown): Promise<string> {
+  async createRealtimeCall(raw: unknown): Promise<VoiceRealtimeCallResult> {
     const request = requireRecord(raw, 'realtime call')
-    if (request.mode !== 'conversation' && request.mode !== 'transcription') throw new TypeError('Invalid realtime call mode')
+    if (request.mode !== 'conversation' && request.mode !== 'test' && request.mode !== 'transcription') throw new TypeError('Invalid realtime call mode')
     const sdp = requireString(request.sdp, 'sdp', { min: 16, max: MAX_SDP_BYTES })
     if (!sdp.startsWith('v=0')) throw new TypeError('Invalid WebRTC session description')
-    const key = await this.secrets.get('openai')
-    const form = new FormData()
-    form.set('sdp', sdp)
+    const setupId = request.mode === 'conversation' || request.mode === 'test' ? requireId(request.setupId, 'setupId') : undefined
+    const abort = setupId ? new AbortController() : undefined
+    if (setupId) {
+      if (this.realtimeSetups.has(setupId)) throw new Error('Realtime setup is already active')
+      this.realtimeSetups.set(setupId, abort!)
+    }
+    try { return await this.establishRealtimeCall(request, sdp, abort?.signal) }
+    finally { if (setupId && this.realtimeSetups.get(setupId) === abort) this.realtimeSetups.delete(setupId) }
+  }
+
+  cancelRealtimeCall(raw: unknown): void {
+    this.realtimeSetups.get(requireId(raw, 'setupId'))?.abort()
+  }
+
+  private async establishRealtimeCall(request: Record<string, unknown>, sdp: string, signal?: AbortSignal): Promise<VoiceRealtimeCallResult> {
     const settings = this.options.settings()
-    const session = request.mode === 'conversation'
-      ? realtimeSession(settings, harnessId(request.harness))
-      : transcriptionSession(settings)
-    form.set('session', JSON.stringify(session))
-    const response = await this.withTimeout('https://api.openai.com/v1/realtime/calls', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-    }, 30_000)
-    const answer = await response.text()
-    if (!response.ok) throw new Error(`OpenAI realtime setup failed (${response.status}): ${answer.slice(0, 512)}`)
-    if (!answer.startsWith('v=0')) throw new Error('OpenAI realtime setup returned an invalid session description')
-    return answer
+    let response: Response
+    let providerLabel: string
+    if (request.mode === 'transcription' || settings.voiceRealtimeProvider === 'openai') {
+      if (request.mode === 'test') throw new Error('Select the self-hosted realtime connection before testing it')
+      const key = await this.secrets.get('openai')
+      const form = new FormData()
+      form.set('sdp', sdp)
+      form.set('session', JSON.stringify(request.mode === 'conversation' ? realtimeSession(settings, harnessId(request.harness)) : transcriptionSession(settings)))
+      response = await this.withTimeout('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form,
+      }, 30_000, signal)
+      providerLabel = 'OpenAI realtime'
+    } else {
+      const harness = harnessId(request.harness)
+      const configuration = selfHostedRealtimeConfiguration(
+        settings.voiceRealtimeSelfHostedUrl,
+        settings.voiceRealtimeSelfHostedModel,
+        settings.voiceRealtimeSelfHostedVoice,
+      )
+      const token = await this.secrets.getOptional('self-hosted-realtime')
+      const form = new FormData()
+      form.set('sdp', sdp)
+      form.set('session', JSON.stringify(selfHostedRealtimeSession(settings, harness, request.mode === 'test')))
+      response = await this.withTimeout(configuration.endpoint, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: form,
+        redirect: 'error',
+      }, 30_000, signal)
+      providerLabel = 'Self-hosted realtime'
+    }
+    const answer = await this.boundedResponseText(response, 'Realtime setup', MAX_SDP_BYTES)
+    if (!response.ok) throw new Error(`${providerLabel} setup failed (${response.status}): ${answer.slice(0, 512)}`)
+    if (!answer.startsWith('v=0')) throw new Error('Realtime setup returned an invalid session description')
+    return { sdp: answer, protocol: 'openai' }
   }
 
   async transcribe(raw: unknown): Promise<string> {
@@ -625,7 +714,7 @@ export class VoiceService {
     const form = new FormData()
     form.set('file', new Blob([exactArrayBuffer(audio)], { type: 'audio/wav' }), 'dictation.wav')
     if (model) form.set('model', model)
-    else form.set('language', 'en-US')
+    else form.set('language', 'en')
     form.set('response_format', 'json')
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), REMOTE_TIMEOUT_MS)
@@ -655,9 +744,9 @@ export class VoiceService {
     return requireRecord(parsed, `${label} response`)
   }
 
-  private async boundedResponseText(response: Response, label: string): Promise<string> {
+  private async boundedResponseText(response: Response, label: string, maxBytes = MAX_PROVIDER_RESPONSE_BYTES): Promise<string> {
     const length = Number(response.headers.get('content-length'))
-    if (Number.isFinite(length) && length > MAX_PROVIDER_RESPONSE_BYTES) throw new Error(`${label} response was too large`)
+    if (Number.isFinite(length) && length > maxBytes) throw new Error(`${label} response was too large`)
     if (!response.body) return ''
     const reader = response.body.getReader()
     const chunks: Uint8Array[] = []
@@ -666,7 +755,7 @@ export class VoiceService {
       const { done, value } = await reader.read()
       if (done) break
       total += value.byteLength
-      if (total > MAX_PROVIDER_RESPONSE_BYTES) {
+      if (total > maxBytes) {
         await reader.cancel().catch(() => undefined)
         throw new Error(`${label} response was too large`)
       }
@@ -678,13 +767,15 @@ export class VoiceService {
     return new TextDecoder().decode(bytes)
   }
 
-  private async withTimeout(url: string, init: RequestInit, timeoutMs = REMOTE_TIMEOUT_MS): Promise<Response> {
-    const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), timeoutMs)
+  private async withTimeout(url: string, init: RequestInit, timeoutMs = REMOTE_TIMEOUT_MS, externalSignal?: AbortSignal): Promise<Response> {
+    const timeout = new AbortController()
+    const timer = setTimeout(() => timeout.abort(), timeoutMs)
+    const signal = externalSignal ? AbortSignal.any([timeout.signal, externalSignal]) : timeout.signal
     timer.unref()
-    try { return await this.fetchImpl(url, { ...init, signal: abort.signal }) }
+    try { return await this.fetchImpl(url, { ...init, signal }) }
     catch (error) {
-      if (abort.signal.aborted) throw new Error('Voice provider request timed out')
+      if (timeout.signal.aborted) throw new Error('Voice provider request timed out')
+      if (externalSignal?.aborted) throw new Error('Realtime setup was cancelled')
       throw error
     } finally { clearTimeout(timer) }
   }

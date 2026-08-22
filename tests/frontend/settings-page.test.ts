@@ -186,8 +186,12 @@ describe('settings field ownership', () => {
       voiceSelfHostedModel: 'voice',
       voiceLocalWhisperExecutable: 'voice',
       voiceLocalWhisperModel: 'voice',
+      voiceRealtimeProvider: 'voice',
       voiceRealtimeModel: 'voice',
       voiceRealtimeVoice: 'voice',
+      voiceRealtimeSelfHostedUrl: 'voice',
+      voiceRealtimeSelfHostedModel: 'voice',
+      voiceRealtimeSelfHostedVoice: 'voice',
     })
   })
 })
