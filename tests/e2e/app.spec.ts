@@ -84,6 +84,25 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
   mkdirSync(project, { recursive: true })
   mkdirSync(secondary, { recursive: true })
   mkdirSync(sessions, { recursive: true })
+  writeFileSync(join(home, '.prime', 'agent', 'models.json'), JSON.stringify({
+    providers: {
+      fixture: {
+        name: 'Fixture',
+        baseUrl: 'http://127.0.0.1:1/v1',
+        api: 'openai-completions',
+        apiKey: 'fixture-key',
+        models: [{
+          id: 'fixture-model',
+          name: 'Fixture Model',
+          reasoning: true,
+          thinkingLevelMap: { medium: 'medium' },
+          input: ['text', 'image'],
+          contextWindow: 100000,
+          maxTokens: 8192,
+        }],
+      },
+    },
+  }))
   const canonicalProject = realpathSync(project)
   const canonicalSecondary = realpathSync(secondary)
   const initializeRepository = (cwd: string, file: string) => {
@@ -1060,6 +1079,7 @@ test.describe('Prime Work desktop smoke', () => {
     await page.getByRole('button', { name: 'Prime Work — switch harness' }).click()
     await page.getByRole('menuitemradio', { name: /OMP Work/ }).click()
     await page.locator('.session-row__title').filter({ hasText: 'OMP hermetic fixture' }).click()
+    await expect(page.getByRole('combobox', { name: 'Model' })).toHaveValue('anthropic/claude-fixture')
     const composer = page.getByRole('combobox', { name: 'Message OMP' })
     await composer.fill('Connect to the newly installed harness')
     await composer.press('Enter')
@@ -1828,6 +1848,7 @@ test.describe('Prime Work desktop smoke', () => {
     await page.getByRole('button', { name: 'Prime Work — switch harness' }).click()
     await page.getByRole('menuitemradio', { name: /OMP Work/ }).click()
     await page.locator('.session-row__title').filter({ hasText: 'OMP hermetic fixture' }).click()
+    await expect(page.getByRole('combobox', { name: 'Model' })).toHaveValue('anthropic/claude-fixture')
 
     const composer = page.getByRole('combobox', { name: 'Message OMP' })
     await composer.fill('Ask me two OMP questions')
@@ -1861,6 +1882,7 @@ test.describe('Prime Work desktop smoke', () => {
     await page.getByRole('button', { name: 'Prime Work — switch harness' }).click()
     await page.getByRole('menuitemradio', { name: /Pi Work/ }).click()
     await page.locator('.session-row__title').filter({ hasText: 'Pi hermetic fixture' }).click()
+    await expect(page.getByRole('combobox', { name: 'Model' })).toHaveValue('anthropic/claude-fixture')
 
     const composer = page.getByRole('combobox', { name: 'Message Pi' })
     await composer.fill('Ask me two Pi questions')
