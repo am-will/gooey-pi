@@ -12,6 +12,8 @@ let fixtureSessionFile = ''
 let currentFixture: ReturnType<typeof createHermeticFixture> | undefined
 let actionableErrors: string[] = []
 
+const ISSUE_131_LONG_TOKEN = 'ReProductSkuController.getProductPoolDetail,ReProductSkuController.getProductPoolPriceWave'
+
 const instrumentedPages = new WeakSet<Page>()
 
 const attachDiagnostics = (target: Page) => {
@@ -109,7 +111,7 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
   writeFileSync(ompSessionFile, [
     ompTitleSlot,
     JSON.stringify({ type: 'session', version: 3, id: '019fdf24-aaaa-7000-8000-000000000001', timestamp: '2026-02-01T00:00:00.000Z', cwd: canonicalProject }),
-    JSON.stringify({ type: 'message', id: 'omp-user', parentId: null, timestamp: '2026-02-01T00:00:01.000Z', message: { role: 'user', content: [{ type: 'text', text: 'OMP hermetic fixture' }], timestamp: 1774915201000 } }),
+    JSON.stringify({ type: 'message', id: 'omp-user', parentId: null, timestamp: '2026-02-01T00:00:01.000Z', message: { role: 'user', content: [{ type: 'text', text: `OMP hermetic fixture\n${ISSUE_131_LONG_TOKEN}` }], timestamp: 1774915201000 } }),
     JSON.stringify({ type: 'message', id: 'omp-assistant', parentId: 'omp-user', timestamp: '2026-02-01T00:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'OMP fixture reply.' }] } }),
     '',
   ].join('\n'))
@@ -780,6 +782,42 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('heading', { name: 'Startup & background' })).toBeVisible()
   })
 
+  test('keeps the application shell fixed when focus reveals root overflow', async () => {
+    const layout = await page.evaluate(() => {
+      const root = document.getElementById('root')
+      const shell = document.querySelector<HTMLElement>('.app-shell')
+      if (!root || !shell) throw new Error('Application shell is missing')
+
+      const probe = document.createElement('button')
+      probe.type = 'button'
+      probe.textContent = 'Root overflow focus probe'
+      root.append(probe)
+
+      try {
+        const initialShellTop = shell.getBoundingClientRect().top
+        probe.focus()
+        probe.scrollIntoView({ block: 'end' })
+        return {
+          activeElement: document.activeElement === probe,
+          clientHeight: root.clientHeight,
+          overflow: getComputedStyle(root).overflow,
+          scrollHeight: root.scrollHeight,
+          scrollTop: root.scrollTop,
+          initialShellTop,
+          shellTop: shell.getBoundingClientRect().top,
+        }
+      } finally {
+        probe.remove()
+      }
+    })
+
+    expect(layout.activeElement).toBe(true)
+    expect(layout.overflow).toBe('clip')
+    expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight)
+    expect(layout.scrollTop).toBe(0)
+    expect(layout.shellTop).toBe(layout.initialShellTop)
+  })
+
   test('uses the persisted selected pet for realtime voice after a full restart', async () => {
     const desktopPet = page.getByRole('button', { name: /Orb, draggable GooeyPi pet/ })
     await expect(desktopPet).toBeVisible()
@@ -854,6 +892,20 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('button', { name: 'Prime Work — switch harness' })).toBeVisible()
     await expect(page.locator('.session-row__title').filter({ hasText: 'Hermetic desktop fixture' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Scheduled' })).toBeVisible()
+  })
+
+  test('wraps an unbroken user-message token inside its chat bubble', async () => {
+    await page.getByRole('button', { name: 'Prime Work — switch harness' }).click()
+    await page.getByRole('menuitemradio', { name: /OMP Work/ }).click()
+    await page.locator('.session-row__title').filter({ hasText: 'OMP hermetic fixture' }).click()
+
+    const bubble = page.locator('.user-bubble').filter({ hasText: ISSUE_131_LONG_TOKEN })
+    await expect(bubble).toBeVisible()
+    const dimensions = await bubble.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }))
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth)
   })
 
   test('switches to Pi Work and lists the pi session catalog, then returns to Prime', async () => {

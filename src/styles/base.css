@@ -114,7 +114,11 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+/* `clip` rather than `hidden`: an overflow:hidden box is still a scroll container, so
+   focusing a control that sits below the fold - a checkbox near the bottom of Settings -
+   lets the browser scroll the whole shell out of view, with no scrollbar and no wheel
+   target to bring it back. `clip` is not scrollable, so that state is unreachable. */
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: clip; }
 body { color: var(--text); background: var(--canvas); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { color: inherit; font: inherit; }
 /* Chromium's Linux native select popup does not reliably inherit the page's
