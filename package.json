@@ -22,6 +22,7 @@
     "format:check": "biome format --config-path=scripts/release/biome.json scripts/release electron.vite.config.ts vitest.config.ts playwright.config.ts tests/release-scripts.test.ts",
     "check": "npm run lint && npm run format:check",
     "test": "vitest run",
+    "test:openai-realtime-tools": "vitest run tests/integration/openai-realtime-agent-tools.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npm run build && npm run test:e2e:hermetic",
@@ -64,6 +65,7 @@
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^4.1.10",
     "@xterm/addon-fit": "^0.11.0",
@@ -80,7 +82,8 @@
     "remark-gfm": "^4.0.1",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "ws": "^8.21.3"
   },
   "build": {
     "appId": "app.gooeypi.desktop",

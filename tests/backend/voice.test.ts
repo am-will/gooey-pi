@@ -50,6 +50,14 @@ function makeService(overrides: Partial<VoiceServiceOptions> = {}) {
   })
   const primeCatalog = vi.fn(catalog)
   const ompCatalog = vi.fn(catalog)
+  const collaboration = {
+    listAccessibleSessions: vi.fn(async () => []),
+    readAccessibleSession: vi.fn(async () => ({
+      session: { id: 'session-1', harness: 'prime' as const, title: 'Test agent', status: 'idle' as const, updatedAt: '2026-01-01T00:00:00.000Z' },
+      projectPath: '/tmp/prime', cursor: 'cursor', live: false, estimated_tokens: 0, token_limit: 2_000, truncated: false, messages: [],
+    })),
+    sendUserMessage: vi.fn(async () => ({ delivered: true, target_session_id: 'session-1', awakened: false, queued: false })),
+  }
   const options: VoiceServiceOptions = {
     secretPath: join(directory, 'voice-secrets.json'),
     secretCodec: {
@@ -69,11 +77,12 @@ function makeService(overrides: Partial<VoiceServiceOptions> = {}) {
       omp: { catalog: ompCatalog },
       pi: { catalog: vi.fn(catalog) },
     } as unknown as VoiceServiceOptions['catalogs'],
+    collaboration,
     runProcess: vi.fn(),
     environment: {},
     ...overrides,
   }
-  return { service: new VoiceService(options), agent, options }
+  return { service: new VoiceService(options), agent, options, collaboration: options.collaboration }
 }
 
 afterEach(() => {
@@ -232,9 +241,16 @@ describe('VoiceService', () => {
       expect(session.instructions).toContain('first call get_local_context, then call search_web')
       expect(session.instructions).toContain('Do not ask the user for a location unless get_local_context returns no usable location_hint')
       expect(session.instructions).toContain('Choose the closest available model and the closest reasoning level')
-      expect(session.tools.map((tool) => tool.name)).toEqual(['list_projects', 'list_models', 'start_task', 'get_local_context', 'search_web'])
+      expect(session.instructions).toContain('Use list_agents to find existing sessions')
+      expect(session.instructions).toContain('Never invent or guess a session ID')
+      expect(session.tools.map((tool) => tool.name)).toEqual([
+        'list_projects', 'list_models', 'start_task', 'get_local_context', 'list_agents', 'get_agent', 'send_agent_message', 'search_web',
+      ])
       expect(session.tools.find((tool) => tool.name === 'start_task')?.parameters.properties).toHaveProperty('model')
       expect(session.tools.find((tool) => tool.name === 'start_task')?.parameters.properties).toHaveProperty('reasoning')
+      expect(session.tools.find((tool) => tool.name === 'list_agents')?.parameters.properties).toHaveProperty('filter')
+      expect(session.tools.find((tool) => tool.name === 'get_agent')?.parameters).toMatchObject({ required: ['session_id'] })
+      expect(session.tools.find((tool) => tool.name === 'send_agent_message')?.parameters).toMatchObject({ required: ['session_id', 'message'] })
       return new Response('v=0\r\no=answer')
     })
     const { service } = makeService({ fetch: fetchMock as typeof fetch })
@@ -409,6 +425,74 @@ describe('VoiceService', () => {
       type: 'prompt', message: 'Determine the next logical feature.', streamingBehavior: 'followUp',
     })
     expect(result.task?.harness).toBe('omp')
+  })
+
+  it('lists, reads, and messages authorized agents through stable session IDs', async () => {
+    const listAccessibleSessions = vi.fn(async () => [{
+      id: 'session-running', harness: 'prime' as const, projectPath: '/tmp/prime', title: 'UI builder', status: 'running' as const,
+      updatedAt: '2026-01-01T00:03:00.000Z', live: true, preview: 'Building the settings panel.',
+    }, {
+      id: 'session-waiting', harness: 'prime' as const, projectPath: '/tmp/prime', title: 'API owner', status: 'waiting' as const,
+      updatedAt: '2026-01-01T00:02:00.000Z', live: true, preview: 'Which response shape should I use?',
+    }, {
+      id: 'session-failed', harness: 'prime' as const, projectPath: '/tmp/prime', title: 'Test runner', status: 'failed' as const,
+      updatedAt: '2026-01-01T00:01:00.000Z', live: false,
+    }, {
+      id: 'session-idle', harness: 'prime' as const, projectPath: '/tmp/prime', title: 'Finished helper', status: 'idle' as const,
+      updatedAt: '2026-01-01T00:00:00.000Z', live: false,
+    }])
+    const readAccessibleSession = vi.fn(async () => ({
+      session: { id: 'session-waiting', harness: 'prime' as const, title: 'API owner', status: 'waiting' as const, updatedAt: '2026-01-01T00:02:00.000Z' },
+      projectPath: '/tmp/prime', cursor: 'cursor', live: true, estimated_tokens: 18, token_limit: 2_000, truncated: false,
+      messages: [{ id: 'message-1', role: 'assistant' as const, text: 'Which response shape should I use?' }],
+    }))
+    const sendUserMessage = vi.fn(async () => ({ delivered: true, target_session_id: 'session-waiting', awakened: false, queued: true }))
+    const collaboration = { listAccessibleSessions, readAccessibleSession, sendUserMessage }
+    const { service } = makeService({ collaboration })
+
+    const active = JSON.parse((await service.executeTool({ name: 'list_agents', arguments: {} }, 'prime')).output)
+    expect(active.agents.map((agent: { session_id: string }) => agent.session_id)).toEqual(['session-running', 'session-waiting', 'session-failed'])
+    expect(active).toMatchObject({ filter: 'active', matched: 3, returned: 3, truncated: false })
+    expect(active.agents[1]).toMatchObject({ project_id: 'prime-project', project_name: 'prime project', status: 'waiting' })
+    expect(listAccessibleSessions).toHaveBeenCalledWith({ harness: 'prime', projectPaths: ['/tmp/prime'] })
+
+    const attention = JSON.parse((await service.executeTool({
+      name: 'list_agents', arguments: { filter: 'needs_attention', project_id: 'prime-project', query: 'api' },
+    }, 'prime')).output)
+    expect(attention.agents).toEqual([expect.objectContaining({ session_id: 'session-waiting', title: 'API owner' })])
+
+    const detail = JSON.parse((await service.executeTool({ name: 'get_agent', arguments: { session_id: 'session-waiting' } }, 'prime')).output)
+    expect(detail).toEqual({
+      agent: {
+        session_id: 'session-waiting', title: 'API owner', project_id: 'prime-project', project_name: 'prime project',
+        harness: 'prime', status: 'waiting', live: true, updated_at: '2026-01-01T00:02:00.000Z',
+      },
+      context: {
+        estimated_tokens: 18, token_limit: 2_000, truncated: false,
+        messages: [{ id: 'message-1', role: 'assistant', text: 'Which response shape should I use?' }],
+      },
+    })
+
+    const sent = JSON.parse((await service.executeTool({
+      name: 'send_agent_message', arguments: { session_id: 'session-waiting', message: 'Use the compact response shape.' },
+    }, 'prime')).output)
+    expect(sent).toEqual({ delivered: true, target_session_id: 'session-waiting', awakened: false, queued: true })
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      { harness: 'prime', projectPaths: ['/tmp/prime'] },
+      'session-waiting',
+      'Use the compact response shape.',
+    )
+  })
+
+  it('rejects invalid agent discovery and ungranted project scopes before collaboration access', async () => {
+    const { service, collaboration } = makeService()
+    await expect(service.executeTool({
+      name: 'list_agents', arguments: { filter: 'sleepy' as 'active' },
+    }, 'prime')).rejects.toThrow('Invalid agent filter')
+    await expect(service.executeTool({
+      name: 'list_agents', arguments: { project_id: 'missing-project' },
+    }, 'prime')).rejects.toThrow(/not explicitly granted/)
+    expect(collaboration.listAccessibleSessions).not.toHaveBeenCalled()
   })
 
   it('returns bounded local context without a calculation tool', async () => {

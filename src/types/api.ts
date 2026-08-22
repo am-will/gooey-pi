@@ -538,6 +538,9 @@ export type VoiceToolRequest =
   | { name: 'list_models'; arguments: { query?: string } }
   | { name: 'start_task'; arguments: { project_id: string; prompt: string; title?: string; model?: string; reasoning?: string } }
   | { name: 'get_local_context'; arguments: Record<string, never> }
+  | { name: 'list_agents'; arguments: { filter?: 'active' | 'running' | 'needs_attention' | 'all'; project_id?: string; query?: string } }
+  | { name: 'get_agent'; arguments: { session_id: string } }
+  | { name: 'send_agent_message'; arguments: { session_id: string; message: string } }
   | { name: 'search_web'; arguments: { query: string } }
 
 export interface VoiceToolResult {

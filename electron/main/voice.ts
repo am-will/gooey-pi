@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { VOICE_CREDENTIAL_PROVIDERS } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { streamingBehaviorForIntent } from '../../src/lib/session-actions'
@@ -17,6 +17,12 @@ import type {
   VoiceToolResult,
 } from '../../src/types/api'
 import type { AgentRpcManager } from './agent-rpc'
+import type {
+  AgentCollaborationBridge,
+  AgentSessionAccessScope,
+  AgentSessionSummary,
+  CollaborationSnapshot,
+} from './collaboration/agent-bridge'
 import { HARNESSES } from './harness'
 import type { ModelCatalogProvider } from './model-catalog'
 import { availableModels, rankedModelMatches, resolveModel, resolveReasoning } from './model-selection'
@@ -29,6 +35,10 @@ const MAX_SECRET_BYTES = 16 * 1024
 const MAX_SDP_BYTES = 256 * 1024
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
 const REMOTE_TIMEOUT_MS = 90_000
+const MAX_LISTED_VOICE_AGENTS = 50
+const MAX_VOICE_AGENT_MESSAGE_CHARS = 64 * 1024
+
+type VoiceAgentFilter = 'active' | 'running' | 'needs_attention' | 'all'
 
 interface SecretCodec {
   status(): VoiceCredentialStorageStatus
@@ -48,6 +58,7 @@ interface VoiceServiceOptions {
   projects: Record<HarnessId, ProjectService>
   agents: Record<HarnessId, AgentRpcManager>
   catalogs: Record<HarnessId, ModelCatalogProvider>
+  collaboration: Pick<AgentCollaborationBridge, 'listAccessibleSessions' | 'readAccessibleSession' | 'sendUserMessage'>
   fetch?: typeof fetch
   runProcess(file: string, args: readonly string[], options?: { timeoutMs?: number; maxBytes?: number }): Promise<ProcessResult>
   environment?: NodeJS.ProcessEnv
@@ -124,6 +135,20 @@ function boundedAudio(value: unknown): Uint8Array {
 
 function cleanText(value: unknown, label: string, max = 1_000_000): string {
   return requireString(value, label, { min: 1, max, trim: true })
+}
+
+function voiceAgentFilter(value: unknown): VoiceAgentFilter {
+  if (value === undefined) return 'active'
+  const filter = requireString(value, 'filter', { min: 1, max: 32, trim: true })
+  if (filter !== 'active' && filter !== 'running' && filter !== 'needs_attention' && filter !== 'all') throw new TypeError('Invalid agent filter')
+  return filter
+}
+
+function includesAgentStatus(filter: VoiceAgentFilter, status: AgentSessionSummary['status']): boolean {
+  if (filter === 'all') return true
+  if (filter === 'running') return status === 'running'
+  if (filter === 'needs_attention') return status === 'waiting' || status === 'failed'
+  return status === 'running' || status === 'waiting' || status === 'failed'
 }
 
 function localContext(harness: HarnessId): Record<string, string> {
@@ -290,6 +315,10 @@ function orchestrationInstructions(harness: HarnessId): string {
     'Only start tasks inside projects returned by list_projects. Never invent project IDs.',
     'When the user names or describes a model, call list_models with the user’s model wording before start_task. Choose the closest available model and the closest reasoning level that model supports. Model names and reasoning wording may be approximate; do not require exact phrasing. Pass the exact model key returned by list_models to start_task. If the user requests only a reasoning level, omit model and pass the approximate reasoning wording so it can be applied to the harness default model.',
     'If the user does not request a model or reasoning level, omit those fields so the selected harness uses its defaults.',
+    'Use list_agents to find existing sessions in the selected harness. Use the running filter for work in progress and needs_attention for sessions that are waiting or failed.',
+    'Use get_agent with an exact session ID returned by list_agents when recent context is needed. Never invent or guess a session ID.',
+    'Call send_agent_message only when the user explicitly asks to tell, reply to, instruct, or otherwise message an existing agent. The explicit request is sufficient authorization; do not ask for a second confirmation.',
+    'send_agent_message sends user text to the agent but cannot approve permission prompts or complete extension UI forms. Never claim a message was sent unless the tool returned delivered true.',
     'Treat session creation, project selection, and harness selection as orchestration instructions for you, not as part of the delegated prompt.',
     'Rewrite the start_task prompt as a clean, self-contained task containing only the actual goal, useful constraints, and requested output. Do not include phrases such as start a session, create a thread, ask the agent, you are an agent, or working inside the project. Do not add generic process advice the user did not request.',
     'Example: "Start a new session in the Prime project workspace. Ask what the next logical feature to add should be" becomes the task prompt "Determine the next logical feature to add to this project and explain why."',
@@ -298,15 +327,9 @@ function orchestrationInstructions(harness: HarnessId): string {
   ].join(' ')
 }
 
-function realtimeSession(settings: AppSettings, harness: HarnessId): Record<string, unknown> {
+export function voiceToolContracts(harness: HarnessId): Array<Record<string, unknown>> {
   const harnessName = HARNESSES[harness].agentName
-  return {
-    type: 'realtime',
-    model: settings.voiceRealtimeModel,
-    instructions: orchestrationInstructions(harness),
-    audio: { output: { voice: settings.voiceRealtimeVoice } },
-    tool_choice: 'auto',
-    tools: [
+  return [
       {
         type: 'function', name: 'list_projects',
         description: `Find explicitly granted projects in the currently selected ${harnessName} harness. Projects from other harnesses are never returned.`,
@@ -348,6 +371,39 @@ function realtimeSession(settings: AppSettings, harness: HarnessId): Record<stri
         parameters: { type: 'object', additionalProperties: false, properties: {} },
       },
       {
+        type: 'function', name: 'list_agents',
+        description: `Find existing top-level ${harnessName} sessions in explicitly granted projects. Use stable session IDs from this result with get_agent or send_agent_message; never guess an ID.`,
+        parameters: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            filter: { type: 'string', enum: ['active', 'running', 'needs_attention', 'all'], description: 'Optional status filter. Defaults to active, which includes running, waiting, and failed sessions.' },
+            project_id: { type: 'string', description: 'Optional exact project ID returned by list_projects.' },
+            query: { type: 'string', description: 'Optional case-insensitive session-title search.' },
+          },
+        },
+      },
+      {
+        type: 'function', name: 'get_agent',
+        description: 'Read state and a small bounded recent conversational snapshot for an exact session returned by list_agents. Tool traces and internal records are omitted.',
+        parameters: {
+          type: 'object', additionalProperties: false,
+          properties: { session_id: { type: 'string', description: 'An exact stable session ID returned by list_agents.' } },
+          required: ['session_id'],
+        },
+      },
+      {
+        type: 'function', name: 'send_agent_message',
+        description: 'Send a user-authorized message to an exact existing session returned by list_agents. Busy sessions receive a queued follow-up; an authorized saved idle session is safely awakened. This cannot approve permission prompts or complete extension UI forms.',
+        parameters: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            session_id: { type: 'string', description: 'An exact stable session ID returned by list_agents.' },
+            message: { type: 'string', description: 'The message the user explicitly asked to send.' },
+          },
+          required: ['session_id', 'message'],
+        },
+      },
+      {
         type: 'function', name: 'search_web',
         description: 'Search the live web for a quick current-information question and return a cited answer. For local weather with no named place, first call get_local_context and include its location_hint in this query.',
         parameters: {
@@ -356,7 +412,17 @@ function realtimeSession(settings: AppSettings, harness: HarnessId): Record<stri
           required: ['query'],
         },
       },
-    ],
+    ]
+}
+
+function realtimeSession(settings: AppSettings, harness: HarnessId): Record<string, unknown> {
+  return {
+    type: 'realtime',
+    model: settings.voiceRealtimeModel,
+    instructions: orchestrationInstructions(harness),
+    audio: { output: { voice: settings.voiceRealtimeVoice } },
+    tool_choice: 'auto',
+    tools: voiceToolContracts(harness),
   }
 }
 
@@ -465,6 +531,9 @@ export class VoiceService {
     if (name === 'list_models') return this.listModels(args, harness)
     if (name === 'start_task') return this.startTask(args, harness)
     if (name === 'get_local_context') return this.getLocalContext(harness)
+    if (name === 'list_agents') return this.listAgents(args, harness)
+    if (name === 'get_agent') return this.getAgent(args, harness)
+    if (name === 'send_agent_message') return this.sendAgentMessage(args, harness)
     if (name === 'search_web') return this.searchWeb(args)
     throw new TypeError('Voice tool is not supported')
   }
@@ -477,6 +546,88 @@ export class VoiceService {
       .slice(0, 50)
       .map(({ id, name, harness: projectHarness, lastOpenedAt }) => ({ id, name, harness: projectHarness, lastOpenedAt }))
     return { output: JSON.stringify({ projects }) }
+  }
+
+  private async explicitProjects(harness: HarnessId): Promise<ProjectRecord[]> {
+    return (await this.options.projects[harness].list()).filter((project) => !project.inferred)
+  }
+
+  private agentScope(harness: HarnessId, projects: readonly ProjectRecord[]): AgentSessionAccessScope {
+    return {
+      harness,
+      projectPaths: [...new Set(projects.flatMap((project) => [project.path, project.primaryFolder, ...project.folders]).map((path) => resolve(path)))],
+    }
+  }
+
+  private projectForAgent(projects: readonly ProjectRecord[], projectPath: string): ProjectRecord | undefined {
+    const wanted = resolve(projectPath)
+    return projects.find((project) => [project.path, project.primaryFolder, ...project.folders].some((path) => resolve(path) === wanted))
+  }
+
+  private async listAgents(args: Record<string, unknown>, harness: HarnessId): Promise<VoiceToolResult> {
+    const filter = voiceAgentFilter(args.filter)
+    const query = args.query === undefined ? '' : requireString(args.query, 'query', { max: 256, trim: true }).toLowerCase()
+    const projectId = args.project_id === undefined ? undefined : requireId(args.project_id, 'project_id')
+    const explicitProjects = await this.explicitProjects(harness)
+    const projects = projectId
+      ? explicitProjects.filter((project) => project.id === projectId)
+      : explicitProjects
+    if (projectId && projects.length === 0) throw new Error(`The requested project is not explicitly granted to the selected ${HARNESSES[harness].agentName} harness`)
+    const accessible = await this.options.collaboration.listAccessibleSessions(this.agentScope(harness, projects))
+    const matched = accessible.flatMap((session) => {
+      const project = this.projectForAgent(projects, session.projectPath)
+      if (!project || !includesAgentStatus(filter, session.status) || (query && !session.title.toLowerCase().includes(query))) return []
+      return [{
+        session_id: session.id,
+        title: session.title,
+        project_id: project.id,
+        project_name: project.name,
+        harness: session.harness,
+        status: session.status,
+        live: session.live,
+        updated_at: session.updatedAt,
+        ...(session.preview ? { preview: session.preview } : {}),
+      }]
+    })
+    const agents = matched.slice(0, MAX_LISTED_VOICE_AGENTS)
+    return { output: JSON.stringify({ filter, agents, matched: matched.length, returned: agents.length, truncated: matched.length > agents.length }) }
+  }
+
+  private async getAgent(args: Record<string, unknown>, harness: HarnessId): Promise<VoiceToolResult> {
+    const sessionId = requireId(args.session_id, 'session_id')
+    const projects = await this.explicitProjects(harness)
+    const snapshot: CollaborationSnapshot & { projectPath: string } = await this.options.collaboration.readAccessibleSession(
+      this.agentScope(harness, projects),
+      sessionId,
+    )
+    const project = this.projectForAgent(projects, snapshot.projectPath)
+    if (!project) throw new Error('The target session was not found in an explicitly granted project')
+    return { output: JSON.stringify({
+      agent: {
+        session_id: snapshot.session.id,
+        title: snapshot.session.title,
+        project_id: project.id,
+        project_name: project.name,
+        harness: snapshot.session.harness,
+        status: snapshot.session.status,
+        live: snapshot.live,
+        updated_at: snapshot.session.updatedAt,
+      },
+      context: {
+        estimated_tokens: snapshot.estimated_tokens,
+        token_limit: snapshot.token_limit,
+        truncated: snapshot.truncated,
+        messages: snapshot.messages,
+      },
+    }) }
+  }
+
+  private async sendAgentMessage(args: Record<string, unknown>, harness: HarnessId): Promise<VoiceToolResult> {
+    const sessionId = requireId(args.session_id, 'session_id')
+    const message = cleanText(args.message, 'message', MAX_VOICE_AGENT_MESSAGE_CHARS)
+    const projects = await this.explicitProjects(harness)
+    const result = await this.options.collaboration.sendUserMessage(this.agentScope(harness, projects), sessionId, message)
+    return { output: JSON.stringify(result) }
   }
 
   private disabledProviders(harness: HarnessId): ReadonlySet<string> {
