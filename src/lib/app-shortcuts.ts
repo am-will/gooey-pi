@@ -21,7 +21,7 @@ export function isOverlayOpen(root: Pick<Document, 'querySelector'> = document):
  * continues to be owned by the active overlay.
  */
 export function appShortcutForKey(event: AppShortcutEvent, overlayOpen: boolean, settingsOpen = false): AppShortcutAction | null {
-  if (overlayOpen) return event.key === 'Escape' ? 'close-palette' : null
+  if (overlayOpen) return null
   const command = event.metaKey || event.ctrlKey
   const key = event.key.toLowerCase()
   if (settingsOpen && (event.key === 'Escape' || (command && key === 'w'))) return 'close-settings'
@@ -41,6 +41,10 @@ export function appShortcutForKey(event: AppShortcutEvent, overlayOpen: boolean,
  */
 export function createAppKeydownHandler(actions: Record<AppShortcutAction, () => void>, root: Pick<Document, 'querySelector'> = document, settingsOpen = false): (event: KeyboardEvent) => void {
   return (event: KeyboardEvent) => {
+    // Capture-phase modal handlers can close an overlay synchronously. Respect
+    // their cancellation even if the overlay has unmounted before this window
+    // listener runs, so the same Escape cannot also close Settings.
+    if (event.defaultPrevented) return
     const action = appShortcutForKey(event, isOverlayOpen(root), settingsOpen)
     if (!action) return
     if (action !== 'close-palette') event.preventDefault()

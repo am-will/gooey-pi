@@ -82,8 +82,9 @@ describe('app keyboard shortcuts with overlays open', () => {
       expect(calls).toEqual([])
       const paste = dispatchKey({ key: 'v', metaKey: true })
       expect(paste.defaultPrevented).toBe(false)
-      dispatchKey({ key: 'Escape' })
-      expect(calls).toEqual(['close-palette'])
+      const escapeKey = dispatchKey({ key: 'Escape' })
+      expect(escapeKey.defaultPrevented).toBe(false)
+      expect(calls).toEqual([])
     } finally {
       dispose()
     }
@@ -101,6 +102,18 @@ describe('app keyboard shortcuts with overlays open', () => {
       const paste = dispatchKey({ key: 'v', metaKey: true })
       expect(paste.defaultPrevented).toBe(false)
       expect(calls).toEqual(['open-palette', 'new-session', 'open-browser'])
+    } finally {
+      dispose()
+    }
+  })
+
+  it('does not act on a shortcut already handled by an overlay', () => {
+    const { calls, dispose } = installHandler()
+    try {
+      const escapeKey = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      escapeKey.preventDefault()
+      window.dispatchEvent(escapeKey)
+      expect(calls).toEqual([])
     } finally {
       dispose()
     }
@@ -129,10 +142,10 @@ describe('app shortcut key mapping', () => {
     expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false)).toBeNull()
   })
 
-  it('owns nothing but Escape while an overlay is open', () => {
+  it('owns no shortcuts while an overlay is open', () => {
     expect(appShortcutForKey(event({ key: 'k', metaKey: true }), true)).toBeNull()
     expect(appShortcutForKey(event({ key: 'v', metaKey: true }), true)).toBeNull()
-    expect(appShortcutForKey(event({ key: 'Escape' }), true)).toBe('close-palette')
+    expect(appShortcutForKey(event({ key: 'Escape' }), true)).toBeNull()
   })
 
   it('detects modal and palette overlays in the document', () => {
