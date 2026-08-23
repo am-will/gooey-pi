@@ -5,7 +5,7 @@ import { appShortcutForKey, createAppKeydownHandler, isOverlayOpen, type AppShor
 function installHandler() {
   const calls: AppShortcutAction[] = []
   const actions = Object.fromEntries(
-    (['open-palette', 'new-session', 'open-browser', 'toggle-sidebar', 'toggle-terminal', 'open-settings', 'close-palette'] as const).map((action) => [
+    (['open-palette', 'new-session', 'open-browser', 'toggle-sidebar', 'toggle-terminal', 'open-settings', 'close-palette', 'close-settings'] as const).map((action) => [
       action,
       () => { calls.push(action) },
     ]),
@@ -120,6 +120,13 @@ describe('app shortcut key mapping', () => {
     expect(appShortcutForKey(event({ key: ',', ctrlKey: true }), false)).toBe('open-settings')
     expect(appShortcutForKey(event({ key: 'Escape' }), false)).toBe('close-palette')
     expect(appShortcutForKey(event({ key: 'v', metaKey: true }), false)).toBeNull()
+  })
+
+  it('closes settings with Escape or the primary W shortcut', () => {
+    expect(appShortcutForKey(event({ key: 'Escape' }), false, true)).toBe('close-settings')
+    expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false, true)).toBe('close-settings')
+    expect(appShortcutForKey(event({ key: 'w', metaKey: true }), false, true)).toBe('close-settings')
+    expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false)).toBeNull()
   })
 
   it('owns nothing but Escape while an overlay is open', () => {

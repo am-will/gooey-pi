@@ -524,6 +524,7 @@ describe('harness settings surfaces', () => {
         pets={null}
         initialSection={initialSection}
         initialSectionRequestId={initialSectionRequestId}
+        onClose={noop}
         onUpdate={noop}
         onResetBrowser={noop}
         onOpenDocs={noop}

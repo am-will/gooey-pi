@@ -3,6 +3,7 @@
 .settings-nav { padding: 20px 10px; border-right: 1px solid var(--border); background: var(--surface-subtle); }
 .settings-nav button { width: 100%; height: 33px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border-radius: 7px; color: var(--text-secondary); background: transparent; text-align: left; }
 .settings-nav button:hover, .settings-nav button.is-active { color: var(--text); background: var(--surface-hover); }
+.settings-nav__close { margin-bottom: 12px; }
 .settings-nav button span { flex: 1; }
 .settings-nav button > svg:last-child { opacity: 0; }
 .settings-nav button.is-active > svg:last-child { opacity: 1; color: var(--text-tertiary); }

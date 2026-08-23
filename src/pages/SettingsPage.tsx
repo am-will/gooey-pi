@@ -1,4 +1,4 @@
-import { AudioLines, Bot, Boxes, ChevronRight, Info, LockKeyhole, PawPrint, Settings2, Sun, Terminal } from 'lucide-react'
+import { ArrowLeft, AudioLines, Bot, Boxes, ChevronRight, Info, LockKeyhole, PawPrint, Settings2, Sun, Terminal } from 'lucide-react'
 import { useEffect, useState, type ComponentType } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { useI18n, type MessageKey } from '@/lib/i18n'
@@ -37,6 +37,7 @@ interface SettingsPageProps {
   voice: PrimeWorkApi['voice'] | null
   pets: PrimeWorkApi['pets'] | null
   onUpdate: SettingsUpdate
+  onClose(): void
   onResetBrowser(): Promise<void> | void
   onOpenDocs(): void
   onRefreshProviders(): Promise<void>
@@ -53,7 +54,7 @@ interface SettingsPageProps {
   initialSectionRequestId?: number
 }
 
-export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onUpdate, onResetBrowser, onOpenDocs, onRefreshProviders, onRefreshHarnesses, onSaveProviderApiKey, onLogoutProvider, onSetProviderEnabled, onSetAllProvidersEnabled, onSetAllProvidersDisabled, onSetModelEnabled, onStartProviderOAuth, initialSection = 'general', initialSectionRequestId = 0 }: SettingsPageProps) {
+export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onClose, onUpdate, onResetBrowser, onOpenDocs, onRefreshProviders, onRefreshHarnesses, onSaveProviderApiKey, onLogoutProvider, onSetProviderEnabled, onSetAllProvidersEnabled, onSetAllProvidersDisabled, onSetModelEnabled, onStartProviderOAuth, initialSection = 'general', initialSectionRequestId = 0 }: SettingsPageProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -94,6 +95,7 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onU
   return (
     <div className="settings-page">
       <nav className="settings-nav" aria-label={t('settings.sections')}>
+        <button type="button" className="settings-nav__close" onClick={onClose}><ArrowLeft size={14} /><span>Back to session</span></button>
         {sections.map((item) => {
           const Icon = item.icon
           return (

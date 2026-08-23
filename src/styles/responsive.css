@@ -98,6 +98,7 @@
   .settings-page { display: flex; flex-direction: column; }
   .settings-nav { flex: 0 0 46px; display: flex; overflow-x: auto; padding: 5px 7px; border-right: 0; border-bottom: 1px solid var(--border); }
   .settings-nav button { width: auto; min-width: 44px; height: 36px; flex: 0 0 auto; }
+  .settings-nav__close { margin-bottom: 0; }
   .settings-nav button span { white-space: nowrap; }
   .settings-nav button > svg:last-child { display: none; }
   .theme-options { gap: 5px; }
