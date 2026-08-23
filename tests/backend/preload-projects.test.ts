@@ -46,6 +46,22 @@ describe('preload project worktree bridge', () => {
       ['projects:create-worktree', '/repo', 'feature', 'omp'],
     ])
   })
+  it('exposes project script lifecycle calls with harness scoping', async () => {
+    const api = electronMocks.api as { projects: {
+      updateScripts(id: string, scripts: { setup: string; run: string }, harness?: string): Promise<unknown>
+      markSetupStarted(id: string, setup: string, harness?: string): Promise<unknown>
+      finishSetup(id: string, setup: string, exitCode: number, harness?: string): Promise<unknown>
+    } }
+    await api.projects.updateScripts('project-1', { setup: 'npm install', run: 'npm run dev' }, 'omp')
+    await api.projects.markSetupStarted('project-1', 'npm install', 'omp')
+    await api.projects.finishSetup('project-1', 'npm install', 0, 'omp')
+    expect(electronMocks.ipcRenderer.invoke.mock.calls).toEqual([
+      ['projects:update-scripts', 'project-1', { setup: 'npm install', run: 'npm run dev' }, 'omp'],
+      ['projects:mark-setup-started', 'project-1', 'npm install', 'omp'],
+      ['projects:finish-setup', 'project-1', 'npm install', 0, 'omp'],
+    ])
+  })
+
 
   it('exposes fixed read-only pet IPC calls', async () => {
     const api = electronMocks.api as { pets: { list(): Promise<unknown>; sprite(id: string): Promise<unknown> } }

@@ -36,6 +36,36 @@ describe('TerminalService', () => {
     await expect(service.bindSession(owner, first.terminalId, '/sessions/two.jsonl')).rejects.toThrow('another task')
     await service.kill(owner, first.terminalId)
   })
+  it('runs configured commands without npm prefix overrides while preserving PREFIX', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'gooeypi-project-run-')); dirs.push(cwd)
+    const events: Array<{ channel: string; payload: { terminalId?: string; data?: string; exitCode?: number } }> = []
+    const owner = {
+      id: 47,
+      isDestroyed: () => false,
+      send: vi.fn((channel: string, payload: { terminalId?: string; data?: string; exitCode?: number }) => { events.push({ channel, payload }) }),
+    } as unknown as WebContents
+    const prefixKeys = ['npm_config_prefix', 'NPM_CONFIG_PREFIX', 'PREFIX'] as const
+    const previousPrefixes = Object.fromEntries(prefixKeys.map((key) => [key, process.env[key]]))
+    for (const key of prefixKeys) process.env[key] = '/usr/local'
+    try {
+      const service = new TerminalService(async () => cwd, () => testShell)
+      const command = 'if [ -z \"${npm_config_prefix}${NPM_CONFIG_PREFIX}\" ] && [ \"$PREFIX\" = /usr/local ]; then printf runner-ok; else printf env-mismatch; exit 2; fi'
+      const created = await service.create(owner, { cwd, shell: testShell, command, cols: 80, rows: 24 })
+
+      await waitFor(() => events.some((event) => event.channel === 'terminal:exit' && event.payload.terminalId === created.terminalId))
+      const output = events.filter((event) => event.channel === 'terminal:data' && event.payload.terminalId === created.terminalId).map((event) => event.payload.data ?? '').join('')
+      expect(output).toContain('runner-ok')
+      expect(output).not.toContain('env-mismatch')
+      expect(events).toContainEqual({ channel: 'terminal:exit', payload: expect.objectContaining({ terminalId: created.terminalId, exitCode: 0 }) })
+    } finally {
+      for (const key of prefixKeys) {
+        const previous = previousPrefixes[key]
+        if (previous === undefined) delete process.env[key]
+        else process.env[key] = previous
+      }
+    }
+  })
+
 
   it('kills descendant processes when a terminal closes', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-pty-')); dirs.push(cwd)

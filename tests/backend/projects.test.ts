@@ -1039,3 +1039,36 @@ describe('ProjectService worktrees', () => {
     expect(store.snapshot().projects.some((project) => resolve(project.path) === resolve(outsider))).toBe(false)
   })
 })
+
+describe('ProjectService scripts', () => {
+  it('persists setup attempts and resets them when the setup command changes', async () => {
+    const { root, service, store } = setup()
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push({
+      id: 'script-project', harness: 'prime', name: 'Script project', path: root, folders: [root], primaryFolder: root,
+      pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root),
+    }) })
+
+    await expect(service.updateScripts('script-project', { setup: 'npm install', run: 'npm run dev' })).resolves.toEqual({
+      setup: 'npm install',
+      run: 'npm run dev',
+      setupLastRun: undefined,
+      setupLastExitCode: undefined,
+    })
+    await expect(service.markSetupStarted('script-project', 'npm install')).resolves.toMatchObject({ setupLastRun: 'npm install' })
+    await expect(service.finishSetup('script-project', 'npm install', 0)).resolves.toMatchObject({ setupLastRun: 'npm install', setupLastExitCode: 0 })
+    await expect(service.updateScripts('script-project', { setup: 'npm ci', run: 'npm run dev' })).resolves.toMatchObject({
+      setup: 'npm ci',
+      run: 'npm run dev',
+      setupLastRun: undefined,
+      setupLastExitCode: undefined,
+    })
+    await expect(service.finishSetup('script-project', 'npm install', 0)).rejects.toThrow(/changed before it finished/)
+  })
+
+  it('rejects script updates for inferred or differently scoped projects', async () => {
+    const { service } = setup()
+    await expect(service.updateScripts('missing', { setup: '', run: 'npm start' })).rejects.toThrow(/not explicitly granted/)
+    await expect(service.updateScripts('missing', { setup: '', run: 'bad\0command' })).rejects.toThrow(/NUL/)
+  })
+})

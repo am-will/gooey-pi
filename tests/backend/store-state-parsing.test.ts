@@ -130,6 +130,25 @@ describe('persisted project parsing', () => {
 
     expect(projects.map(({ id, harness }) => ({ id, harness }))).toEqual([{ id: 'prime-project', harness: 'prime' }])
   })
+  it('bounds project scripts and preserves setup execution state', () => {
+    const project = {
+      id: 'project-1',
+      harness: 'prime',
+      name: 'GooeyPi',
+      path: '/repos/gooey-pi',
+      folders: ['/repos/gooey-pi'],
+      primaryFolder: '/repos/gooey-pi',
+      scripts: { setup: 'npm install', run: 'npm run dev', setupLastRun: 'npm install', setupLastExitCode: 0 },
+    }
+    expect(loadState({ version: 4, projects: [project] }).projects[0].scripts).toEqual(project.scripts)
+    expect(loadState({ version: 4, projects: [{ ...project, scripts: { setup: 'bad\0setup', run: 7, setupLastRun: 'x'.repeat(70_000), setupLastExitCode: -1 } }] }).projects[0].scripts).toEqual({
+      setup: '',
+      run: '',
+      setupLastRun: undefined,
+      setupLastExitCode: undefined,
+    })
+  })
+
 })
 
 describe('persisted settings parsing', () => {

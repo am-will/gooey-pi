@@ -13,6 +13,33 @@
 .title-toolbar__identity strong { max-width: 28vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; font-weight: 540; }
 .title-toolbar__actions { justify-content: flex-end; }
 .toolbar-divider { width: 1px; height: 16px; background: var(--border); margin: 0 5px; }
+.project-run-control { position: relative; margin-right: 5px; }
+.project-run-split { height: 28px; display: inline-flex; align-items: stretch; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface-raised); }
+.project-run-split:hover { border-color: color-mix(in srgb, var(--text-secondary) 55%, var(--border-strong)); }
+.project-run-split.is-running { border-color: color-mix(in srgb, var(--prime) 42%, var(--border-strong)); background: var(--prime-soft); }
+.project-run-split button { display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--text-secondary); background: transparent; font-size: 11px; font-weight: 580; }
+.project-run-split button:hover { color: var(--text); background: var(--surface-hover); }
+.project-run-split__primary { min-width: 58px; gap: 5px; padding-inline: 8px !important; }
+.project-run-split__primary svg { color: var(--success); }
+.project-run-split.is-running .project-run-split__primary svg { color: var(--danger); }
+.project-run-split__menu { width: 25px; border-left: 1px solid var(--border); }
+.project-run-menu { position: absolute; z-index: 90; top: calc(100% + 8px); right: 0; width: min(360px, calc(100vw - 24px)); display: grid; gap: 13px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-popover); cursor: default; }
+.project-run-menu > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.project-run-menu > header strong { font-size: 12px; font-weight: 620; }
+.project-run-menu > header small { max-width: 180px; overflow: hidden; color: var(--text-tertiary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.project-run-menu > label { display: grid; gap: 6px; }
+.project-run-menu > label > span { font-size: 11px; font-weight: 580; }
+.project-run-menu > label > small { color: var(--text-tertiary); font-size: 9.5px; line-height: 1.4; }
+.project-run-menu textarea { width: 100%; min-height: 52px; resize: vertical; padding: 7px 8px; border: 1px solid var(--border-strong); border-radius: 7px; outline: 0; color: var(--text); background: var(--canvas); font-size: 10.5px; line-height: 1.45; }
+.project-run-menu textarea:focus { border-color: var(--focus); box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 24%, transparent); }
+.project-run-menu__status { min-height: 22px; display: inline-flex; align-items: center; gap: 5px; justify-self: start; margin-top: -7px; padding: 0 6px; border-radius: 5px; color: var(--text-tertiary); background: var(--surface-subtle); font-size: 9.5px; }
+.project-run-menu__status.is-running { color: var(--prime); background: var(--prime-soft); }
+.project-run-menu__status.is-success { color: var(--success); background: var(--success-soft); }
+.project-run-menu__status.is-error { color: var(--danger); background: var(--danger-soft); }
+.project-run-menu__error { margin: -4px 0 0; color: var(--danger); font-size: 10px; line-height: 1.4; }
+.project-run-menu > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 1px; }
+.project-run-menu > footer .button { min-height: 28px; font-size: 10.5px; }
+.button--quiet { color: var(--text-secondary); background: transparent; }
 .branch-pill { height: 24px; max-width: 180px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; color: var(--text-secondary); background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 6px; font-size: 11.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .workbench__content { flex: 1; min-height: 0; min-width: 0; }
 .session-workspace { display: flex; height: 100%; min-height: 0; min-width: 0; }
