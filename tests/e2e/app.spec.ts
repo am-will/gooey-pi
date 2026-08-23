@@ -2139,6 +2139,18 @@ test.describe('Prime Work desktop smoke', () => {
     await page.getByLabel('Close terminal', { exact: true }).click()
   })
 
+  test('shuts down cleanly with an active terminal', async () => {
+    await page.getByLabel(/Toggle terminal/).click()
+    const drawer = page.locator('.terminal-drawer:not([hidden])')
+    const input = drawer.locator('.xterm-helper-textarea')
+    await expect(input).toBeVisible()
+    await input.click()
+    await page.keyboard.type('while true; do sleep 1; done')
+    await page.keyboard.press('Enter')
+    // Intentionally leave the PTY open. The shared teardown closes the
+    // Electron app and exercises the native node-pty shutdown path.
+  })
+
   test('restores each session terminal without leaking it into another session', async () => {
     await page.getByLabel(/Toggle terminal/).click()
     const visibleDrawer = page.locator('.terminal-drawer:not([hidden])')
