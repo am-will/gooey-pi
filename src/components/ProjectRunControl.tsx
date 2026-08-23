@@ -90,11 +90,10 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
   return (
     <div ref={rootRef} className="project-run-control">
       <div className={`project-run-split ${running ? 'is-running' : ''}`}>
-        <button type="button" className="project-run-split__primary" aria-label={running ? `Stop ${activeKind} script` : 'Run project'} onClick={runPrimary}>
-          {running ? <Square size={12} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
-          <span>{running ? (activeKind === 'setup' ? 'Setting up' : 'Running') : 'Run'}</span>
+        <button type="button" title={running ? (activeKind === 'setup' ? 'Stop setup' : 'Stop project') : 'Run project'} className="project-run-split__primary" aria-label={running ? `Stop ${activeKind} script` : 'Run project'} onClick={runPrimary}>
+          {running ? <Square size={11} fill="currentColor" /> : <Play size={15} />}
         </button>
-        <button type="button" className="project-run-split__menu" aria-label="Configure project scripts" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? menuId : undefined} onClick={() => setOpen((value) => !value)}>
+        <button type="button" title="Configure project scripts" className="project-run-split__menu" aria-label="Configure project scripts" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? menuId : undefined} onClick={() => setOpen((value) => !value)}>
           <ChevronDown size={13} />
         </button>
       </div>
