@@ -22,6 +22,18 @@
       "integrity": "sha512-TdQwiJ46eWwao40lXOW01SGY4K4je7+lm/llIcC+KTwU0gP0C91xQnZTxA8+ncBNsNiJ4KgfJAwKSL711Oyhlw=="
     }
   },
+  "reference-artifacts": {
+    "prime-agent-base": {
+      "path": "vendor/prime-agent-0.7.0.tgz",
+      "integrity": "sha512-pgrjR4QFg4VqgcPg+50VSmttjISuFQgv2a5Bx6L7jD/Mk72/XGd6strBuQPIJ0+KKNekaiEf7cclt7RWvw8s7w==",
+      "note": "Upstream base release documented by vendor/prime-agent-0.7.0-gooeypi.1.md; kept for provenance, never installed."
+    },
+    "prime-agent-ai-base": {
+      "path": "vendor/prime-agent-ai-0.7.0.tgz",
+      "integrity": "sha512-UUYRmIA4SG3wg2v0Dnpj16DxgwZu3GtzZuZhtyEUMeXbdG3Bv7bmHowPCQC/6+GDepd82mwRmV4RVe4IrMlNUg==",
+      "note": "Upstream base release documented by vendor/prime-agent-ai-0.7.0-gooeypi.1.md; kept for provenance, never installed."
+    }
+  },
   "artifacts": {
     "npm": {
       "version": "12.0.2",
