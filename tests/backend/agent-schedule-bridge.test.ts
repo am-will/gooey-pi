@@ -83,6 +83,29 @@ describe('AgentScheduleBridge', () => {
     expect((await call('list', {})).body.result).toEqual([expect.objectContaining({ harness: 'omp', prompt: 'OMP-only' })])
   })
 
+  it('rejects non-JSON and missing content types but accepts parameterized application/json', async () => {
+    const { environment, call } = await fixture()
+    const plain = await fetch(environment.PRIME_WORK_SCHEDULE_URL!, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${environment.PRIME_WORK_SCHEDULE_TOKEN}`, 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ method: 'list', params: {} }),
+    })
+    expect(plain.status).toBe(415)
+    const missing = await fetch(environment.PRIME_WORK_SCHEDULE_URL!, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${environment.PRIME_WORK_SCHEDULE_TOKEN}` },
+      body: JSON.stringify({ method: 'list', params: {} }),
+    })
+    expect(missing.status).toBe(415)
+    const charset = await fetch(environment.PRIME_WORK_SCHEDULE_URL!, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${environment.PRIME_WORK_SCHEDULE_TOKEN}`, 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ method: 'list', params: {} }),
+    })
+    expect(charset.status).toBe(200)
+    expect((await call('list', {})).status).toBe(200)
+  })
+
   it('rejects missing tokens, browser origins, and unavailable target scopes', async () => {
     const { environment, call } = await fixture()
     expect((await call('list', {}, 'wrong')).status).toBe(401)
@@ -93,7 +116,7 @@ describe('AgentScheduleBridge', () => {
     expect(origin.status).toBe(404)
     const noSessionEnvironment = bridges[0].environmentFor({ cwd: '/project' })
     const response = await fetch(noSessionEnvironment.PRIME_WORK_SCHEDULE_URL!, {
-      method: 'POST', headers: { Authorization: `Bearer ${noSessionEnvironment.PRIME_WORK_SCHEDULE_TOKEN}` },
+      method: 'POST', headers: { Authorization: `Bearer ${noSessionEnvironment.PRIME_WORK_SCHEDULE_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: 'create', params: { target: 'current_session', input: {} } }),
     })
     expect(response.status).toBe(400)
