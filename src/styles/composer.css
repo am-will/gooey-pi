@@ -1,5 +1,5 @@
 /* Composer */
-.composer-wrap { position: absolute; z-index: 10; left: 24px; right: 24px; bottom: 13px; width: min(calc(100% - 48px), 760px); margin: 0 auto; }
+.composer-wrap { position: absolute; z-index: 10; left: 24px; right: 24px; bottom: 13px; width: min(calc(100% - 48px), var(--transcript-measure)); margin: 0 auto; }
 .composer { position: relative; min-height: 104px; display: flex; flex-direction: column; padding: 7px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-raised); box-shadow: 0 1px 3px rgba(0,0,0,.06); }
 .composer-queue { display: grid; gap: 5px; margin: 0 0 8px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 3px 12px color-mix(in srgb, #000 8%, transparent); }
 .composer-queue__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-tertiary); font-size: 10.5px; font-weight: 620; letter-spacing: .01em; }

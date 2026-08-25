@@ -18,7 +18,7 @@
 .session-workspace { display: flex; height: 100%; min-height: 0; min-width: 0; }
 .conversation-column { position: relative; display: flex; min-height: 0; min-width: 0; flex: 1 1 auto; flex-direction: column; }
 .conversation-pane { position: relative; min-width: 360px; min-height: 0; flex: 1 1 auto; background: var(--canvas); overflow: hidden; container-type: inline-size; }
-.conversation-bottom-dock { position: absolute; z-index: 10; right: 24px; bottom: 13px; left: 24px; width: min(calc(100% - 48px), 760px); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.conversation-bottom-dock { position: absolute; z-index: 10; right: 24px; bottom: 13px; left: 24px; width: min(calc(100% - 48px), var(--transcript-measure)); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .conversation-bottom-dock > * { pointer-events: auto; }
 .conversation-bottom-dock .composer-wrap { position: relative; inset: auto; width: 100%; margin: 0; }
 .conversation-bottom-dock .changes-card { margin: 0; box-shadow: 0 4px 18px color-mix(in srgb, #000 12%, transparent); }
