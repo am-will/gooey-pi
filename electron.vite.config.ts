@@ -21,6 +21,7 @@ export default defineConfig({
     plugins: [react()],
     resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },
     build: {
+      minify: 'esbuild',
       rollupOptions: {
         input: resolve('index.html'),
         output: {
