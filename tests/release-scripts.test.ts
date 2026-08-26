@@ -1713,7 +1713,6 @@ describe('vendored supply-chain pins', () => {
     expect(packagedInputs).not.toContain('vendor/**')
     expect(build.files).toEqual(['out/**/*', 'package.json'])
   })
-
 })
 
 const AUDIT_EXCEPTION_REASON = 'no patched release exists upstream yet'
