@@ -110,6 +110,10 @@ export class SettingsService {
       },
       voiceLocalWhisperExecutable: (value) => requireString(value, 'voiceLocalWhisperExecutable', { max: 4_096, trim: true }),
       voiceLocalWhisperModel: (value) => requireString(value, 'voiceLocalWhisperModel', { max: 4_096, trim: true }),
+      voiceRealtimeProvider: (value) => {
+        if (value !== 'openai' && value !== 'openai-codex') throw new TypeError('Invalid realtime voice provider')
+        return value
+      },
       voiceRealtimeModel: (value) => this.voiceModel(value, 'voiceRealtimeModel'),
       voiceRealtimeVoice: (value) => this.voiceModel(value, 'voiceRealtimeVoice'),
       disabledProviders: (value) => {

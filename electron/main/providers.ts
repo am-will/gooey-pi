@@ -106,6 +106,12 @@ function toModelDescriptor(model: Model<Api>, available: Set<string>): PrimeMode
   }
 }
 
+export function codexRealtimeBaseUrl(baseUrl: string): string {
+  const normalized = baseUrl.replace(/\/+$/, '')
+  const base = normalized.endsWith('/responses') ? normalized.slice(0, -'/responses'.length) : normalized
+  return base.endsWith('/codex') ? base : `${base}/codex`
+}
+
 export class PrimeProviderService {
   private readonly authStorage: AuthStorage
   private readonly registry: ModelRegistry
@@ -216,6 +222,19 @@ export class PrimeProviderService {
   async capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined> {
     if (!provider || !modelId) return undefined
     return (await this.catalog()).models.find((model) => model.provider === provider && model.id === modelId)
+  }
+
+  codexVoiceConfigured(): boolean {
+    return this.authStorage.get('openai-codex')?.type === 'oauth'
+  }
+
+  async codexVoiceAuth(): Promise<{ apiKey: string; baseUrl: string; headers?: Record<string, string> }> {
+    if (!this.codexVoiceConfigured()) throw new Error('Connect ChatGPT Plus/Pro in Prime Work provider settings before starting realtime voice')
+    const model = this.registry.getAll().find((candidate) => candidate.provider === 'openai-codex')
+    if (!model) throw new Error('OpenAI Codex is not available in the Prime Agent model catalog')
+    const auth = await this.registry.getApiKeyAndHeaders(model)
+    if (!auth.ok || !auth.apiKey) throw new Error('Connect ChatGPT Plus/Pro in Prime Work provider settings before starting realtime voice')
+    return { apiKey: auth.apiKey, baseUrl: codexRealtimeBaseUrl(model.baseUrl), ...(auth.headers ? { headers: auth.headers } : {}) }
   }
 
   async saveApiKey(rawProviderId: unknown, rawKey: unknown): Promise<void> {

@@ -14,11 +14,11 @@ import {
   optionsWithCurrent,
   type VoiceOption,
 } from '@/lib/voice-options'
-import type { AppSettings, PrimeWorkApi, VoiceCredentialProvider, VoiceCredentialStatus, VoiceTranscriptionProvider } from '@/types/api'
+import type { AppSettings, PrimeWorkApi, VoiceCredentialProvider, VoiceCredentialStatus, VoiceRealtimeProvider, VoiceTranscriptionProvider } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 
 const CREDENTIALS: Array<{ id: VoiceCredentialProvider; name: string; monogram: string; detail: string }> = [
-  { id: 'openai', name: 'OpenAI', monogram: 'OA', detail: 'Required for live dictation and the realtime orb.' },
+  { id: 'openai', name: 'OpenAI', monogram: 'OA', detail: 'Used for live dictation and API-key realtime voice.' },
   { id: 'groq', name: 'Groq', monogram: 'GQ', detail: 'Used only when Groq is your dictation provider.' },
   { id: 'deepgram', name: 'Deepgram', monogram: 'DG', detail: 'Used only when Deepgram is your dictation provider.' },
   { id: 'self-hosted', name: 'Self-hosted endpoint', monogram: 'SH', detail: 'Optional bearer token for your Parakeet or Whisper server.' },
@@ -132,6 +132,8 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
   const selectedCredential = provider.credential
   const selectedConfigured = selectedCredential ? status?.configured[selectedCredential] ?? false : true
   const secureStorageAvailable = status?.storage.available ?? false
+  const realtimeProvider = settings.voiceRealtimeProvider
+  const realtimeConfigured = realtimeProvider === 'openai' ? status?.configured.openai ?? false : status?.codexSubscription ?? false
 
   return (
     <>
@@ -249,16 +251,30 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
       <section className="voice-section" aria-labelledby="voice-realtime-title">
         <div className="voice-section__heading">
           <span><Radio size={15} /></span>
-          <div><h2 id="voice-realtime-title">Realtime orb</h2><p>The draggable voice agent. It uses your OpenAI connection.</p></div>
+          <div><h2 id="voice-realtime-title">Realtime orb</h2><p>The draggable voice agent can use an OpenAI API key or your ChatGPT subscription.</p></div>
         </div>
         <div className="voice-setup-card">
-          <ModelSelect label="Realtime model" description="Handles conversation, web search, and task delegation." value={settings.voiceRealtimeModel} options={REALTIME_MODELS} onChange={(value) => update('voiceRealtimeModel', value)} />
-          <ModelSelect label="Speaking voice" description="The voice you hear when the orb responds." value={settings.voiceRealtimeVoice} options={REALTIME_VOICES} onChange={(value) => update('voiceRealtimeVoice', value)} />
-          <div className={`voice-requirement${status?.configured.openai ? ' is-ready' : ''}`}>
-            <span>{status?.configured.openai ? <Check size={13} /> : <KeyRound size={13} />}{status?.configured.openai ? 'OpenAI is connected' : 'OpenAI key required'}</span>
-            {!status?.configured.openai && voice && serviceState === 'ready' ? <button type="button" onClick={() => openCredential('openai')}>Add key</button> : null}
+          <label className="voice-choice-row">
+            <span><strong>Connection</strong><small>Choose which OpenAI authentication GooeyPi uses for the orb.</small></span>
+            <span className="voice-choice-control">
+              <select aria-label="Realtime connection" value={realtimeProvider} onChange={(event) => update('voiceRealtimeProvider', event.target.value as VoiceRealtimeProvider)}>
+                <option value="openai">OpenAI API key</option>
+                <option value="openai-codex">ChatGPT subscription</option>
+              </select>
+              <small>{realtimeProvider === 'openai' ? 'Uses GooeyPi’s existing realtime API connection.' : 'Uses the Codex login managed under Prime Work → Providers.'}</small>
+            </span>
+          </label>
+          {realtimeProvider === 'openai' ? <>
+            <ModelSelect label="Realtime model" description="Handles conversation, web search, and task delegation." value={settings.voiceRealtimeModel} options={REALTIME_MODELS} onChange={(value) => update('voiceRealtimeModel', value)} />
+            <ModelSelect label="Speaking voice" description="The voice you hear when the orb responds." value={settings.voiceRealtimeVoice} options={REALTIME_VOICES} onChange={(value) => update('voiceRealtimeVoice', value)} />
+          </> : null}
+          <div className={`voice-requirement${realtimeConfigured ? ' is-ready' : ''}`}>
+            <span>{realtimeConfigured ? <Check size={13} /> : <KeyRound size={13} />}{realtimeProvider === 'openai' ? realtimeConfigured ? 'OpenAI API key connected' : 'OpenAI API key required' : realtimeConfigured ? 'ChatGPT subscription connected' : 'ChatGPT Plus/Pro login required'}</span>
+            {realtimeProvider === 'openai' && !realtimeConfigured && voice && serviceState === 'ready' ? <button type="button" onClick={() => openCredential('openai')}>Add key</button> : null}
           </div>
-          {secureStorageAvailable ? <p className="voice-realtime-note">Saved API keys are encrypted using your operating system’s internal keychain. When you open the voice agent, your system may ask for your password to retrieve the key.</p> : null}
+          {realtimeProvider === 'openai-codex' ? <p className="voice-realtime-note">Subscription voice uses its fixed GPT Live Codex realtime model and Cove voice.</p> : null}
+          {realtimeProvider === 'openai-codex' && !realtimeConfigured ? <p className="voice-realtime-note">Connect OpenAI Codex under Prime Work → Providers.</p> : null}
+          {realtimeProvider === 'openai' && secureStorageAvailable && realtimeConfigured ? <p className="voice-realtime-note">Saved API keys are encrypted using your operating system’s internal keychain. When you open the voice agent, your system may ask for your password to retrieve the key.</p> : null}
         </div>
       </section>
 
