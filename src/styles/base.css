@@ -52,9 +52,13 @@
   --terminal-bright-cyan: #177f83;
   --terminal-bright-white: #20201e;
   --shadow-popover: 0 10px 30px rgba(0, 0, 0, .12);
-  /* Shared transcript column measure: grows with the pane from the 760px
-     reading minimum, capped so prose stays readable on very wide monitors. */
-  --transcript-measure: max(760px, min(85%, 1240px));
+  /* Shared transcript column measure: grows with the pane from the reading
+     minimum, capped so prose stays readable on very wide monitors. Sized in
+     cqi against .conversation-pane so the scrolled column and the absolutely
+     positioned surfaces resolve identically even when the scroll area loses
+     width to a non-overlay scrollbar. */
+  --transcript-measure-min: 760px;
+  --transcript-measure: max(var(--transcript-measure-min), min(85cqi, 1240px));
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   font-size: 13px;
   font-synthesis: none;
