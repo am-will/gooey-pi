@@ -22,7 +22,7 @@ function runProductionAudit() {
     const detail = error && typeof error === 'object' && 'summary' in error ? error.summary : String(error)
     throw new Error(`npm audit failed: ${detail}`)
   }
-  if (!Object.prototype.hasOwnProperty.call(report, 'vulnerabilities')) throw new Error('npm audit report has no vulnerabilities section')
+  if (!Object.hasOwn(report, 'vulnerabilities')) throw new Error('npm audit report has no vulnerabilities section')
   return report
 }
 

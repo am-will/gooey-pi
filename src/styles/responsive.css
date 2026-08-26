@@ -1,9 +1,9 @@
 @container (max-width: 620px) {
-  .permissions-chip:not(.worktree-picker__trigger) { display: none; }
-  .worktree-picker__trigger { display: inline-flex; max-width: 112px; }
+  .permissions-chip:not(.worktree-picker__trigger, .model-picker__trigger) { display: none; }
+  .worktree-picker__trigger, .model-picker__trigger { display: inline-flex; max-width: 112px; }
   .composer__controls { min-width: 0; }
   .select-control select { max-width: 92px; }
-  .select-control__chevron, .worktree-picker__chevron { display: none; }
+  .select-control__chevron, .worktree-picker__chevron, .model-picker__trigger > svg:last-child { display: none; }
 }
 
 @container (max-width: 490px) {
@@ -11,9 +11,9 @@
   .select-control select { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; opacity: 0; cursor: pointer; }
   .select-control__icon { pointer-events: none; }
   .fast-mode-toggle { width: 28px; justify-content: center; padding-inline: 0; }
-  .fast-mode-toggle__label, .worktree-picker__label { display: none; }
-  .worktree-picker, .worktree-picker__trigger { width: 28px; max-width: 28px; flex: 0 0 28px; }
-  .worktree-picker__trigger { justify-content: center; padding-inline: 0; }
+  .fast-mode-toggle__label, .worktree-picker__label, .model-picker__trigger > span { display: none; }
+  .worktree-picker, .worktree-picker__trigger, .model-picker, .model-picker__trigger { width: 28px; max-width: 28px; flex: 0 0 28px; }
+  .worktree-picker__trigger, .model-picker__trigger { justify-content: center; padding-inline: 0; }
   .composer-note { display: none; }
 }
 
@@ -28,8 +28,8 @@
   .conversation-pane { min-width: 360px; }
   .changes-body { grid-template-columns: 155px minmax(0, 1fr); }
   .file-changes small { display: none; }
-  .permissions-chip:not(.worktree-picker__trigger) { display: none; }
-  .worktree-picker__trigger { display: inline-flex; max-width: 112px; }
+  .permissions-chip:not(.worktree-picker__trigger, .model-picker__trigger) { display: none; }
+  .worktree-picker__trigger, .model-picker__trigger { display: inline-flex; max-width: 112px; }
 }
 
 @media (max-width: 980px) {
@@ -75,7 +75,7 @@
   .select-control select { max-width: 91px; }
   .composer__controls > .icon-button { width: 32px; height: 32px; }
   .composer__actions .icon-button { display: none; }
-  .worktree-picker__menu { position: fixed; right: 9px; bottom: 58px; left: 9px; width: auto; }
+  .worktree-picker__menu, .model-picker__popover { position: fixed; right: 9px; bottom: 58px; left: 9px; width: auto; }
   .composer-note { display: none; }
   .terminal-drawer { height: var(--terminal-height, 46vh); flex-basis: var(--terminal-height, 46vh); }
   .terminal-toolbar .icon-button { width: 32px; height: 32px; }
