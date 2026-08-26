@@ -77,4 +77,19 @@ describe('ProjectRunControl', () => {
 
     expect(onSave).toHaveBeenCalledWith({ setup: 'npm install', run: 'npm run dev' })
   })
+
+  it.each([
+    [{ setupLastRun: 'npm install', setupLastExitCode: 0 }, 'Setup completed', 'is-success'],
+    [{ setupLastRun: 'npm install', setupLastExitCode: 2 }, 'Setup exited with code 2', 'is-error'],
+    [{ setupLastRun: 'npm install' }, 'Setup did not finish', ''],
+  ])('shows the setup status for %j', (state, text, statusClass) => {
+    const configured = { ...project, scripts: { setup: 'npm install', run: 'npm run dev', ...state } }
+    act(() => root.render(<ProjectRunControl project={configured} onRun={vi.fn()} onStop={vi.fn()} onSave={vi.fn()} />))
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Configure project scripts"]')?.click())
+
+    const status = container.querySelector('.project-run-menu__status')
+    expect(status?.textContent).toContain(text)
+    if (statusClass) expect(status?.classList.contains(statusClass)).toBe(true)
+    else expect(status?.classList.contains('is-error')).toBe(false)
+  })
 })

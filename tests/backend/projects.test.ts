@@ -1057,6 +1057,11 @@ describe('ProjectService scripts', () => {
     })
     await expect(service.markSetupStarted('script-project', 'npm install')).resolves.toMatchObject({ setupLastRun: 'npm install' })
     await expect(service.finishSetup('script-project', 'npm install', 0)).resolves.toMatchObject({ setupLastRun: 'npm install', setupLastExitCode: 0 })
+    await expect(service.markSetupStarted('script-project', 'npm install')).resolves.toMatchObject({ setupLastRun: 'npm install', setupLastExitCode: undefined })
+    await expect(service.finishSetup('script-project', 'npm install', -1_073_741_510)).resolves.toMatchObject({ setupLastRun: 'npm install', setupLastExitCode: -1_073_741_510 })
+    await expect(service.markSetupStarted('script-project', 'npm install')).resolves.toMatchObject({ setupLastRun: 'npm install', setupLastExitCode: undefined })
+    await expect(service.finishSetup('script-project', 'npm install', 1.5)).rejects.toThrow(/integer/)
+    await expect(service.finishSetup('script-project', 'npm install', -2_147_483_649)).rejects.toThrow(/integer from/)
     await expect(service.updateScripts('script-project', { setup: 'npm ci', run: 'npm run dev' })).resolves.toMatchObject({
       setup: 'npm ci',
       run: 'npm run dev',

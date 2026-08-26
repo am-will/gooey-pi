@@ -141,9 +141,18 @@ describe('persisted project parsing', () => {
       scripts: { setup: 'npm install', run: 'npm run dev', setupLastRun: 'npm install', setupLastExitCode: 0 },
     }
     expect(loadState({ version: 4, projects: [project] }).projects[0].scripts).toEqual(project.scripts)
-    expect(loadState({ version: 4, projects: [{ ...project, scripts: { setup: 'bad\0setup', run: 7, setupLastRun: 'x'.repeat(70_000), setupLastExitCode: -1 } }] }).projects[0].scripts).toEqual({
+    expect(loadState({ version: 4, projects: [{ ...project, scripts: { setup: 'bad\0setup', run: 7, setupLastRun: 'x'.repeat(70_000), setupLastExitCode: 'bad' } }] }).projects[0].scripts).toEqual({
       setup: '',
       run: '',
+      setupLastRun: undefined,
+      setupLastExitCode: undefined,
+    })
+    expect(loadState({ version: 4, projects: [{ ...project, scripts: { ...project.scripts, setupLastExitCode: -1 } }] }).projects[0].scripts).toEqual({
+      ...project.scripts,
+      setupLastExitCode: -1,
+    })
+    expect(loadState({ version: 4, projects: [{ ...project, scripts: { ...project.scripts, setupLastExitCode: undefined } }] }).projects[0].scripts).toEqual({
+      ...project.scripts,
       setupLastRun: undefined,
       setupLastExitCode: undefined,
     })

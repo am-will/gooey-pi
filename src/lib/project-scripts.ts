@@ -7,6 +7,10 @@ export class ProjectScriptBusyError extends Error {
   }
 }
 
+export function activeProjectScriptKind<T extends string>(run: { projectId: string; kind: T } | undefined, projectId?: string): T | undefined {
+  return run && run.projectId === projectId ? run.kind : undefined
+}
+
 export function setupNeedsRun(scripts?: ProjectScripts): boolean {
   if (!scripts?.setup.trim()) return false
   return scripts.setupLastRun !== scripts.setup || scripts.setupLastExitCode === undefined

@@ -407,7 +407,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
     setTabs((current) => current.map((tab) => tab.id === tabId ? { ...tab, ...state } : tab))
   }
 
-  const finishCommand = (tabId: string, exitCode: number) => {
+  const finishCommand = (tabId: string, exitCode?: number) => {
     const callback = tabsRef.current.find((tab) => tab.id === tabId)?.onExit
     if (!callback) return
     setTabs((current) => current.map((tab) => tab.id === tabId ? { ...tab, onExit: undefined } : tab))
