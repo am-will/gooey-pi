@@ -77,7 +77,7 @@ export function authoritativeTranscriptReadIsCurrent(
     && (currentRuntimeId === null || currentRuntimeId === marker.runtimeId)
 }
 
-const LOCAL_MESSAGE_ID = /^(?:user|assistant|stream|error|compaction)-/
+const LOCAL_MESSAGE_ID = /^(?:user|assistant|stream|error|compaction|fallback)-/
 
 function messageText(message: TranscriptMessage): string {
   return message.parts.map((part) => 'text' in part && typeof part.text === 'string' ? part.text : '').join('\n').trim()

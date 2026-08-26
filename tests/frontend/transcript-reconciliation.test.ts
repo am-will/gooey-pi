@@ -77,6 +77,21 @@ describe('authoritative transcript reconciliation', () => {
     )).toEqual([persisted, message('record-2', 'user', 'run the tests')])
   })
 
+  it('preserves a local fallback notice until persistence catches up without duplicating it', () => {
+    const message = (id: string, role: TranscriptMessage['role'], text: string): TranscriptMessage => ({
+      id, role, timestamp: 1, parts: [{ type: 'text', text }],
+    })
+    const persisted = message('record-1', 'assistant', 'earlier answer')
+    const fallbackText = 'Switched to anthropic/claude-sonnet due to a provider fallback'
+    const fallback = message('fallback-1754500000000', 'system', fallbackText)
+    const persistedFallback = message('record-2', 'system', fallbackText)
+
+    expect(reconcileTranscriptMessages([persisted, fallback], [persisted]))
+      .toEqual([persisted, fallback])
+    expect(reconcileTranscriptMessages([persisted, fallback], [persisted, persistedFallback]))
+      .toEqual([persisted, persistedFallback])
+  })
+
   it('does not resurrect disk-loaded rows removed by an authoritative rewrite', () => {
     const message = (id: string, role: TranscriptMessage['role'], text: string): TranscriptMessage => ({
       id, role, timestamp: 1, parts: [{ type: 'text', text }],
