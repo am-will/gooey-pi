@@ -2004,7 +2004,7 @@ test.describe('Prime Work desktop smoke', () => {
     }
     const measure = () => page.evaluate(() => {
       const width = (selector: string) => document.querySelector(selector)?.getBoundingClientRect().width ?? 0
-      return { pane: width('.conversation-pane'), column: width('.transcript__inner'), dock: width('.conversation-bottom-dock') }
+      return { pane: width('.conversation-pane'), column: width('.transcript__inner'), dock: width('.conversation-bottom-dock'), scroller: document.querySelector('.transcript')?.clientWidth ?? 0 }
     })
 
     // The window manager may hand back less than the requested viewport, so the
@@ -2021,7 +2021,11 @@ test.describe('Prime Work desktop smoke', () => {
     await page.setViewportSize({ width: 720, height: 700 })
     await expect.poll(async () => (await measure()).pane).toBeLessThan(760)
     const compact = await measure()
-    expect(compact.column).toBeCloseTo(compact.pane, 1)
+    // Below the reading minimum the column fills the scroll area, which is the
+    // pane minus whatever a non-overlay scrollbar takes.
+    // clientWidth is integer rounded, so allow a pixel of slack.
+    expect(Math.abs(compact.column - compact.scroller)).toBeLessThanOrEqual(1)
+    expect(compact.column).toBeLessThanOrEqual(compact.pane)
   })
 
   test('auto-closes both drawers at the smallest breakpoint while keeping them user-toggleable', async () => {
