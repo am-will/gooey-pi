@@ -597,7 +597,6 @@ describe('Composer memoization', () => {
     // memo(Composer) bails out for identical props: no further renders.
     expect(renderProbes).toBe(initialRenders)
 
-    expect(container.querySelectorAll('optgroup')).toHaveLength(1)
-    expect(container.querySelectorAll('optgroup option')).toHaveLength(1)
+    expect(container.querySelector('.model-picker__trigger')?.textContent).toContain('Vision')
   })
 })

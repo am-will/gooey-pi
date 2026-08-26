@@ -13,11 +13,11 @@ const MIB = 1024 * KIB
  * bundle-size creep still fails the release build.
  */
 export const BUNDLE_SIZE_BUDGETS = Object.freeze({
-  mainBytes: 648 * KIB,
+  mainBytes: 488 * KIB,
   preloadBytes: 16 * KIB,
   initialRendererBytes: 1280 * KIB,
   largestRendererChunkBytes: 600 * KIB,
-  rendererJsCssBytes: 2312 * KIB,
+  rendererJsCssBytes: 2320 * KIB,
 })
 
 /**
@@ -32,7 +32,7 @@ export const BUNDLE_SIZE_BUDGETS = Object.freeze({
  * download-size creep still fails the release build.
  */
 export const PACKAGE_SIZE_BUDGETS = Object.freeze({
-  asarBytes: 220 * MIB,
+  asarBytes: 125 * MIB,
   appBytes: 480 * MIB,
   dmgBytes: 190 * MIB,
   zipBytes: 185 * MIB,

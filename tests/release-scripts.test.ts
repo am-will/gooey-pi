@@ -1313,9 +1313,19 @@ describe('post-package verification helpers', () => {
 
   test('excludes other platform native build trees and declares zeromq directly', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    const optimizedAgentExclusions = [
+      '!**/node_modules/prime-agent/docs/**',
+      '!**/node_modules/prime-agent/dist/bundle/**',
+      '!**/node_modules/prime-agent/dist/modes/**',
+      '!**/node_modules/prime-agent/**/*.map',
+      '!**/node_modules/prime-agent/**/*.d.ts',
+      '!**/node_modules/@earendil-works/pi-tui/**',
+      '!**/node_modules/koffi/**',
+    ]
     expect(packageJson.build.mac.files).toEqual([
       'out/**/*',
       'package.json',
+      ...optimizedAgentExclusions,
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.linux-*.node',
@@ -1324,6 +1334,7 @@ describe('post-package verification helpers', () => {
     expect(packageJson.build.linux.files).toEqual([
       'out/**/*',
       'package.json',
+      ...optimizedAgentExclusions,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
@@ -1332,6 +1343,7 @@ describe('post-package verification helpers', () => {
     expect(packageJson.build.win.files).toEqual([
       'out/**/*',
       'package.json',
+      ...optimizedAgentExclusions,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
@@ -1711,7 +1723,17 @@ describe('vendored supply-chain pins', () => {
     const packagedInputs = JSON.stringify({ files: build.files, extraResources: build.extraResources, mac: build.mac?.files, linux: build.linux?.files, win: build.win?.files })
     expect(packagedInputs).not.toContain('vendor/npm-')
     expect(packagedInputs).not.toContain('vendor/**')
-    expect(build.files).toEqual(['out/**/*', 'package.json'])
+    expect(build.files).toEqual([
+      'out/**/*',
+      'package.json',
+      '!**/node_modules/prime-agent/docs/**',
+      '!**/node_modules/prime-agent/dist/bundle/**',
+      '!**/node_modules/prime-agent/dist/modes/**',
+      '!**/node_modules/prime-agent/**/*.map',
+      '!**/node_modules/prime-agent/**/*.d.ts',
+      '!**/node_modules/@earendil-works/pi-tui/**',
+      '!**/node_modules/koffi/**',
+    ])
   })
 })
 

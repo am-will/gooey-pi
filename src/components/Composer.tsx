@@ -1,4 +1,4 @@
-import { ArrowUp, AtSign, Brain, Check, ChevronDown, Clock3, Command, Edit3, FolderGit2, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
+import { ArrowUp, AtSign, Check, ChevronDown, Clock3, Command, Edit3, FolderGit2, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
@@ -29,6 +29,7 @@ import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
 import { IconButton, SelectControl } from './ui'
+import { ModelPicker } from './ModelPicker'
 
 interface ComposerProps {
   busy: boolean
@@ -445,23 +446,6 @@ export const Composer = memo(function Composer({
     setActiveSuggestion(0)
   }, [menu, value, suggestions.length])
   const chooseSuggestion = (index: number) => suggestions[index]?.choose()
-  // The option tree only depends on catalog identity, not on per-keystroke state.
-  const modelOptions = useMemo(
-    () =>
-      providers
-        .filter((provider) => provider.enabled && (modelsByProvider.get(provider.id)?.length ?? 0) > 0)
-        .map((provider) => (
-          <optgroup key={provider.id} label={`${provider.name}${provider.configured ? '' : ' · not connected'}`}>
-            {(modelsByProvider.get(provider.id) ?? []).map((candidate) => (
-              <option key={candidate.key} value={candidate.key} disabled={!candidate.available}>
-                {candidate.name}
-                {candidate.available ? '' : ' · connect provider'}
-              </option>
-            ))}
-          </optgroup>
-        )),
-    [modelsByProvider, providers],
-  )
   const contextPercent = contextUsage?.percent === null || contextUsage?.percent === undefined ? null : Math.min(100, Math.max(0, contextUsage.percent))
   const contextLabel =
     contextUsage && contextUsage.tokens !== null
@@ -733,10 +717,7 @@ export const Composer = memo(function Composer({
                 void imageAttachments.ingest(files)
               }}
             />
-            <SelectControl label="Model" compact icon={<Brain size={14} />} value={model} onChange={(event) => onModelChange(event.target.value)}>
-              {!model ? <option value="" disabled>No model available</option> : null}
-              {modelOptions}
-            </SelectControl>
+            <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} />
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>
