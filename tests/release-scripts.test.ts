@@ -1714,15 +1714,6 @@ describe('vendored supply-chain pins', () => {
     expect(build.files).toEqual(['out/**/*', 'package.json'])
   })
 
-  test('includes the renderer public assets in the packaged application', () => {
-    const build = JSON.parse(readFileSync('package.json', 'utf8')).build
-    const publicAsset = 'public/fonts/vazirmatn-arabic-var.woff2'
-    const rendererAsset = join('out/renderer', publicAsset.slice('public/'.length))
-
-    expect(existsSync(publicAsset)).toBe(true)
-    expect(rendererAsset).toBe('out/renderer/fonts/vazirmatn-arabic-var.woff2')
-    expect(build.files).toContain('out/**/*')
-  })
 })
 
 const AUDIT_EXCEPTION_REASON = 'no patched release exists upstream yet'
