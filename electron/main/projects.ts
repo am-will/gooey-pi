@@ -4,6 +4,7 @@ import { lstat, readdir, realpath } from 'node:fs/promises'
 import type { BigIntStats, Dirent } from 'node:fs'
 import { dialog, type BrowserWindow } from 'electron'
 import { homedir } from 'node:os'
+import { sortProjects } from '../../src/lib/project-order'
 import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, SessionRecord } from '../../src/types/api'
 import { createGitWorktree, isNotARepositoryFailure, listGitWorktrees, validateGitBranch } from './git'
 import { HARNESSES } from './harness'
@@ -445,7 +446,7 @@ export class ProjectService {
       }
       return target
     })
-    return records.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt) || a.id.localeCompare(b.id))
+    return sortProjects(records, 'recent')
   }
 
   async listWorktrees(cwdValue: unknown): Promise<GitWorktree[]> {
