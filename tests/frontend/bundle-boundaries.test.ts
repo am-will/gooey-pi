@@ -16,6 +16,12 @@ describe('renderer bundle boundaries', () => {
     expect(appSource).not.toContain("import { TerminalDrawer } from '@/components/TerminalDrawer'")
   })
 
+  it('minifies the renderer but keeps the function names React crash stacks are built from', () => {
+    const buildConfig = readFileSync('electron.vite.config.ts', 'utf8')
+    expect(buildConfig).toContain("minify: 'esbuild'")
+    expect(buildConfig).toContain('esbuild: { keepNames: true }')
+  })
+
   it('reserves the terminal drawer height while its lazy bundle loads', () => {
     expect(appSource).toContain('fallback={terminal.id === activeTerminalSession?.id ? <TerminalLoadingPanel /> : null}')
     expect(appSource).not.toContain('<LoadingPanel label="terminal" />')
