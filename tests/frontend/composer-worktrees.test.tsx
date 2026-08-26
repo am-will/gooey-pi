@@ -57,9 +57,9 @@ describe('composer worktree picker', () => {
   it('does not expose an automatic model choice before the catalog loads', () => {
     act(() => root.render(<Composer {...props()} />))
 
-    const options = [...container.querySelectorAll<HTMLOptionElement>('select[aria-label="Model"] option')]
-    expect(options.map((option) => option.textContent)).toEqual(['No model available'])
-    expect(options.some((option) => option.value === 'auto')).toBe(false)
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Model: No model available"]')
+    expect(trigger?.textContent).toContain('No model available')
+    expect(trigger?.disabled).toBe(true)
   })
 
   it('shows the checkout name instead of a generic Workspace label before the catalog loads', () => {
