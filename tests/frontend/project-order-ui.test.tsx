@@ -192,7 +192,7 @@ describe('project ordering controls in App', () => {
     await act(async () => root.render(<App />))
     await waitFor(() => container.querySelector('.sidebar__section-heading'))
 
-    expect([...container.querySelectorAll('.project-row__main')].map((button) => button.textContent)).toEqual(['Alpha', 'Zeta', 'Inferred'])
+    expect([...container.querySelectorAll('.project-row__main')].map((button) => button.textContent)).toEqual(['Inferred', 'Alpha', 'Zeta'])
     await press(container.querySelector('[aria-label="Sort projects"]')!)
     await press([...container.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((item) => item.textContent?.includes('Alphabetical'))!)
     expect(bridge.settings.update).toHaveBeenCalledWith({ projectSortMode: 'alphabetical' })
