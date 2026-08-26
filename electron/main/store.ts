@@ -166,11 +166,11 @@ function parseProjectScripts(value: unknown): ProjectScripts | undefined {
   if (!isRecord(value)) return undefined
   const setup = boundedString(value.setup, 64 * 1024, true) && !value.setup.includes('\0') ? value.setup : ''
   const run = boundedString(value.run, 64 * 1024, true) && !value.run.includes('\0') ? value.run : ''
-  const setupLastRun = boundedString(value.setupLastRun, 64 * 1024, true) && !value.setupLastRun.includes('\0')
-    ? value.setupLastRun
-    : undefined
-  const setupLastExitCode = Number.isSafeInteger(value.setupLastExitCode) && Number(value.setupLastExitCode) >= 0
+  const setupLastExitCode = Number.isSafeInteger(value.setupLastExitCode)
     ? Number(value.setupLastExitCode)
+    : undefined
+  const setupLastRun = setupLastExitCode !== undefined && boundedString(value.setupLastRun, 64 * 1024, true) && !value.setupLastRun.includes('\0')
+    ? value.setupLastRun
     : undefined
   return { setup, run, setupLastRun, setupLastExitCode }
 }

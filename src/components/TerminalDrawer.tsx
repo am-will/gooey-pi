@@ -16,7 +16,7 @@ interface TerminalDrawerProps {
   cwd?: string
   sessionPath?: string
   shell?: string
-  initialCommand?: { id: string; command: string; label: string; onExit(exitCode: number): void }
+  initialCommand?: { id: string; command: string; label: string; onExit(exitCode?: number): void }
   height: number
   minHeight: number
   maxHeight: number
@@ -37,7 +37,7 @@ interface TerminalTab {
   connected: boolean
   command?: string
   label?: string
-  onExit?(exitCode: number): void
+  onExit?(exitCode?: number): void
 }
 
 interface TerminalViewHandle {
@@ -57,13 +57,13 @@ interface TerminalViewProps {
   onSelectionChange(text: string, truncated: boolean): void
   onError?(message: string): void
   onOpenLink?(url: string, external: boolean): void
-  onExit?(exitCode: number): void
+  onExit?(exitCode?: number): void
 }
 
 export interface TerminalDrawerHandle {
   clearSelection(): void
   readSelectionContext(): TerminalPromptContext | undefined
-  runCommand(command: string, label: string, onExit: (exitCode: number) => void): string
+  runCommand(command: string, label: string, onExit: (exitCode?: number) => void): string
   stopCommand(tabId: string): void
 }
 
@@ -316,7 +316,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
   return <div className="terminal-surface" ref={containerRef} hidden={!visible}/>
 })
 
-function createTab(number: number, shell?: string, command?: string, label?: string, onExit?: (exitCode: number) => void, id: string = crypto.randomUUID()): TerminalTab {
+function createTab(number: number, shell?: string, command?: string, label?: string, onExit?: (exitCode?: number) => void, id: string = crypto.randomUUID()): TerminalTab {
   return {
     id,
     number,
@@ -392,7 +392,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
     const index = tabs.findIndex((tab) => tab.id === tabId)
     if (index === -1) return
     const tab = tabs[index]
-    tab.onExit?.(130)
+    tab.onExit?.()
     if (tabs.length === 1) {
       onClose()
       return

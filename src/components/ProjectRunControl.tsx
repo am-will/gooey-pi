@@ -84,7 +84,7 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
     if (scripts?.setup !== setup.trim() || scripts.setupLastRun !== scripts.setup) return <span className="project-run-menu__status">Runs automatically after save</span>
     if (scripts.setupLastExitCode === 0) return <span className="project-run-menu__status is-success"><CheckCircle2 size={12} /> Setup completed</span>
     if (scripts.setupLastExitCode !== undefined) return <span className="project-run-menu__status is-error"><CircleAlert size={12} /> Setup exited with code {scripts.setupLastExitCode}</span>
-    return <span className="project-run-menu__status is-error"><CircleAlert size={12} /> Setup was interrupted</span>
+    return <span className="project-run-menu__status">Setup did not finish</span>
   })()
 
   return (

@@ -16,6 +16,7 @@ import { I18nProvider } from '@/lib/i18n'
 import { openExternalUrl, revealPath } from '@/lib/desktop-actions'
 import { createSingleFlightAdmission, findProjectForSession, gitStatusForWorkspace, shouldRefreshGitOnSessionTransition, workspaceCwd } from '@/lib/workspace'
 import { waitForVoiceSession } from '@/lib/voice'
+import { ProjectScriptBusyError, setupNeedsRun } from '@/lib/project-scripts'
 import { SAMPLE_GIT, SAMPLE_PROJECTS, SAMPLE_SCHEDULES, SAMPLE_SESSIONS, SAMPLE_SKILLS, SAMPLE_TRANSCRIPT } from '@/lib/data'
 import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { AgentBrowserLayer, type AgentSlotRect } from '@/components/AgentBrowserLayer'
@@ -79,6 +80,7 @@ interface ActiveProjectScriptRun {
   tabId?: string
   ownsDrawer: boolean
 }
+type ProjectScriptRunOutcome = { cancelled: true } | { exitCode: number }
 
 
 export default function App() {
@@ -117,6 +119,7 @@ export default function App() {
   const [activeProjectScriptRun, setActiveProjectScriptRun] = useState<ActiveProjectScriptRun>()
   const activeProjectScriptRunRef = useRef<ActiveProjectScriptRun | undefined>(undefined)
   const projectScriptStartingRef = useRef(false)
+  const cancelledSetupCommandsRef = useRef(new Map<string, string>())
   activeProjectScriptRunRef.current = activeProjectScriptRun
 
   const reportError = useCallback((error: unknown) => {
@@ -381,17 +384,22 @@ export default function App() {
   const patchProjectScripts = useCallback((projectId: string, scripts: NonNullable<ProjectRecord['scripts']>) => {
     setProjects((current) => current.map((project) => project.id === projectId ? { ...project, scripts } : project))
   }, [])
-  const finishProjectScriptRun = useCallback((run: ActiveProjectScriptRun, exitCode: number) => {
+  const finishProjectScriptRun = useCallback((run: ActiveProjectScriptRun, outcome: ProjectScriptRunOutcome) => {
     if (activeProjectScriptRunRef.current?.requestId !== run.requestId) return
     activeProjectScriptRunRef.current = undefined
     setActiveProjectScriptRun(undefined)
-    if (run.kind === 'setup' && bridge && exitCode !== 130) {
-      void bridge.projects.finishSetup(run.projectId, run.command, exitCode, run.harness)
-        .then((scripts) => patchProjectScripts(run.projectId, scripts))
-        .catch(reportError)
+    if (outcome.cancelled) {
+      if (run.kind === 'setup') cancelledSetupCommandsRef.current.set(run.projectId, run.command)
+      return
     }
-    if (exitCode !== 130) setToast(exitCode === 0 ? `${run.kind === 'setup' ? 'Setup' : 'Run'} completed.` : `${run.kind === 'setup' ? 'Setup' : 'Run'} exited with code ${exitCode}.`)
-  }, [bridge, patchProjectScripts, reportError])
+    if (run.kind === 'setup' && bridge) {
+      void bridge.projects.finishSetup(run.projectId, run.command, outcome.exitCode, run.harness)
+        .then((scripts) => patchProjectScripts(run.projectId, scripts))
+        // The rejection only happens when the recorded setup no longer matches.
+        .catch(() => undefined)
+    }
+    setToast(outcome.exitCode === 0 ? `${run.kind === 'setup' ? 'Setup' : 'Run'} completed.` : `${run.kind === 'setup' ? 'Setup' : 'Run'} exited with code ${outcome.exitCode}.`)
+  }, [bridge, patchProjectScripts])
 
   const {
     toggleSidebar, toggleInspector, grantProject,
@@ -409,7 +417,7 @@ export default function App() {
     closeTerminalForSession: (sessionPath) => {
       const removed = terminalSessions.find((terminal) => terminal.sessionPath === sessionPath)
       const projectRun = activeProjectScriptRunRef.current
-      if (removed && projectRun?.drawerId === removed.id) finishProjectScriptRun(projectRun, 130)
+      if (removed && projectRun?.drawerId === removed.id) finishProjectScriptRun(projectRun, { cancelled: true })
       setTerminalSessions((current) => current.filter((terminal) => terminal.sessionPath !== sessionPath))
     },
     clearSessionAttention, reportError,
@@ -486,7 +494,7 @@ export default function App() {
 
   const closeTerminal = useCallback((id: string) => {
     const projectRun = activeProjectScriptRunRef.current
-    if (projectRun?.drawerId === id) finishProjectScriptRun(projectRun, 130)
+    if (projectRun?.drawerId === id) finishProjectScriptRun(projectRun, { cancelled: true })
     terminalDrawerRefs.current.delete(id)
     setTerminalSessions((current) => current.filter((terminal) => terminal.id !== id))
     if (activeTerminalSession?.id === id) setTerminalSelection(undefined)
@@ -522,7 +530,7 @@ export default function App() {
   }, [activeCwd, activeTerminalSession?.id, activeTerminalSessionPath])
   const startProjectScript = useCallback(async (kind: ProjectScriptKind) => {
     if (!bridge || !activeProject || !activeCwd) throw new Error('Project scripts are available in the desktop app for an active project.')
-    if (activeProjectScriptRunRef.current || projectScriptStartingRef.current) throw new Error('Another project script is already starting or running.')
+    if (activeProjectScriptRunRef.current || projectScriptStartingRef.current) throw new ProjectScriptBusyError()
     projectScriptStartingRef.current = true
     try {
       const project = activeProject.inferred ? await grantProject(activeProject) : activeProject
@@ -554,7 +562,7 @@ export default function App() {
             id: tabId,
             command,
             label: kind === 'setup' ? 'Setup' : 'Run',
-            onExit: (exitCode) => finishProjectScriptRun(started, exitCode),
+            onExit: (exitCode) => finishProjectScriptRun(started, exitCode === undefined ? { cancelled: true } : { exitCode }),
           },
         }])
       }
@@ -571,7 +579,7 @@ export default function App() {
   const stopProjectScript = useCallback(() => {
     const run = activeProjectScriptRunRef.current
     if (!run) return
-    finishProjectScriptRun(run, 130)
+    finishProjectScriptRun(run, { cancelled: true })
     if (!run.drawerId || !run.tabId) return
     const drawer = terminalDrawerRefs.current.get(run.drawerId)
     if (drawer) drawer.stopCommand(run.tabId)
@@ -581,7 +589,7 @@ export default function App() {
     if (view === 'session') return
     const run = activeProjectScriptRunRef.current
     if (!run) return
-    finishProjectScriptRun(run, 130)
+    finishProjectScriptRun(run, { cancelled: true })
     if (!run.drawerId) return
     const drawer = terminalDrawerRefs.current.get(run.drawerId)
     if (!run.ownsDrawer && drawer && run.tabId) drawer.stopCommand(run.tabId)
@@ -593,19 +601,21 @@ export default function App() {
     const drawer = terminalDrawerRefs.current.get(run.drawerId)
     if (!drawer) return
     try {
-      const tabId = drawer.runCommand(run.command, run.kind === 'setup' ? 'Setup' : 'Run', (exitCode) => finishProjectScriptRun(run, exitCode))
+      const tabId = drawer.runCommand(run.command, run.kind === 'setup' ? 'Setup' : 'Run', (exitCode) => finishProjectScriptRun(run, exitCode === undefined ? { cancelled: true } : { exitCode }))
       const started = { ...run, tabId }
       activeProjectScriptRunRef.current = started
       setActiveProjectScriptRun(started)
     } catch (error) {
-      finishProjectScriptRun(run, 1)
+      finishProjectScriptRun(run, { exitCode: 1 })
       reportError(error)
     }
   }, [activeProjectScriptRun, finishProjectScriptRun, reportError, terminalDrawerRevision])
   useEffect(() => {
     const scripts = activeProject?.scripts
-    if (!scripts?.setup || scripts.setupLastRun === scripts.setup || activeProjectScriptRunRef.current) return
-    void startProjectScript('setup').catch(reportError)
+    if (!activeProject || !setupNeedsRun(scripts) || activeProjectScriptRunRef.current || cancelledSetupCommandsRef.current.get(activeProject.id) === scripts.setup) return
+    void startProjectScript('setup').catch((error: unknown) => {
+      if (!(error instanceof ProjectScriptBusyError)) reportError(error)
+    })
   }, [activeProject?.id, activeProject?.scripts, activeProjectScriptRun, reportError, startProjectScript])
   const sidebarActions = useSidebarActions({
     onSelectProject: selectProject,
