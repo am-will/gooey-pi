@@ -48,6 +48,15 @@ export interface AppUpdateState {
   message?: string
 }
 
+export interface ProjectScripts {
+  setup: string
+  run: string
+  /** Exact setup command most recently started for this project. */
+  setupLastRun?: string
+  /** Missing while the latest setup command is running or was interrupted. */
+  setupLastExitCode?: number
+}
+
 export interface ProjectRecord {
   id: string
   /** Agent harness this project grant belongs to; grants never cross harnesses. */
@@ -63,6 +72,7 @@ export interface ProjectRecord {
   gitBranch?: string
   inferred?: boolean
   readOnly?: boolean
+  scripts?: ProjectScripts
 }
 
 export interface SessionRecord {
@@ -363,7 +373,7 @@ export interface GitDiff { path?: string; staged: boolean; text: string; truncat
 export type ProcessFailureReason = 'timeout' | 'overflow' | 'exit' | 'blocked'
 export interface ProcessOutcome { ok: boolean; output: string; reason?: ProcessFailureReason }
 
-export interface TerminalSpawnOptions { cwd: string; sessionPath?: string; shell?: string; cols?: number; rows?: number }
+export interface TerminalSpawnOptions { cwd: string; sessionPath?: string; shell?: string; command?: string; cols?: number; rows?: number }
 export interface TerminalDataEvent { terminalId: string; data: string }
 export interface TerminalExitEvent { terminalId: string; exitCode: number; signal?: number }
 export interface TerminalSelectionContext { tabId: string; label: string; text: string; truncated: boolean }
@@ -703,6 +713,9 @@ export interface PrimeWorkApi {
     grantInferred(path: string, harness?: HarnessId): Promise<ProjectRecord>
     remove(id: string, harness?: HarnessId): Promise<boolean>
     touch(id: string, harness?: HarnessId): Promise<boolean>
+    updateScripts(id: string, scripts: Pick<ProjectScripts, 'setup' | 'run'>, harness?: HarnessId): Promise<ProjectScripts>
+    markSetupStarted(id: string, setup: string, harness?: HarnessId): Promise<ProjectScripts>
+    finishSetup(id: string, setup: string, exitCode: number, harness?: HarnessId): Promise<ProjectScripts | undefined>
   }
   sessions: {
     list(projectPath?: string, includeArchived?: boolean, harness?: HarnessId, force?: boolean): Promise<SessionRecord[]>

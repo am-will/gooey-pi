@@ -25,6 +25,3 @@ The Git history is organized into dependency-ordered milestones reconstructed fr
 
 Because the project had no Git repository while it was being built, there were no original intermediate snapshots to preserve. These commits reconstruct logical milestones from the authoritative session logs and the final filesystem; they do not claim byte-for-byte snapshots at each conversational turn.
 
-## Validation evidence
-
-The repository includes the validation artifacts produced during development under `research/`, including functional QA notes, adversarial security review, screenshots, and dependency audit output. Generated build directories (`out/`, `release/`, test reports, and dependencies) remain excluded from source control.

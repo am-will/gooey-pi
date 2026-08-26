@@ -115,6 +115,12 @@ export class PluginService {
       : () => builtInSkills ?? []
   }
 
+  private queueSettingsMutation(mutate: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> {
+    const operation = this.settingsMutation.then(mutate)
+    this.settingsMutation = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
   list(projectPath?: unknown): Promise<PluginCatalog> {
     if (!projectPath) return this.listCanonical()
     const requested = requireString(projectPath, 'projectPath', { min: 1, max: 4096 })
@@ -197,13 +203,11 @@ export class PluginService {
         await release()
       }
     }
-    const operation: Promise<ProcessOutcome> = this.settingsMutation.then(() => (
+    return await this.queueSettingsMutation(() => (
       this.harness === 'pi' && isOfficialPiMcpAdapterSource(source)
         ? this.withPiMcpAdmission(install)
         : install()
     ))
-    this.settingsMutation = operation.then(() => undefined, () => undefined)
-    return await operation
   }
 
   async installExtension(inputValue: unknown): Promise<ProcessOutcome> {
@@ -223,7 +227,7 @@ export class PluginService {
         })
       : undefined
     const settingsPath = projectSettings?.path ?? join(this.agentDir, 'settings.json')
-    const operation: Promise<ProcessOutcome> = this.settingsMutation.then(async (): Promise<ProcessOutcome> => {
+    return await this.queueSettingsMutation(async (): Promise<ProcessOutcome> => {
       const lockPath = `${settingsPath}.gooeypi`
       const release = await acquireSettingsLock(lockPath, projectSettings?.verify)
       try {
@@ -234,15 +238,13 @@ export class PluginService {
         await release()
       }
     })
-    this.settingsMutation = operation.then(() => undefined, () => undefined)
-    return await operation
   }
 
   async setMcpSupport(enabledValue: unknown): Promise<ProcessOutcome> {
     if (this.harness !== 'pi') return { ok: false, reason: 'blocked', output: `${HARNESSES[this.harness].agentName} does not use an MCP support toggle.` }
     if (typeof enabledValue !== 'boolean') throw new TypeError('MCP support state must be a boolean')
     const settingsPath = join(this.agentDir, 'settings.json')
-    const operation: Promise<ProcessOutcome> = this.settingsMutation.then(() => this.withPiMcpAdmission(async () => {
+    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
       const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`)
       try {
         const adapter = await this.piMcpAdapterState()
@@ -264,8 +266,6 @@ export class PluginService {
         await releaseSettings()
       }
     }))
-    this.settingsMutation = operation.then(() => undefined, () => undefined)
-    return await operation
   }
 
   async connectMcp(inputValue: unknown): Promise<ProcessOutcome> {
@@ -296,7 +296,7 @@ export class PluginService {
     }
     const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
     const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
-    const mutation = this.settingsMutation.then(() => this.withPiMcpAdmission(async () => {
+    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
       const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
       try {
         const piAdmissionFailure = await this.piMcpAdmissionFailure()
@@ -311,8 +311,6 @@ export class PluginService {
         await releaseSettings()
       }
     }))
-    this.settingsMutation = mutation.then(() => undefined, () => undefined)
-    return await mutation
   }
 
   async setMcpEnabled(inputValue: unknown): Promise<ProcessOutcome> {
@@ -333,7 +331,7 @@ export class PluginService {
     const agentName = HARNESSES[this.harness].agentName
     const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
     const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
-    const mutation = this.settingsMutation.then(() => this.withPiMcpAdmission(async () => {
+    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
       const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
       try {
         const piAdmissionFailure = await this.piMcpAdmissionFailure()
@@ -348,8 +346,6 @@ export class PluginService {
         await releaseSettings()
       }
     }))
-    this.settingsMutation = mutation.then(() => undefined, () => undefined)
-    return await mutation
   }
 
   async mutateCapability(inputValue: unknown): Promise<ProcessOutcome> {
@@ -399,14 +395,12 @@ export class PluginService {
         await releaseSettings()
       }
     }
-    const operation: Promise<ProcessOutcome> = this.settingsMutation.then(() => (
+    return await this.queueSettingsMutation(() => (
       this.harness === 'pi' && (input.kind === 'mcp' && input.action !== 'remove'
         || input.kind === 'package' && isOfficialPiMcpAdapterSource(input.source ?? ''))
         ? this.withPiMcpAdmission(mutate)
         : mutate()
     ))
-    this.settingsMutation = operation.then(() => undefined, () => undefined)
-    return await operation
   }
 
   /** Pi core has no MCP. Do not write adapter configuration until its package is actually installed. */

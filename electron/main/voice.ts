@@ -91,7 +91,7 @@ function selfHostedConfiguration(urlValue: unknown, modelValue: unknown): { endp
   const path = url.pathname.replace(/\/+$/, '')
   if (!path.endsWith(suffix)) url.pathname = path.endsWith('/v1') ? `${path}/audio/transcriptions` : `${path}${suffix}`
   const model = requireString(modelValue, 'self-hosted voice model', { max: 128, trim: true })
-  if (model && !/^[a-z0-9][a-z0-9._:\/-]{0,127}$/i.test(model)) throw new TypeError('Self-hosted voice model is not valid')
+  if (model && !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(model)) throw new TypeError('Self-hosted voice model is not valid')
   return { endpoint: url.toString(), model }
 }
 
@@ -208,17 +208,9 @@ class VoiceSecretStore {
   }
 
   async get(provider: VoiceCredentialProvider): Promise<string> {
-    await this.load()
-    const fromSession = this.sessionValues[provider]
-    if (fromSession) return fromSession
-    const encrypted = this.values[provider]
+    const value = await this.getOptional(provider)
+    if (value) return value
     const storage = this.codec.status()
-    if (encrypted && storage.available) {
-      try { return this.codec.decrypt(Buffer.from(encrypted, 'base64')) }
-      catch { throw new Error(`The saved ${provider} voice key could not be decrypted. Save it again in Voice settings.`) }
-    }
-    const fromEnvironment = this.environmentKey(provider)
-    if (fromEnvironment) return fromEnvironment
     if (!storage.available) throw new Error(storage.message ?? 'Secure credential storage is unavailable on this system')
     throw new Error(`Add a ${provider} API key in Settings → Voice.`)
   }
