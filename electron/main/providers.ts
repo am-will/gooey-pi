@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { AuthStorage, ModelRegistry, VERSION } from 'prime-agent'
+import { AuthStorage } from 'prime-agent/auth-storage'
+import { VERSION } from 'prime-agent/config'
+import { ModelRegistry } from 'prime-agent/model-registry'
 import { getSupportedThinkingLevels, supportsFastMode } from 'prime-agent-ai'
 import { BUILTIN_MCP_CATALOG } from 'prime-agent-ai/mcp'
 import type { Api, Model } from 'prime-agent-ai'

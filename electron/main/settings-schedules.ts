@@ -105,7 +105,7 @@ export class SettingsService {
       },
       voiceSelfHostedModel: (value) => {
         const model = requireString(value, 'voiceSelfHostedModel', { max: 128, trim: true })
-        if (model && !/^[a-z0-9][a-z0-9._:\/-]{0,127}$/i.test(model)) throw new TypeError('voiceSelfHostedModel is not valid')
+        if (model && !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(model)) throw new TypeError('voiceSelfHostedModel is not valid')
         return model
       },
       voiceLocalWhisperExecutable: (value) => requireString(value, 'voiceLocalWhisperExecutable', { max: 4_096, trim: true }),

@@ -726,7 +726,9 @@ async function bootstrap(): Promise<void> {
     (previous, next) => backgroundMode?.applySettings(previous, next),
   )
   const cuaDriver = new CuaDriverService()
-  await cuaDriver.status()
+  // The disabled-by-default integration probes PATH and may spawn a version
+  // command. Defer that work until it is enabled or its settings UI is opened.
+  if (stateStore.getSettings().computerUseEnabled) await cuaDriver.status()
   const voice = new VoiceService({
     secretPath: join(app.getPath('userData'), 'voice-secrets.json'),
     secretCodec: {
@@ -916,8 +918,6 @@ async function bootstrap(): Promise<void> {
       return { projectId: project.id, sessionId: scheduledSession?.id }
     },
   })
-  await Promise.all([scheduleBridge.start(), ompScheduleBridge.start(), piScheduleBridge.start()])
-  agentScheduleBridges = [scheduleBridge, ompScheduleBridge, piScheduleBridge]
   const browserService = new AgentBrowserService({
     getGuest: (webContentsId) => {
       const contents = webContents.fromId(webContentsId)
@@ -934,7 +934,14 @@ async function bootstrap(): Promise<void> {
     disabledProviders: { prime: disabledProviders, omp: ompDisabledProviders, pi: piDisabledProviders },
     disabledModels: { prime: disabledModels, omp: ompDisabledModels, pi: piDisabledModels },
   })
-  await Promise.all([browserBridge.start(), collaborationBridge.start()])
+  await Promise.all([
+    scheduleBridge.start(),
+    ompScheduleBridge.start(),
+    piScheduleBridge.start(),
+    browserBridge.start(),
+    collaborationBridge.start(),
+  ])
+  agentScheduleBridges = [scheduleBridge, ompScheduleBridge, piScheduleBridge]
   agentBrowserBridge = browserBridge
   agentCollaborationBridge = collaborationBridge
   const revokeRuntimeCapabilities = (environment: NodeJS.ProcessEnv, runtimeScheduleBridge: AgentScheduleBridge): void => {
