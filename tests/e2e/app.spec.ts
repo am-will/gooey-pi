@@ -2007,8 +2007,11 @@ test.describe('Prime Work desktop smoke', () => {
       return { pane: width('.conversation-pane'), column: width('.transcript__inner'), dock: width('.conversation-bottom-dock') }
     })
 
-    await expect.poll(async () => (await measure()).pane).toBeGreaterThan(1459)
+    // The window manager may hand back less than the requested viewport, so the
+    // expected column is derived from the pane the app actually got.
+    await expect.poll(async () => (await measure()).pane).toBeGreaterThan(894)
     const wide = await measure()
+    expect(wide.column).toBeCloseTo(Math.min(1240, Math.max(760, wide.pane * 0.85)), 0)
     expect(wide.column).toBeGreaterThan(760)
     expect(wide.column).toBeLessThanOrEqual(1240)
     // The scrolled column and the absolutely positioned dock share one measure,
