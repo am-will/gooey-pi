@@ -10,7 +10,7 @@ import { FilesPanel } from './inspector/FilesPanel'
 import { SummaryPanel } from './inspector/SummaryPanel'
 import { IconButton, useFocusTrap } from './ui'
 
-interface InspectorProps {
+export interface InspectorProps {
   platform?: NodeJS.Platform
   activeTab: InspectorTab
   onTabChange(tab: InspectorTab): void
