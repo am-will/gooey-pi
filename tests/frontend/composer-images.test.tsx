@@ -561,7 +561,7 @@ describe('Composer fallback indicator', () => {
     })
 
     expect(container.querySelector('select')?.value).toBe('provider/vision')
-    expect(container.querySelector('.model-fallback-chip')?.textContent).toBe('⚠ Running on anthropic/claude-sonnet')
+    expect(container.querySelector('.model-fallback-chip')?.textContent).toContain('Running on anthropic/claude-sonnet')
     expect(container.querySelector('.model-fallback-chip')?.getAttribute('title')).toContain('Provider fallback')
   })
 })
