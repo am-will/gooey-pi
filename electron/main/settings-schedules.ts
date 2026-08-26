@@ -1,6 +1,6 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
-import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, type AppSettings } from '../../src/types/api'
+import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, PROJECT_SORT_MODES, type AppSettings, type ProjectSortMode } from '../../src/types/api'
 import type { JsonStateStore } from './store'
 import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
@@ -31,6 +31,10 @@ export class SettingsService {
       interfaceFontScale: (value) => {
         if (!INTERFACE_FONT_SCALES.includes(value as AppSettings['interfaceFontScale'])) throw new TypeError('Invalid interface font scale')
         return value as AppSettings['interfaceFontScale']
+      },
+      projectSortMode: (value) => {
+        if (!PROJECT_SORT_MODES.includes(value as ProjectSortMode)) throw new TypeError('Invalid project sort mode')
+        return value as ProjectSortMode
       },
       sidebarOpen: (value) => requireBoolean(value, 'sidebarOpen'),
       inspectorOpen: (value) => requireBoolean(value, 'inspectorOpen'),
