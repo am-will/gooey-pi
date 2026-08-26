@@ -5,8 +5,8 @@ import { resolve } from 'node:path'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    // Compact production syntax while retaining names and line-oriented output for diagnostics.
-    esbuild: { minifyIdentifiers: false, minifySyntax: true, minifyWhitespace: false },
+    // Fully minify production code: Electron never consumes readable output,
+    // and less source is faster for V8 to read, parse, and compile at startup.
     build: { lib: { entry: 'electron/main/index.ts' }, minify: 'esbuild' },
   },
   preload: {
