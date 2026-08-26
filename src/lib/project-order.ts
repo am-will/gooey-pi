@@ -1,4 +1,4 @@
-import type { ProjectRecord, ProjectSortMode } from '@/types/api'
+import type { ProjectRecord, ProjectSortMode } from '../types/api'
 
 function compareRecent(a: ProjectRecord, b: ProjectRecord): number {
   const aTime = Date.parse(a.lastOpenedAt)

@@ -7,7 +7,7 @@ import { parseMcpAuthenticationCommand } from '@/lib/mcp-policy'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, HarnessId, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, HarnessId, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -249,6 +249,18 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       }
       setToast('Project removed. Files and saved sessions were kept.')
     } catch (error) { reportError(error) }
+  }
+  const togglePinProject = async (project: ProjectRecord) => {
+    const { bridge, setProjects, setToast, reportError } = getDeps()
+    if (project.inferred) { setToast('Add this project before pinning it.'); return }
+    if (!bridge) { setToast('Project pinning is available in the desktop app.'); return }
+    try {
+      if (!await bridge.projects.setPinned(project.id, !project.pinned, project.harness)) throw new Error('This project could not be pinned.')
+      setProjects((items) => items.map((item) => item.id === project.id ? { ...item, pinned: !project.pinned } : item))
+    } catch (error) { reportError(error) }
+  }
+  const setProjectSortMode = (mode: ProjectSortMode) => {
+    void getDeps().settingsState.updateSettings({ projectSortMode: mode })
   }
 
   const sendPrompt = async (
@@ -625,7 +637,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   return {
     grantProject, persistPanel, toggleSidebar, toggleInspector, toggleTerminal,
     selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived,
-    addProject, removeProject, sendPrompt, stopRuntime, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability,
+    addProject, removeProject, togglePinProject, setProjectSortMode, sendPrompt, stopRuntime, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability,
     createSchedule, updateSchedule, mutateSchedule, manageHeartbeat, openScheduledSession,
     openBrowser, openChanges,
   }

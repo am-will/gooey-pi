@@ -11,11 +11,13 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  ListFilter,
   LoaderCircle,
   MessageCircleQuestion,
   NotebookPen,
   PackageOpen,
   PanelLeftClose,
+  Pin,
   MoreHorizontal,
   Search,
   Settings,
@@ -23,9 +25,10 @@ import {
   Trash2,
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
-import type { AppMeta, AppUpdateState, HarnessId, ProjectRecord, SessionRecord, WorkspaceView } from '@/types/api'
+import type { AppMeta, AppUpdateState, HarnessId, ProjectRecord, ProjectSortMode, SessionRecord, WorkspaceView } from '@/types/api'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_PRODUCT_NAMES, HARNESS_SELECTOR_ORDER, HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { sortProjects } from '@/lib/project-order'
 import { useI18n } from '@/lib/i18n'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
@@ -49,6 +52,9 @@ export interface SidebarProps {
   onNewSession(project?: ProjectRecord): void
   onAddProject(): void
   onRemoveProject(project: ProjectRecord): void
+  projectSortMode?: ProjectSortMode
+  onSetProjectSortMode?(mode: ProjectSortMode): void
+  onTogglePinProject?(project: ProjectRecord): void
   onClose(): void
   onOpenPalette(): void
   onRenameSession(session: SessionRecord, title: string): Promise<void>
@@ -177,7 +183,7 @@ async function copySessionUuid(id: string): Promise<void> {
   if (!copied) throw new Error('Copy is unavailable')
 }
 
-function SidebarView({ projects, sessions, activeProjectId, activeSessionId, activeView, activeHarness = 'omp', harnesses, clearedAttention = {}, updateState = { phase: 'unsupported' }, onUpdateAction, onSelectHarness, onSelectProject, onSelectSession, onNavigate, onNewSession, onAddProject, onRemoveProject, onClose, onOpenPalette, onRenameSession, onArchiveSession, overlay = false, platform = 'darwin' }: SidebarProps) {
+function SidebarView({ projects, sessions, activeProjectId, activeSessionId, activeView, activeHarness = 'omp', harnesses, clearedAttention = {}, updateState = { phase: 'unsupported' }, onUpdateAction, onSelectHarness, onSelectProject, onSelectSession, onNavigate, onNewSession, onAddProject, onRemoveProject, projectSortMode = 'recent', onSetProjectSortMode = () => undefined, onTogglePinProject = () => undefined, onClose, onOpenPalette, onRenameSession, onArchiveSession, overlay = false, platform = 'darwin' }: SidebarProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [harnessMenuOpen, setHarnessMenuOpen] = useState(false)
@@ -185,6 +191,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
   const [searchOpen, setSearchOpen] = useState(false)
   const sidebarRef = useFocusTrap<HTMLElement>(overlay, onClose)
   const [projectMenu, setProjectMenu] = useState<string | null>(null)
+  const [projectSortMenuOpen, setProjectSortMenuOpen] = useState(false)
   const [sessionMenu, setSessionMenu] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<SessionRecord | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -221,6 +228,13 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
     return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
   }, [projectMenu])
   useEffect(() => {
+    if (!projectSortMenuOpen) return
+    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.sidebar__sort-control')) setProjectSortMenuOpen(false) }
+    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectSortMenuOpen(false) } }
+    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
+    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
+  }, [projectSortMenuOpen])
+  useEffect(() => {
     if (!sessionMenu) return
     const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.session-row-wrap')) setSessionMenu(null) }
     const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null) } }
@@ -237,7 +251,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
     return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
   }, [archiveTarget])
   const normalized = query.trim().toLowerCase()
-  const visibleProjects = useMemo(() => projects.filter((project) => !normalized || project.name.toLowerCase().includes(normalized) || (sessionsByProject.get(project.id) ?? []).some((session) => `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized))), [projects, sessionsByProject, normalized])
+  const visibleProjects = useMemo(() => sortProjects(projects.filter((project) => !normalized || project.name.toLowerCase().includes(normalized) || (sessionsByProject.get(project.id) ?? []).some((session) => `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized))), projectSortMode), [projects, sessionsByProject, normalized, projectSortMode])
 
   return (
     <aside ref={sidebarRef} className="sidebar" aria-label="Project and session navigation" tabIndex={overlay ? -1 : undefined}>
@@ -299,7 +313,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
       </nav>
 
       <div className="sidebar__scroll scroll-area">
-        <div className="sidebar__section-heading"><span>Projects</span><IconButton size="small" label="Add project" onClick={onAddProject}><FolderPlus size={13} /></IconButton></div>
+        <div className="sidebar__section-heading"><span>Projects</span><span className="sidebar__section-heading-actions sidebar__sort-control"><IconButton size="small" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label="Sort projects" onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label="Add project" onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label="Project sort order">{(['recent', 'alphabetical'] as const).map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{mode === 'recent' ? 'Recent activity' : 'Alphabetical'}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
         {visibleProjects.length === 0 ? <p className="sidebar__empty">No matching work</p> : null}
         {visibleProjects.map((project) => {
           const projectSessions = (sessionsByProject.get(project.id) ?? []).filter((session) => !normalized || `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized) || project.name.toLowerCase().includes(normalized))
@@ -317,10 +331,11 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                 <button className="project-row__main" type="button" onClick={() => { setProjectMenu(null); onSelectProject(project) }} title={project.path}>
                   {activeProjectId === project.id ? <FolderOpen size={14} /> : <Folder size={14} />}
                   <span>{project.name}</span>
+                  {project.pinned ? <Pin className="project-row__pin" size={11} fill="currentColor" /> : null}
                 </button>
                 <IconButton size="small" className="project-row__new-session row-action" label={`New session in ${project.name}`} onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={13} /></IconButton>
                 {running ? <span className="project-working" title="Agent working"><LoaderCircle className="spin" size={13} /></span> : null}
-                {projectMenu === project.id ? <div className="project-row__menu" role="menu" aria-label={`Project options for ${project.name}`}><button type="button" role="menuitem" onClick={() => { setProjectMenu(null); setRemoveTarget(project) }}><Trash2 size={12} /> Remove project</button></div> : null}
+                {projectMenu === project.id ? <div className="project-row__menu" role="menu" aria-label={`Project options for ${project.name}`}>{!project.inferred ? <button type="button" role="menuitem" onClick={() => { setProjectMenu(null); onTogglePinProject(project) }}><Pin size={12} /> {project.pinned ? 'Unpin project' : 'Pin project'}</button> : null}<button type="button" role="menuitem" onClick={() => { setProjectMenu(null); setRemoveTarget(project) }}><Trash2 size={12} /> Remove project</button></div> : null}
               </div>
               {!isCollapsed ? (
                 <div className="session-list">
@@ -399,6 +414,9 @@ export function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps)
     && previous.onNewSession === next.onNewSession
     && previous.onAddProject === next.onAddProject
     && previous.onRemoveProject === next.onRemoveProject
+    && previous.projectSortMode === next.projectSortMode
+    && previous.onSetProjectSortMode === next.onSetProjectSortMode
+    && previous.onTogglePinProject === next.onTogglePinProject
     && previous.onClose === next.onClose
     && previous.onOpenPalette === next.onOpenPalette
     && previous.onRenameSession === next.onRenameSession
