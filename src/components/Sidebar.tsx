@@ -25,7 +25,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
-import type { AppMeta, AppUpdateState, HarnessId, ProjectRecord, ProjectSortMode, SessionRecord, WorkspaceView } from '@/types/api'
+import { PROJECT_SORT_MODES, type AppMeta, type AppUpdateState, type HarnessId, type ProjectRecord, type ProjectSortMode, type SessionRecord, type WorkspaceView } from '@/types/api'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_PRODUCT_NAMES, HARNESS_SELECTOR_ORDER, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { sortProjects } from '@/lib/project-order'
@@ -33,6 +33,8 @@ import { useI18n } from '@/lib/i18n'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
 import { IconButton, Modal, OmpMark, PiMark, PrimeMark, useFocusTrap } from './ui'
+
+const PROJECT_SORT_LABELS: Record<ProjectSortMode, string> = { recent: 'Recent activity', alphabetical: 'Alphabetical' }
 
 export interface SidebarProps {
   projects: ProjectRecord[]
@@ -229,7 +231,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
   }, [projectMenu])
   useEffect(() => {
     if (!projectSortMenuOpen) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.sidebar__sort-control')) setProjectSortMenuOpen(false) }
+    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.sidebar__section-heading-actions')) setProjectSortMenuOpen(false) }
     const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectSortMenuOpen(false) } }
     document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
     return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
@@ -313,7 +315,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
       </nav>
 
       <div className="sidebar__scroll scroll-area">
-        <div className="sidebar__section-heading"><span>Projects</span><span className="sidebar__section-heading-actions sidebar__sort-control"><IconButton size="small" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label="Sort projects" onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label="Add project" onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label="Project sort order">{(['recent', 'alphabetical'] as const).map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{mode === 'recent' ? 'Recent activity' : 'Alphabetical'}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
+        <div className="sidebar__section-heading"><span>Projects</span><span className="sidebar__section-heading-actions"><IconButton size="small" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label="Sort projects" onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label="Add project" onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label="Project sort order">{PROJECT_SORT_MODES.map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{PROJECT_SORT_LABELS[mode]}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
         {visibleProjects.length === 0 ? <p className="sidebar__empty">No matching work</p> : null}
         {visibleProjects.map((project) => {
           const projectSessions = (sessionsByProject.get(project.id) ?? []).filter((session) => !normalized || `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized) || project.name.toLowerCase().includes(normalized))
