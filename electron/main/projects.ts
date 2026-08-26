@@ -9,7 +9,7 @@ import { createGitWorktree, isNotARepositoryFailure, listGitWorktrees, validateG
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
-import { isPathWithin, requireExistingDirectory, requireExistingPath, requireId, requireString } from './validation'
+import { isPathWithin, requireBoolean, requireExistingDirectory, requireExistingPath, requireId, requireString } from './validation'
 
 const MAX_CONCURRENT_BRANCH_LOOKUPS = 4
 
@@ -445,7 +445,7 @@ export class ProjectService {
       }
       return target
     })
-    return records.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt))
+    return records.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt) || a.id.localeCompare(b.id))
   }
 
   async listWorktrees(cwdValue: unknown): Promise<GitWorktree[]> {
@@ -651,6 +651,17 @@ export class ProjectService {
       const project = state.projects.find((item) => item.id === id && item.harness === this.harness)
       if (!project) return false
       project.lastOpenedAt = new Date().toISOString()
+      return true
+    })
+  }
+
+  async setPinned(idValue: unknown, pinnedValue: unknown): Promise<boolean> {
+    const id = requireId(idValue, 'project id')
+    const pinned = requireBoolean(pinnedValue, 'pinned')
+    return this.store.update((state) => {
+      const project = state.projects.find((item) => item.id === id && item.harness === this.harness)
+      if (!project) return false
+      project.pinned = pinned
       return true
     })
   }

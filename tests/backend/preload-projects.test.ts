@@ -47,6 +47,12 @@ describe('preload project worktree bridge', () => {
     ])
   })
 
+  it('exposes project pinning with the harness in the final argument', async () => {
+    const api = electronMocks.api as { projects: { setPinned(id: string, pinned: boolean, harness?: string): Promise<unknown> } }
+    await api.projects.setPinned('id', true, 'omp')
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenCalledWith('projects:pin', 'id', true, 'omp')
+  })
+
   it('exposes fixed read-only pet IPC calls', async () => {
     const api = electronMocks.api as { pets: { list(): Promise<unknown>; sprite(id: string): Promise<unknown> } }
     await api.pets.list()

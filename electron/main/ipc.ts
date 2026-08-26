@@ -239,6 +239,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('projects:grant-inferred', (_event, path, harness) => projectsFor(requireHarness(harness)).grantInferred(path))
   handle('projects:remove', (_event, id, harness) => projectsFor(requireHarness(harness)).remove(id))
   handle('projects:touch', (_event, id, harness) => projectsFor(requireHarness(harness)).touch(id))
+  handle('projects:pin', (_event, id, pinned, harness) => projectsFor(requireHarness(harness)).setPinned(id, pinned))
 
   handle('sessions:list', (_event, projectPath, includeArchived, harness, force) => sessionsFor(requireHarness(harness)).list(projectPath, includeArchived, force))
   handle('sessions:read', async (_event, filePath) => (await sessionsForPath(filePath)).service.read(filePath))
