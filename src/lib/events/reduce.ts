@@ -256,17 +256,6 @@ export function replayPrimeEvents(
       rebase(applyCompactionEvent(next, raw) ?? next)
       continue
     }
-    const fallback = fallbackModelFromRecord(raw)
-    if (fallback) {
-      const text = fallbackNoticeText(fallback.label)
-      const last = next.at(-1)
-      if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
-      const timestamp = Date.now()
-      finalizeStreaming(timestamp, false)
-      copyTranscript()
-      next.push({ id: nextTranscriptId('fallback'), role: 'system', timestamp, parts: [withPartId({ type: 'text', text })] })
-      continue
-    }
     if (type === 'agent_start' || type === 'turn_start') {
       // Gate on a streaming *assistant* to match the sequential reducer: a
       // compaction system row carried over from a previous batch may still be
@@ -338,6 +327,18 @@ export function replayPrimeEvents(
     }
     if (type === 'agent_end') {
       finalizeStreaming(Date.now(), true)
+      continue
+    }
+    if (type === 'model_change' || type === 'model_changed') {
+      const fallback = fallbackModelFromRecord(raw)
+      if (!fallback) continue
+      const text = fallbackNoticeText(fallback.label)
+      const last = next.at(-1)
+      if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
+      const timestamp = Date.now()
+      finalizeStreaming(timestamp, false)
+      copyTranscript()
+      next.push({ id: nextTranscriptId('fallback'), role: 'system', timestamp, parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {

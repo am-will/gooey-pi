@@ -74,8 +74,6 @@ export function useAgentEvents({
         if (type === 'runtime_exit') runtimeSessionsRef.current.delete(runtimeId)
         return
       }
-      const fallback = fallbackModelFromRecord(event)
-
       if (type === 'context_usage') {
         const contextUsage = contextUsageFromEvent(event)
         if (contextUsage) setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, contextUsage } : current)
@@ -96,10 +94,13 @@ export function useAgentEvents({
           ? { ...current, isStreaming: true, isCompacting: false, executingModel: null }
           : current)
       }
-      if (fallback) {
-        setRuntime((current) => current?.runtimeId === runtimeId
-          ? { ...current, executingModel: { ...fallback, isFallback: true } }
-          : current)
+      if (type === 'model_change' || type === 'model_changed') {
+        const fallback = fallbackModelFromRecord(event)
+        if (fallback) {
+          setRuntime((current) => current?.runtimeId === runtimeId
+            ? { ...current, executingModel: { ...fallback, isFallback: true } }
+            : current)
+        }
       }
       if (type === 'compaction_start') {
         setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, isCompacting: true } : current)
