@@ -129,6 +129,6 @@ describe('TerminalDrawer project command handle', () => {
 
     expect(onError).toHaveBeenCalledWith('spawn failed')
     expect(onExit).toHaveBeenCalledOnce()
-    expect(onExit).toHaveBeenCalledWith()
+    expect(onExit).toHaveBeenCalledWith(undefined)
   })
 })

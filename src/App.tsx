@@ -387,9 +387,7 @@ export default function App() {
     if (activeProjectScriptRunRef.current?.requestId !== run.requestId) return
     activeProjectScriptRunRef.current = undefined
     setActiveProjectScriptRun(undefined)
-    if ('cancelled' in outcome) {
-      return
-    }
+    if ('cancelled' in outcome) return
     if (run.kind === 'setup' && bridge) {
       void bridge.projects.finishSetup(run.projectId, run.command, outcome.exitCode, run.harness)
         .then((scripts) => patchProjectScripts(run.projectId, scripts))
