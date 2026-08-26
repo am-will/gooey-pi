@@ -49,7 +49,7 @@ export const COVERAGE_FAMILIES: readonly CoverageFamily[] = Object.freeze([
     root: 'electron/preload',
     runtimeExtensions: COVERAGE_RUNTIME_EXTENSIONS,
     responsibility: 'The isolated renderer-to-main capability surface exposed by Electron preload.',
-    thresholds: { statements: 14, branches: 10, functions: 9, lines: 12 },
+    thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
   },
   {
     id: 'renderer-application-authority',
