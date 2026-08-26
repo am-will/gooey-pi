@@ -1,0 +1,192 @@
+--- a/package/package.json
++++ b/package/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "prime-agent-ai",
+-  "version": "0.7.0",
++  "version": "0.7.0-gooeypi.1",
+   "description": "Unified LLM API with automatic model discovery and provider configuration",
+   "type": "module",
+   "main": "./dist/index.js",
+--- a/package/dist/mcp/oauth.js
++++ b/package/dist/mcp/oauth.js
+@@ -50,24 +50,47 @@
+     throw new Error(`Could not discover OAuth metadata for ${origin}. ` +
+         `Tried ${candidates.join(", ")}. Last error: ${String(lastError)}`);
+ }
+-/** Dynamic client registration (RFC 7591). Returns the issued client_id. */
+-async function registerClient(registrationEndpoint, label) {
++const TOKEN_AUTH_METHODS = new Set(["none", "client_secret_basic", "client_secret_post"]);
++function preferredTokenAuthMethod(metadata) {
++    const supported = Array.isArray(metadata.token_endpoint_auth_methods_supported)
++        ? metadata.token_endpoint_auth_methods_supported.filter((method) => TOKEN_AUTH_METHODS.has(method))
++        : [];
++    if (supported.includes("client_secret_basic"))
++        return "client_secret_basic";
++    if (supported.includes("client_secret_post"))
++        return "client_secret_post";
++    if (supported.includes("none"))
++        return "none";
++    // RFC 8414 defaults an omitted list to client_secret_basic.
++    if (supported.length === 0)
++        return "client_secret_basic";
++    throw new Error("OAuth server does not advertise a supported token endpoint authentication method");
++}
++/** Dynamic client registration (RFC 7591). Retains confidential client credentials when issued. */
++async function registerClient(registrationEndpoint, label, requestedAuthMethod) {
+     const body = {
+         client_name: label,
+         redirect_uris: ALL_REDIRECT_URIS,
+         grant_types: ["authorization_code", "refresh_token"],
+         response_types: ["code"],
+-        token_endpoint_auth_method: "none",
++        token_endpoint_auth_method: requestedAuthMethod,
+     };
+     const data = (await fetchJson(registrationEndpoint, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify(body),
+     }));
+-    if (!data.client_id) {
++    if (typeof data.client_id !== "string" || !data.client_id) {
+         throw new Error(`Dynamic client registration at ${registrationEndpoint} returned no client_id`);
+     }
+-    return data.client_id;
++    const authMethod = TOKEN_AUTH_METHODS.has(data.token_endpoint_auth_method)
++        ? data.token_endpoint_auth_method
++        : requestedAuthMethod;
++    const clientSecret = typeof data.client_secret === "string" && data.client_secret ? data.client_secret : undefined;
++    if (authMethod !== "none" && !clientSecret) {
++        throw new Error(`Dynamic client registration at ${registrationEndpoint} returned no client_secret for ${authMethod}`);
++    }
++    return { clientId: data.client_id, clientSecret, authMethod };
+ }
+ async function startCallbackServer(label) {
+     const { createServer } = await import("node:http");
+@@ -161,10 +184,26 @@
+     }
+     return { code, state: state ?? expectedState };
+ }
+-async function exchangeToken(tokenEndpoint, params) {
++async function exchangeToken(tokenEndpoint, params, client) {
++    const headers = { "Content-Type": "application/x-www-form-urlencoded" };
++    if (client.authMethod === "client_secret_basic") {
++        if (!client.clientSecret)
++            throw new Error("client_secret_basic authentication requires a client_secret");
++        const id = encodeURIComponent(client.clientId);
++        const secret = encodeURIComponent(client.clientSecret);
++        headers.Authorization = `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
++    }
++    else {
++        params.client_id = client.clientId;
++        if (client.authMethod === "client_secret_post") {
++            if (!client.clientSecret)
++                throw new Error("client_secret_post authentication requires a client_secret");
++            params.client_secret = client.clientSecret;
++        }
++    }
+     const res = await fetch(tokenEndpoint, {
+         method: "POST",
+-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
++        headers,
+         body: new URLSearchParams(params).toString(),
+     });
+     const text = await res.text();
+@@ -173,7 +212,7 @@
+     }
+     return JSON.parse(text);
+ }
+-function toCredentials(token, tokenEndpoint, clientId, previousRefresh) {
++function toCredentials(token, tokenEndpoint, client, previousRefresh) {
+     return {
+         access: token.access_token,
+         // Some servers omit refresh_token on refresh; keep the prior one.
+@@ -182,7 +221,9 @@
+             ? Date.now() + token.expires_in * 1000 - TOKEN_EXPIRY_BUFFER_MS
+             : Date.now() + 3600 * 1000 - TOKEN_EXPIRY_BUFFER_MS,
+         tokenEndpoint,
+-        clientId,
++        clientId: client.clientId,
++        clientSecret: client.clientSecret,
++        tokenEndpointAuthMethod: client.authMethod,
+     };
+ }
+ /** Build a provider for one MCP server. Register it with registerOAuthProvider(). */
+@@ -191,14 +232,16 @@
+     async function login(callbacks) {
+         const meta = await discover(config.url);
+         callbacks.onProgress?.(`Discovered ${meta.issuer ?? new URL(config.url).origin}`);
+-        let clientId = config.clientId;
+-        if (!clientId) {
++        let client = config.clientId
++            ? { clientId: config.clientId, authMethod: "none" }
++            : undefined;
++        if (!client) {
+             if (!meta.registration_endpoint) {
+                 throw new Error(`${label} does not support dynamic client registration and no clientId was configured. ` +
+                     `Set a pre-registered client id for this server.`);
+             }
+             callbacks.onProgress?.("Registering OAuth client…");
+-            clientId = await registerClient(meta.registration_endpoint, `Prime Agent (${label})`);
++            client = await registerClient(meta.registration_endpoint, `Prime Agent (${label})`, preferredTokenAuthMethod(meta));
+         }
+         const { verifier, challenge } = await generatePKCE();
+         // `state` must be independent of the PKCE verifier — the verifier is the
+@@ -208,7 +251,7 @@
+         const cb = await startCallbackServer(label);
+         try {
+             const authParams = new URLSearchParams({
+-                client_id: clientId,
++                client_id: client.clientId,
+                 response_type: "code",
+                 redirect_uri: cb.redirectUri,
+                 code_challenge: challenge,
+@@ -279,10 +322,9 @@
+                 grant_type: "authorization_code",
+                 code: result.code,
+                 redirect_uri: cb.redirectUri,
+-                client_id: clientId,
+                 code_verifier: verifier,
+-            });
+-            return toCredentials(token, meta.token_endpoint, clientId);
++            }, client);
++            return toCredentials(token, meta.token_endpoint, client);
+         }
+         finally {
+             cb.server.close();
+@@ -292,15 +334,25 @@
+         const creds = credentials;
+         const tokenEndpoint = creds.tokenEndpoint ?? (await discover(config.url)).token_endpoint;
+         const clientId = creds.clientId ?? config.clientId;
++        if (!clientId) {
++            throw new Error(`No OAuth client id stored for ${label}; re-run /mcp login ${config.server}`);
++        }
++        const authMethod = TOKEN_AUTH_METHODS.has(creds.tokenEndpointAuthMethod)
++            ? creds.tokenEndpointAuthMethod
++            : creds.clientSecret ? "client_secret_basic" : "none";
++        const client = {
++            clientId,
++            clientSecret: typeof creds.clientSecret === "string" ? creds.clientSecret : undefined,
++            authMethod,
++        };
+         if (!creds.refresh) {
+             throw new Error(`No refresh token stored for ${label}; re-run /mcp login ${config.server}`);
+         }
+         const token = await exchangeToken(tokenEndpoint, {
+             grant_type: "refresh_token",
+             refresh_token: creds.refresh,
+-            ...(clientId ? { client_id: clientId } : {}),
+-        });
+-        return toCredentials(token, tokenEndpoint, clientId ?? "", creds.refresh);
++        }, client);
++        return toCredentials(token, tokenEndpoint, client, creds.refresh);
+     }
+     return {
+         id: `mcp:${config.server}`,
+@@ -311,4 +363,4 @@
+         getApiKey: (credentials) => credentials.access,
+     };
+ }
+-//# sourceMappingURL=oauth.js.map
+\ No newline at end of file
++//# sourceMappingURL=oauth.js.map
