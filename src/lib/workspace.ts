@@ -6,8 +6,11 @@ export interface OwnedGitStatus {
   status: GitStatus
 }
 
+/** Stable identity for "no git status", so memoized consumers of the result keep their memo across renders. */
+export const EMPTY_GIT_STATUS: GitStatus = Object.freeze({ isRepo: false, files: [] })
+
 export function gitStatusForWorkspace(snapshot: OwnedGitStatus, cwd?: string): GitStatus {
-  return cwd && snapshot.cwd === cwd ? snapshot.status : { isRepo: false, files: [] }
+  return cwd && snapshot.cwd === cwd ? snapshot.status : EMPTY_GIT_STATUS
 }
 
 export interface WorkspaceSelection {
