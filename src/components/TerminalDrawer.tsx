@@ -281,7 +281,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         const message = error instanceof Error ? error.message : 'Unable to start terminal'
         terminal.writeln(`\x1b[31m${message}\x1b[0m`)
         onErrorRef.current?.(message)
-        onExitRef.current?.(1)
+        onExitRef.current?.()
       })
     } else {
       terminal.writeln('\x1b[38;5;141mGooeyPi terminal\x1b[0m')
@@ -411,7 +411,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
     const callback = tabsRef.current.find((tab) => tab.id === tabId)?.onExit
     if (!callback) return
     setTabs((current) => current.map((tab) => tab.id === tabId ? { ...tab, onExit: undefined } : tab))
-    callback(exitCode)
+    if (exitCode === undefined) callback()
+    else callback(exitCode)
   }
 
   return (

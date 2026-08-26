@@ -15,6 +15,7 @@ describe('TerminalDrawer project command handle', () => {
   let create: ReturnType<typeof vi.fn>
   let kill: ReturnType<typeof vi.fn>
   let createdTerminalIds: string[]
+  let onError: ReturnType<typeof vi.fn<(message: string) => void>>
 
   beforeEach(() => {
     container = document.createElement('div')
@@ -26,8 +27,10 @@ describe('TerminalDrawer project command handle', () => {
     })
     terminalExitListeners = []
     createdTerminalIds = []
+    onError = vi.fn()
     let nextTerminalId = 0
     create = vi.fn(async ({ command }: { command?: string }) => {
+      if (command === 'fail to spawn') throw new Error('spawn failed')
       const terminalId = `terminal-${nextTerminalId++}`
       createdTerminalIds.push(terminalId)
       return { terminalId, shell: '/bin/sh', command }
@@ -60,7 +63,7 @@ describe('TerminalDrawer project command handle', () => {
   })
 
   function renderDrawer(handle: RefObject<TerminalDrawerHandle | null>) {
-    act(() => root.render(<TerminalDrawer ref={handle} cwd="/repo" height={200} minHeight={100} maxHeight={500} defaultHeight={200} onHeightChange={vi.fn()} onClose={vi.fn()} />))
+    act(() => root.render(<TerminalDrawer ref={handle} cwd="/repo" height={200} minHeight={100} maxHeight={500} defaultHeight={200} onHeightChange={vi.fn()} onClose={vi.fn()} onError={onError} />))
   }
 
   function createHandle() {
@@ -113,5 +116,19 @@ describe('TerminalDrawer project command handle', () => {
 
     expect(onExit).toHaveBeenCalledOnce()
     expect(onExit).toHaveBeenCalledWith(7)
+  })
+
+  it('reports terminal creation failures without fabricating an exit code', async () => {
+    const handle = createHandle()
+    renderDrawer(handle)
+    const onExit = vi.fn()
+    await act(async () => {
+      handle.current?.runCommand('fail to spawn', 'Setup', onExit)
+      await Promise.resolve()
+    })
+
+    expect(onError).toHaveBeenCalledWith('spawn failed')
+    expect(onExit).toHaveBeenCalledOnce()
+    expect(onExit).toHaveBeenCalledWith()
   })
 })

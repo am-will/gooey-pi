@@ -119,7 +119,6 @@ export default function App() {
   const [activeProjectScriptRun, setActiveProjectScriptRun] = useState<ActiveProjectScriptRun>()
   const activeProjectScriptRunRef = useRef<ActiveProjectScriptRun | undefined>(undefined)
   const projectScriptStartingRef = useRef(false)
-  const cancelledSetupCommandsRef = useRef(new Map<string, string>())
   activeProjectScriptRunRef.current = activeProjectScriptRun
 
   const reportError = useCallback((error: unknown) => {
@@ -389,7 +388,6 @@ export default function App() {
     activeProjectScriptRunRef.current = undefined
     setActiveProjectScriptRun(undefined)
     if ('cancelled' in outcome) {
-      if (run.kind === 'setup') cancelledSetupCommandsRef.current.set(run.projectId, run.command)
       return
     }
     if (run.kind === 'setup' && bridge) {
@@ -606,13 +604,13 @@ export default function App() {
       activeProjectScriptRunRef.current = started
       setActiveProjectScriptRun(started)
     } catch (error) {
-      finishProjectScriptRun(run, { exitCode: 1 })
+      finishProjectScriptRun(run, { cancelled: true })
       reportError(error)
     }
   }, [activeProjectScriptRun, finishProjectScriptRun, reportError, terminalDrawerRevision])
   useEffect(() => {
     const scripts = activeProject?.scripts
-    if (!activeProject || !scripts || !setupNeedsRun(scripts) || activeProjectScriptRunRef.current || cancelledSetupCommandsRef.current.get(activeProject.id) === scripts.setup) return
+    if (!activeProject || !scripts || !setupNeedsRun(scripts) || activeProjectScriptRunRef.current) return
     void startProjectScript('setup').catch((error: unknown) => {
       if (!(error instanceof ProjectScriptBusyError)) reportError(error)
     })

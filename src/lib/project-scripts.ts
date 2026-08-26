@@ -13,5 +13,5 @@ export function activeProjectScriptKind<T extends string>(run: { projectId: stri
 
 export function setupNeedsRun(scripts?: ProjectScripts): boolean {
   if (!scripts?.setup.trim()) return false
-  return scripts.setupLastRun !== scripts.setup || scripts.setupLastExitCode === undefined
+  return scripts.setupLastRun !== scripts.setup
 }

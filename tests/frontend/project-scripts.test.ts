@@ -14,7 +14,9 @@ describe('project script helpers', () => {
     [{ setup: '', run: '' }, false],
     [{ setup: 'npm install', run: 'npm run dev' }, true],
     [{ setup: 'npm install', run: 'npm run dev', setupLastRun: 'npm ci', setupLastExitCode: 0 }, true],
-    [{ setup: 'npm install', run: 'npm run dev', setupLastRun: 'npm install' }, true],
+    [{ setup: 'npm install', run: 'npm run dev', setupLastRun: 'npm install' }, false],
+    [{ setup: 'x', run: '', setupLastRun: 'x' }, false],
+    [{ setup: 'x', run: '', setupLastRun: 'y' }, true],
     [{ setup: 'npm install', run: 'npm run dev', setupLastRun: 'npm install', setupLastExitCode: 0 }, false],
   ])('reports whether setup needs to run for %j', (scripts, expected) => {
     expect(setupNeedsRun(scripts)).toBe(expected)
