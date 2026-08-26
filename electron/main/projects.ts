@@ -4,12 +4,12 @@ import { lstat, readdir, realpath } from 'node:fs/promises'
 import type { BigIntStats, Dirent } from 'node:fs'
 import { dialog, type BrowserWindow } from 'electron'
 import { homedir } from 'node:os'
-import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, SessionRecord } from '../../src/types/api'
+import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
 import { createGitWorktree, isNotARepositoryFailure, listGitWorktrees, validateGitBranch } from './git'
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
-import { isPathWithin, requireExistingDirectory, requireExistingPath, requireId, requireString } from './validation'
+import { isPathWithin, rejectUnknownKeys, requireExistingDirectory, requireExistingPath, requireId, requireInteger, requireRecord, requireString } from './validation'
 
 const MAX_CONCURRENT_BRANCH_LOOKUPS = 4
 
@@ -403,7 +403,7 @@ export class ProjectService {
       for (const folder of folders) sessionCount += sessionStats.get(folder)?.count ?? 0
       const record: ProjectRecord = {
         id: project.id, harness: project.harness, name: project.name, path: project.path, folders: project.folders, primaryFolder: project.primaryFolder,
-        pinned: project.pinned, createdAt: project.createdAt, lastOpenedAt: project.lastOpenedAt,
+        pinned: project.pinned, createdAt: project.createdAt, lastOpenedAt: project.lastOpenedAt, scripts: project.scripts ? { ...project.scripts } : undefined,
         sessionCount,
         gitBranch: undefined,
       }
@@ -652,6 +652,54 @@ export class ProjectService {
       if (!project) return false
       project.lastOpenedAt = new Date().toISOString()
       return true
+    })
+  }
+
+  async updateScripts(idValue: unknown, scriptsValue: unknown): Promise<ProjectScripts> {
+    const id = requireId(idValue, 'project id')
+    const input = requireRecord(scriptsValue, 'project scripts')
+    rejectUnknownKeys(input, ['setup', 'run'], 'project scripts')
+    const setup = requireString(input.setup, 'setup script', { max: 64 * 1024, trim: true })
+    const run = requireString(input.run, 'run script', { max: 64 * 1024, trim: true })
+    return this.store.update((state) => {
+      const project = state.projects.find((item) => item.id === id && item.harness === this.harness)
+      if (!project) throw new Error('Project is not explicitly granted to this harness')
+      const previous = project.scripts
+      project.scripts = {
+        setup,
+        run,
+        setupLastRun: previous?.setupLastRun,
+        setupLastExitCode: previous?.setupLastExitCode,
+      }
+      if (previous?.setup !== setup) {
+        project.scripts.setupLastRun = undefined
+        project.scripts.setupLastExitCode = undefined
+      }
+      return { ...project.scripts }
+    })
+  }
+
+  async markSetupStarted(idValue: unknown, setupValue: unknown): Promise<ProjectScripts> {
+    const id = requireId(idValue, 'project id')
+    const setup = requireString(setupValue, 'setup script', { min: 1, max: 64 * 1024 })
+    return this.store.update((state) => {
+      const project = state.projects.find((item) => item.id === id && item.harness === this.harness)
+      if (!project?.scripts || project.scripts.setup !== setup) throw new Error('Project setup script changed before it could start')
+      project.scripts.setupLastRun = setup
+      project.scripts.setupLastExitCode = undefined
+      return { ...project.scripts }
+    })
+  }
+
+  async finishSetup(idValue: unknown, setupValue: unknown, exitCodeValue: unknown): Promise<ProjectScripts | undefined> {
+    const id = requireId(idValue, 'project id')
+    const setup = requireString(setupValue, 'setup script', { min: 1, max: 64 * 1024 })
+    const exitCode = requireInteger(exitCodeValue, 'setup exit code', -2_147_483_648, 2_147_483_647)
+    return this.store.update((state) => {
+      const project = state.projects.find((item) => item.id === id && item.harness === this.harness)
+      if (!project?.scripts || project.scripts.setup !== setup || project.scripts.setupLastRun !== setup) return undefined
+      project.scripts.setupLastExitCode = exitCode
+      return { ...project.scripts }
     })
   }
 
