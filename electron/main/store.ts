@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { normalizeScheduleRunHistory } from './schedules/retention'
 import { isRecord } from './validation'
 
@@ -163,6 +163,19 @@ function parseHarness(value: unknown, preHarnessState: boolean): HarnessId | nul
 function validDate(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value))
 }
+function parseProjectScripts(value: unknown): ProjectScripts | undefined {
+  if (!isRecord(value)) return undefined
+  const setup = boundedString(value.setup, 64 * 1024, true) && !value.setup.includes('\0') ? value.setup : ''
+  const run = boundedString(value.run, 64 * 1024, true) && !value.run.includes('\0') ? value.run : ''
+  const setupLastExitCode = Number.isSafeInteger(value.setupLastExitCode)
+    ? Number(value.setupLastExitCode)
+    : undefined
+  const setupLastRun = setupLastExitCode !== undefined && boundedString(value.setupLastRun, 64 * 1024, true) && !value.setupLastRun.includes('\0')
+    ? value.setupLastRun
+    : undefined
+  return { setup, run, setupLastRun, setupLastExitCode }
+}
+
 
 function parseProject(value: unknown, preHarnessState: boolean): PersistedProject | null {
   if (!isRecord(value)) return null
@@ -195,6 +208,7 @@ function parseProject(value: unknown, preHarnessState: boolean): PersistedProjec
     createdAt: validDate(value.createdAt) ? value.createdAt : now,
     lastOpenedAt: validDate(value.lastOpenedAt) ? value.lastOpenedAt : now,
     folderIdentities: Object.keys(folderIdentities).length ? folderIdentities : undefined,
+    scripts: parseProjectScripts(value.scripts),
   }
 }
 

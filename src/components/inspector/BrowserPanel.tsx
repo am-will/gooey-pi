@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, Bot, ExternalLink, History, MessageCirclePlus, RefreshCw, ShieldCheck, X } from 'lucide-react'
-import { createElement, useEffect, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { annotationMarkersScript, annotationPickerScript, annotationTakeScript } from '@/lib/annotation-picker'
 import { MAX_BROWSER_ANNOTATIONS, sanitizeCapturedElement } from '@/lib/browser-annotations'
 import { detectRendererPlatform, shortcutLabel } from '@/lib/platform-shortcuts'
@@ -48,6 +48,8 @@ function normalizeUrl(value: string) {
 }
 
 interface BrowserPanelProps {
+  navigationRequest?: { id: number; url: string }
+  onNavigationRequestHandled?(id: number): void
   platform?: NodeJS.Platform
   home: string
   onOpenExternal(url: string): void
@@ -82,7 +84,7 @@ function agentTabLabel(tab: AgentBrowserTabRecord): string {
   return 'New tab'
 }
 
-export function BrowserPanel({ home, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
+export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
   const [address, setAddress] = useState(home)
   const [currentUrl, setCurrentUrl] = useState(home)
@@ -286,14 +288,19 @@ export function BrowserPanel({ home, onOpenExternal, annotations, agentTabs = []
     void runInPage(view, annotationMarkersScript(markers))
   }, [markerSignature, loading, domReady])
 
-  const navigate = (value: string) => {
+  const navigate = useCallback((value: string) => {
     const url = normalizeUrl(value)
     setAddress(url)
     setCurrentUrl(url)
     void webviewRef.current?.loadURL(url).catch((error: unknown) => {
       if (!String(error).includes('ERR_ABORTED')) console.error('Browser navigation failed', error)
     })
-  }
+  }, [])
+  useEffect(() => {
+    if (!navigationRequest || !domReady) return
+    navigate(navigationRequest.url)
+    onNavigationRequestHandled?.(navigationRequest.id)
+  }, [domReady, navigate, navigationRequest, onNavigationRequestHandled])
 
   const toggleAnnotation = () => {
     if (picking) {

@@ -240,6 +240,9 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('projects:remove', (_event, id, harness) => projectsFor(requireHarness(harness)).remove(id))
   handle('projects:touch', (_event, id, harness) => projectsFor(requireHarness(harness)).touch(id))
   handle('projects:pin', (_event, id, pinned, harness) => projectsFor(requireHarness(harness)).setPinned(id, pinned))
+  handle('projects:update-scripts', (_event, id, scripts, harness) => projectsFor(requireHarness(harness)).updateScripts(id, scripts))
+  handle('projects:mark-setup-started', (_event, id, setup, harness) => projectsFor(requireHarness(harness)).markSetupStarted(id, setup))
+  handle('projects:finish-setup', (_event, id, setup, exitCode, harness) => projectsFor(requireHarness(harness)).finishSetup(id, setup, exitCode))
 
   handle('sessions:list', (_event, projectPath, includeArchived, harness, force) => sessionsFor(requireHarness(harness)).list(projectPath, includeArchived, force))
   handle('sessions:read', async (_event, filePath) => (await sessionsForPath(filePath)).service.read(filePath))

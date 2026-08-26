@@ -74,13 +74,31 @@ async function processTree(rootPid: number): Promise<number[]> {
   return descendants
 }
 
-function shellArguments(shell: string): string[] {
-  if (process.platform !== 'win32') return ['-l']
+function shellArguments(shell: string, command?: string): string[] {
+  if (process.platform !== 'win32') return command === undefined ? ['-l'] : ['-lc', command]
   const name = basename(shell).toLowerCase()
-  if (name === 'cmd.exe') return ['/K']
-  if (name === 'powershell.exe' || name === 'pwsh.exe') return ['-NoLogo']
-  return []
+  if (name === 'cmd.exe') return command === undefined ? ['/K'] : ['/D', '/S', '/C', command]
+  if (name === 'powershell.exe' || name === 'pwsh.exe') {
+    if (command === undefined) return ['-NoLogo']
+    const trackedCommand = `${command}\n$gooeyPiSuccess = $?\n$gooeyPiExitCode = $LASTEXITCODE\nif (-not $gooeyPiSuccess) {\n  if ($null -ne $gooeyPiExitCode -and $gooeyPiExitCode -ne 0) { exit $gooeyPiExitCode }\n  exit 1\n}\nexit 0`
+    return ['-NoLogo', '-Command', trackedCommand]
+  }
+  return command === undefined ? [] : [command]
 }
+function terminalEnvironment(commandRunner: boolean): Record<string, string> {
+  const env = Object.fromEntries(Object.entries(safeChildEnvironment({
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+  })).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+  // npm injects its configured prefix into apps launched through `npm run`.
+  // Login-shell nvm refuses to initialize while that npm override is present.
+  if (commandRunner) {
+    delete env.npm_config_prefix
+    delete env.NPM_CONFIG_PREFIX
+  }
+  return env
+}
+
 
 export class TerminalService {
   private readonly terminals = new Map<string, OwnedTerminal>()
@@ -116,7 +134,7 @@ export class TerminalService {
 
   async create(owner: WebContents, raw: unknown): Promise<{ terminalId: string; shell: string }> {
     const options = requireRecord(raw, 'terminal options')
-    rejectUnknownKeys(options, ['cwd', 'sessionPath', 'shell', 'cols', 'rows'], 'terminal options')
+    rejectUnknownKeys(options, ['cwd', 'sessionPath', 'shell', 'command', 'cols', 'rows'], 'terminal options')
     const cwd = await this.authorizeCwd(requireString(options.cwd, 'cwd', { min: 1, max: 4096 }))
     const sessionPath = options.sessionPath === undefined
       ? undefined
@@ -124,10 +142,13 @@ export class TerminalService {
     if (owner.isDestroyed()) throw new Error('Terminal owner was closed')
     if (this.terminals.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
     const shell = this.validateShell(options.shell ?? this.configuredShell())
+    const command = options.command === undefined
+      ? undefined
+      : requireString(options.command, 'terminal command', { min: 1, max: 64 * 1024 })
     const cols = options.cols === undefined ? 100 : requireInteger(options.cols, 'cols', 2, 1_000)
     const rows = options.rows === undefined ? 30 : requireInteger(options.rows, 'rows', 1, 1_000)
-    const env = Object.fromEntries(Object.entries(safeChildEnvironment({ TERM: 'xterm-256color', COLORTERM: 'truecolor' })).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-    const terminal = pty.spawn(shell, shellArguments(shell), { cwd, cols, rows, name: 'xterm-256color', env })
+    const env = terminalEnvironment(command !== undefined)
+    const terminal = pty.spawn(shell, shellArguments(shell, command), { cwd, cols, rows, name: 'xterm-256color', env })
     if (owner.isDestroyed()) { try { terminal.kill() } catch { /* owner closed during spawn */ }; throw new Error('Terminal owner was closed') }
     const terminalId = randomUUID()
     const owned: OwnedTerminal = { terminal, owner, ownerId: owner.id, cwd, shell, sessionPath, outputWindowStartedAt: Date.now(), outputWindowBytes: 0, pendingOutput: '', pendingOutputBytes: 0, terminating: false, exited: false }

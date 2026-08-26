@@ -9,6 +9,7 @@ import type { ApplicationMenuName, ProjectRecord, WorkspaceView } from '@/types/
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { BrowserGlobe, IconButton } from './ui'
+import { ProjectRunControl, type ProjectScriptKind } from './ProjectRunControl'
 import type { MouseEvent } from 'react'
 
 const viewTitles: Record<Exclude<WorkspaceView, 'session'>, MessageKey> = {
@@ -43,10 +44,14 @@ interface TitleToolbarProps {
   onOpenBrowser(): void
   voiceOpen?: boolean
   onToggleVoice?(): void
+  activeProjectScriptKind?: ProjectScriptKind
+  onRunProjectScript?(kind: ProjectScriptKind): Promise<void> | void
+  onStopProjectScript?(): void
+  onSaveProjectScripts?(scripts: { setup: string; run: string }): Promise<void>
   platform?: NodeJS.Platform
 }
 
-export function TitleToolbar({ project, gitBranch, view, productName = 'Prime Work', sidebarOpen, inspectorOpen, terminalOpen, voiceOpen = false, onToggleSidebar, onToggleInspector, onToggleTerminal, onOpenBrowser, onToggleVoice, platform = 'darwin' }: TitleToolbarProps) {
+export function TitleToolbar({ project, gitBranch, view, productName = 'Prime Work', sidebarOpen, inspectorOpen, terminalOpen, voiceOpen = false, activeProjectScriptKind, onToggleSidebar, onToggleInspector, onToggleTerminal, onOpenBrowser, onToggleVoice, onRunProjectScript, onStopProjectScript, onSaveProjectScripts, platform = 'darwin' }: TitleToolbarProps) {
   const { t } = useI18n()
   const sidebarShortcut = shortcutLabel(platform, ['Primary', 'B'])
   const terminalShortcut = shortcutLabel(platform, ['Primary', 'J'])
@@ -65,6 +70,9 @@ export function TitleToolbar({ project, gitBranch, view, productName = 'Prime Wo
         {(gitBranch ?? project?.gitBranch) && view === 'session' ? <span className="branch-pill"><GitBranch size={12} />{gitBranch ?? project?.gitBranch}</span> : null}
       </div>
       <div className="title-toolbar__actions no-drag">
+        {view === 'session' && project && onRunProjectScript && onStopProjectScript && onSaveProjectScripts
+          ? <ProjectRunControl project={project} activeKind={activeProjectScriptKind} onRun={onRunProjectScript} onStop={onStopProjectScript} onSave={onSaveProjectScripts} />
+          : null}
         {view === 'session' && onToggleVoice ? <IconButton className={voiceOpen ? 'is-active voice-toggle--active' : ''} label={voiceOpen ? 'Close realtime voice' : 'Open realtime voice'} onClick={onToggleVoice}><AudioWaveform size={17} /></IconButton> : null}
         {view === 'session' ? <IconButton className={terminalOpen ? 'is-active' : ''} label={`Toggle terminal (${terminalShortcut})`} onClick={onToggleTerminal}><Terminal size={17} /></IconButton> : null}
         {view === 'session' ? <IconButton label={`Open browser (${browserShortcut})`} onClick={onOpenBrowser}><BrowserGlobe size={18} /></IconButton> : null}
