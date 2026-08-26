@@ -1,6 +1,7 @@
 import type { MessagePart, QueuedPrompt, TranscriptMessage } from '@/types/api'
 import { applyCompactionEvent, isCompactionEvent } from './compaction'
 import { nextTranscriptId, withPartId } from './ids'
+import { fallbackModelFromRecord, fallbackNoticeText } from './model-fallback'
 import { agentMessagePart, record, resultText, string } from './parse'
 
 export interface PrimeEventReplayStats {
@@ -253,6 +254,17 @@ export function replayPrimeEvents(
       // and re-open drafting on the result.
       materializeDrafts()
       rebase(applyCompactionEvent(next, raw) ?? next)
+      continue
+    }
+    const fallback = fallbackModelFromRecord(raw)
+    if (fallback) {
+      const text = fallbackNoticeText(fallback.label)
+      const last = next.at(-1)
+      if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
+      const timestamp = Date.now()
+      finalizeStreaming(timestamp, false)
+      copyTranscript()
+      next.push({ id: nextTranscriptId('fallback'), role: 'system', timestamp, parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'agent_start' || type === 'turn_start') {

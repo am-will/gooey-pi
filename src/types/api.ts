@@ -183,6 +183,8 @@ export interface RuntimeInfo {
   sessionActions?: SessionActionSnapshot
   isCompacting?: boolean
   model?: { provider?: string; id?: string; name?: string } | null
+  /** Renderer-local notice; never persisted or used to update the model picker. */
+  executingModel?: { provider?: string; id: string; label: string; isFallback: true } | null
   thinkingLevel?: string
   availableThinkingLevels?: PrimeThinkingLevel[]
   fastModeSupported?: boolean

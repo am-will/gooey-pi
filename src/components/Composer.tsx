@@ -14,6 +14,7 @@ import type {
   PromptDeliveryIntent,
   PromptImage,
   QueuedPrompt,
+  RuntimeInfo,
   SessionRecord,
   SkillRecord,
   TerminalPromptContext,
@@ -52,6 +53,7 @@ interface ComposerProps {
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
   messageEnterAction?: MessageEnterAction
   contextUsage?: PrimeContextUsage
+  executingModel?: RuntimeInfo['executingModel']
   voice?: PrimeWorkApi['voice'] | null
   transcriptionProvider?: VoiceTranscriptionProvider
   skills: SkillRecord[]
@@ -133,6 +135,7 @@ export const Composer = memo(function Composer({
   imageInputSupported,
   messageEnterAction = 'queue',
   contextUsage,
+  executingModel,
   voice,
   transcriptionProvider = 'openai-live',
   skills,
@@ -737,6 +740,15 @@ export const Composer = memo(function Composer({
               {!model ? <option value="" disabled>No model available</option> : null}
               {modelOptions}
             </SelectControl>
+            {executingModel?.isFallback ? (
+              <span
+                className="model-fallback-chip"
+                role="status"
+                title={`Provider fallback: running on ${executingModel.label} instead of the selected model.`}
+              >
+                ⚠ Running on {executingModel.label}
+              </span>
+            ) : null}
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>
