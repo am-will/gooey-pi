@@ -17,8 +17,9 @@ installs the Electron/xvfb system libraries, bootstraps the repo-pinned npm, and
 runs `npm ci`. Canonical toolchain and check commands live in
 [`docs/validation.md`](docs/validation.md); do not restate versions here.
 
-`node`/`npm` come from `nvm`. A fresh login shell already selects 24.15.0; in a
-non-login shell load it first:
+`node`/`npm` come from `nvm`. A harness shell can be shadowed by another `node`
+on `PATH`, so select the pinned toolchain before running `node`/`npm` if `node
+-v` is not `v24.15.0`:
 
 ```
 export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use >/dev/null
