@@ -1,3 +1,4 @@
+import { openSync, writeSync, closeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isRecord } from '../validation'
@@ -74,6 +75,33 @@ async function readOmpTitleSlot(io: SessionMetadataReaderIo, filePath: string): 
   if (!isRecord(value) || value.type !== 'title' || typeof value.title !== 'string' || !value.title.trim()) return undefined
   return value.title
 }
+/**
+ * Rewrite the 256-byte in-place title slot at the start of an OMP session
+ * file. Used as a fallback when no live runtime is available to accept
+ * `set_session_name` (e.g. the session has finished and the agent exited).
+ *
+ * The slot is a single JSON line padded with spaces to exactly
+ * `OMP_TITLE_SLOT_BYTES` bytes, followed by `\n`. OMP rewrites this slot
+ * in place without touching the rest of the file.
+ */
+export function writeOmpTitleSlot(filePath: string, title: string): boolean {
+  try {
+    const updatedAt = new Date().toISOString()
+    const targetLen = OMP_TITLE_SLOT_BYTES - 1 // -1 for the trailing \n
+    // Truncate title if needed so the JSON line fits in the fixed-width slot.
+    let name = title
+    while (name.length > 0 && Buffer.byteLength(JSON.stringify({ type: 'title', v: 1, title: name, source: 'user', updatedAt, pad: '' }), 'utf8') > targetLen) {
+      name = name.slice(0, -1)
+    }
+    const json = JSON.stringify({ type: 'title', v: 1, title: name, source: 'user', updatedAt, pad: '' })
+    const padded = json + ' '.repeat(targetLen - Buffer.byteLength(json, 'utf8'))
+    const fd = openSync(filePath, 'r+')
+    try { writeSync(fd, padded + '\n', 0, 'utf8') } finally { closeSync(fd) }
+    return true
+  } catch {
+    return false
+  }
+}
 
 /**
  * OMP metadata reader: the append-only tail (everything after the 256-byte
@@ -105,8 +133,7 @@ export function ompSessionServiceOptions(sessionRoot = ompSessionRoot()): Sessio
     metadataReader: createOmpSessionMetadataReader(),
     transcriptReader: readOmpTranscript,
     isSessionPathAuthorized: isOmpSessionPath,
-    // Session files sit one bucket directory below the root; bounded one-level
-    // watchers keep catalog refresh behavior identical across platforms.
     recursiveWatch: true,
+    renameFile: writeOmpTitleSlot,
   }
 }

@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionServiceOptions } from '../sessions'
@@ -62,7 +63,21 @@ const piMetadataParser = createBucketedMetadataParser((state, value) => {
 export function createPiSessionMetadataReader(io: SessionMetadataReaderIo = nodeMetadataReaderIo): SessionMetadataReader {
   return createIncrementalMetadataReader(piMetadataParser, io)
 }
-
+/**
+ * Append a `session_info` record to a pi session file as a fallback rename
+ * when no live runtime is available. Pi's metadata reader picks up the
+ * latest `session_info` name in file order, so the new name takes effect
+ * immediately on the next catalog scan.
+ */
+export function appendPiSessionInfo(filePath: string, title: string): boolean {
+  try {
+    const record = JSON.stringify({ type: 'session_info', name: title, timestamp: new Date().toISOString() }) + '\n'
+    appendFileSync(filePath, record, 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
 export const readPiTranscript: TranscriptFileReader = createBranchSummaryTranscriptReader()
 
 /**
@@ -77,9 +92,7 @@ export function piSessionServiceOptions(sessionRoot = piSessionRoot()): SessionS
     catalogNameTimestamp: piTimestampFromSessionName,
     metadataReader: createPiSessionMetadataReader(),
     transcriptReader: readPiTranscript,
-    isSessionPathAuthorized: isPiSessionPath,
-    // Session files sit one bucket directory below the root; bounded one-level
-    // watchers keep catalog refresh behavior identical across platforms.
     recursiveWatch: true,
+    renameFile: appendPiSessionInfo,
   }
 }

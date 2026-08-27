@@ -293,7 +293,7 @@ export const Composer = memo(function Composer({
       return
     }
     if (currentImages.length > 0 && !imageInputSupported) {
-      setAttachmentError('This model does not accept images. Remove the attachment or choose a vision model.')
+      setAttachmentError('This model does not accept images. Switch to a vision-capable model, or ask the agent to analyze the image with the inspect_image tool.')
       return
     }
     const submittedImages = currentImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))

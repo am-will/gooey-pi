@@ -236,7 +236,7 @@ export class AgentRpcManager {
       return { type: 'response', command: 'set_service_tier', success: true }
     }
     if (Array.isArray(command.images) && command.images.length > 0 && runtime.snapshot().imageInputSupported === false) {
-      throw new Error('The active model does not accept images. Choose a vision model and try again.')
+      throw new Error('The active model does not accept images. Switch to a vision-capable model, or ask the agent to analyze the image with the inspect_image tool.')
     }
     const response = await runtime.command(translated)
     if (command.type === 'steer' || command.type === 'follow_up') {
