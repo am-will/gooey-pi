@@ -99,6 +99,16 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
   await indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle: title, isCurrent }).catch(() => undefined)
 }
 
+export function parseCompactCommand(prompt: string): { customInstructions?: string } | undefined {
+  const trimmed = prompt.trim()
+  if (trimmed === '/compact') return {}
+  if (trimmed.startsWith('/compact ')) {
+    const customInstructions = trimmed.slice(9).trim()
+    return customInstructions ? { customInstructions } : {}
+  }
+  return undefined
+}
+
 export function parseMcpCommand(prompt: string, harness: HarnessId): McpCommand | undefined {
   const value = prompt.trim()
   if (harness === 'prime' && value === '/mcp') return { type: 'open' }
@@ -259,6 +269,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   ) => {
     const { bridge, sessions, workspace, provider, settingsState, submissionAdmissionRef, demoTimerRef, setSessions, setSubmitting, setView, setToast, reportError } = getDeps()
     const commandHarness = workspace.workspaceRef?.current?.project?.harness ?? settingsState.settings.activeHarness
+    const compactCommand = parseCompactCommand(prompt)
     const mcpCommand = parseMcpCommand(prompt, commandHarness)
     if (mcpCommand?.type === 'open' && images.length === 0) {
       setView('plugins')
@@ -419,7 +430,13 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           throw new Error(`${HARNESS_AGENT_NAMES[activeHarness]} returned a runtime for a different workspace or session.`)
         }
         workspace.attachRuntime(activeRuntime, generation)
-        if (activeRuntime.isStreaming) {
+        if (compactCommand) {
+          await bridge.agent.command(activeRuntime.runtimeId, {
+            type: 'compact',
+            ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}),
+          })
+          completeQueuedFlush()
+        } else if (activeRuntime.isStreaming) {
           // Follow-ups are daemon-owned. Steers get a renderer-only pending
           // row so pickup can move them into history without redelivery.
           if (intent === 'steer') queuedPromptId = workspace.queuePrompt(prompt, intent, userMessage.parts, sentAt)
