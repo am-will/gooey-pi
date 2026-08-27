@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { HarnessId, PrimeModelCatalog, PrimeModelDescriptor, PrimeThinkingLevel, PrimeWorkApi, ProviderAuthEvent, RuntimeInfo } from '@/types/api'
+import type { HarnessId, PrimeModelCatalog, PrimeModelDescriptor, PrimeThinkingLevel, PrimeWorkApi, ProviderAuthEvent, RuntimeInfo, SessionRecord } from '@/types/api'
 
 type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
 
@@ -24,6 +24,8 @@ interface UseProviderCatalogOptions {
   /** Harness whose model catalog is shown; catalogs are cached per harness. */
   harness?: HarnessId
   runtime: RuntimeInfo | null
+  /** Active session metadata if available. */
+  activeSession?: SessionRecord
   /** Persisted per-harness model preference. */
   lastSelectedModel?: string
   rememberModel?(modelKey: string): void
@@ -31,7 +33,7 @@ interface UseProviderCatalogOptions {
   reportError(error: unknown): void
 }
 
-export function useProviderCatalog({ bridge, ready = true, harness = 'prime', runtime, lastSelectedModel = '', rememberModel, syncRuntime, reportError }: UseProviderCatalogOptions) {
+export function useProviderCatalog({ bridge, ready = true, harness = 'prime', runtime, activeSession, lastSelectedModel = '', rememberModel, syncRuntime, reportError }: UseProviderCatalogOptions) {
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState<PrimeThinkingLevel>('medium')
   const [fast, setFast] = useState(false)
@@ -99,10 +101,15 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     nextCatalog?.models.find((candidate) => candidate.enabled !== false && candidate.available)
   ), [])
 
-  const fallbackModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => (
-    nextCatalog?.models.find((candidate) => candidate.key === lastSelectedModel && candidate.enabled !== false && candidate.available)
+  const fallbackModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => {
+    if (activeSession?.provider && activeSession.model && nextCatalog) {
+      const sessionModel = nextCatalog.models.find((candidate) => candidate.provider === activeSession.provider && (candidate.id === activeSession.model || candidate.key === activeSession.model) && candidate.enabled !== false && candidate.available)
+        ?? nextCatalog.models.find((candidate) => candidate.id === activeSession.model && candidate.enabled !== false && candidate.available)
+      if (sessionModel) return sessionModel
+    }
+    return nextCatalog?.models.find((candidate) => candidate.key === lastSelectedModel && candidate.enabled !== false && candidate.available)
       ?? firstUsableModel(nextCatalog)
-  ), [firstUsableModel, lastSelectedModel])
+  }, [activeSession?.model, activeSession?.provider, firstUsableModel, lastSelectedModel])
 
   const selectedModel = useMemo<PrimeModelDescriptor | undefined>(() => {
     return catalog?.models.find((candidate) => candidate.key === model && candidate.enabled !== false && candidate.available)
@@ -160,15 +167,37 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     })
   }, [bridge, refresh, reportError])
 
+  const activeSessionIdRef = useRef(activeSession?.id)
   useEffect(() => {
-    if (!runtime?.model?.provider || !runtime.model.id || !catalog) return
-    const effectiveModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false && candidate.available)
-    if (effectiveModel) {
-      updateModel(effectiveModel.key)
-      rememberSelectionRef.current(effectiveModel.key)
+    if (!catalog) return
+    const sessionChanged = activeSessionIdRef.current !== activeSession?.id
+    activeSessionIdRef.current = activeSession?.id
+
+    // 1. If active live runtime has a model, sync to it
+    if (runtime?.model?.provider && runtime.model.id) {
+      const runtimeModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false && candidate.available)
+      if (runtimeModel) {
+        if (modelRef.current !== runtimeModel.key) updateModel(runtimeModel.key)
+        rememberSelectionRef.current(runtimeModel.key)
+      }
+      if (runtime.thinkingLevel && runtimeModel?.availableThinkingLevels.includes(runtime.thinkingLevel as PrimeThinkingLevel)) {
+        if (effortRef.current !== runtime.thinkingLevel) updateEffort(runtime.thinkingLevel as PrimeThinkingLevel)
+      }
+      return
     }
-    if (runtime.thinkingLevel && effectiveModel?.availableThinkingLevels.includes(runtime.thinkingLevel as PrimeThinkingLevel)) updateEffort(runtime.thinkingLevel as PrimeThinkingLevel)
-  }, [catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, updateEffort, updateModel])
+
+    // 2. If active selected session has a persisted model/provider, sync on session switch or initial load
+    if (activeSession?.provider && activeSession.model && sessionChanged) {
+      const sessionModel = catalog.models.find((candidate) => candidate.provider === activeSession.provider && (candidate.id === activeSession.model || candidate.key === activeSession.model) && candidate.enabled !== false && candidate.available)
+        ?? catalog.models.find((candidate) => candidate.id === activeSession.model && candidate.enabled !== false && candidate.available)
+      if (sessionModel && modelRef.current !== sessionModel.key) {
+        updateModel(sessionModel.key)
+      }
+      if (activeSession.thinkingLevel && sessionModel?.availableThinkingLevels.includes(activeSession.thinkingLevel as PrimeThinkingLevel)) {
+        if (effortRef.current !== activeSession.thinkingLevel) updateEffort(activeSession.thinkingLevel as PrimeThinkingLevel)
+      }
+    }
+  }, [activeSession?.id, catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, updateEffort, updateModel])
 
   // Scoped to the runtime's reported tier so a catalog refresh cannot revert
   // an optimistic fast-mode toggle that the runtime has not confirmed yet.
