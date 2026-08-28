@@ -729,23 +729,6 @@ async function bootstrap(): Promise<void> {
   // The disabled-by-default integration probes PATH and may spawn a version
   // command. Defer that work until it is enabled or its settings UI is opened.
   if (stateStore.getSettings().computerUseEnabled) await cuaDriver.status()
-  const voice = new VoiceService({
-    secretPath: join(app.getPath('userData'), 'voice-secrets.json'),
-    secretCodec: {
-      status: () => voiceSecretStorageStatus(
-        process.platform,
-        safeStorage.isEncryptionAvailable(),
-        process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : undefined,
-      ),
-      encrypt: (value) => safeStorage.encryptString(value),
-      decrypt: (value) => safeStorage.decryptString(value),
-    },
-    settings: () => stateStore.getSettings(),
-    projects: { prime: projects, omp: ompProjects, pi: piProjects },
-    agents: { prime: agents, omp: ompManager, pi: piManager },
-    catalogs: { prime: providers, omp: ompCatalog, pi: piCatalog },
-    runProcess,
-  })
   const pets = new PetService({
     builtInRoot: app.isPackaged ? join(process.resourcesPath, 'pets') : join(app.getAppPath(), 'assets', 'pets'),
     codexRoot: join(homedir(), '.codex', 'pets'),
@@ -942,6 +925,24 @@ async function bootstrap(): Promise<void> {
     collaborationBridge.start(),
   ])
   agentScheduleBridges = [scheduleBridge, ompScheduleBridge, piScheduleBridge]
+  const voice = new VoiceService({
+    secretPath: join(app.getPath('userData'), 'voice-secrets.json'),
+    secretCodec: {
+      status: () => voiceSecretStorageStatus(
+        process.platform,
+        safeStorage.isEncryptionAvailable(),
+        process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : undefined,
+      ),
+      encrypt: (value) => safeStorage.encryptString(value),
+      decrypt: (value) => safeStorage.decryptString(value),
+    },
+    settings: () => stateStore.getSettings(),
+    projects: { prime: projects, omp: ompProjects, pi: piProjects },
+    agents: { prime: agents, omp: ompManager, pi: piManager },
+    catalogs: { prime: providers, omp: ompCatalog, pi: piCatalog },
+    collaboration: collaborationBridge,
+    runProcess,
+  })
   agentBrowserBridge = browserBridge
   agentCollaborationBridge = collaborationBridge
   const revokeRuntimeCapabilities = (environment: NodeJS.ProcessEnv, runtimeScheduleBridge: AgentScheduleBridge): void => {

@@ -14,7 +14,6 @@ const MAX_LISTED_SESSIONS = 100
 const MAX_MESSAGES = 40
 const MAX_CONTEXT_TOKENS = 30_000
 const TOKEN_ESTIMATE_CHARS = 4
-const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * TOKEN_ESTIMATE_CHARS
 const MAX_SEND_CHARS = 64 * 1024
 const MAX_CREATE_PROMPT_CHARS = 1_000_000
 const MAX_WAIT_MS = 30_000
@@ -43,7 +42,7 @@ async function delayUntil(targetTime: number, clock: CollaborationWaitClock): Pr
   }
 }
 
-interface CollaborationSessionService {
+export interface CollaborationSessionService {
   list(projectPath?: unknown, includeArchived?: unknown, force?: unknown): Promise<SessionRecord[]>
   read(filePath: unknown): Promise<TranscriptMessage[]>
 }
@@ -64,14 +63,14 @@ export interface AgentCollaborationBridgeOptions {
   waitClock?: CollaborationWaitClock
 }
 
-interface CollaborationMessage {
+export interface CollaborationMessage {
   id: string
   role: TranscriptMessage['role']
   agentName?: string
   text: string
 }
 
-interface CollaborationSnapshot {
+export interface CollaborationSnapshot {
   session: Pick<SessionRecord, 'id' | 'harness' | 'title' | 'status' | 'updatedAt'>
   cursor: string
   live: boolean
@@ -79,6 +78,27 @@ interface CollaborationSnapshot {
   token_limit: number
   truncated: boolean
   messages: CollaborationMessage[]
+}
+
+export interface AgentSessionAccessScope {
+  harness: HarnessId
+  projectPaths: readonly string[]
+}
+
+export interface AgentSessionSummary {
+  id: string
+  harness: HarnessId
+  projectPath: string
+  title: string
+  status: SessionRecord['status']
+  updatedAt: string
+  live: boolean
+  preview?: string
+}
+
+interface SnapshotLimits {
+  maxMessages: number
+  maxContextTokens: number
 }
 
 function messageText(message: TranscriptMessage): string {
@@ -100,12 +120,13 @@ function truncateMiddle(value: string, maxChars: number): string {
   return `${value.slice(0, headChars)}${marker}${value.slice(-(available - headChars))}`
 }
 
-function boundedMessages(transcript: TranscriptMessage[]): {
+function boundedMessages(transcript: TranscriptMessage[], limits: SnapshotLimits): {
   messages: CollaborationMessage[]
   estimatedTokens: number
   truncated: boolean
 } {
-  let remaining = MAX_CONTEXT_CHARS
+  const maxContextChars = limits.maxContextTokens * TOKEN_ESTIMATE_CHARS
+  let remaining = maxContextChars
   const messages: CollaborationMessage[] = []
   let truncated = false
   let includedMessages = 0
@@ -113,7 +134,7 @@ function boundedMessages(transcript: TranscriptMessage[]): {
     const message = transcript[index]
     const raw = messageText(message)
     if (!raw) continue
-    if (includedMessages >= MAX_MESSAGES || remaining <= 0) {
+    if (includedMessages >= limits.maxMessages || remaining <= 0) {
       truncated = true
       break
     }
@@ -126,7 +147,7 @@ function boundedMessages(transcript: TranscriptMessage[]): {
   }
   return {
     messages: messages.reverse(),
-    estimatedTokens: Math.ceil((MAX_CONTEXT_CHARS - remaining) / TOKEN_ESTIMATE_CHARS),
+    estimatedTokens: Math.ceil((maxContextChars - remaining) / TOKEN_ESTIMATE_CHARS),
     truncated,
   }
 }
@@ -194,6 +215,38 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     if (runtimeId) this.pendingRuntimeTokens.delete(runtimeId)
   }
 
+  /**
+   * Main-process access for user-owned surfaces such as realtime voice. The
+   * caller supplies only paths from explicit project grants; this bridge keeps
+   * catalog lookup, transcript bounds, wake-up, and delivery behavior shared
+   * with the harness collaboration tools.
+   */
+  async listAccessibleSessions(scope: AgentSessionAccessScope): Promise<AgentSessionSummary[]> {
+    return (await this.targetsForScope(scope)).map(({ session, manager }) => ({
+      id: session.id,
+      harness: session.harness,
+      projectPath: session.projectPath,
+      title: session.title,
+      status: session.status,
+      updatedAt: session.updatedAt,
+      live: Boolean(manager.getForSession(session.filePath)),
+      ...(session.preview ? { preview: session.preview.slice(0, 280) } : {}),
+    }))
+  }
+
+  async readAccessibleSession(scope: AgentSessionAccessScope, targetId: string): Promise<CollaborationSnapshot & { projectPath: string }> {
+    const target = await this.targetForScope(scope, requireId(targetId, 'session_id'))
+    const snapshot = await this.snapshot(target, { maxMessages: 10, maxContextTokens: 2_000 })
+    return { ...snapshot, projectPath: target.session.projectPath }
+  }
+
+  async sendUserMessage(scope: AgentSessionAccessScope, targetId: string, rawMessage: unknown): Promise<Record<string, unknown>> {
+    const target = await this.targetForScope(scope, requireId(targetId, 'session_id'))
+    const message = requireString(rawMessage, 'message', { min: 1, max: MAX_SEND_CHARS, trim: true })
+    assertNoMcpAuthenticationCommand(message, scope.harness)
+    return this.withDeliveryLock(target, () => this.deliver(target, message, false))
+  }
+
   private bindRuntimeSession(runtimeId: string, sessionFile: string): void {
     const token = this.pendingRuntimeTokens.get(runtimeId)
     if (token) this.bindSession(token, sessionFile, runtimeId)
@@ -246,6 +299,25 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       peers.push({ session, service, manager: this.options.agents[harness] })
     }
     return peers.sort((left, right) => Date.parse(right.session.updatedAt) - Date.parse(left.session.updatedAt))
+  }
+
+  private async targetsForScope(scope: AgentSessionAccessScope): Promise<CollaborationTarget[]> {
+    const allowedPaths = new Set(scope.projectPaths.map((path) => resolve(path)))
+    if (allowedPaths.size === 0) return []
+    const service = this.options.sessions[scope.harness]
+    const manager = this.options.agents[scope.harness]
+    const sessions = await service.list(undefined, false, true)
+    return sessions
+      .filter((session) => session.depth === 0 && allowedPaths.has(resolve(session.projectPath)))
+      .map((session) => ({ session, service, manager }))
+      .sort((left, right) => Date.parse(right.session.updatedAt) - Date.parse(left.session.updatedAt))
+  }
+
+  private async targetForScope(scope: AgentSessionAccessScope, targetId: string): Promise<CollaborationTarget> {
+    const matches = (await this.targetsForScope(scope)).filter(({ session }) => session.id === targetId)
+    if (matches.length === 0) throw new Error('The target session was not found in an explicitly granted project')
+    if (matches.length > 1) throw new Error('The target session id is ambiguous in this catalog')
+    return matches[0]
   }
 
   private async listPeers(source: CollaborationTarget): Promise<Array<Record<string, unknown>>> {
@@ -358,8 +430,11 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     return matches[0]
   }
 
-  private async snapshot(target: CollaborationTarget): Promise<CollaborationSnapshot> {
-    const context = boundedMessages(await target.service.read(target.session.filePath))
+  private async snapshot(
+    target: CollaborationTarget,
+    limits: SnapshotLimits = { maxMessages: MAX_MESSAGES, maxContextTokens: MAX_CONTEXT_TOKENS },
+  ): Promise<CollaborationSnapshot> {
+    const context = boundedMessages(await target.service.read(target.session.filePath), limits)
     // The target was authorized through a forced catalog scan. Polling waits
     // use the service cache so a 30-second wait never rescans every session
     // file four times per second.
@@ -372,7 +447,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       cursor: cursorFor(refreshed, context.messages, live),
       live,
       estimated_tokens: context.estimatedTokens,
-      token_limit: MAX_CONTEXT_TOKENS,
+      token_limit: limits.maxContextTokens,
       truncated: context.truncated,
       messages: context.messages,
     }
@@ -381,16 +456,26 @@ export class AgentCollaborationBridge extends CapabilityBridge {
   private async send(source: CollaborationTarget, target: CollaborationTarget, rawMessage: unknown): Promise<Record<string, unknown>> {
     const message = requireString(rawMessage, 'message', { min: 1, max: MAX_SEND_CHARS, trim: true })
     assertNoMcpAuthenticationCommand(message, source.session.harness)
-    const existing = target.manager.getForSession(target.session.filePath)
-    const runtime = existing ?? await this.wake(target)
-    const before = await this.snapshot(target)
     const attribution = encodeGooeyPiAgentMessage({
       fromSessionId: source.session.id,
       text: message,
     })
+    return this.deliver(target, attribution, true)
+  }
+
+  private async deliver(target: CollaborationTarget, message: string, includeCursor: boolean): Promise<Record<string, unknown>> {
+    const existing = target.manager.getForSession(target.session.filePath)
+    const runtime = existing ?? await this.wake(target)
+    const before = includeCursor ? await this.snapshot(target) : undefined
     const busy = runtime.isStreaming || runtime.isCompacting || runtime.sessionActions?.active
-    await target.manager.command(runtime.runtimeId, { type: busy ? 'follow_up' : 'prompt', message: attribution })
-    return { delivered: true, target_session_id: target.session.id, awakened: !existing, queued: Boolean(busy), cursor_before: before.cursor }
+    await target.manager.command(runtime.runtimeId, { type: busy ? 'follow_up' : 'prompt', message })
+    return {
+      delivered: true,
+      target_session_id: target.session.id,
+      awakened: !existing,
+      queued: Boolean(busy),
+      ...(before ? { cursor_before: before.cursor } : {}),
+    }
   }
 
   private async wake(target: CollaborationTarget): Promise<RuntimeInfo> {
