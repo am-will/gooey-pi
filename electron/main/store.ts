@@ -144,8 +144,12 @@ export function defaultSettings(): AppSettings {
     voiceSelfHostedModel: '',
     voiceLocalWhisperExecutable: '',
     voiceLocalWhisperModel: '',
+    voiceRealtimeProvider: 'openai',
     voiceRealtimeModel: 'gpt-realtime-2.1',
     voiceRealtimeVoice: 'marin',
+    voiceRealtimeSelfHostedUrl: '',
+    voiceRealtimeSelfHostedModel: '',
+    voiceRealtimeSelfHostedVoice: '',
   }
 }
 
@@ -296,8 +300,12 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     voiceSelfHostedModel: boundedString(value.voiceSelfHostedModel, 128, true) ? value.voiceSelfHostedModel : defaults.voiceSelfHostedModel,
     voiceLocalWhisperExecutable: boundedString(value.voiceLocalWhisperExecutable, 4096, true) ? value.voiceLocalWhisperExecutable : defaults.voiceLocalWhisperExecutable,
     voiceLocalWhisperModel: boundedString(value.voiceLocalWhisperModel, 4096, true) ? value.voiceLocalWhisperModel : defaults.voiceLocalWhisperModel,
+    voiceRealtimeProvider: value.voiceRealtimeProvider === 'openai' || value.voiceRealtimeProvider === 'self-hosted' ? value.voiceRealtimeProvider : defaults.voiceRealtimeProvider,
     voiceRealtimeModel: boundedString(value.voiceRealtimeModel, 128) ? value.voiceRealtimeModel : defaults.voiceRealtimeModel,
     voiceRealtimeVoice: boundedString(value.voiceRealtimeVoice, 64) ? value.voiceRealtimeVoice : defaults.voiceRealtimeVoice,
+    voiceRealtimeSelfHostedUrl: boundedString(value.voiceRealtimeSelfHostedUrl, 2_048, true) ? value.voiceRealtimeSelfHostedUrl : defaults.voiceRealtimeSelfHostedUrl,
+    voiceRealtimeSelfHostedModel: boundedString(value.voiceRealtimeSelfHostedModel, 128, true) ? value.voiceRealtimeSelfHostedModel : defaults.voiceRealtimeSelfHostedModel,
+    voiceRealtimeSelfHostedVoice: boundedString(value.voiceRealtimeSelfHostedVoice, 128, true) ? value.voiceRealtimeSelfHostedVoice : defaults.voiceRealtimeSelfHostedVoice,
   }
 }
 

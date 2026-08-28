@@ -59,6 +59,10 @@ export const SETTINGS_FIELD_SECTIONS = {
   voiceSelfHostedModel: 'voice',
   voiceLocalWhisperExecutable: 'voice',
   voiceLocalWhisperModel: 'voice',
+  voiceRealtimeProvider: 'voice',
   voiceRealtimeModel: 'voice',
   voiceRealtimeVoice: 'voice',
+  voiceRealtimeSelfHostedUrl: 'voice',
+  voiceRealtimeSelfHostedModel: 'voice',
+  voiceRealtimeSelfHostedVoice: 'voice',
 } as const satisfies Record<keyof AppSettings, SettingsSection>

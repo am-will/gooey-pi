@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Modal } from '@/components/ui'
 import { errorMessage } from '@/lib/errors'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
+import { probeRealtimeToolSupport, waitForDataChannelOpen, waitForIceGathering } from '@/lib/realtime-webrtc'
 import {
   DEEPGRAM_MODELS,
   GROQ_MODELS,
@@ -14,7 +15,7 @@ import {
   optionsWithCurrent,
   type VoiceOption,
 } from '@/lib/voice-options'
-import type { AppSettings, PrimeWorkApi, VoiceCredentialProvider, VoiceCredentialStatus, VoiceTranscriptionProvider } from '@/types/api'
+import type { AppSettings, PrimeWorkApi, VoiceCredentialProvider, VoiceCredentialStatus, VoiceRealtimeProvider, VoiceTranscriptionProvider } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 
 const CREDENTIALS: Array<{ id: VoiceCredentialProvider; name: string; monogram: string; detail: string }> = [
@@ -22,9 +23,10 @@ const CREDENTIALS: Array<{ id: VoiceCredentialProvider; name: string; monogram: 
   { id: 'groq', name: 'Groq', monogram: 'GQ', detail: 'Used only when Groq is your dictation provider.' },
   { id: 'deepgram', name: 'Deepgram', monogram: 'DG', detail: 'Used only when Deepgram is your dictation provider.' },
   { id: 'self-hosted', name: 'Self-hosted endpoint', monogram: 'SH', detail: 'Optional bearer token for your Parakeet or Whisper server.' },
+  { id: 'self-hosted-realtime', name: 'Self-hosted realtime endpoint', monogram: 'RT', detail: 'Optional bearer token used only by the realtime orb.' },
 ]
 
-const CONNECTION_CREDENTIALS = CREDENTIALS.filter((item) => item.id !== 'self-hosted')
+const CONNECTION_CREDENTIALS = CREDENTIALS.filter((item) => item.id !== 'self-hosted' && item.id !== 'self-hosted-realtime')
 
 interface VoiceSettingsProps extends SettingsSectionProps {
   voice: PrimeWorkApi['voice'] | null
@@ -32,7 +34,7 @@ interface VoiceSettingsProps extends SettingsSectionProps {
 }
 
 type VoiceServiceState = 'checking' | 'ready' | 'restart-required' | 'error'
-type SelfHostedTestState = 'idle' | 'testing' | 'connected' | 'error'
+type SelfHostedTestState = 'idle' | 'testing' | 'connected' | 'warning' | 'error'
 
 function needsDesktopRestart(error: unknown): boolean {
   return /No handler registered for ['"]voice:/i.test(errorMessage(error))
@@ -76,9 +78,17 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
   const [selfHostedModel, setSelfHostedModel] = useState(settings.voiceSelfHostedModel)
   const [selfHostedTestState, setSelfHostedTestState] = useState<SelfHostedTestState>('idle')
   const [selfHostedMessage, setSelfHostedMessage] = useState('')
+  const [realtimeSelfHostedUrl, setRealtimeSelfHostedUrl] = useState(settings.voiceRealtimeSelfHostedUrl)
+  const [realtimeSelfHostedModel, setRealtimeSelfHostedModel] = useState(settings.voiceRealtimeSelfHostedModel)
+  const [realtimeSelfHostedVoice, setRealtimeSelfHostedVoice] = useState(settings.voiceRealtimeSelfHostedVoice)
+  const [realtimeTestState, setRealtimeTestState] = useState<SelfHostedTestState>('idle')
+  const [realtimeMessage, setRealtimeMessage] = useState('')
 
   useEffect(() => setSelfHostedUrl(settings.voiceSelfHostedUrl), [settings.voiceSelfHostedUrl])
   useEffect(() => setSelfHostedModel(settings.voiceSelfHostedModel), [settings.voiceSelfHostedModel])
+  useEffect(() => setRealtimeSelfHostedUrl(settings.voiceRealtimeSelfHostedUrl), [settings.voiceRealtimeSelfHostedUrl])
+  useEffect(() => setRealtimeSelfHostedModel(settings.voiceRealtimeSelfHostedModel), [settings.voiceRealtimeSelfHostedModel])
+  useEffect(() => setRealtimeSelfHostedVoice(settings.voiceRealtimeSelfHostedVoice), [settings.voiceRealtimeSelfHostedVoice])
 
   useEffect(() => {
     let active = true
@@ -128,10 +138,58 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
       setSelfHostedMessage(errorMessage(error))
     }
   }
+  const testRealtimeSelfHosted = async () => {
+    if (!voice || !realtimeSelfHostedUrl.trim()) return
+    setRealtimeTestState('testing'); setRealtimeMessage('')
+    const values = {
+      voiceRealtimeProvider: 'self-hosted' as const,
+      voiceRealtimeSelfHostedUrl: realtimeSelfHostedUrl.trim(),
+      voiceRealtimeSelfHostedModel: realtimeSelfHostedModel.trim(),
+      voiceRealtimeSelfHostedVoice: realtimeSelfHostedVoice.trim(),
+    }
+    let peer: RTCPeerConnection | null = null
+    let setupPending = false
+    const setupId = crypto.randomUUID()
+    try {
+      await onUpdate(values)
+      peer = new RTCPeerConnection()
+      peer.addTransceiver('audio', { direction: 'recvonly' })
+      const channel = peer.createDataChannel('oai-events')
+      const offer = await peer.createOffer()
+      await peer.setLocalDescription(offer)
+      const localDescription = await waitForIceGathering(peer)
+      setupPending = true
+      const answer = await voice.createRealtimeCall({
+        mode: 'test',
+        setupId,
+        sdp: localDescription.sdp ?? '',
+        harness: settings.activeHarness,
+      })
+      setupPending = false
+      await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
+      await waitForDataChannelOpen(channel)
+      const toolsSupported = await probeRealtimeToolSupport(channel)
+      setRealtimeTestState(toolsSupported ? 'connected' : 'warning')
+      setRealtimeMessage(toolsSupported
+        ? 'Connected. GooeyPi established an OpenAI-compatible realtime session with tool support.'
+        : 'Self-hosted realtime server connected, but tool support was not detected.')
+    } catch (error) {
+      if (setupPending) await voice.cancelRealtimeCall(setupId).catch(() => undefined)
+      setRealtimeTestState('error')
+      setRealtimeMessage(errorMessage(error))
+    } finally {
+      peer?.close()
+    }
+  }
   const provider = VOICE_PROVIDER_OPTIONS.find((option) => option.value === settings.voiceTranscriptionProvider) ?? VOICE_PROVIDER_OPTIONS[0]
   const selectedCredential = provider.credential
   const selectedConfigured = selectedCredential ? status?.configured[selectedCredential] ?? false : true
   const secureStorageAvailable = status?.storage.available ?? false
+  const realtimeProvider = settings.voiceRealtimeProvider
+  const realtimeConfigured = realtimeProvider === 'openai'
+    ? status?.configured.openai ?? false
+    : Boolean(realtimeSelfHostedUrl.trim())
+  const tokenCredential = credential === 'self-hosted' || credential === 'self-hosted-realtime'
 
   return (
     <>
@@ -249,23 +307,70 @@ export function VoiceSettings({ settings, onUpdate, voice, platform = 'darwin' }
       <section className="voice-section" aria-labelledby="voice-realtime-title">
         <div className="voice-section__heading">
           <span><Radio size={15} /></span>
-          <div><h2 id="voice-realtime-title">Realtime orb</h2><p>The draggable voice agent. It uses your OpenAI connection.</p></div>
+          <div><h2 id="voice-realtime-title">Realtime orb</h2><p>The draggable voice agent can use OpenAI or an OpenAI-compatible server.</p></div>
         </div>
         <div className="voice-setup-card">
-          <ModelSelect label="Realtime model" description="Handles conversation, web search, and task delegation." value={settings.voiceRealtimeModel} options={REALTIME_MODELS} onChange={(value) => update('voiceRealtimeModel', value)} />
-          <ModelSelect label="Speaking voice" description="The voice you hear when the orb responds." value={settings.voiceRealtimeVoice} options={REALTIME_VOICES} onChange={(value) => update('voiceRealtimeVoice', value)} />
-          <div className={`voice-requirement${status?.configured.openai ? ' is-ready' : ''}`}>
-            <span>{status?.configured.openai ? <Check size={13} /> : <KeyRound size={13} />}{status?.configured.openai ? 'OpenAI is connected' : 'OpenAI key required'}</span>
-            {!status?.configured.openai && voice && serviceState === 'ready' ? <button type="button" onClick={() => openCredential('openai')}>Add key</button> : null}
+          <label className="voice-choice-row">
+            <span><strong>Connection</strong><small>Choose the independent connection used by the orb.</small></span>
+            <span className="voice-choice-control">
+              <select aria-label="Realtime connection" value={realtimeProvider} onChange={(event) => { update('voiceRealtimeProvider', event.target.value as VoiceRealtimeProvider); setRealtimeTestState('idle'); setRealtimeMessage('') }}>
+                <option value="openai">OpenAI API key</option>
+                <option value="self-hosted">Self-hosted · OpenAI compatible</option>
+              </select>
+              <small>{realtimeProvider === 'openai'
+                ? 'Uses GooeyPi’s existing realtime API connection.'
+                : 'Uses your own OpenAI-compatible Realtime WebRTC endpoint.'}</small>
+            </span>
+          </label>
+          {realtimeProvider === 'openai' ? <>
+            <ModelSelect label="Realtime model" description="Handles conversation, web search, and task delegation." value={settings.voiceRealtimeModel} options={REALTIME_MODELS} onChange={(value) => update('voiceRealtimeModel', value)} />
+            <ModelSelect label="Speaking voice" description="The voice you hear when the orb responds." value={settings.voiceRealtimeVoice} options={REALTIME_VOICES} onChange={(value) => update('voiceRealtimeVoice', value)} />
+          </> : null}
+          {realtimeProvider === 'self-hosted' ? (
+            <div className="voice-self-hosted-setup">
+              <span className="voice-local-setup__intro"><Server size={15} /><span><strong>Connect your realtime server</strong><small>This configuration is separate from the self-hosted dictation service.</small></span></span>
+              <label className="voice-path-field">
+                <span><strong>Server URL</strong><small>Enter a base URL or the full /v1/realtime/calls endpoint.</small></span>
+                <input aria-label="Self-hosted realtime server URL" type="url" value={realtimeSelfHostedUrl} placeholder="https://api.example.com" spellCheck={false} onChange={(event) => { setRealtimeSelfHostedUrl(event.target.value); setRealtimeTestState('idle'); setRealtimeMessage('') }} onBlur={() => { const value = realtimeSelfHostedUrl.trim(); if (value !== settings.voiceRealtimeSelfHostedUrl) update('voiceRealtimeSelfHostedUrl', value) }} />
+              </label>
+              <label className="voice-path-field">
+                <span><strong>Model ID</strong><small>Optional. Leave blank to use the server default.</small></span>
+                <input aria-label="Self-hosted realtime model ID" value={realtimeSelfHostedModel} placeholder="Server default" spellCheck={false} onChange={(event) => { setRealtimeSelfHostedModel(event.target.value); setRealtimeTestState('idle'); setRealtimeMessage('') }} onBlur={() => { const value = realtimeSelfHostedModel.trim(); if (value !== settings.voiceRealtimeSelfHostedModel) update('voiceRealtimeSelfHostedModel', value) }} />
+              </label>
+              <label className="voice-path-field">
+                <span><strong>Speaking voice</strong><small>Optional. Leave blank to use the server default.</small></span>
+                <input aria-label="Self-hosted realtime voice ID" value={realtimeSelfHostedVoice} placeholder="Server default" spellCheck={false} onChange={(event) => { setRealtimeSelfHostedVoice(event.target.value); setRealtimeTestState('idle'); setRealtimeMessage('') }} onBlur={() => { const value = realtimeSelfHostedVoice.trim(); if (value !== settings.voiceRealtimeSelfHostedVoice) update('voiceRealtimeSelfHostedVoice', value) }} />
+              </label>
+              <div className="voice-self-hosted-auth">
+                <span><strong>Access token</strong><small>Optional and separate from the self-hosted dictation token.</small></span>
+                <span className="voice-self-hosted-auth__actions">
+                  <i>{status?.configured['self-hosted-realtime'] ? status.source['self-hosted-realtime'] === 'session' ? 'Session only' : status.source['self-hosted-realtime'] === 'environment' ? 'Environment token' : 'Token saved' : status?.source['self-hosted-realtime'] === 'saved' ? 'Storage locked' : 'No token'}</i>
+                  {voice && serviceState === 'ready' ? <button type="button" className="button" disabled={busy} onClick={() => openCredential('self-hosted-realtime')}><KeyRound size={13} /> {status?.configured['self-hosted-realtime'] ? 'Replace token' : 'Add token'}</button> : null}
+                  {voice && serviceState === 'ready' && (status?.source['self-hosted-realtime'] === 'saved' || status?.source['self-hosted-realtime'] === 'session') ? <button type="button" className="button button--icon" aria-label="Remove self-hosted realtime access token" disabled={busy} onClick={() => void removeCredential('self-hosted-realtime')}><Trash2 size={13} /></button> : null}
+                </span>
+              </div>
+              <div className="voice-self-hosted-connect">
+                <span><strong>Connection check</strong><small>Creates a microphone-free WebRTC session and requires one harmless function call.</small></span>
+                <button type="button" className="button button--primary" disabled={!voice || !realtimeSelfHostedUrl.trim() || realtimeTestState === 'testing'} onClick={() => void testRealtimeSelfHosted()}>{realtimeTestState === 'testing' ? <LoaderCircle className="is-spinning" size={13} /> : <Radio size={13} />} {realtimeTestState === 'testing' ? 'Testing…' : 'Connect & test'}</button>
+              </div>
+              {realtimeMessage ? <p className={`voice-self-hosted-result is-${realtimeTestState}`} role={realtimeTestState === 'error' ? 'alert' : 'status'}>{realtimeTestState === 'connected' ? <Check size={13} /> : <ShieldAlert size={13} />}{realtimeMessage}</p> : null}
+              <p className="voice-self-hosted-note">Plain HTTP is allowed on this computer and private-network addresses. Use HTTPS for public hosts. GooeyPi never falls back to a hosted voice provider.</p>
+            </div>
+          ) : null}
+          <div className={`voice-requirement${realtimeConfigured ? ' is-ready' : ''}`}>
+            <span>{realtimeConfigured ? <Check size={13} /> : realtimeProvider === 'self-hosted' ? <Server size={13} /> : <KeyRound size={13} />}{realtimeProvider === 'openai'
+              ? realtimeConfigured ? 'OpenAI API key connected' : 'OpenAI API key required'
+              : realtimeConfigured ? 'Self-hosted realtime server configured' : 'Self-hosted realtime server URL required'}</span>
+            {realtimeProvider === 'openai' && !realtimeConfigured && voice && serviceState === 'ready' ? <button type="button" onClick={() => openCredential('openai')}>Add key</button> : null}
           </div>
           {secureStorageAvailable ? <p className="voice-realtime-note">Saved API keys are encrypted using your operating system’s internal keychain. When you open the voice agent, your system may ask for your password to retrieve the key.</p> : null}
         </div>
       </section>
 
-      {credential ? <Modal title={`Connect ${CREDENTIALS.find((item) => item.id === credential)?.name ?? credential}`} onClose={closeCredential} footer={<><button type="button" className="button" disabled={busy} onClick={closeCredential}>Cancel</button><button type="button" className="button button--primary" disabled={busy || !apiKey.trim()} onClick={() => void saveCredential()}>{busy ? 'Saving…' : credential === 'self-hosted' ? 'Save token' : 'Save API key'}</button></>}>
-        <p className="modal-intro">{secureStorageAvailable ? `Paste the ${credential === 'self-hosted' ? 'optional bearer token' : 'provider API key'}. GooeyPi encrypts it with your operating system’s secure credential store and never reads it back into this screen.` : `Secure credential storage is unavailable. GooeyPi will keep this ${credential === 'self-hosted' ? 'token' : 'key'} only in desktop memory for the current app session. It will not write the ${credential === 'self-hosted' ? 'token' : 'key'} to disk, and it will be cleared when GooeyPi quits.`}</p>
+      {credential ? <Modal title={`Connect ${CREDENTIALS.find((item) => item.id === credential)?.name ?? credential}`} onClose={closeCredential} footer={<><button type="button" className="button" disabled={busy} onClick={closeCredential}>Cancel</button><button type="button" className="button button--primary" disabled={busy || !apiKey.trim()} onClick={() => void saveCredential()}>{busy ? 'Saving…' : tokenCredential ? 'Save token' : 'Save API key'}</button></>}>
+        <p className="modal-intro">{secureStorageAvailable ? `Paste the ${tokenCredential ? 'optional bearer token' : 'provider API key'}. GooeyPi encrypts it with your operating system’s secure credential store and never reads it back into this screen.` : `Secure credential storage is unavailable. GooeyPi will keep this ${tokenCredential ? 'token' : 'key'} only in desktop memory for the current app session. It will not write the ${tokenCredential ? 'token' : 'key'} to disk, and it will be cleared when GooeyPi quits.`}</p>
         {failure ? <p className="settings-error" role="alert">{failure}</p> : null}
-        <label className="field"><span>{credential === 'self-hosted' ? 'Access token' : 'API key'}</span><input autoFocus type="password" value={apiKey} autoComplete="off" spellCheck={false} placeholder={credential === 'self-hosted' ? 'Paste access token' : 'Paste API key'} onChange={(event) => setApiKey(event.target.value)} /></label>
+        <label className="field"><span>{tokenCredential ? 'Access token' : 'API key'}</span><input autoFocus type="password" value={apiKey} autoComplete="off" spellCheck={false} placeholder={tokenCredential ? 'Paste access token' : 'Paste API key'} onChange={(event) => setApiKey(event.target.value)} /></label>
       </Modal> : null}
     </>
   )

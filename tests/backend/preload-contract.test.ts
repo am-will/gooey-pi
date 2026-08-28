@@ -56,6 +56,7 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['voice', 'saveApiKey', 'voice:save-api-key', ['openai', 'secret']],
   ['voice', 'deleteApiKey', 'voice:delete-api-key', ['openai']],
   ['voice', 'createRealtimeCall', 'voice:create-realtime-call', [{ mode: 'transcription', sdp: 'sdp' }]],
+  ['voice', 'cancelRealtimeCall', 'voice:cancel-realtime-call', ['setup-id']],
   ['voice', 'transcribe', 'voice:transcribe', [{ provider: 'openai', audioBase64: 'audio' }]],
   ['voice', 'testSelfHosted', 'voice:test-self-hosted', [{ url: 'https://voice.example' }]],
   ['voice', 'executeTool', 'voice:execute-tool', [{ name: 'list_projects', arguments: {} }, 'omp']],

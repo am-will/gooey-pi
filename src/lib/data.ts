@@ -53,8 +53,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceSelfHostedModel: '',
   voiceLocalWhisperExecutable: '',
   voiceLocalWhisperModel: '',
+  voiceRealtimeProvider: 'openai',
   voiceRealtimeModel: 'gpt-realtime-2.1',
   voiceRealtimeVoice: 'marin',
+  voiceRealtimeSelfHostedUrl: '',
+  voiceRealtimeSelfHostedModel: '',
+  voiceRealtimeSelfHostedVoice: '',
 }
 
 export const SAMPLE_PROJECTS: ProjectRecord[] = [

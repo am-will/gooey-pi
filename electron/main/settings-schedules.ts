@@ -110,8 +110,18 @@ export class SettingsService {
       },
       voiceLocalWhisperExecutable: (value) => requireString(value, 'voiceLocalWhisperExecutable', { max: 4_096, trim: true }),
       voiceLocalWhisperModel: (value) => requireString(value, 'voiceLocalWhisperModel', { max: 4_096, trim: true }),
+      voiceRealtimeProvider: (value) => {
+        if (value !== 'openai' && value !== 'self-hosted') throw new TypeError('Invalid realtime voice provider')
+        return value
+      },
       voiceRealtimeModel: (value) => this.voiceModel(value, 'voiceRealtimeModel'),
       voiceRealtimeVoice: (value) => this.voiceModel(value, 'voiceRealtimeVoice'),
+      voiceRealtimeSelfHostedUrl: (value) => {
+        const url = requireString(value, 'voiceRealtimeSelfHostedUrl', { max: 2_048, trim: true })
+        return url ? requireSelfHostedVoiceUrl(url) : ''
+      },
+      voiceRealtimeSelfHostedModel: (value) => this.optionalVoiceId(value, 'voiceRealtimeSelfHostedModel'),
+      voiceRealtimeSelfHostedVoice: (value) => this.optionalVoiceId(value, 'voiceRealtimeSelfHostedVoice'),
       disabledProviders: (value) => {
         if (!Array.isArray(value) || value.length > 128) throw new TypeError('disabledProviders must be a bounded array')
         return [...new Set(value.map((entry, index) => {
@@ -173,6 +183,12 @@ export class SettingsService {
     const model = requireString(value, label, { min: 1, max: 128, trim: true })
     if (!/^[a-z0-9][a-z0-9._:-]{0,127}$/i.test(model)) throw new TypeError(`${label} is not valid`)
     return model
+  }
+
+  private optionalVoiceId(value: unknown, label: string): string {
+    const id = requireString(value, label, { max: 128, trim: true })
+    if (id && !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(id)) throw new TypeError(`${label} is not valid`)
+    return id
   }
 
   private disabledModels(value: unknown, label: string): string[] {
