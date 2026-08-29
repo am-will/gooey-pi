@@ -68,6 +68,25 @@ describe('runProcess resource bounds', () => {
     expect(result.stdout).toBe('17.3.4\n')
   })
 
+  it('runs a Bun XDG-cache OMP shim when bun is only in ~/.bun/bin', async () => {
+    const home = temp()
+    const bunDirectory = join(home, '.bun', 'bin')
+    const cacheDirectory = join(home, '.cache', '.bun', 'bin')
+    mkdirSync(bunDirectory, { recursive: true })
+    mkdirSync(cacheDirectory, { recursive: true })
+    const executable = join(cacheDirectory, 'omp')
+    symlinkSync(process.execPath, join(bunDirectory, 'bun'))
+    writeFileSync(executable, '#!/usr/bin/env bun\nprocess.stdout.write("18.0.6\\n")\n')
+    chmodSync(executable, 0o755)
+
+    const result = await runProcess(executable, ['--version'], {
+      env: { HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toBe('18.0.6\n')
+  })
+
   it('uses a combined output budget and explicitly reports truncation with independent kill escalation', async () => {
     const started = Date.now()
     const result = await runProcess(process.execPath, ['-e', `
@@ -306,6 +325,7 @@ describe('OMP discovery candidates', () => {
       }, 'darwin', undefined, home)
       expect(candidates).toContain('/Users/Ada/.local/bin/omp')
       expect(candidates).toContain('/Users/Ada/.bun/bin/omp')
+      expect(candidates).toContain('/Users/Ada/.cache/.bun/bin/omp')
       expect(candidates).toContain('/Users/Ada/Library/pnpm/omp')
       expect(candidates).toContain('/Users/Ada/.volta/bin/omp')
       expect(candidates).toContain('/Users/Ada/.local/share/mise/shims/omp')
@@ -313,17 +333,25 @@ describe('OMP discovery candidates', () => {
     const candidates = harnessExecutableCandidates(HARNESSES.omp, { PATH: '/usr/bin' }, 'darwin', undefined, home)
     expect(candidates).toContain('/opt/homebrew/bin/omp')
     expect(candidates).toContain('/usr/local/bin/omp')
+    expect(candidates).toContain('/Users/Ada/.cache/.bun/bin/omp')
     expect(candidates.every((candidate) => isAbsolutePathForPlatform(candidate, 'darwin'))).toBe(true)
+    const xdgCache = harnessExecutableCandidates(HARNESSES.omp, {
+      PATH: '/usr/bin', XDG_CACHE_HOME: '/var/cache',
+    }, 'darwin', undefined, home)
+    expect(xdgCache).toContain('/var/cache/.bun/bin/omp')
+    expect(xdgCache).toContain('/Users/Ada/.cache/.bun/bin/omp')
   })
 
   it('finds official and Bun-installed Windows OMP executables despite a stale process Path', () => {
     const candidates = harnessExecutableCandidates(HARNESSES.omp, {
       Path: 'C:\\bin', LOCALAPPDATA: 'C:\\Users\\Ada\\AppData\\Local', USERPROFILE: 'C:\\Users\\Ada', APPDATA: 'C:\\Users\\Ada\\AppData\\Roaming',
-      BUN_INSTALL: 'D:\\Bun', BUN_INSTALL_BIN: 'E:\\Portable\\bun-global-bin',
+      BUN_INSTALL: 'D:\\Bun', BUN_INSTALL_BIN: 'E:\\Portable\\bun-global-bin', XDG_CACHE_HOME: 'D:\\Cache',
     }, 'win32', undefined, 'C:\\Users\\Ada')
     expect(candidates).toContain('C:\\bin\\omp.exe')
     expect(candidates).toContain('C:\\Users\\Ada\\AppData\\Local\\omp\\omp.exe')
     expect(candidates).toContain('C:\\Users\\Ada\\.bun\\bin\\omp.exe')
+    expect(candidates).toContain('C:\\Users\\Ada\\.cache\\.bun\\bin\\omp.exe')
+    expect(candidates).toContain('D:\\Cache\\.bun\\bin\\omp.exe')
     expect(candidates).toContain('D:\\Bun\\bin\\omp.exe')
     expect(candidates).toContain('E:\\Portable\\bun-global-bin\\omp.exe')
     expect(candidates.some((candidate) => candidate.includes('resources'))).toBe(false)

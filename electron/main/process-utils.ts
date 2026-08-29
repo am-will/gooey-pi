@@ -380,6 +380,8 @@ function sharedHarnessCandidateDirs(
       fromRoot(env.LOCALAPPDATA, 'pnpm', 'bin'),
       fromRoot(env.LOCALAPPDATA, 'mise', 'shims'),
       win32.join(home, '.bun', 'bin'),
+      win32.join(home, '.cache', '.bun', 'bin'),
+      fromRoot(env.XDG_CACHE_HOME, '.bun', 'bin'),
       win32.join(home, '.volta', 'bin'),
     ])
   }
@@ -388,6 +390,8 @@ function sharedHarnessCandidateDirs(
     ...environmentDirs,
     posix.join(home, '.local', 'bin'),
     posix.join(home, '.bun', 'bin'),
+    posix.join(home, '.cache', '.bun', 'bin'),
+    fromRoot(env.XDG_CACHE_HOME, '.bun', 'bin'),
     posix.join(home, '.volta', 'bin'),
     posix.join(dataHome, 'pnpm'),
     posix.join(dataHome, 'pnpm', 'bin'),
