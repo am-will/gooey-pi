@@ -24,6 +24,18 @@ const MAX_TABS_PER_SESSION = 6
 const MAX_TABS_TOTAL = 24
 const ATTACH_TIMEOUT_MS = 15_000
 const LOAD_TIMEOUT_MS = 20_000
+/**
+ * Ceiling for a single guest call (script, input, capture). Electron never
+ * settles `executeJavaScript` when a navigation destroys the execution context
+ * that owns its promise, so every guest await needs its own deadline.
+ */
+const ACTION_TIMEOUT_MS = 30_000
+/**
+ * Extra margin before the per-tab queue releases a still-pending action. Each
+ * guest call already carries ACTION_TIMEOUT_MS, so reaching this means the
+ * action is pathologically stuck and liveness matters more than serialization.
+ */
+const QUEUE_RELEASE_GRACE_MS = 5_000
 const SETTLE_MS = 150
 const MAX_TYPE_CHARS = 8_000
 const MAX_EVALUATE_CHARS = 16_000
@@ -33,6 +45,13 @@ const MAX_READ_ELEMENTS = 300
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
 const SCREENSHOT_JPEG_QUALITY = 70
 const ACTION_REVOKED_MESSAGE = 'Browser tab access changed before this action could start'
+/**
+ * A navigation replaced the document while a guest call was in flight. Chromium
+ * discards the old execution context together with any promise it owns, so the
+ * call can never settle and has to be reported instead of awaited forever.
+ */
+const NAVIGATION_ABORTED_MESSAGE = 'The page navigated while this action was running, so it was cancelled. Navigate with browser_navigate first, then run the action.'
+const ACTION_TIMED_OUT_MESSAGE = 'The page did not answer this action in time and it was cancelled.'
 
 interface CdpKey {
   key: string
@@ -101,6 +120,8 @@ export interface AgentBrowserServiceOptions {
   getGuest(webContentsId: number): WebContents | undefined
   attachTimeoutMs?: number
   loadTimeoutMs?: number
+  /** Deadline for a single guest call; also bounds the per-tab queue release. */
+  actionTimeoutMs?: number
 }
 
 function isAllowedTabUrl(raw: string): boolean {
@@ -144,11 +165,13 @@ export class AgentBrowserService {
   private readonly activityListeners = new Set<(event: AgentBrowserActivityEvent) => void>()
   private readonly attachTimeoutMs: number
   private readonly loadTimeoutMs: number
+  private readonly actionTimeoutMs: number
   private closed = false
 
   constructor(private readonly options: AgentBrowserServiceOptions) {
     this.attachTimeoutMs = options.attachTimeoutMs ?? ATTACH_TIMEOUT_MS
     this.loadTimeoutMs = options.loadTimeoutMs ?? LOAD_TIMEOUT_MS
+    this.actionTimeoutMs = options.actionTimeoutMs ?? ACTION_TIMEOUT_MS
   }
 
   // ---- lifecycle -----------------------------------------------------------
@@ -450,12 +473,12 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       const info = await this.pageInfo(guest)
       // Show the agent its own pointer in the capture so it can calibrate.
-      if (tab.pointer) await guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y)).catch(() => undefined)
+      if (tab.pointer) await this.guardGuestCall(guest, guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y))).catch(() => undefined)
       let image: Electron.NativeImage
       try {
-        image = await guest.capturePage(undefined, { stayHidden: true, stayAwake: true })
+        image = await this.guardGuestCall(guest, guest.capturePage(undefined, { stayHidden: true, stayAwake: true }))
       } finally {
-        if (tab.pointer) void guest.executeJavaScript(removeCursorMarkerScript()).catch(() => undefined)
+        if (tab.pointer) void this.guardGuestCall(guest, guest.executeJavaScript(removeCursorMarkerScript())).catch(() => undefined)
       }
       const size = image.getSize()
       if (!size.width || !size.height) throw new Error('The browser tab has no visible content to capture yet')
@@ -577,7 +600,7 @@ export class AgentBrowserService {
         await delay(SETTLE_MS)
         return this.describe(tab, guest)
       }
-      const payload = parseScriptJson(await guest.executeJavaScript(scrollByScript(deltaX, deltaY)), 'scroll')
+      const payload = await this.runPageScript(guest, scrollByScript(deltaX, deltaY), 'scroll')
       return { ...await this.describe(tab, guest), ...payload }
     })
   }
@@ -586,14 +609,14 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (_tab, guest) => {
       const mode = params.mode === undefined ? 'interactive' : requireString(params.mode, 'mode', { min: 1, max: 16, trim: true })
       if (mode !== 'interactive' && mode !== 'text') throw new TypeError('mode must be interactive or text')
-      return parseScriptJson(await guest.executeJavaScript(readPageScript(mode, MAX_READ_TEXT_CHARS, MAX_READ_ELEMENTS)), 'read_page')
+      return this.runPageScript(guest, readPageScript(mode, MAX_READ_TEXT_CHARS, MAX_READ_ELEMENTS), 'read_page')
     })
   }
 
   async evaluate(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.withTab(sessionKey, params, async (_tab, guest) => {
       const code = requireString(params.code, 'code', { min: 1, max: MAX_EVALUATE_CHARS })
-      return parseScriptJson(await guest.executeJavaScript(evaluateScript(code, MAX_EVALUATE_RESULT_CHARS)), 'evaluate')
+      return this.runPageScript(guest, evaluateScript(code, MAX_EVALUATE_RESULT_CHARS), 'evaluate')
     })
   }
 
@@ -654,7 +677,7 @@ export class AgentBrowserService {
       // already using Electron's guest APIs; it may finish or fail naturally.
       return action(tab, guest)
     })
-    tab.serial.tail = run.catch(() => undefined)
+    tab.serial.tail = this.releaseQueueEventually(run)
     return run
   }
 
@@ -663,6 +686,65 @@ export class AgentBrowserService {
     if (this.closed || tab.revoked || tab.generation !== generation || tab.sessionKey !== sessionKey || current !== tab) {
       throw new Error(ACTION_REVOKED_MESSAGE)
     }
+  }
+
+  /**
+   * Bounds one guest call. Chromium destroys the execution context that owns an
+   * `executeJavaScript` promise when the document is replaced, so the promise
+   * neither resolves nor rejects; without this the caller waits forever and the
+   * tab's action queue never drains again. Same-document navigations keep the
+   * context alive and are ignored.
+   */
+  private guardGuestCall<T>(guest: WebContents, call: Promise<T>): Promise<T> {
+    // Reassigned by the executor below before any listener can fire.
+    let cleanup = (): void => {}
+    const interrupted = new Promise<never>((_resolveInterrupt, reject) => {
+      const fail = (message: string) => {
+        cleanup()
+        reject(new Error(message))
+      }
+      const onNavigation = (details: { isSameDocument?: boolean; isMainFrame?: boolean }) => {
+        if (details?.isSameDocument) return
+        if (details?.isMainFrame === false) return
+        fail(NAVIGATION_ABORTED_MESSAGE)
+      }
+      // Guest destruction is deliberately not an interrupt: Electron settles the
+      // pending call itself, and already-running work is never retroactively
+      // cancelled. Only a context-replacing navigation strands the promise.
+      const timer = setTimeout(() => fail(ACTION_TIMED_OUT_MESSAGE), this.actionTimeoutMs)
+      timer.unref?.()
+      guest.on('did-start-navigation', onNavigation)
+      cleanup = () => {
+        clearTimeout(timer)
+        guest.removeListener('did-start-navigation', onNavigation)
+      }
+    })
+    const guarded = call.finally(() => cleanup())
+    // Whichever promise loses the race must not surface as an unhandled rejection.
+    void guarded.catch(() => undefined)
+    void interrupted.catch(() => undefined)
+    return Promise.race([guarded, interrupted])
+  }
+
+  private async runPageScript(guest: WebContents, script: string, label: string): Promise<Record<string, unknown>> {
+    return parseScriptJson(await this.guardGuestCall(guest, guest.executeJavaScript(script)), label)
+  }
+
+  /**
+   * Keeps the per-tab queue alive. Every guest call is already bounded, so a
+   * still-pending action here is pathologically stuck; releasing the tail keeps
+   * later actions for the tab runnable instead of silently queueing behind a
+   * promise that will never settle.
+   */
+  private releaseQueueEventually(run: Promise<unknown>): Promise<unknown> {
+    return new Promise((resolveTail) => {
+      const timer = setTimeout(() => resolveTail(undefined), this.actionTimeoutMs + QUEUE_RELEASE_GRACE_MS)
+      timer.unref?.()
+      void run.catch(() => undefined).then(() => {
+        clearTimeout(timer)
+        resolveTail(undefined)
+      })
+    })
   }
 
   private emitActivity(tab: TabState): void {
@@ -786,7 +868,7 @@ export class AgentBrowserService {
   }
 
   private async pageInfo(guest: WebContents): Promise<PageInfo> {
-    const payload = parseScriptJson(await guest.executeJavaScript(pageInfoScript()), 'page info')
+    const payload = await this.runPageScript(guest, pageInfoScript(), 'page info')
     return {
       url: typeof payload.url === 'string' ? payload.url : guest.getURL(),
       title: typeof payload.title === 'string' ? payload.title : '',
@@ -813,7 +895,7 @@ export class AgentBrowserService {
 
   private async elementAt(guest: WebContents, point: { x: number; y: number }): Promise<Record<string, unknown> | null> {
     try {
-      const payload = parseScriptJson(await guest.executeJavaScript(elementAtPointScript(point.x, point.y)), 'element at point')
+      const payload = await this.runPageScript(guest, elementAtPointScript(point.x, point.y), 'element at point')
       return typeof payload.tag === 'string' ? { tag: payload.tag, name: typeof payload.name === 'string' ? payload.name : '' } : null
     } catch { return null }
   }
@@ -821,7 +903,7 @@ export class AgentBrowserService {
   private async resolvePoint(guest: WebContents, params: Record<string, unknown>, focus: boolean): Promise<{ x: number; y: number }> {
     if (params.ref !== undefined) {
       if (!Number.isSafeInteger(params.ref) || (params.ref as number) < 0 || (params.ref as number) > 999) throw new TypeError('ref must be an element number from browser_read_page')
-      const payload = parseScriptJson(await guest.executeJavaScript(refPointScript(params.ref as number, focus)), 'element ref')
+      const payload = await this.runPageScript(guest, refPointScript(params.ref as number, focus), 'element ref')
       if (typeof payload.error === 'string') throw new Error(payload.error.slice(0, 300))
       if (!Number.isSafeInteger(payload.x) || !Number.isSafeInteger(payload.y)) throw new Error('The element position could not be determined')
       return { x: payload.x as number, y: payload.y as number }

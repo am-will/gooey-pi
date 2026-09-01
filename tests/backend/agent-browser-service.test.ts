@@ -494,4 +494,70 @@ describe('AgentBrowserService', () => {
     await expect(service.click('/sessions/a.jsonl', {})).rejects.toThrow(/ref .*or x and y/)
     await expect(service.click('/sessions/a.jsonl', { x: -5, y: 10 })).rejects.toThrow(/within the page viewport/)
   })
+
+  it('rejects an in-flight page script when the document is replaced', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    // Chromium discards the execution context that owns the promise, so the
+    // script never settles; a never-resolving promise models exactly that.
+    guest.scriptResult = (code) => {
+      if (code.includes('navigates-away')) {
+        started.resolve()
+        return new Promise<string>(() => {})
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const stranded = service.evaluate('/sessions/a.jsonl', { tabId, code: "'navigates-away'" })
+    await started.promise
+    guest.emit('did-start-navigation', { url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
+
+    await expect(stranded).rejects.toThrow(/page navigated while this action was running/i)
+  })
+
+  it('keeps the tab usable after a navigation strands a page script', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    guest.scriptResult = (code) => {
+      if (code.includes('navigates-away')) {
+        started.resolve()
+        return new Promise<string>(() => {})
+      }
+      return JSON.stringify({ recovered: true })
+    }
+
+    const stranded = service.evaluate('/sessions/a.jsonl', { tabId, code: "'navigates-away'" })
+    await started.promise
+    guest.emit('did-start-navigation', { url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
+    await expect(stranded).rejects.toThrow(/page navigated while this action was running/i)
+
+    // Before the fix the per-tab queue stayed chained to the stranded promise,
+    // so every later action on this tab hung instead of running.
+    await expect(service.evaluate('/sessions/a.jsonl', { tabId, code: "'after-navigation'" })).resolves.toEqual({ recovered: true })
+  })
+
+  it('ignores same-document navigations while a page script runs', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const started = deferred<void>()
+    const release = deferred<string>()
+    guest.scriptResult = (code) => {
+      if (code.includes('same-document')) {
+        started.resolve()
+        return release.promise
+      }
+      return JSON.stringify({ executed: true })
+    }
+
+    const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'same-document'" })
+    await started.promise
+    // pushState and hash changes keep the execution context alive.
+    guest.emit('did-start-navigation', { url: 'https://example.com/#section', isSameDocument: true, isMainFrame: true })
+    guest.emit('did-start-navigation', { url: 'https://example.com/frame', isSameDocument: false, isMainFrame: false })
+    release.resolve(JSON.stringify({ completed: true }))
+
+    await expect(running).resolves.toEqual({ completed: true })
+  })
 })
