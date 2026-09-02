@@ -45,4 +45,22 @@ describe('GeneralSettings macOS background controls', () => {
     expect(container.textContent).not.toContain('Startup & background')
     expect(container.textContent).not.toContain('Launch at login')
   })
+
+  it('offers worktree isolation or in-place branch switching', () => {
+    const update = vi.fn()
+    act(() => root.render(<GeneralSettings settings={DEFAULT_SETTINGS} onUpdate={update} platform="linux" />))
+
+    const select = [...container.querySelectorAll('select')].find((candidate) => candidate.value === 'worktree')
+    expect(select?.textContent).toContain('Worktrees')
+    expect(select?.textContent).toContain('Branches')
+    expect(container.textContent).toContain('separate folders')
+    expect(container.textContent).toContain('same folder')
+
+    act(() => {
+      if (!select) return
+      select.value = 'branch'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(update).toHaveBeenCalledWith({ checkoutStrategy: 'branch' })
+  })
 })

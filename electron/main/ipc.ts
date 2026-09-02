@@ -8,6 +8,7 @@ import type { PluginService } from './plugins'
 import type { PetService } from './pets'
 import type { PrimeProviderService } from './providers'
 import type { ProjectService } from './projects'
+import type { CheckoutService } from './checkouts'
 import type { SettingsService } from './settings-schedules'
 import type { AutomationService } from './schedules/service'
 import type { HeartbeatService } from './schedules/heartbeats'
@@ -24,6 +25,7 @@ interface Services {
   popupApplicationMenu(sender: WebContents, menu: ApplicationMenuName, x: number, y: number): boolean
   setTitleBarTheme(sender: WebContents, theme: Exclude<ThemeMode, 'system'>): boolean
   projects: ProjectService
+  checkouts: Record<HarnessId, CheckoutService>
   sessions: SessionService
   agents: AgentRpcManager
   terminals: TerminalService
@@ -142,6 +144,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const agentManagers: Record<HarnessId, AgentRpcManager> = { prime: services.agents, omp: services.omp.agents, pi: services.pi.agents }
   const pluginServices: Record<HarnessId, PluginService> = { prime: services.plugins, omp: services.omp.plugins, pi: services.pi.plugins }
   const projectsFor = (harness: HarnessId): ProjectService => projectServices[harness]
+  const checkoutsFor = (harness: HarnessId): CheckoutService => services.checkouts[harness]
   const sessionsFor = (harness: HarnessId): SessionService => sessionServices[harness]
   const agentsFor = (harness: HarnessId): AgentRpcManager => agentManagers[harness]
   const pluginsFor = (harness: HarnessId): PluginService => pluginServices[harness]
@@ -232,9 +235,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
 
   handle('projects:list', (_event, harness) => projectsFor(requireHarness(harness)).list())
   handle('projects:list-files', (_event, root, harness) => projectsFor(requireHarness(harness)).listFiles(root))
-  handle('projects:list-worktrees', (_event, cwd, harness) => projectsFor(requireHarness(harness)).listWorktrees(cwd))
-  handle('projects:open-worktree', (_event, cwd, path, harness) => projectsFor(requireHarness(harness)).openWorktree(cwd, path))
-  handle('projects:create-worktree', (_event, cwd, branch, harness) => projectsFor(requireHarness(harness)).createWorktree(cwd, branch))
+  handle('projects:list-checkouts', (_event, projectId, harness) => checkoutsFor(requireHarness(harness)).list(projectId))
+  handle('projects:execute-checkout', (_event, projectId, action, harness) => checkoutsFor(requireHarness(harness)).execute(projectId, action))
   handle('projects:add', (_event, harness) => projectsFor(requireHarness(harness)).add())
   handle('projects:grant-inferred', (_event, path, harness) => projectsFor(requireHarness(harness)).grantInferred(path))
   handle('projects:remove', (_event, id, harness) => projectsFor(requireHarness(harness)).remove(id))
