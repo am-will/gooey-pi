@@ -1,13 +1,34 @@
 --- a/package/package.json
 +++ b/package/package.json
-@@ -1,6 +1,6 @@
+@@ -1,4 +1,4 @@
  {
    "name": "prime-agent",
 -  "version": "0.7.0",
 +  "version": "0.7.0-gooeypi.1",
    "description": "Coding agent CLI with IPython-backed tools and session management",
-   "type": "module",
-   "piConfig": {
+@@ -15,9 +15,21 @@
+   "exports": {
+     ".": {
+       "types": "./dist/index.d.ts",
+       "import": "./dist/index.js"
+     },
++    "./auth-storage": {
++      "types": "./dist/core/auth-storage.d.ts",
++      "import": "./dist/core/auth-storage.js"
++    },
++    "./config": {
++      "types": "./dist/config.d.ts",
++      "import": "./dist/config.js"
++    },
++    "./model-registry": {
++      "types": "./dist/core/model-registry.d.ts",
++      "import": "./dist/core/model-registry.js"
++    },
+     "./hooks": {
+       "types": "./dist/core/hooks/index.d.ts",
+       "import": "./dist/core/hooks/index.js"
+     }
+   },
 --- a/package/dist/bundle/chunk-L3VO7F2S.js
 +++ b/package/dist/bundle/chunk-L3VO7F2S.js
 @@ -3244,23 +3244,37 @@
