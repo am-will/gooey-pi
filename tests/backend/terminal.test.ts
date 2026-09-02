@@ -17,6 +17,18 @@ const waitFor = async (predicate: () => boolean, timeout = 4_000) => {
 }
 
 describe('TerminalService', () => {
+  it('holds repository use until the terminal exits', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'gooeypi-terminal-use-')); dirs.push(cwd)
+    const owner = { id: 39, isDestroyed: () => false, send: vi.fn() } as unknown as WebContents
+    const release = vi.fn()
+    const begin = vi.fn(async () => ({ release }))
+    const service = new TerminalService(async () => cwd, () => testShell, async (path) => path, begin)
+
+    await service.create(owner, { cwd, shell: testShell, command: 'exit 0', cols: 80, rows: 24 })
+    expect(begin).toHaveBeenCalledWith(cwd, expect.objectContaining({ kind: 'terminal' }))
+    await waitFor(() => release.mock.calls.length === 1)
+  })
+
   it('publishes only the active terminal snapshot for its session', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-pty-context-')); dirs.push(cwd)
     const owner = { id: 40, isDestroyed: () => false, send: vi.fn() } as unknown as WebContents

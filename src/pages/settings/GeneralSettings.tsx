@@ -22,6 +22,16 @@ export function GeneralSettings({ settings, onUpdate, platform }: SettingsSectio
       <section className="settings-group">
         <h2>Session defaults</h2>
         <label className="settings-row">
+          <span><strong>Git checkout style</strong><small>Worktrees use separate folders for safe parallel tasks. Branches reuse the same folder and require a clean, idle project.</small></span>
+          <select value={settings.checkoutStrategy} onChange={(event) => {
+            const checkoutStrategy = event.target.value
+            if (checkoutStrategy === 'worktree' || checkoutStrategy === 'branch') void onUpdate({ checkoutStrategy })
+          }}>
+            <option value="worktree">Worktrees</option>
+            <option value="branch">Branches</option>
+          </select>
+        </label>
+        <label className="settings-row">
           <span><strong>Default inspector tab</strong><small>The first detail surface shown in a session.</small></span>
           <select value={settings.defaultInspectorTab} onChange={(event) => { void onUpdate({ defaultInspectorTab: event.target.value as AppSettings['defaultInspectorTab'] }) }}>
             <option value="summary">Summary</option>
