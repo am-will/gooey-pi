@@ -23,8 +23,6 @@
 .message--steer-read { display: flex; align-items: center; gap: 10px; margin: -5px 0 21px; color: var(--text-tertiary); font-size: 10.5px; }
 .message--steer-read::before, .message--steer-read::after { height: 1px; flex: 1; background: var(--border); content: ''; }
 .message--steer-read span { flex: 0 0 auto; }
-/* Bubbles keep the reading measure they had before the column grew, so a wide
-   pane widens assistant prose without stretching user messages. */
 .user-bubble { max-width: min(88%, calc(var(--transcript-measure-min) * .88)); padding: 9px 13px; border-radius: 15px; border-bottom-right-radius: 5px; background: var(--surface-subtle); color: var(--text); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
 .user-annotations { margin-top: 6px; }
 .user-annotations > summary { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--annotation) 35%, var(--border)); border-radius: 15px; border-bottom-right-radius: 5px; color: var(--annotation); background: color-mix(in srgb, var(--annotation) 8%, transparent); cursor: pointer; font-size: 11px; font-weight: 600; list-style: none; user-select: none; }
