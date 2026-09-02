@@ -50,9 +50,8 @@ const api: PrimeWorkApi = {
   projects: {
     list: (harness) => invoke('projects:list', harness),
     listFiles: (root, harness) => invoke('projects:list-files', root, harness),
-    listWorktrees: (cwd, harness) => invoke('projects:list-worktrees', cwd, harness),
-    openWorktree: (cwd, path, harness) => invoke('projects:open-worktree', cwd, path, harness),
-    createWorktree: (cwd, branch, harness) => invoke('projects:create-worktree', cwd, branch, harness),
+    listCheckouts: (projectId, harness) => invoke('projects:list-checkouts', projectId, harness),
+    executeCheckout: (projectId, action, harness) => invoke('projects:execute-checkout', projectId, action, harness),
     add: (harness) => invoke('projects:add', harness),
     grantInferred: (path, harness) => invoke('projects:grant-inferred', path, harness),
     remove: (id, harness) => invoke('projects:remove', id, harness),
