@@ -146,6 +146,7 @@ describe('settings field ownership', () => {
       theme: 'appearance',
       locale: 'appearance',
       interfaceFontScale: 'appearance',
+      projectSortMode: 'general',
       sidebarOpen: 'general',
       inspectorOpen: 'general',
       showFileChangesPopup: 'general',

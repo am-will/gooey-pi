@@ -23,6 +23,7 @@ describe('SettingsService.update', () => {
       theme: 'dark',
       locale: 'zh-CN',
       interfaceFontScale: 105,
+      projectSortMode: 'alphabetical',
       sidebarOpen: false,
       inspectorOpen: true,
       showFileChangesPopup: false,
@@ -66,7 +67,7 @@ describe('SettingsService.update', () => {
       voiceRealtimeVoice: 'cedar',
     })
     expect(next).toMatchObject({
-      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, keepRunningInBackground: true, launchAtLogin: true, terminalOpen: true,
+      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, projectSortMode: 'alphabetical', sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, keepRunningInBackground: true, launchAtLogin: true, terminalOpen: true,
       defaultInspectorTab: 'changes', browserHome: 'https://example.test/',
       browserAskForDownloads: false, terminalShell: '/bin/zsh', reduceMotion: true,
       showReasoningSummaries: false, showToolCalls: false, messageEnterAction: 'steer',
@@ -97,6 +98,7 @@ describe('SettingsService.update', () => {
     await expect(service.update({ theme: 'solarized' })).rejects.toThrow(/Invalid theme/)
     await expect(service.update({ locale: 'fr' })).rejects.toThrow(/Invalid locale/)
     await expect(service.update({ interfaceFontScale: 111 })).rejects.toThrow(/Invalid interface font scale/)
+    await expect(service.update({ projectSortMode: 'invalid' })).rejects.toThrow(/Invalid project sort mode/)
     await expect(service.update({ defaultInspectorTab: 'tools' })).rejects.toThrow(/Invalid inspector tab/)
     await expect(service.update({ messageEnterAction: 'send' })).rejects.toThrow(/Invalid message Enter action/)
     await expect(service.update({ runtimePaths: { prime: 'relative/prime-agent', omp: '', pi: '' } })).rejects.toThrow(/must be absolute/)
@@ -132,6 +134,11 @@ describe('SettingsService.update', () => {
     await expect(service.update({ voiceSelfHostedUrl: 'https://speech.example.test/#secret' })).rejects.toThrow(/query or fragment/)
     await expect(service.update({ voiceSelfHostedModel: '../bad model' })).rejects.toThrow(/not valid/)
     expect(service.get()).toEqual(before)
+  })
+
+  it('accepts project sort modes', async () => {
+    const service = makeService()
+    await expect(service.update({ projectSortMode: 'alphabetical' })).resolves.toMatchObject({ projectSortMode: 'alphabetical' })
   })
 
   it('accepts loopback HTTP and remote HTTPS self-hosted transcription servers', async () => {
