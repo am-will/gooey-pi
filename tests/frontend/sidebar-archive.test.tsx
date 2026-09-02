@@ -49,6 +49,71 @@ async function rightClick(element: Element) {
 }
 
 describe('sidebar project context menu', () => {
+  it('sorts projects from the section menu and toggles pinning from project options', async () => {
+    const projects = [
+      { ...project, id: 'zeta', name: 'Zeta', lastOpenedAt: '2026-01-01T00:00:00.000Z' },
+      { ...project, id: 'alpha', name: 'Alpha', lastOpenedAt: '2026-02-01T00:00:00.000Z' },
+    ]
+    const onSetProjectSortMode = vi.fn()
+    const onTogglePinProject = vi.fn()
+    await act(async () => {
+      root.render(
+        <Sidebar
+          projects={projects} sessions={[session]} activeView="session" projectSortMode="recent"
+          onSetProjectSortMode={onSetProjectSortMode} onTogglePinProject={onTogglePinProject}
+          onSelectProject={noop} onSelectSession={noop} onNavigate={noop} onNewSession={noop} onAddProject={noop} onRemoveProject={noop}
+          onClose={noop} onOpenPalette={noop} onRenameSession={async () => undefined} onArchiveSession={async () => undefined}
+        />,
+      )
+    })
+
+    expect([...container.querySelectorAll('.project-row__main')].map((button) => button.textContent)).toEqual(['Alpha', 'Zeta'])
+    await press(container.querySelector('[aria-label="Sort projects"]')!)
+    const alphabetical = [...container.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((item) => item.textContent?.includes('Alphabetical'))
+    expect(alphabetical).toBeDefined()
+    await press(alphabetical!)
+    expect(onSetProjectSortMode).toHaveBeenCalledWith('alphabetical')
+
+    await rightClick(container.querySelector('.project-row')!)
+    const pin = [...container.querySelectorAll('[aria-label^="Project options"] button')].find((button) => button.textContent?.includes('Pin project'))
+    expect(pin).toBeDefined()
+    await press(pin!)
+    expect(onTogglePinProject).toHaveBeenCalledWith(projects[1])
+  })
+
+  it('dismisses the sort menu when adding a project', async () => {
+    await act(async () => {
+      root.render(
+        <Sidebar
+          projects={[project]} sessions={[session]} activeView="session" projectSortMode="recent"
+          onSelectProject={noop} onSelectSession={noop} onNavigate={noop} onNewSession={noop} onAddProject={noop} onRemoveProject={noop}
+          onClose={noop} onOpenPalette={noop} onRenameSession={async () => undefined} onArchiveSession={async () => undefined}
+        />,
+      )
+    })
+
+    await press(container.querySelector('[aria-label="Sort projects"]')!)
+    expect(container.querySelector('[role="menuitemradio"]')).not.toBeNull()
+    await act(async () => {
+      container.querySelector('[aria-label="Add project"]')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    })
+    expect(container.querySelector('[role="menuitemradio"]')).toBeNull()
+  })
+
+  it('omits pinning for inferred projects', async () => {
+    await act(async () => {
+      root.render(
+        <Sidebar
+          projects={[{ ...project, inferred: true }]} sessions={[session]} activeView="session"
+          onSelectProject={noop} onSelectSession={noop} onNavigate={noop} onNewSession={noop} onAddProject={noop} onRemoveProject={noop}
+          onClose={noop} onOpenPalette={noop} onRenameSession={async () => undefined} onArchiveSession={async () => undefined}
+        />,
+      )
+    })
+    await rightClick(container.querySelector('.project-row')!)
+    expect([...container.querySelectorAll('[aria-label^="Project options"] button')].some((button) => button.textContent?.includes('Pin project'))).toBe(false)
+  })
+
   it('requires confirmation before downloading and restarting an available update', async () => {
     const onUpdateAction = vi.fn()
     await act(async () => {
