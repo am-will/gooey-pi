@@ -88,8 +88,9 @@ describe('OMP transcript system entries', () => {
       userEntry('aa000001', null, 'before fallback'),
       JSON.stringify({ type: 'model_change', id: 'aa000002', parentId: 'aa000001', timestamp: '2026-08-08T02:14:00.000Z', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }),
       JSON.stringify({ type: 'message', id: 'aa000003', parentId: 'aa000002', timestamp: '2026-08-08T02:14:01.000Z', message: { role: 'assistant', content: 'continued response' } }),
-      JSON.stringify({ type: 'model_change', id: 'aa000004', parentId: 'aa000003', timestamp: '2026-08-08T02:14:02.000Z', model: 'anthropic/claude-haiku', role: 'default' }),
-      JSON.stringify({ type: 'model_change', id: 'aa000005', parentId: 'aa000004', timestamp: '2026-08-08T02:14:03.000Z', model: 'anthropic/claude-haiku', role: 'compaction' }),
+      JSON.stringify({ type: 'model_change', id: 'aa000004', parentId: 'aa000003', timestamp: '2026-08-08T02:14:02.000Z', model: 'anthropic/claude-sonnet', role: 'fallback' }),
+      JSON.stringify({ type: 'model_change', id: 'aa000005', parentId: 'aa000004', timestamp: '2026-08-08T02:14:03.000Z', model: 'anthropic/claude-haiku', role: 'default' }),
+      JSON.stringify({ type: 'model_change', id: 'aa000006', parentId: 'aa000005', timestamp: '2026-08-08T02:14:04.000Z', model: 'anthropic/claude-haiku', role: 'compaction' }),
     ])
 
     const transcript = await readOmpTranscript(file, false)

@@ -94,11 +94,11 @@ export function useAgentEvents({
           ? { ...current, isStreaming: true, isCompacting: false, executingModel: null }
           : current)
       }
-      if (type === 'model_change' || type === 'model_changed') {
+      if (type === 'retry_fallback_applied' || type === 'retry_fallback_succeeded') {
         const fallback = fallbackModelFromRecord(event)
         if (fallback) {
           setRuntime((current) => current?.runtimeId === runtimeId
-            ? { ...current, executingModel: { ...fallback, isFallback: true } }
+            ? { ...current, executingModel: { provider: fallback.provider, id: fallback.id, label: fallback.label, isFallback: true } }
             : current)
         }
       }

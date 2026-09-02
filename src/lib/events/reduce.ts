@@ -329,10 +329,10 @@ export function replayPrimeEvents(
       finalizeStreaming(Date.now(), true)
       continue
     }
-    if (type === 'model_change' || type === 'model_changed') {
+    if (type === 'retry_fallback_applied' || type === 'model_change') {
       const fallback = fallbackModelFromRecord(raw)
       if (!fallback) continue
-      const text = fallbackNoticeText(fallback.label)
+      const text = fallbackNoticeText(fallback.label, fallback.from)
       const last = next.at(-1)
       if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
       const timestamp = Date.now()

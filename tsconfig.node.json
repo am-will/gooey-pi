@@ -7,11 +7,6 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
-    "paths": {
-      "@/*": [
-        "./src/*"
-      ]
-    },
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "types": [

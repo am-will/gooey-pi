@@ -375,7 +375,9 @@ describe('provider fallback runtime state', () => {
     }
 
     await act(async () => { root.render(<AgentEventsProbe />) })
-    act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true } }) })
+    act(() => {
+      handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'retry_fallback_applied', from: 'anthropic/claude-opus', to: 'anthropic/claude-sonnet', role: 'fallback' } })
+    })
 
     const update = setRuntime.mock.calls.at(-1)?.[0] as (current: RuntimeInfo) => RuntimeInfo
     const next = update({ ...primeRuntime, model: { provider: 'provider', id: 'vision' } })
@@ -386,6 +388,14 @@ describe('provider fallback runtime state', () => {
       label: 'anthropic/claude-sonnet',
       isFallback: true,
     })
+
+    act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'retry_fallback_succeeded', model: 'anthropic/claude-sonnet', role: 'fallback' } }) })
+    const succeededUpdate = setRuntime.mock.calls.at(-1)?.[0] as (current: RuntimeInfo) => RuntimeInfo
+    expect(succeededUpdate(next).executingModel).toEqual(next.executingModel)
+
+    const callsBeforeModelChanged = setRuntime.mock.calls.length
+    act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'model_changed' } }) })
+    expect(setRuntime.mock.calls).toHaveLength(callsBeforeModelChanged)
 
     act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'agent_start' } }) })
     const reset = setRuntime.mock.calls.at(-1)?.[0] as (current: RuntimeInfo) => RuntimeInfo

@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUp, AtSign, Check, ChevronDown, Clock3, Command, Edit3, FolderGit2, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
+import { ArrowUp, AtSign, Check, ChevronDown, Clock3, Command, Edit3, FolderGit2, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
@@ -14,7 +14,6 @@ import type {
   PromptDeliveryIntent,
   PromptImage,
   QueuedPrompt,
-  RuntimeInfo,
   SessionRecord,
   SkillRecord,
   TerminalPromptContext,
@@ -30,6 +29,7 @@ import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
 import { IconButton, SelectControl } from './ui'
+import { ExecutingModelChip, type ExecutingModelChipProps } from './ExecutingModelChip'
 import { ModelPicker } from './ModelPicker'
 
 interface ComposerProps {
@@ -53,8 +53,7 @@ interface ComposerProps {
   imageInputSupported: boolean
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
   messageEnterAction?: MessageEnterAction
-  contextUsage?: PrimeContextUsage
-  executingModel?: RuntimeInfo['executingModel']
+  contextUsage?: PrimeContextUsage; executingModel?: ExecutingModelChipProps['executingModel']
   voice?: PrimeWorkApi['voice'] | null
   transcriptionProvider?: VoiceTranscriptionProvider
   skills: SkillRecord[]
@@ -139,8 +138,7 @@ export const Composer = memo(function Composer({
   harness = 'prime',
   imageInputSupported,
   messageEnterAction = 'queue',
-  contextUsage,
-  executingModel,
+  contextUsage, executingModel,
   voice,
   transcriptionProvider = 'openai-live',
   skills,
@@ -747,16 +745,7 @@ export const Composer = memo(function Composer({
                 void imageAttachments.ingest(files)
               }}
             />
-            <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} />
-            {executingModel?.isFallback ? (
-              <span
-                className="model-fallback-chip"
-                role="status"
-                title={`Provider fallback: running on ${executingModel.label} instead of the selected model.`}
-              >
-                <AlertTriangle size={12} /> Running on {executingModel.label}
-              </span>
-            ) : null}
+            <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} /><ExecutingModelChip executingModel={executingModel} />
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>

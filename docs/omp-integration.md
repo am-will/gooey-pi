@@ -58,6 +58,7 @@ The OMP argv contract (`--mode rpc`, `--cwd`, `--resume`, `--model`, `--thinking
 |---|---|
 | `auto_compaction_start` / `auto_compaction_end` | `compaction_start` / `compaction_end` |
 | `agent_end` with `isTerminal === false` | swallowed as a turn boundary (not finalized) |
+| `retry_fallback_applied` / `retry_fallback_succeeded` | unchanged; renderer renders a transcript notice from `applied` and a composer "Running on" chip from both; the persisted counterpart is the JSONL `model_change` entry with `resolvedModelIsFallback: true` |
 | `ready`, `available_commands_update`, `config_update`, `session_info_update`, `notice`, etc. | passed through (renderer reducer ignores unknown types) |
 | everything else (`agent_start`, `turn_*`, `message_*`, `tool_execution_*`, `extension_ui_request`, `auto_retry_*`, `model_changed`, ...) | unchanged — same names as Prime |
 
