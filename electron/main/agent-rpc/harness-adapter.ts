@@ -1,4 +1,5 @@
-import type { HarnessId, PrimeContextUsage } from '../../../src/types/api'
+import type { HarnessId, PrimeContextUsage, SessionActionSnapshot } from '../../../src/types/api'
+import { MAX_QUEUED_ACTIONS } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
@@ -22,6 +23,7 @@ export interface HarnessStartArgsInput {
 export interface HarnessStateReading {
   serviceTier?: 'default' | 'priority'
   contextUsage?: PrimeContextUsage
+  sessionActions?: SessionActionSnapshot
 }
 
 /**
@@ -159,6 +161,13 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
     if (typeof data.fastModeEnabled === 'boolean') reading.serviceTier = data.fastModeEnabled ? 'priority' : 'default'
     const usage = parseContextUsage(data.contextUsage)
     if (usage) reading.contextUsage = usage
+    if (Number.isSafeInteger(data.queuedMessageCount) && Number(data.queuedMessageCount) >= 0 && Number(data.queuedMessageCount) <= MAX_QUEUED_ACTIONS) {
+      reading.sessionActions = {
+        queuedCount: Number(data.queuedMessageCount),
+        steering: [],
+        followUps: [],
+      }
+    }
     return reading
   },
 }

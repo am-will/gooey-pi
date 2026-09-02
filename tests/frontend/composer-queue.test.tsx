@@ -74,4 +74,34 @@ describe('composer queue tray', () => {
     expect(onDelete).toHaveBeenCalledWith(queued)
   })
 
+  it('shows messages held by a count-only harness queue', () => {
+    act(() => root.render(<Composer
+      busy
+      submitting={false}
+      loading={false}
+      disabled={false}
+      model="auto"
+      effort="medium"
+      modelsByProvider={new Map()}
+      providers={[]}
+      reasoningLevels={['medium']}
+      fast={false}
+      fastSupported={false}
+      fastAvailable={false}
+      agentName="OMP"
+      imageInputSupported={true}
+      skills={[]}
+      harnessQueuedMessageCount={2}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+      onFastChange={vi.fn()}
+      onSend={vi.fn()}
+      onStop={vi.fn()}
+    />))
+
+    const tray = container.querySelector('.composer-queue')
+    expect(tray?.querySelector('.composer-queue__header strong')?.textContent).toBe('2')
+    expect(tray?.textContent).toContain('OMP is holding 2 messages for the next turn.')
+  })
+
 })
