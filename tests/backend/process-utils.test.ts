@@ -338,9 +338,38 @@ describe('OMP discovery candidates', () => {
     expect(candidates.some((candidate) => candidate.endsWith('omp.cmd') || candidate.endsWith('prime-agent.cmd'))).toBe(false)
   })
 
+  it('discovers the official Prime Agent npm command shim alongside native Windows executables', () => {
+    const candidates = harnessExecutableCandidates(HARNESSES.prime, {
+      Path: 'C:\\Windows', APPDATA: 'C:\\Users\\Ada\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\Ada\\AppData\\Local',
+    }, 'win32', undefined, 'C:\\Users\\Ada')
+    expect(candidates).toContain('C:\\Users\\Ada\\AppData\\Roaming\\npm\\prime-agent.exe')
+    expect(candidates).toContain('C:\\Users\\Ada\\AppData\\Roaming\\npm\\prime-agent.cmd')
+    expect(candidates.some((candidate) => candidate.endsWith('omp.cmd') || candidate.endsWith('pi.cmd'))).toBe(false)
+  })
+
   it('resolves the official Windows Pi npm shim to Node without invoking a shell', () => {
     const shim = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\pi.cmd'
     const entrypoint = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\cli.js'
+    const node = 'C:\\Program Files\\nodejs\\node.exe'
+    const accessible = new Set([entrypoint.toLowerCase(), node.toLowerCase()])
+    const invocation = prepareExecutableSpawn(shim, ['--version'], {
+      Path: 'C:\\Windows',
+      ProgramFiles: 'C:\\Program Files',
+      USERPROFILE: 'C:\\Users\\Ada',
+    }, {
+      platform: 'win32',
+      home: 'C:\\Users\\Ada',
+      canAccess: (candidate) => accessible.has(candidate.toLowerCase()),
+    })
+
+    expect(invocation.file).toBe(node)
+    expect(invocation.args).toEqual([entrypoint, '--version'])
+    expect(invocation.env.Path).toContain('C:\\Users\\Ada\\AppData\\Roaming\\npm')
+  })
+
+  it('resolves the official Windows Prime Agent npm shim to Node without invoking a shell', () => {
+    const shim = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\prime-agent.cmd'
+    const entrypoint = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\node_modules\\prime-agent\\dist\\bundle\\cli.js'
     const node = 'C:\\Program Files\\nodejs\\node.exe'
     const accessible = new Set([entrypoint.toLowerCase(), node.toLowerCase()])
     const invocation = prepareExecutableSpawn(shim, ['--version'], {
@@ -367,6 +396,37 @@ describe('OMP discovery candidates', () => {
       home: 'C:\\Users\\Ada',
       canAccess: () => false,
     })).toThrow(/official Pi installation/)
+    expect(() => prepareExecutableSpawn('C:\\Tools\\prime-agent.cmd', ['--version'], {}, {
+      platform: 'win32',
+      home: 'C:\\Users\\Ada',
+      canAccess: () => false,
+    })).toThrow(/official Prime Agent installation/)
+  })
+
+  it('does not recognize a prime-agent.cmd outside an npm prefix', () => {
+    const shim = 'C:\\Users\\Ada\\AppData\\Local\\Programs\\prime-agent-win\\bin\\prime-agent.cmd'
+    const expectedOutsideEntrypoint = 'C:\\Users\\Ada\\AppData\\Local\\Programs\\prime-agent-win\\packages\\coding-agent\\dist\\bundle\\cli.js'
+    const node = 'C:\\Program Files\\nodejs\\node.exe'
+    const accessible = new Set([expectedOutsideEntrypoint.toLowerCase(), node.toLowerCase()])
+    expect(() => prepareExecutableSpawn(shim, ['--version'], {}, {
+      platform: 'win32',
+      home: 'C:\\Users\\Ada',
+      canAccess: (candidate) => accessible.has(candidate.toLowerCase()),
+    })).toThrow(/official Prime Agent installation/)
+  })
+
+  it('reports when Node.js is missing for the official Prime Agent npm command shim', () => {
+    const shim = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\prime-agent.cmd'
+    const entrypoint = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\node_modules\\prime-agent\\dist\\bundle\\cli.js'
+    expect(() => prepareExecutableSpawn(shim, ['--version'], {
+      Path: 'C:\\Windows',
+      ProgramFiles: 'C:\\Program Files',
+      USERPROFILE: 'C:\\Users\\Ada',
+    }, {
+      platform: 'win32',
+      home: 'C:\\Users\\Ada',
+      canAccess: (candidate, mode) => mode === 0 && candidate.toLowerCase() === entrypoint.toLowerCase(),
+    })).toThrow(/Node\.js was not found for the Prime Agent/)
   })
 
   it('keeps E2E discovery hermetic when a fixture executable disappears', async () => {
