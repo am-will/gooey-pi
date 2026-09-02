@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createSingleFlightAdmission,
+  EMPTY_GIT_STATUS,
   findRuntimeForWorkspace,
   gitStatusForWorkspace,
   newSessionProject,
@@ -67,8 +68,10 @@ describe('workspace and runtime ownership', () => {
     const snapshot = { cwd: '/project-a', status: projectAStatus }
 
     expect(gitStatusForWorkspace(snapshot, '/project-a')).toBe(projectAStatus)
-    expect(gitStatusForWorkspace(snapshot, '/project-b')).toEqual({ isRepo: false, files: [] })
-    expect(gitStatusForWorkspace(snapshot, undefined)).toEqual({ isRepo: false, files: [] })
+    // Identity, not just shape: memoized consumers (Inspector) re-render whenever this fallback changes identity.
+    expect(gitStatusForWorkspace(snapshot, '/project-b')).toBe(EMPTY_GIT_STATUS)
+    expect(gitStatusForWorkspace(snapshot, undefined)).toBe(EMPTY_GIT_STATUS)
+    expect(EMPTY_GIT_STATUS).toEqual({ isRepo: false, files: [] })
   })
 
   it('uses the displayed bootstrap project for New Session without clearing workspace ownership', () => {
