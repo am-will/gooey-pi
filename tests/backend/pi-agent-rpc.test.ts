@@ -43,7 +43,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       contextUsage: { tokens: 999999, contextWindow: 272000, percent: 99 },
     } })
   } else if (command.type === 'get_session_stats') {
-    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 12000, contextWindow: 272000, percent: 4 } } })
+    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 12000, contextWindow: 272000, percent: 4 }, tokens: { input: 10000, output: 2000, cacheRead: 500, cacheWrite: 100, total: 12600 }, cost: 0.4321 } })
   } else if (command.type === 'fork' || command.type === 'get_fork_messages') {
     send({ id: command.id, type: 'response', command: command.type, success: true, data: { received: command.type, entryId: command.entryId } })
   } else if (command.type === 'prompt') {
@@ -180,6 +180,7 @@ describe('pi RPC handshake', () => {
     // Context usage flows through the shared get_session_stats path, not the
     // contextUsage field pi's get_state does not really carry.
     expect(runtime.contextUsage).toEqual({ tokens: 12_000, contextWindow: 272_000, percent: 4 })
+    expect(runtime.sessionUsage).toEqual({ cost: 0.4321, tokens: { input: 10_000, output: 2_000, cacheRead: 500, cacheWrite: 100, total: 12_600 } })
     // A negotiate_protocol frame would have been answered with a failure that
     // aborts the handshake; the fake also records every unknown command.
     expect(events.some((event) => event.type === 'fake_unknown_command')).toBe(false)
