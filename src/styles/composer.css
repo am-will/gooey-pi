@@ -16,7 +16,6 @@
 .composer-queue__action:hover { color: var(--text-primary); background: var(--surface-hover); }
 .composer-queue__action--delete:hover { color: var(--danger); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--border-strong) 65%, var(--focus)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 30%, transparent); }
-.composer--busy { border-color: color-mix(in srgb, var(--prime) 33%, var(--border-strong)); }
 .composer--image-dragging { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 28%, transparent); }
 .composer-drop-feedback { position: absolute; z-index: 80; inset: 5px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed color-mix(in srgb, var(--focus) 72%, var(--border)); border-radius: 10px; color: var(--text); background: color-mix(in srgb, var(--surface-raised) 91%, transparent); backdrop-filter: blur(4px); font-size: 12px; font-weight: 620; pointer-events: none; }
 .composer-input { position: relative; width: 100%; min-height: 55px; max-height: 150px; flex: 1; }
@@ -156,3 +155,60 @@
 .composer-menu button > span { min-width: 0; display: flex; flex-direction: column; }
 .composer-menu strong { color: var(--text); font-size: 12px; font-weight: 540; }
 .composer-menu small { overflow: hidden; color: var(--text-tertiary); font-size: 10.5px; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Fluid running-state ring: a layered conic flow orbits the composer while the agent works.
+   The .composer--busy hook is applied by Composer.tsx whenever the session is busy or submitting. */
+@property --composer-flow { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+
+.composer--busy::before,
+.composer--busy::after { content: ""; position: absolute; pointer-events: none; }
+
+/* Ambient layer: a static hue wash, mostly veiled by the opaque card, leaking only as a
+   soft halo past the edges. It is not animated: a blurred conic gradient re-rasterises on
+   every frame, and the ribbon alone carries the motion. */
+.composer--busy::before {
+  z-index: -1;
+  inset: -5px;
+  border-radius: 19px;
+  background: conic-gradient(
+    color-mix(in srgb, var(--prime) 55%, transparent),
+    color-mix(in srgb, var(--focus) 45%, transparent),
+    color-mix(in srgb, var(--prime) 55%, transparent));
+  filter: blur(7px);
+  opacity: .5;
+}
+
+/* Streaming ribbon: two soft currents run around the border like molten glass.
+   Animating a registered property repaints the gradient every frame, so the flow is
+   stepped to ~30 fps (3.5deg per step), which roughly halves steady-state renderer CPU. */
+.composer--busy::after {
+  z-index: 2;
+  inset: -3px;
+  padding: 2.5px;
+  border-radius: 17px;
+  background: conic-gradient(from var(--composer-flow),
+    transparent 0 8%,
+    color-mix(in srgb, var(--prime) 30%, transparent) 18%,
+    color-mix(in srgb, var(--prime) 85%, white) 27%,
+    color-mix(in srgb, var(--focus) 90%, white) 34%,
+    color-mix(in srgb, var(--prime) 40%, transparent) 44%,
+    transparent 54%,
+    color-mix(in srgb, var(--focus) 55%, transparent) 68%,
+    color-mix(in srgb, var(--prime) 60%, white) 76%,
+    transparent 88%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  filter: blur(.6px);
+  animation: composer-flow 3.4s steps(102, end) infinite;
+}
+
+@keyframes composer-flow { to { --composer-flow: 360deg; } }
+
+/* The registered property does not inherit, so the rest angle is set on each pseudo directly.
+   The in-app reduce-motion setting (.reduce-motion on <html>) mirrors the OS media query. */
+@media (prefers-reduced-motion: reduce) {
+  .composer--busy::after { animation: none; --composer-flow: 210deg; opacity: .6; }
+}
+.reduce-motion .composer--busy::after { animation: none; --composer-flow: 210deg; opacity: .6; }
