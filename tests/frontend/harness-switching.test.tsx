@@ -487,6 +487,29 @@ describe('provider catalog per harness', () => {
     expect(state.model).toBe('openai-codex/gpt-5.6')
   })
 
+  it('restores a usable remembered model and replaces a stale preference with the first usable model', async () => {
+    const alternate = { ...primeCatalog.models[0], key: 'openai-codex/gpt-5.5', id: 'gpt-5.5', name: 'GPT-5.5' }
+    const catalog = { ...primeCatalog, models: [primeCatalog.models[0], alternate] }
+    const bridge = {
+      providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn().mockReturnValue(() => undefined) },
+    } as unknown as PrimeWorkApi
+    const rememberModel = vi.fn()
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useProviderCatalog>
+    function CatalogProbe({ lastSelectedModel }: { lastSelectedModel: string }) {
+      state = useProviderCatalog({ bridge, harness: 'prime', runtime: null, lastSelectedModel, rememberModel, syncRuntime: async () => undefined, reportError })
+      return <Probe />
+    }
+
+    await act(async () => { root.render(<CatalogProbe lastSelectedModel={alternate.key} />); await Promise.resolve() })
+    expect(state.model).toBe(alternate.key)
+    expect(rememberModel).not.toHaveBeenCalled()
+
+    await act(async () => { root.render(<CatalogProbe key="stale-preference" lastSelectedModel="missing/model" />); await Promise.resolve() })
+    expect(state.model).toBe(primeCatalog.models[0].key)
+    expect(rememberModel).toHaveBeenLastCalledWith(primeCatalog.models[0].key)
+  })
+
   it('syncs model and thinking level from active session metadata when runtime has no live model', async () => {
     const alternate = { ...primeCatalog.models[0], key: 'openai-codex/gpt-5.5', id: 'gpt-5.5', name: 'GPT-5.5' }
     const catalog = { ...primeCatalog, models: [primeCatalog.models[0], alternate] }
@@ -518,8 +541,129 @@ describe('provider catalog per harness', () => {
 
     await act(async () => { root.render(<CatalogProbe activeSession={sessionA} />); await Promise.resolve() })
     expect(state.model).toBe('openai-codex/gpt-5.5')
+    expect(state.effort).toBe('low')
 
     await act(async () => { root.render(<CatalogProbe activeSession={sessionB} />); await Promise.resolve() })
+    expect(state.model).toBe(primeCatalog.models[0].key)
+    expect(state.effort).toBe('high')
+
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionA} />); await Promise.resolve() })
+    expect(state.model).toBe('openai-codex/gpt-5.5')
+    expect(state.effort).toBe('low')
+
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionB} />); await Promise.resolve() })
+    expect(state.model).toBe(primeCatalog.models[0].key)
+    expect(state.effort).toBe('high')
+  })
+
+  it('keeps an unsent selection per tab and prefers it over session metadata', async () => {
+    const alternate = { ...primeCatalog.models[0], key: 'openai-codex/gpt-5.5', id: 'gpt-5.5', name: 'GPT-5.5' }
+    const catalog = { ...primeCatalog, models: [primeCatalog.models[0], alternate] }
+    const bridge = {
+      providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn().mockReturnValue(() => undefined) },
+    } as unknown as PrimeWorkApi
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useProviderCatalog>
+    function CatalogProbe({ activeSession }: { activeSession?: SessionRecord }) {
+      state = useProviderCatalog({ bridge, harness: 'prime', runtime: null, activeSession, syncRuntime: async () => undefined, reportError })
+      return <Probe />
+    }
+
+    const sessionA: SessionRecord = {
+      ...primeSession,
+      id: 'session-a',
+      provider: 'openai-codex',
+      model: 'gpt-5.5',
+      thinkingLevel: 'low',
+    }
+    const sessionB: SessionRecord = {
+      ...primeSession,
+      id: 'session-b',
+      provider: 'openai-codex',
+      model: primeCatalog.models[0].id,
+      thinkingLevel: 'high',
+    }
+
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionA} />); await Promise.resolve() })
+    expect(state.model).toBe('openai-codex/gpt-5.5')
+    expect(state.effort).toBe('low')
+
+    act(() => state.changeModel(primeCatalog.models[0].key))
+    act(() => state.changeEffort('high'))
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionB} />); await Promise.resolve() })
+    expect(state.model).toBe(primeCatalog.models[0].key)
+    expect(state.effort).toBe('high')
+
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionA} />); await Promise.resolve() })
+    expect(state.model).toBe(primeCatalog.models[0].key)
+    expect(state.effort).toBe('high')
+
+    await act(async () => { root.render(<CatalogProbe activeSession={undefined} />); await Promise.resolve() })
+    act(() => state.changeModel('openai-codex/gpt-5.5'))
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionB} />); await Promise.resolve() })
+    await act(async () => { root.render(<CatalogProbe activeSession={undefined} />); await Promise.resolve() })
+    expect(state.model).toBe('openai-codex/gpt-5.5')
+  })
+
+  it('prefers the live runtime model over session metadata', async () => {
+    const alternate = { ...primeCatalog.models[0], key: 'openai-codex/gpt-5.5', id: 'gpt-5.5', name: 'GPT-5.5' }
+    const catalog = { ...primeCatalog, models: [primeCatalog.models[0], alternate] }
+    const bridge = {
+      providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn().mockReturnValue(() => undefined) },
+    } as unknown as PrimeWorkApi
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useProviderCatalog>
+    function CatalogProbe({ runtime, activeSession }: { runtime: RuntimeInfo | null; activeSession?: SessionRecord }) {
+      state = useProviderCatalog({ bridge, harness: 'prime', runtime, activeSession, syncRuntime: async () => undefined, reportError })
+      return <Probe />
+    }
+
+    const sessionB: SessionRecord = {
+      ...primeSession,
+      id: 'session-b',
+      provider: 'openai-codex',
+      model: primeCatalog.models[0].id,
+      thinkingLevel: 'high',
+    }
+
+    await act(async () => {
+      root.render(<CatalogProbe
+        activeSession={sessionB}
+        runtime={{ ...primeRuntime, model: { provider: 'openai-codex', id: 'gpt-5.5' }, thinkingLevel: 'low' }}
+      />)
+      await Promise.resolve()
+    })
+    expect(state.model).toBe('openai-codex/gpt-5.5')
+    expect(state.effort).toBe('low')
+  })
+
+  it('does not revert a selection when the catalog refreshes for the same session', async () => {
+    const alternate = { ...primeCatalog.models[0], key: 'openai-codex/gpt-5.5', id: 'gpt-5.5', name: 'GPT-5.5' }
+    const catalog = { ...primeCatalog, models: [primeCatalog.models[0], alternate] }
+    const catalogMock = vi.fn()
+      .mockResolvedValueOnce(catalog)
+      .mockImplementation(async (force: boolean) => force ? { ...catalog } : catalog)
+    const bridge = {
+      providers: { catalog: catalogMock, onAuthEvent: vi.fn().mockReturnValue(() => undefined) },
+    } as unknown as PrimeWorkApi
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useProviderCatalog>
+    function CatalogProbe({ activeSession }: { activeSession?: SessionRecord }) {
+      state = useProviderCatalog({ bridge, harness: 'prime', runtime: null, activeSession, syncRuntime: async () => undefined, reportError })
+      return <Probe />
+    }
+
+    const sessionA: SessionRecord = {
+      ...primeSession,
+      id: 'session-a',
+      provider: 'openai-codex',
+      model: 'gpt-5.5',
+      thinkingLevel: 'low',
+    }
+
+    await act(async () => { root.render(<CatalogProbe activeSession={sessionA} />); await Promise.resolve() })
+    act(() => state.changeModel(primeCatalog.models[0].key))
+    await act(async () => { await state.refresh(true) })
     expect(state.model).toBe(primeCatalog.models[0].key)
   })
 })

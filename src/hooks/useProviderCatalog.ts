@@ -6,6 +6,19 @@ type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
 /** Stable fallback identities so consumers can memoize on prop equality. */
 const DEFAULT_REASONING_LEVELS: PrimeThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
+function isUsable(candidate: PrimeModelDescriptor): boolean {
+  return candidate.enabled !== false && candidate.available
+}
+
+/** Resolve a session's persisted model against the catalog, matching either the model id or the full key. */
+function findSessionModel(catalog: PrimeModelCatalog, session: Pick<SessionRecord, 'model' | 'provider'> | undefined): PrimeModelDescriptor | undefined {
+  if (!session?.provider || !session.model) return undefined
+  return catalog.models.find((candidate) => candidate.provider === session.provider && (candidate.id === session.model || candidate.key === session.model) && isUsable(candidate))
+    ?? catalog.models.find((candidate) => candidate.id === session.model && isUsable(candidate))
+}
+
+interface PendingSelection { model: string; effort: PrimeThinkingLevel }
+
 export function groupModelsByProvider(models: readonly PrimeModelDescriptor[] | undefined): Map<string, PrimeModelDescriptor[]> {
   const grouped = new Map<string, PrimeModelDescriptor[]>()
   for (const model of models ?? []) {
@@ -102,14 +115,13 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   ), [])
 
   const fallbackModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => {
-    if (activeSession?.provider && activeSession.model && nextCatalog) {
-      const sessionModel = nextCatalog.models.find((candidate) => candidate.provider === activeSession.provider && (candidate.id === activeSession.model || candidate.key === activeSession.model) && candidate.enabled !== false && candidate.available)
-        ?? nextCatalog.models.find((candidate) => candidate.id === activeSession.model && candidate.enabled !== false && candidate.available)
+    if (nextCatalog) {
+      const sessionModel = findSessionModel(nextCatalog, activeSession)
       if (sessionModel) return sessionModel
     }
     return nextCatalog?.models.find((candidate) => candidate.key === lastSelectedModel && candidate.enabled !== false && candidate.available)
       ?? firstUsableModel(nextCatalog)
-  }, [activeSession?.model, activeSession?.provider, firstUsableModel, lastSelectedModel])
+  }, [activeSession, firstUsableModel, lastSelectedModel])
 
   const selectedModel = useMemo<PrimeModelDescriptor | undefined>(() => {
     return catalog?.models.find((candidate) => candidate.key === model && candidate.enabled !== false && candidate.available)
@@ -167,15 +179,27 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     })
   }, [bridge, refresh, reportError])
 
-  const activeSessionIdRef = useRef(activeSession?.id)
+  // Selections made while a session has no live runtime are only local state,
+  // so they are parked per session (new tabs share the '' key) until a runtime
+  // reports them back or the user returns to that tab.
+  const pendingSelectionsRef = useRef(new Map<string, PendingSelection>())
+  const sessionKey = activeSession?.id ?? ''
+  const sessionKeyRef = useRef(sessionKey)
+  useLayoutEffect(() => { sessionKeyRef.current = sessionKey })
+  // Starts undefined so the first render with a catalog counts as a switch and
+  // restores the initial session's effort as well as its model.
+  const activeSessionIdRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!catalog) return
     const sessionChanged = activeSessionIdRef.current !== activeSession?.id
     activeSessionIdRef.current = activeSession?.id
 
-    // 1. If active live runtime has a model, sync to it
+    // Precedence: live runtime, then the tab's unsent selection, then the
+    // session's persisted metadata. The latter two only apply when the tab
+    // changes so a catalog refresh cannot revert what the user picked.
     if (runtime?.model?.provider && runtime.model.id) {
-      const runtimeModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && candidate.enabled !== false && candidate.available)
+      pendingSelectionsRef.current.delete(sessionKey)
+      const runtimeModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && isUsable(candidate))
       if (runtimeModel) {
         if (modelRef.current !== runtimeModel.key) updateModel(runtimeModel.key)
         rememberSelectionRef.current(runtimeModel.key)
@@ -185,19 +209,22 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
       }
       return
     }
+    if (!sessionChanged) return
 
-    // 2. If active selected session has a persisted model/provider, sync on session switch or initial load
-    if (activeSession?.provider && activeSession.model && sessionChanged) {
-      const sessionModel = catalog.models.find((candidate) => candidate.provider === activeSession.provider && (candidate.id === activeSession.model || candidate.key === activeSession.model) && candidate.enabled !== false && candidate.available)
-        ?? catalog.models.find((candidate) => candidate.id === activeSession.model && candidate.enabled !== false && candidate.available)
-      if (sessionModel && modelRef.current !== sessionModel.key) {
-        updateModel(sessionModel.key)
-      }
-      if (activeSession.thinkingLevel && sessionModel?.availableThinkingLevels.includes(activeSession.thinkingLevel as PrimeThinkingLevel)) {
-        if (effortRef.current !== activeSession.thinkingLevel) updateEffort(activeSession.thinkingLevel as PrimeThinkingLevel)
-      }
+    const pending = pendingSelectionsRef.current.get(sessionKey)
+    const pendingModel = pending && catalog.models.find((candidate) => candidate.key === pending.model && isUsable(candidate))
+    if (pending && pendingModel) {
+      if (modelRef.current !== pendingModel.key) updateModel(pendingModel.key)
+      if (pendingModel.availableThinkingLevels.includes(pending.effort) && effortRef.current !== pending.effort) updateEffort(pending.effort)
+      return
     }
-  }, [activeSession?.id, catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, updateEffort, updateModel])
+
+    const sessionModel = findSessionModel(catalog, activeSession)
+    if (sessionModel && modelRef.current !== sessionModel.key) updateModel(sessionModel.key)
+    if (activeSession?.thinkingLevel && sessionModel?.availableThinkingLevels.includes(activeSession.thinkingLevel as PrimeThinkingLevel)) {
+      if (effortRef.current !== activeSession.thinkingLevel) updateEffort(activeSession.thinkingLevel as PrimeThinkingLevel)
+    }
+  }, [activeSession, catalog, runtime?.model?.id, runtime?.model?.provider, runtime?.thinkingLevel, sessionKey, updateEffort, updateModel])
 
   // Scoped to the runtime's reported tier so a catalog refresh cannot revert
   // an optimistic fast-mode toggle that the runtime has not confirmed yet.
@@ -216,7 +243,10 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     updateEffort(nextEffort)
     if (!nextModel?.fastModeSupported) updateFast(false)
     if (!bridge || !runtime || !nextModel) {
-      if (nextModel) rememberSelection(nextModelKey)
+      if (nextModel) {
+        pendingSelectionsRef.current.set(sessionKeyRef.current, { model: nextModelKey, effort: nextEffort })
+        rememberSelection(nextModelKey)
+      }
       return
     }
     queueRuntimeMutation(
@@ -233,7 +263,10 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   const changeEffort = useCallback((nextEffort: PrimeThinkingLevel) => {
     const previous = effortRef.current
     updateEffort(nextEffort)
-    if (!bridge || !runtime) return
+    if (!bridge || !runtime) {
+      pendingSelectionsRef.current.set(sessionKeyRef.current, { model: modelRef.current, effort: nextEffort })
+      return
+    }
     queueRuntimeMutation(
       runtime.runtimeId,
       async () => { await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort }) },
