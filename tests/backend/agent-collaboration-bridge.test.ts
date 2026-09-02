@@ -283,7 +283,7 @@ describe('AgentCollaborationBridge', () => {
     expect(primeManager.command).toHaveBeenCalledWith('runtime-target', expect.objectContaining({ type: 'prompt' }))
     const delivered = (primeManager.command.mock.calls[0] as unknown as [string, { message: string }])[1]
     expect(delivered.message).toContain(`"from_session_id":"${source.id}"`)
-    expect(delivered.message).toContain('"reply_with":"session_send"')
+    expect(delivered.message).toContain('"reply_with":"gooeypi_session_send"')
     expect(delivered.message).not.toContain('"from_title"')
     expect(delivered.message).not.toContain('"from_harness"')
     expect(delivered.message).not.toContain(source.title)
@@ -294,7 +294,7 @@ describe('AgentCollaborationBridge', () => {
     expect(Object.keys(metadata).sort()).toEqual([
       'from_session_id', 'nonce', 'reply_with', 'sent_at', 'signature', 'version',
     ])
-    expect(metadata.version).toBe(2)
+    expect(metadata.version).toBe(3)
     expect(parseGooeyPiAgentMessage(delivered.message)).toEqual({
       fromSessionId: source.id,
       text: 'Please claim src/api.ts.',

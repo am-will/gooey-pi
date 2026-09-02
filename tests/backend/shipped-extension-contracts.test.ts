@@ -95,7 +95,7 @@ const expectedRegistrations: Record<string, Registration[]> = {
   ],
   'omp-work-ask-user.ts': [{ kind: 'tool', name: 'ask_user' }],
   'omp-work-collaboration.ts': [
-    ...['session_list', 'session_models', 'session_create', 'session_read', 'session_send', 'session_wait'].map((name) => ({ kind: 'tool' as const, name })),
+    ...['gooeypi_session_list', 'gooeypi_session_models', 'gooeypi_session_create', 'gooeypi_session_read', 'gooeypi_session_send', 'gooeypi_session_wait'].map((name) => ({ kind: 'tool' as const, name })),
   ],
   'omp-work-schedules.ts': [
     ...['scheduled_tasks_list', 'scheduled_task_create_once', 'scheduled_task_create_recurring', 'scheduled_task_update', 'scheduled_task_manage'].map((name) => ({ kind: 'tool' as const, name })),
@@ -111,6 +111,13 @@ const brokerVariables: Partial<Record<ExtensionInjection['capability'], readonly
   schedule: ['PRIME_WORK_SCHEDULE_URL', 'PRIME_WORK_SCHEDULE_TOKEN'],
   collaboration: ['GOOEYPI_COLLABORATION_URL', 'GOOEYPI_COLLABORATION_TOKEN'],
 }
+
+const LEGACY_UNPREFIXED_TOOLS = [
+  'ask_user', 'terminal_read', 'browser_tabs', 'browser_navigate', 'browser_screenshot', 'browser_read_page',
+  'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll', 'browser_evaluate',
+  'scheduled_tasks_list', 'scheduled_task_create_once', 'scheduled_task_create_recurring',
+  'scheduled_task_update', 'scheduled_task_manage',
+]
 
 async function loadExtension(injection: ExtensionInjection, configured: boolean) {
   vi.resetModules()
@@ -156,6 +163,16 @@ describe('shipped extension contracts', () => {
     expect(() => badExtension(ompHost().api as OmpExtensionApi)).not.toThrow()
     expect(() => badExtension(primeHost().api as OmpExtensionApi)).toThrow()
     expect(() => badExtension(piHost().api as OmpExtensionApi)).toThrow()
+  })
+
+  it('keeps tool registrations namespaced', () => {
+    // The allow-list only shrinks as legacy tools are renamed. See #192.
+    for (const registrations of Object.values(expectedRegistrations)) {
+      for (const registration of registrations) {
+        if (registration.kind !== 'tool') continue
+        expect(registration.name.startsWith('gooeypi_') || LEGACY_UNPREFIXED_TOOLS.includes(registration.name)).toBe(true)
+      }
+    }
   })
 
   it('rejects properties outside each host fixture from the proxy trap', () => {
