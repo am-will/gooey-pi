@@ -287,6 +287,10 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       setToast(`Network MCP authentication is managed outside GooeyPi. Use ${HARNESS_AGENT_NAMES[commandHarness]} directly${target}.`)
       return
     }
+    if (compactCommand && images.length > 0) {
+      reportError('/compact does not accept attachments. Remove the attachment and try again.')
+      return
+    }
     const currentWorkspace = workspace.workspaceRef.current
     const currentRuntime = workspace.runtime
     const currentOwner = workspace.runtimeOwnerRef.current
@@ -300,6 +304,13 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       if (queuedFlushPromptId) workspace.removeQueuedPrompt(queuedFlushPromptId)
     }
     if (ownsStreamingRuntime && currentRuntime && bridge) {
+      if (compactCommand) {
+        // Compacting mid-turn would abort the running turn, so it waits for the
+        // idle flush like any queued prompt.
+        if (!queuedFlushPromptId) workspace.queuePrompt(prompt, 'queue')
+        if (intent === 'steer') setToast('Compaction will run when the current turn finishes.')
+        return
+      }
       if (intent === 'queue' && images.length === 0) {
         if (!queuedFlushPromptId) workspace.queuePrompt(prompt, intent)
         return
@@ -388,8 +399,16 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
         let activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
         const selectedSession = selected.sessionFile ? sessions.find((session) => session.filePath === selected.sessionFile) : undefined
-        if (intent === 'queue' && images.length === 0 && (activeRuntime?.isStreaming || selectedSession?.status === 'running')) {
+        if (compactCommand && !activeRuntime) {
+          if (!selected.sessionFile) { setToast('Nothing to compact yet.'); return }
+          if (selectedSession?.status === 'running') {
+            setToast('Compaction is unavailable while this session is running outside GooeyPi.')
+            return
+          }
+        }
+        if ((intent === 'queue' || compactCommand) && images.length === 0 && (activeRuntime?.isStreaming || selectedSession?.status === 'running')) {
           if (!queuedFlushPromptId) queuedPromptId = workspace.queuePrompt(prompt, intent)
+          if (compactCommand && intent === 'steer') setToast('Compaction will run when the current turn finishes.')
           return
         }
         let startedRuntime = false
