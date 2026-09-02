@@ -27,6 +27,7 @@
 .progress-list div { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 .progress-list div svg { color: var(--success); }
 .progress-list div.is-current svg { color: var(--prime); }
+.summary-cost { margin-top: 10px; }
 .context-meter > div { display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--text-secondary); font-size: 11px; }
 .context-meter progress { width: 100%; height: 5px; display: block; overflow: hidden; border: 0; border-radius: 3px; background: var(--surface-selected); appearance: none; }
 .context-meter progress::-webkit-progress-bar { background: var(--surface-selected); }

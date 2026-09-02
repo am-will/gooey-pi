@@ -57,6 +57,7 @@ const api: PrimeWorkApi = {
     grantInferred: (path, harness) => invoke('projects:grant-inferred', path, harness),
     remove: (id, harness) => invoke('projects:remove', id, harness),
     touch: (id, harness) => invoke('projects:touch', id, harness),
+    setPinned: (id, pinned, harness) => invoke('projects:pin', id, pinned, harness),
     updateScripts: (id, scripts, harness) => invoke('projects:update-scripts', id, scripts, harness),
     markSetupStarted: (id, setup, harness) => invoke('projects:mark-setup-started', id, setup, harness),
     finishSetup: (id, setup, exitCode, harness) => invoke('projects:finish-setup', id, setup, exitCode, harness),

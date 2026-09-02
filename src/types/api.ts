@@ -183,6 +183,21 @@ export interface PrimeContextUsage {
   percent: number | null
 }
 
+export interface SessionUsageTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+}
+
+/** Cumulative cost and token totals for the in-context session, as reported by get_session_stats. */
+export interface SessionUsage {
+  /** USD cost summed from catalog pricing; null when the harness reports none. */
+  cost: number | null
+  tokens?: SessionUsageTokens
+}
+
 export interface RuntimeInfo {
   runtimeId: string
   harness: HarnessId
@@ -200,6 +215,7 @@ export interface RuntimeInfo {
   fastModeAvailable?: boolean
   serviceTier?: PrimeServiceTier
   contextUsage?: PrimeContextUsage
+  sessionUsage?: SessionUsage
 }
 
 export const PRIME_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -418,12 +434,16 @@ export const INTERFACE_FONT_SCALES = [105, 110, 115] as const
 export type InterfaceFontScale = typeof INTERFACE_FONT_SCALES[number]
 export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN'] as const
 export type LocalePreference = typeof LOCALE_PREFERENCES[number]
+export const PROJECT_SORT_MODES = ['recent', 'alphabetical'] as const
+export type ProjectSortMode = typeof PROJECT_SORT_MODES[number]
 
 export interface AppSettings {
   theme: ThemeMode
   locale: LocalePreference
   /** Bounded interface text scale; 110 is the designed default. */
   interfaceFontScale: InterfaceFontScale
+  /** Order the renderer derives for project lists; 'recent' keeps launch behaviour unchanged. */
+  projectSortMode: ProjectSortMode
   sidebarOpen: boolean
   inspectorOpen: boolean
   showFileChangesPopup: boolean
@@ -711,6 +731,7 @@ export interface PrimeWorkApi {
     grantInferred(path: string, harness?: HarnessId): Promise<ProjectRecord>
     remove(id: string, harness?: HarnessId): Promise<boolean>
     touch(id: string, harness?: HarnessId): Promise<boolean>
+    setPinned(id: string, pinned: boolean, harness?: HarnessId): Promise<boolean>
     updateScripts(id: string, scripts: Pick<ProjectScripts, 'setup' | 'run'>, harness?: HarnessId): Promise<ProjectScripts>
     markSetupStarted(id: string, setup: string, harness?: HarnessId): Promise<ProjectScripts>
     finishSetup(id: string, setup: string, exitCode: number, harness?: HarnessId): Promise<ProjectScripts | undefined>
