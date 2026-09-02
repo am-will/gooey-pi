@@ -1,4 +1,4 @@
-import { openSync, writeSync, closeSync } from 'node:fs'
+import { closeSync, openSync, readSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isRecord } from '../validation'
@@ -86,18 +86,34 @@ async function readOmpTitleSlot(io: SessionMetadataReaderIo, filePath: string): 
  */
 export function writeOmpTitleSlot(filePath: string, title: string): boolean {
   try {
-    const updatedAt = new Date().toISOString()
-    const targetLen = OMP_TITLE_SLOT_BYTES - 1 // -1 for the trailing \n
-    // Truncate title if needed so the JSON line fits in the fixed-width slot.
-    let name = title
-    while (name.length > 0 && Buffer.byteLength(JSON.stringify({ type: 'title', v: 1, title: name, source: 'user', updatedAt, pad: '' }), 'utf8') > targetLen) {
-      name = name.slice(0, -1)
-    }
-    const json = JSON.stringify({ type: 'title', v: 1, title: name, source: 'user', updatedAt, pad: '' })
-    const padded = json + ' '.repeat(targetLen - Buffer.byteLength(json, 'utf8'))
     const fd = openSync(filePath, 'r+')
-    try { writeSync(fd, padded + '\n', 0, 'utf8') } finally { closeSync(fd) }
-    return true
+    try {
+      const slot = Buffer.alloc(OMP_TITLE_SLOT_BYTES)
+      const bytesRead = readSync(fd, slot, 0, OMP_TITLE_SLOT_BYTES, 0)
+      if (bytesRead !== OMP_TITLE_SLOT_BYTES || slot[OMP_TITLE_SLOT_BYTES - 1] !== 0x0a) return false
+      let existing: unknown
+      try { existing = JSON.parse(slot.toString('utf8', 0, OMP_TITLE_SLOT_BYTES - 1)) } catch { return false }
+      if (!isRecord(existing) || existing.type !== 'title') return false
+
+      const updatedAt = new Date().toISOString()
+      const targetLen = OMP_TITLE_SLOT_BYTES - 1
+      const build = (name: string, pad: string) => JSON.stringify({ ...existing, title: name, updatedAt, pad })
+      let name = title
+      while (name.length > 0 && Buffer.byteLength(build(name, ''), 'utf8') > targetLen) {
+        const points = Array.from(name)
+        points.pop()
+        name = points.join('')
+      }
+      const unpadded = build(name, '')
+      const padding = targetLen - Buffer.byteLength(unpadded, 'utf8')
+      if (padding < 0) return false
+      const line = build(name, ' '.repeat(padding))
+      if (Buffer.byteLength(line, 'utf8') !== targetLen) return false
+      writeSync(fd, `${line}\n`, 0, 'utf8')
+      return true
+    } finally {
+      closeSync(fd)
+    }
   } catch {
     return false
   }
@@ -133,6 +149,8 @@ export function ompSessionServiceOptions(sessionRoot = ompSessionRoot()): Sessio
     metadataReader: createOmpSessionMetadataReader(),
     transcriptReader: readOmpTranscript,
     isSessionPathAuthorized: isOmpSessionPath,
+    // Session files sit one bucket directory below the root; bounded one-level
+    // watchers keep catalog refresh behavior identical across platforms.
     recursiveWatch: true,
     renameFile: writeOmpTitleSlot,
   }

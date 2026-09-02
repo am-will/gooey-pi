@@ -224,7 +224,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const { bridge, settingsState, setSessions, setToast, reportError } = getDeps()
     if (!bridge) return
     try {
-      if (!await bridge.sessions.rename(session.filePath, title)) throw new Error(`${HARNESS_AGENT_NAMES[settingsState.settings.activeHarness]} could not rename this session. The session file may be locked. Try again in a moment, or switch to the session first.`)
+      if (!await bridge.sessions.rename(session.filePath, title)) throw new Error(`${HARNESS_AGENT_NAMES[settingsState.settings.activeHarness]} could not rename this session.`)
       setSessions((items) => items.map((item) => item.id === session.id ? { ...item, title } : item)); setToast('Session renamed.')
     } catch (error) { reportError(error) }
   }
@@ -379,7 +379,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         // harness against the old workspace's cwd and session.
         const activeHarness = admitted.project.harness
         if (images.length > 0 && !provider.selectedModel?.input.includes('image')) {
-          reportError('This model does not accept images. Switch to a vision-capable model, or ask the agent to analyze the image with the inspect_image tool.')
+          reportError('This model does not accept images. Remove the attachment or choose a vision model.')
           return
         }
         if (!workspace.prepareForPrompt(generation)) return

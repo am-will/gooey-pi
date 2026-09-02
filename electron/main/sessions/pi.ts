@@ -1,6 +1,8 @@
-import { appendFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { appendFileSync, closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
 import type { SessionCatalogIo } from './catalog'
 import {
@@ -68,14 +70,47 @@ export function createPiSessionMetadataReader(io: SessionMetadataReaderIo = node
  * when no live runtime is available. Pi's metadata reader picks up the
  * latest `session_info` name in file order, so the new name takes effect
  * immediately on the next catalog scan.
+ *
+ * Pi v3 entries are an id/parentId branch tree; every fixture and the
+ * header comment above carry both fields. Generate a short hex id and
+ * parent it to the current leaf so a later pi resume can load the file.
  */
 export function appendPiSessionInfo(filePath: string, title: string): boolean {
   try {
-    const record = JSON.stringify({ type: 'session_info', name: title, timestamp: new Date().toISOString() }) + '\n'
+    const parentId = currentPiLeafId(filePath)
+    const record = `${JSON.stringify({
+      type: 'session_info',
+      id: randomBytes(4).toString('hex'),
+      parentId,
+      timestamp: new Date().toISOString(),
+      name: title,
+    })}\n`
     appendFileSync(filePath, record, 'utf8')
     return true
   } catch {
     return false
+  }
+}
+
+function currentPiLeafId(filePath: string): string | null {
+  const fd = openSync(filePath, 'r')
+  try {
+    const size = fstatSync(fd).size
+    const window = Math.min(size, 256 * 1024)
+    const buf = Buffer.alloc(window)
+    readSync(fd, buf, 0, window, size - window)
+    const lines = buf.toString('utf8').split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!.trim()
+      if (!line) continue
+      let value: unknown
+      try { value = JSON.parse(line) } catch { continue }
+      if (!isRecord(value) || value.type === 'session' || typeof value.id !== 'string' || !value.id) continue
+      return value.id
+    }
+    return null
+  } finally {
+    closeSync(fd)
   }
 }
 export const readPiTranscript: TranscriptFileReader = createBranchSummaryTranscriptReader()
@@ -92,6 +127,9 @@ export function piSessionServiceOptions(sessionRoot = piSessionRoot()): SessionS
     catalogNameTimestamp: piTimestampFromSessionName,
     metadataReader: createPiSessionMetadataReader(),
     transcriptReader: readPiTranscript,
+    isSessionPathAuthorized: isPiSessionPath,
+    // Session files sit one bucket directory below the root; bounded one-level
+    // watchers keep catalog refresh behavior identical across platforms.
     recursiveWatch: true,
     renameFile: appendPiSessionInfo,
   }

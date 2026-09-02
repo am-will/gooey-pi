@@ -255,11 +255,8 @@ export class SessionService {
     if (safeTitle.startsWith('-') || /[\r\n]/.test(safeTitle)) throw new TypeError('title contains invalid characters')
     if (await this.renameRuntimeSession(safePath, safeTitle)) return true
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
-    if (!primeAgentPath) {
-      // No CLI fallback (OMP, pi): try the file-level rename callback.
-      if (this.renameFile) return this.renameFile(safePath, safeTitle)
-      return false
-    }
+    // OMP/pi services are constructed with a null CLI path (electron/main/index.ts).
+    if (!primeAgentPath) return this.renameFile?.(safePath, safeTitle) ?? false
     const metadata = await this.readMetadata(safePath)
     const result = await runProcess(primeAgentPath, ['rename', metadata.id, safeTitle, '--json'], { timeoutMs: 30_000 })
     return result.code === 0
