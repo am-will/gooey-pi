@@ -183,6 +183,21 @@ export interface PrimeContextUsage {
   percent: number | null
 }
 
+export interface SessionUsageTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+}
+
+/** Cumulative cost and token totals for the in-context session, as reported by get_session_stats. */
+export interface SessionUsage {
+  /** USD cost summed from catalog pricing; null when the harness reports none. */
+  cost: number | null
+  tokens?: SessionUsageTokens
+}
+
 export interface RuntimeInfo {
   runtimeId: string
   harness: HarnessId
@@ -202,6 +217,7 @@ export interface RuntimeInfo {
   fastModeAvailable?: boolean
   serviceTier?: PrimeServiceTier
   contextUsage?: PrimeContextUsage
+  sessionUsage?: SessionUsage
 }
 
 export const PRIME_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
