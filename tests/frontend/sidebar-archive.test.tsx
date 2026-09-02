@@ -81,6 +81,25 @@ describe('sidebar project context menu', () => {
     expect(onTogglePinProject).toHaveBeenCalledWith(projects[1])
   })
 
+  it('dismisses the sort menu when adding a project', async () => {
+    await act(async () => {
+      root.render(
+        <Sidebar
+          projects={[project]} sessions={[session]} activeView="session" projectSortMode="recent"
+          onSelectProject={noop} onSelectSession={noop} onNavigate={noop} onNewSession={noop} onAddProject={noop} onRemoveProject={noop}
+          onClose={noop} onOpenPalette={noop} onRenameSession={async () => undefined} onArchiveSession={async () => undefined}
+        />,
+      )
+    })
+
+    await press(container.querySelector('[aria-label="Sort projects"]')!)
+    expect(container.querySelector('[role="menuitemradio"]')).not.toBeNull()
+    await act(async () => {
+      container.querySelector('[aria-label="Add project"]')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    })
+    expect(container.querySelector('[role="menuitemradio"]')).toBeNull()
+  })
+
   it('omits pinning for inferred projects', async () => {
     await act(async () => {
       root.render(
