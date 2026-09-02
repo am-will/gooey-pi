@@ -65,6 +65,17 @@ describe('JsonStateStore', () => {
     expect(new JsonStateStore(path).getSettings().locale).toBe('system')
   })
 
+  it('defaults, persists, and validates the project sort mode', () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    const settings = { ...defaultSettings(), projectSortMode: 'alphabetical' as const }
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).getSettings().projectSortMode).toBe('alphabetical')
+
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings: { ...settings, projectSortMode: 'invalid' }, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).getSettings().projectSortMode).toBe('recent')
+  })
+
   it('serializes concurrent updates without losing data', async () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')

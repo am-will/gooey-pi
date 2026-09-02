@@ -923,12 +923,36 @@ describe('ProjectService harness scoping', () => {
     // Removing through the wrong harness's service is a no-op that leaves the grant intact.
     await expect(primeService.remove('omp-project')).resolves.toBe(false)
     await expect(primeService.touch('omp-project')).resolves.toBe(false)
+    await expect(primeService.setPinned('omp-project', true)).resolves.toBe(false)
     expect(store.snapshot().projects.map((project) => project.id).sort()).toEqual(['omp-project', 'prime-project'])
     await expect(ompService.authorizeCwd(ompRoot)).resolves.toBe(realpathSync(ompRoot))
 
     await expect(ompService.remove('omp-project')).resolves.toBe(true)
     expect(store.snapshot().projects.map((project) => project.id)).toEqual(['prime-project'])
     await expect(primeService.authorizeCwd(root)).resolves.toBe(realpathSync(root))
+  })
+
+  it('pins and unpins its own projects while keeping other harnesses isolated', async () => {
+    const { root, service: primeService, store } = setup()
+    const ompRoot = `${root}-omp`
+    mkdirSync(ompRoot)
+    const ompService = new ProjectService(store, () => null, 'omp')
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push(
+      { id: 'prime-project', harness: 'prime', name: 'Prime', path: root, folders: [root], primaryFolder: root, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root) },
+      { id: 'omp-project', harness: 'omp', name: 'OMP', path: ompRoot, folders: [ompRoot], primaryFolder: ompRoot, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(ompRoot) },
+    ) })
+    primeService.bindProviders({ sessions: async () => [], branch: async () => undefined })
+
+    await expect(primeService.setPinned('prime-project', true)).resolves.toBe(true)
+    expect(store.snapshot().projects.find((project) => project.id === 'prime-project')?.pinned).toBe(true)
+    expect((await primeService.list()).map((project) => project.id)).toEqual(['prime-project'])
+    await expect(primeService.setPinned('prime-project', false)).resolves.toBe(true)
+    expect(store.snapshot().projects.find((project) => project.id === 'prime-project')?.pinned).toBe(false)
+    await expect(primeService.setPinned('missing', true)).resolves.toBe(false)
+    await expect(primeService.setPinned('omp-project', true)).resolves.toBe(false)
+    expect(store.snapshot().projects.find((project) => project.id === 'omp-project')?.pinned).toBe(false)
+    expect(await ompService.list()).toHaveLength(1)
   })
 
   it('revokes session-derived read-only authorization across sibling harnesses when dismissed on one harness', async () => {

@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   locale: 'system',
   interfaceFontScale: 110,
+  projectSortMode: 'recent',
   activeHarness: 'omp',
   ompApprovalMode: 'inherit',
   petEnabled: true,

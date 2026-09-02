@@ -30,6 +30,7 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['projects', 'grantInferred', 'projects:grant-inferred', ['/repo', 'omp']],
   ['projects', 'remove', 'projects:remove', ['project-id', 'omp']],
   ['projects', 'touch', 'projects:touch', ['project-id', 'omp']],
+  ['projects', 'setPinned', 'projects:pin', ['project-id', true, 'omp']],
   ['projects', 'updateScripts', 'projects:update-scripts', ['project-id', { setup: 'npm install', run: 'npm run dev' }, 'omp']],
   ['projects', 'markSetupStarted', 'projects:mark-setup-started', ['project-id', 'npm install', 'omp']],
   ['projects', 'finishSetup', 'projects:finish-setup', ['project-id', 'npm install', 0, 'omp']],
