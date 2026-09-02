@@ -3,6 +3,7 @@ import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
 import { mapLimit } from '../lib/async'
 import { isPathWithin, isRecord } from '../validation'
+import { fallbackModelFromRecord, fallbackNoticeText } from '../../../src/lib/events/model-fallback'
 import type { SessionCatalogEntry, SessionCatalogIo } from './catalog'
 import {
   ingestMessageActivity,
@@ -186,8 +187,21 @@ export function createBucketedMetadataParser(ingestRecord: BucketedRecordIngest)
 export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
   return createTranscriptReader({
     isRenderable: (entry) => entry.type === 'message' || entry.type === 'compaction' || entry.type === 'branch_summary'
-      || (entry.type === 'custom_message' && entry.display === true),
+      || (entry.type === 'custom_message' && entry.display === true)
+      || Boolean(fallbackModelFromRecord(entry)),
     renderEntry: (entry, safeId) => {
+      const fallback = fallbackModelFromRecord(entry)
+      if (fallback) {
+        const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
+        return {
+          id: safeId,
+          role: 'system',
+          timestamp,
+          startedAt: timestamp,
+          completedAt: timestamp,
+          parts: [{ type: 'text', text: boundedString(fallbackNoticeText(fallback.label), MAX_PART_TEXT_CHARS) }],
+        }
+      }
       if (entry.type !== 'branch_summary') return undefined
       const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
       const text = typeof entry.summary === 'string' ? entry.summary : textFromContent(entry.content, MAX_PART_TEXT_CHARS)

@@ -32,6 +32,7 @@ import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
 import { IconButton, SelectControl } from './ui'
+import { ExecutingModelChip, type ExecutingModelChipProps } from './ExecutingModelChip'
 import { ModelPicker } from './ModelPicker'
 import { CheckoutPicker } from './CheckoutPicker'
 
@@ -57,6 +58,7 @@ interface ComposerProps {
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
   messageEnterAction?: MessageEnterAction
   contextUsage?: PrimeContextUsage
+  executingModel?: ExecutingModelChipProps['executingModel']
   sessionUsage?: SessionUsage
   voice?: PrimeWorkApi['voice'] | null
   transcriptionProvider?: VoiceTranscriptionProvider
@@ -141,6 +143,7 @@ export const Composer = memo(function Composer({
   imageInputSupported,
   messageEnterAction = 'queue',
   contextUsage,
+  executingModel,
   sessionUsage,
   voice,
   transcriptionProvider = 'openai-live',
@@ -705,6 +708,7 @@ export const Composer = memo(function Composer({
               }}
             />
             <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} />
+            <ExecutingModelChip executingModel={executingModel} />
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>

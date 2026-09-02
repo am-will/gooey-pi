@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '../../src/components/Composer'
 import { groupModelsByProvider } from '../../src/hooks/useProviderCatalog'
-import type { PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, SkillRecord } from '../../src/types/api'
+import type { PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo, SkillRecord } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -41,7 +41,7 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = false, messageEnterAction: 'queue' | 'steer' = 'queue', contextUsage?: PrimeContextUsage) {
+function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = false, messageEnterAction: 'queue' | 'steer' = 'queue', contextUsage?: PrimeContextUsage, executingModel?: RuntimeInfo['executingModel']) {
   act(() => root.render(<Composer
     busy={busy}
     model="provider/vision"
@@ -55,6 +55,7 @@ function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = fal
     imageInputSupported={imageInputSupported}
     messageEnterAction={messageEnterAction}
     contextUsage={contextUsage}
+    executingModel={executingModel}
     skills={[]}
     onModelChange={vi.fn()}
     onEffortChange={vi.fn()}
@@ -547,6 +548,21 @@ describe('Composer context usage and stop control', () => {
     expect(dial?.title).toContain('unavailable')
     expect(container.querySelector('button[aria-label="Stop Prime"] .lucide-square')).not.toBeNull()
     expect(container.querySelector('.lucide-circle-stop')).toBeNull()
+  })
+})
+
+describe('Composer fallback indicator', () => {
+  it('shows the executing fallback without changing the selected model', () => {
+    renderComposer(vi.fn(), true, false, 'queue', undefined, {
+      provider: 'anthropic',
+      id: 'claude-sonnet',
+      label: 'anthropic/claude-sonnet',
+      isFallback: true,
+    })
+
+    expect(container.querySelector<HTMLButtonElement>('.model-picker__trigger')?.getAttribute('aria-label')).toBe('Model: Vision')
+    expect(container.querySelector('.model-fallback-chip')?.textContent).toContain('Running on anthropic/claude-sonnet')
+    expect(container.querySelector('.model-fallback-chip')?.getAttribute('title')).toContain('Provider fallback')
   })
 })
 
