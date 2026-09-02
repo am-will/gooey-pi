@@ -210,17 +210,18 @@ export class AgentRpcManager {
       throw new Error('The active model does not accept images. Choose a vision model and try again.')
     }
     const response = await runtime.command(translated)
-    if (command.type === 'steer') {
-      // A steer can be admitted and consumed before its two action-update
-      // edges cross IPC. Refresh after the admission response and attach the
-      // authoritative scheduler state so the renderer can settle its
-      // optimistic row even when both events raced the response.
+    if (command.type === 'steer' || command.type === 'follow_up') {
+      // OMP reports only queuedMessageCount, while Prime reports the full
+      // scheduler snapshot. Refresh after admission so both shapes reach the
+      // renderer before a queued row can appear to vanish.
       try {
         const state = await runtime.command({ type: 'get_state' })
-        const sessionActions = isRecord(state.data) ? parseSessionActionSnapshot(state.data.sessionActions) : null
-        // Do not expose RpcRuntime's default empty snapshot when an older
-        // harness omits sessionActions: absence is not proof of pickup.
-        if (sessionActions) return { ...response, sessionActions }
+        const explicitActions = isRecord(state.data) ? parseSessionActionSnapshot(state.data.sessionActions) : null
+        const sessionActions = explicitActions ?? runtime.snapshot().sessionActions
+        // Zero without an active-turn marker is not proof that a steer was read.
+        if (explicitActions || (this.adapter.id === 'omp' && sessionActions && sessionActions.queuedCount > 0)) {
+          return { ...response, sessionActions }
+        }
       } catch { /* action events remain the fallback */ }
       return response
     }
