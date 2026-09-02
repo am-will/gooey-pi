@@ -1,4 +1,4 @@
-import type { HarnessId, PrimeContextUsage, SessionActionSnapshot } from '../../../src/types/api'
+import type { HarnessId, PrimeContextUsage, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
 import { MAX_QUEUED_ACTIONS } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
@@ -63,6 +63,32 @@ export function parseContextUsage(raw: unknown): PrimeContextUsage | null {
   const percent = raw.percent === null ? null : typeof raw.percent === 'number' && Number.isFinite(raw.percent) && raw.percent >= 0 ? raw.percent : undefined
   if (tokens === undefined || percent === undefined) return null
   return { tokens, contextWindow: Number(raw.contextWindow), percent }
+}
+
+const SESSION_TOKEN_FIELDS: Array<keyof SessionUsageTokens> = ['input', 'output', 'cacheRead', 'cacheWrite', 'total']
+
+function parseSessionUsageTokens(raw: unknown): SessionUsageTokens | undefined {
+  if (!isRecord(raw)) return undefined
+  const tokens: Partial<SessionUsageTokens> = {}
+  for (const field of SESSION_TOKEN_FIELDS) {
+    const value = raw[field]
+    if (!Number.isSafeInteger(value) || Number(value) < 0) return undefined
+    tokens[field] = Number(value)
+  }
+  return tokens as SessionUsageTokens
+}
+
+/**
+ * Reads the cost/token totals out of get_session_stats data. A missing or
+ * malformed cost becomes null (older harness builds omit it); malformed token
+ * fields drop the breakdown. Returns null only when neither is present.
+ */
+export function parseSessionUsage(raw: unknown): SessionUsage | null {
+  if (!isRecord(raw)) return null
+  const cost = typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? raw.cost : null
+  const tokens = parseSessionUsageTokens(raw.tokens)
+  if (cost === null && tokens === undefined) return null
+  return tokens ? { cost, tokens } : { cost }
 }
 
 const unsafeArgValue = (value: string): boolean => value.startsWith('-') || /[\r\n]/.test(value)
