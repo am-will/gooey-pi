@@ -774,7 +774,7 @@ export class RpcRuntime {
       // path as the get_session_stats refresh.
       this.applyAuthoritativeContextUsage(reading.contextUsage)
     }
-    const sessionActions = parseSessionActionSnapshot(raw.sessionActions)
+    const sessionActions = parseSessionActionSnapshot(raw.sessionActions) ?? reading.sessionActions ?? null
     if (sessionActions) this.info.sessionActions = sessionActions
     if (isRecord(raw.model)) {
       this.info.model = {

@@ -1689,6 +1689,32 @@ describe('vendored supply-chain pins', () => {
     }
   })
 
+  test('every vendored tarball is pinned and reference artifacts hash to their pins', () => {
+    const manifest = JSON.parse(readFileSync('scripts/release/dependency-pins.json', 'utf8'))
+    const reference = manifest['reference-artifacts'] as Record<string, { path: string; integrity: string }> | undefined
+    // Reference artifacts are not installed (no lockfile entry binds them), but
+    // they document the upstream base releases the patched tarballs derive
+    // from; unpinned bytes in vendor/ would drift silently.
+    expect(reference, 'reference-artifacts section missing from dependency-pins.json').toBeDefined()
+
+    const pinned = new Set<string>()
+    for (const pin of Object.values(manifest.packages as Record<string, { resolved: string }>)) {
+      if (pin.resolved.startsWith('file:vendor/')) pinned.add(pin.resolved.slice('file:'.length))
+    }
+    pinned.add(readPinnedNpmArtifact().relativePath)
+    for (const entry of Object.values(reference ?? {})) pinned.add(entry.path)
+
+    for (const [name, entry] of Object.entries(reference ?? {})) {
+      expect(entry.path, `reference artifact outside vendor/: ${name}`).toMatch(/^vendor\/[^/]+\.tgz$/)
+      expect(entry.integrity, `weak integrity algorithm for ${name}`).toMatch(/^sha512-/)
+      const digest = `sha512-${createHash('sha512').update(readFileSync(entry.path)).digest('base64')}`
+      expect(digest, `reference tarball bytes drifted from pin: ${entry.path}`).toBe(entry.integrity)
+    }
+
+    const unpinned = readdirSync('vendor').filter((name) => name.endsWith('.tgz') && !pinned.has(`vendor/${name}`))
+    expect(unpinned, 'vendored tarballs without any pin').toEqual([])
+  })
+
   test('the checked-in npm bootstrap archive matches its strict artifact pin and provenance record', () => {
     const pinManifest = JSON.parse(readFileSync('scripts/release/dependency-pins.json', 'utf8'))
     const artifact = readPinnedNpmArtifact()

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { requestFailureMessage } from '@/app/workspace'
+import { clearComposerDraft } from '@/lib/composer-draft'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
 import { parseMcpAuthenticationCommand } from '@/lib/mcp-policy'
@@ -172,6 +173,10 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   const selectProject = async (project: ProjectRecord) => {
     const { bridge, layout, settingsState, sessions, workspace, setSessions, setView, clearSessionAttention, reportError } = getDeps()
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
+    if (workspace.workspaceRef.current.project?.id === project.id) {
+      setView('session')
+      return
+    }
     const session = sessions.find((candidate) => !candidate.archived && projectContainsPath(project, candidate.projectPath))
     if (session) {
       clearSessionAttention(session)
@@ -205,6 +210,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const project = newSessionProject(requestedProject, workspace.workspaceRef.current.project, activeProject)
     if (!project) return
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
+    clearComposerDraft(`${project.id}:new`)
     workspace.activateWorkspace(project)
     if (!bridge) workspace.setMessages([])
     setView('session'); setPaletteOpen(false)
@@ -441,9 +447,14 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           // row so pickup can move them into history without redelivery.
           if (intent === 'steer') queuedPromptId = workspace.queuePrompt(prompt, intent, userMessage.parts, sentAt)
           const response = await bridge.agent.command(activeRuntime.runtimeId, { type: intent === 'steer' ? 'steer' : 'follow_up', message: prompt, ...(images.length ? { images } : {}) })
+          const actions = parseSessionActionSnapshot(response.sessionActions)
+          if (actions) {
+            workspace.setRuntime((current) => current?.runtimeId === activeRuntime.runtimeId
+              ? { ...current, sessionActions: actions }
+              : current)
+          }
           if (intent === 'steer' && queuedPromptId) {
             workspace.acceptSteer(queuedPromptId)
-            const actions = parseSessionActionSnapshot(response.sessionActions)
             if (actions) workspace.acknowledgeSteer(queuedPromptId, actions)
           }
           completeQueuedFlush()
