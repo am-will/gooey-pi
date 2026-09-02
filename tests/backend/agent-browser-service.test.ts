@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import type { WebContents } from 'electron'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AgentBrowserService } from '../../electron/main/browser/agent-service'
 import type { AgentBrowserPointerEvent, AgentBrowserState } from '../../src/types/api'
 
@@ -100,12 +100,13 @@ class FakeGuest extends EventEmitter {
   }
 }
 
-function fixture() {
+function fixture(options?: { actionTimeoutMs?: number }) {
   const guests = new Map<number, FakeGuest>()
   const service = new AgentBrowserService({
     getGuest: (id) => guests.get(id) as unknown as WebContents,
     attachTimeoutMs: 1_500,
     loadTimeoutMs: 1_500,
+    actionTimeoutMs: options?.actionTimeoutMs,
   })
   const states: AgentBrowserState[] = []
   service.onDidChange((state) => states.push(state))
@@ -268,6 +269,45 @@ describe('AgentBrowserService', () => {
     await service.screenshot('/sessions/a.jsonl', {})
     expect(guest.executedScripts.some((code) => code.includes('__primeWorkAgentCursorMarker') && code.includes("style.left = '10px'"))).toBe(true)
     expect(guest.executedScripts.some((code) => code.includes('marker.remove()'))).toBe(true)
+  })
+
+  it('rejects a guest call that never answers after actionTimeoutMs', async () => {
+    const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.scriptResult = (code) => code.includes('hangs') ? new Promise(() => {}) : JSON.stringify({})
+
+    await expect(service.evaluate('/sessions/a.jsonl', { tabId, code: "'hangs'" })).rejects.toThrow(/did not answer this action in time/)
+  })
+
+  it('releases the per-tab queue after the timeout grace even if the action is still pending', async () => {
+    const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    vi.useFakeTimers()
+    try {
+      guest.loadURL = () => new Promise<void>(() => {})
+      const hung = service.navigate('/sessions/a.jsonl', { tabId, url: 'https://example.org/' })
+      void hung.catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(50 + 5_000 + 10)
+      await expect(service.evaluate('/sessions/a.jsonl', { tabId, code: "'after'" })).resolves.toEqual({})
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a screenshot when navigation strands capturePage', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    const started = deferred<void>()
+    guest.capturePage = () => {
+      started.resolve()
+      return new Promise<never>(() => {})
+    }
+
+    const stranded = service.screenshot('/sessions/a.jsonl', { tabId })
+    await started.promise
+    guest.startNavigation({ url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
+
+    await expect(stranded).rejects.toThrow(/page navigated while this action was running/i)
   })
 
   it('marks tabs detached when their guest is destroyed and reactivates a sibling on close', async () => {

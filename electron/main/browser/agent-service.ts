@@ -1,8 +1,9 @@
-import type { Event, WebContents, WebContentsDidStartNavigationEventParams } from 'electron'
+import type { WebContents } from 'electron'
 import { randomBytes } from 'node:crypto'
 import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AgentBrowserTabRecord } from '../../../src/types/api'
 import { canonicalSessionPath } from '../session-paths'
 import { requireRecord, requireString } from '../validation'
+import { ACTION_TIMEOUT_MS, guardGuestCall, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
 
 /** The user's own Preview webview, adoptable by the active thread's agent. */
 export const PREVIEW_TAB_ID = 'preview'
@@ -19,23 +20,10 @@ function logNavigationFailure(url: string, error: unknown): void {
   if (message.includes('ERR_ABORTED')) return
   console.warn(`GooeyPi browser could not load ${url}: ${message}`)
 }
-
 const MAX_TABS_PER_SESSION = 6
 const MAX_TABS_TOTAL = 24
 const ATTACH_TIMEOUT_MS = 15_000
 const LOAD_TIMEOUT_MS = 20_000
-/**
- * Ceiling for a single guest call (script, input, capture). Electron never
- * settles `executeJavaScript` when a navigation destroys the execution context
- * that owns its promise, so every guest await needs its own deadline.
- */
-const ACTION_TIMEOUT_MS = 30_000
-/**
- * Extra margin before the per-tab queue releases a still-pending action. Each
- * guest call already carries ACTION_TIMEOUT_MS, so reaching this means the
- * action is pathologically stuck and liveness matters more than serialization.
- */
-const QUEUE_RELEASE_GRACE_MS = 5_000
 const SETTLE_MS = 150
 const MAX_TYPE_CHARS = 8_000
 const MAX_EVALUATE_CHARS = 16_000
@@ -45,25 +33,15 @@ const MAX_READ_ELEMENTS = 300
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
 const SCREENSHOT_JPEG_QUALITY = 70
 const ACTION_REVOKED_MESSAGE = 'Browser tab access changed before this action could start'
-/**
- * A navigation replaced the document while a guest call was in flight. Chromium
- * discards the old execution context together with any promise it owns, so the
- * call can never settle and has to be reported instead of awaited forever.
- */
-const NAVIGATION_ABORTED_MESSAGE = 'The page navigated while this action was running, so it was cancelled. Navigate with browser_navigate first, then run the action.'
-const ACTION_TIMED_OUT_MESSAGE = 'The page did not answer this action in time and it was cancelled.'
-
 interface CdpKey {
   key: string
   code: string
   keyCode: number
   text?: string
 }
-
 interface TabActionSerial {
   tail: Promise<unknown>
 }
-
 const PRESS_KEYS: Record<string, CdpKey> = {
   enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
   tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
@@ -83,7 +61,6 @@ const PRESS_KEYS: Record<string, CdpKey> = {
 // DevTools protocol modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
 const PRESS_MODIFIER_BITS: Record<string, number> = { alt: 1, control: 2, meta: 4, shift: 8 }
 const CDP_BUTTON_MASKS: Record<string, number> = { left: 1, right: 2, middle: 4 }
-
 interface TabState {
   tabId: string
   sessionKey: string
@@ -100,7 +77,6 @@ interface TabState {
   attachWaiters: Array<{ resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>
   unbindGuest: (() => void) | null
 }
-
 const GLIDE_MAX_MS = 550
 const GLIDE_MIN_MS = 160
 const GLIDE_STEP_MS = 28
@@ -473,12 +449,12 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       const info = await this.pageInfo(guest)
       // Show the agent its own pointer in the capture so it can calibrate.
-      if (tab.pointer) await this.guardGuestCall(guest, guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y))).catch(() => undefined)
+      if (tab.pointer) await guardGuestCall(guest, guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y)), this.actionTimeoutMs).catch(() => undefined)
       let image: Electron.NativeImage
       try {
-        image = await this.guardGuestCall(guest, guest.capturePage(undefined, { stayHidden: true, stayAwake: true }))
+        image = await guardGuestCall(guest, guest.capturePage(undefined, { stayHidden: true, stayAwake: true }), this.actionTimeoutMs)
       } finally {
-        if (tab.pointer) void this.guardGuestCall(guest, guest.executeJavaScript(removeCursorMarkerScript())).catch(() => undefined)
+        if (tab.pointer) void guardGuestCall(guest, guest.executeJavaScript(removeCursorMarkerScript()), this.actionTimeoutMs).catch(() => undefined)
       }
       const size = image.getSize()
       if (!size.width || !size.height) throw new Error('The browser tab has no visible content to capture yet')
@@ -677,10 +653,9 @@ export class AgentBrowserService {
       // already using Electron's guest APIs; it may finish or fail naturally.
       return action(tab, guest)
     })
-    tab.serial.tail = this.releaseQueueEventually(run)
+    tab.serial.tail = releaseQueueEventually(run, this.actionTimeoutMs + QUEUE_RELEASE_GRACE_MS)
     return run
   }
-
   private assertActionAuthority(tab: TabState, sessionKey: string, generation: number): void {
     const current = tab.tabId === PREVIEW_TAB_ID ? this.previewTab : this.tabs.get(tab.tabId)
     if (this.closed || tab.revoked || tab.generation !== generation || tab.sessionKey !== sessionKey || current !== tab) {
@@ -688,66 +663,9 @@ export class AgentBrowserService {
     }
   }
 
-  /**
-   * Bounds one guest call. Chromium destroys the execution context that owns an
-   * `executeJavaScript` promise when the document is replaced, so the promise
-   * neither resolves nor rejects; without this the caller waits forever and the
-   * tab's action queue never drains again. Same-document navigations keep the
-   * context alive and are ignored.
-   */
-  private guardGuestCall<T>(guest: WebContents, call: Promise<T>): Promise<T> {
-    // Reassigned by the executor below before any listener can fire.
-    let cleanup = (): void => {}
-    const interrupted = new Promise<never>((_resolveInterrupt, reject) => {
-      const fail = (message: string) => {
-        cleanup()
-        reject(new Error(message))
-      }
-      const onNavigation = (details: Event<WebContentsDidStartNavigationEventParams>) => {
-        // Same-document navigations (pushState/replaceState, fragment) and
-        // subframe navigations leave the main-frame context intact.
-        if (details.isSameDocument || !details.isMainFrame) return
-        fail(NAVIGATION_ABORTED_MESSAGE)
-      }
-      // Guest destruction is deliberately not an interrupt: Electron settles the
-      // pending call itself, and already-running work is never retroactively
-      // cancelled. Only a context-replacing navigation strands the promise.
-      const timer = setTimeout(() => fail(ACTION_TIMED_OUT_MESSAGE), this.actionTimeoutMs)
-      timer.unref?.()
-      guest.on('did-start-navigation', onNavigation)
-      cleanup = () => {
-        clearTimeout(timer)
-        guest.removeListener('did-start-navigation', onNavigation)
-      }
-    })
-    const guarded = call.finally(() => cleanup())
-    // Whichever promise loses the race must not surface as an unhandled rejection.
-    void guarded.catch(() => undefined)
-    void interrupted.catch(() => undefined)
-    return Promise.race([guarded, interrupted])
-  }
-
   private async runPageScript(guest: WebContents, script: string, label: string): Promise<Record<string, unknown>> {
-    return parseScriptJson(await this.guardGuestCall(guest, guest.executeJavaScript(script)), label)
+    return parseScriptJson(await guardGuestCall(guest, guest.executeJavaScript(script), this.actionTimeoutMs), label)
   }
-
-  /**
-   * Keeps the per-tab queue alive. Every guest call is already bounded, so a
-   * still-pending action here is pathologically stuck; releasing the tail keeps
-   * later actions for the tab runnable instead of silently queueing behind a
-   * promise that will never settle.
-   */
-  private releaseQueueEventually(run: Promise<unknown>): Promise<unknown> {
-    return new Promise((resolveTail) => {
-      const timer = setTimeout(() => resolveTail(undefined), this.actionTimeoutMs + QUEUE_RELEASE_GRACE_MS)
-      timer.unref?.()
-      void run.catch(() => undefined).then(() => {
-        clearTimeout(timer)
-        resolveTail(undefined)
-      })
-    })
-  }
-
   private emitActivity(tab: TabState): void {
     const event: AgentBrowserActivityEvent = { sessionFile: tab.sessionKey, tabId: tab.tabId }
     for (const listener of this.activityListeners) {
@@ -762,7 +680,6 @@ export class AgentBrowserService {
     if (!guest || guest.isDestroyed()) return null
     return { tab, guest }
   }
-
   private async waitForGuest(tab: TabState): Promise<WebContents> {
     const existing = tab.webContentsId === null ? undefined : this.options.getGuest(tab.webContentsId)
     if (existing && !existing.isDestroyed()) return existing
