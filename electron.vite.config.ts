@@ -20,7 +20,13 @@ export default defineConfig({
     root: '.',
     plugins: [react()],
     resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },
+    // Full minification, but function names survive so the React component
+    // stacks ErrorBoundary logs stay readable; no sourcemap can restore those,
+    // since React reads them from the function names at runtime. Costs ~4% of
+    // renderer bytes, far less than keeping every identifier (~40%).
+    esbuild: { keepNames: true },
     build: {
+      minify: 'esbuild',
       rollupOptions: {
         input: resolve('index.html'),
         output: {
