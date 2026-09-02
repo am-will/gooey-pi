@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, closeSync, fstatSync, openSync, readSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isRecord } from '../validation'
@@ -93,25 +93,16 @@ export function appendPiSessionInfo(filePath: string, title: string): boolean {
 }
 
 function currentPiLeafId(filePath: string): string | null {
-  const fd = openSync(filePath, 'r')
-  try {
-    const size = fstatSync(fd).size
-    const window = Math.min(size, 256 * 1024)
-    const buf = Buffer.alloc(window)
-    readSync(fd, buf, 0, window, size - window)
-    const lines = buf.toString('utf8').split('\n')
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i]!.trim()
-      if (!line) continue
-      let value: unknown
-      try { value = JSON.parse(line) } catch { continue }
-      if (!isRecord(value) || value.type === 'session' || typeof value.id !== 'string' || !value.id) continue
-      return value.id
-    }
-    return null
-  } finally {
-    closeSync(fd)
+  const lines = readFileSync(filePath, 'utf8').split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!line) continue
+    let value: unknown
+    try { value = JSON.parse(line) } catch { continue }
+    if (!isRecord(value) || value.type === 'session' || typeof value.id !== 'string' || !value.id) continue
+    return value.id
   }
+  return null
 }
 export const readPiTranscript: TranscriptFileReader = createBranchSummaryTranscriptReader()
 

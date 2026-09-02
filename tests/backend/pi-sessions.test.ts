@@ -403,4 +403,21 @@ describe('pi file-level rename fallback', () => {
     expect(appended.id).toMatch(/^[0-9a-f]{8}$/)
     expect((await service.list())[0]?.title).toBe('Renamed offline')
   })
+
+  it('parents the appended session_info to the last entry even when that entry exceeds 256KiB', () => {
+    const { root, project } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } }),
+        piEntry('message', 'deadbeef', 'aa11bb22', { message: { role: 'assistant', content: 'x'.repeat(256 * 1024 + 1) } }),
+      ],
+    })
+    const before = readFileSync(file, 'utf8')
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const appended = JSON.parse(readFileSync(file, 'utf8').slice(before.length).trim()) as { parentId: string }
+    expect(appended.parentId).toBe('deadbeef')
+  })
 })
