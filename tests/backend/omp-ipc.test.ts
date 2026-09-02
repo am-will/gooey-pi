@@ -88,7 +88,12 @@ function buildServices() {
   return {
     meta: { version: '0.0.0-test' },
     refreshHarnesses: vi.fn(async () => ({ meta: { version: '0.0.0-refreshed' }, settings: settingsState })),
-    projects: { ...serviceStub(), list: vi.fn(async () => ['prime-projects']), listWorktrees: vi.fn(async () => ['prime-worktrees']), openWorktree: vi.fn(async () => 'prime-open'), createWorktree: vi.fn(async () => 'prime-create'), grantInferred: vi.fn(async () => 'prime-grant') },
+    projects: { ...serviceStub(), list: vi.fn(async () => ['prime-projects']), grantInferred: vi.fn(async () => 'prime-grant') },
+    checkouts: {
+      prime: { list: vi.fn(async () => 'prime-checkouts'), execute: vi.fn(async () => 'prime-checkout') },
+      omp: { list: vi.fn(async () => 'omp-checkouts'), execute: vi.fn(async () => 'omp-checkout') },
+      pi: { list: vi.fn(async () => 'pi-checkouts'), execute: vi.fn(async () => 'pi-checkout') },
+    },
     sessions: {
       ...serviceStub(),
       onDidChange: vi.fn(() => () => undefined),
@@ -121,7 +126,7 @@ function buildServices() {
     browser: { ...serviceStub(), closeForSession: vi.fn(() => true), onDidChange: vi.fn(() => vi.fn()), onPointer: vi.fn(() => vi.fn()), onActivity: vi.fn(() => vi.fn()) },
     omp: {
       plugins: { ...serviceStub(), list: vi.fn(async () => 'omp-plugins'), install: vi.fn(async () => undefined), installExtension: vi.fn(async () => undefined), setMcpSupport: vi.fn(async () => undefined), connectMcp: vi.fn(async () => undefined), setMcpEnabled: vi.fn(async () => undefined), refresh: vi.fn(async () => 'omp-plugins') },
-      projects: { ...serviceStub(), list: vi.fn(async () => ['omp-projects']), listWorktrees: vi.fn(async () => ['omp-worktrees']), openWorktree: vi.fn(async () => 'omp-open'), createWorktree: vi.fn(async () => 'omp-create'), grantInferred: vi.fn(async () => 'omp-grant') },
+      projects: { ...serviceStub(), list: vi.fn(async () => ['omp-projects']), grantInferred: vi.fn(async () => 'omp-grant') },
       sessions: {
         ...serviceStub(),
         onDidChange: vi.fn(() => () => undefined),
@@ -146,7 +151,7 @@ function buildServices() {
     },
     pi: {
       plugins: { ...serviceStub(), list: vi.fn(async () => 'pi-plugins'), install: vi.fn(async () => undefined), installExtension: vi.fn(async () => undefined), setMcpSupport: vi.fn(async () => undefined), connectMcp: vi.fn(async () => undefined), setMcpEnabled: vi.fn(async () => undefined), refresh: vi.fn(async () => 'pi-plugins') },
-      projects: { ...serviceStub(), list: vi.fn(async () => ['pi-projects']), listWorktrees: vi.fn(async () => ['pi-worktrees']), openWorktree: vi.fn(async () => 'pi-open'), createWorktree: vi.fn(async () => 'pi-create'), grantInferred: vi.fn(async () => 'pi-grant') },
+      projects: { ...serviceStub(), list: vi.fn(async () => ['pi-projects']), grantInferred: vi.fn(async () => 'pi-grant') },
       sessions: {
         ...serviceStub(),
         onDidChange: vi.fn(() => () => undefined),
@@ -270,12 +275,10 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.projects.grantInferred).not.toHaveBeenCalled()
     await expect(harness.invoke('projects:grant-inferred', '/somewhere', 'pi')).resolves.toBe('pi-grant')
     expect(harness.services.pi.projects.grantInferred).toHaveBeenCalledWith('/somewhere')
-    await expect(harness.invoke('projects:list-worktrees', '/repo', 'omp')).resolves.toEqual(['omp-worktrees'])
-    await expect(harness.invoke('projects:open-worktree', '/repo', '/linked', 'omp')).resolves.toBe('omp-open')
-    await expect(harness.invoke('projects:create-worktree', '/repo', 'feature', 'omp')).resolves.toBe('omp-create')
-    expect(harness.services.omp.projects.listWorktrees).toHaveBeenCalledWith('/repo')
-    expect(harness.services.omp.projects.openWorktree).toHaveBeenCalledWith('/repo', '/linked')
-    expect(harness.services.omp.projects.createWorktree).toHaveBeenCalledWith('/repo', 'feature')
+    await expect(harness.invoke('projects:list-checkouts', 'project', 'omp')).resolves.toBe('omp-checkouts')
+    await expect(harness.invoke('projects:execute-checkout', 'project', { strategy: 'branch', operation: 'switch', branch: 'feature' }, 'omp')).resolves.toBe('omp-checkout')
+    expect(harness.services.checkouts.omp.list).toHaveBeenCalledWith('project')
+    expect(harness.services.checkouts.omp.execute).toHaveBeenCalledWith('project', { strategy: 'branch', operation: 'switch', branch: 'feature' })
   })
 
   it('routes plugin catalog, installation, and MCP configuration by harness', async () => {

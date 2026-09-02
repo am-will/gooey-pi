@@ -1,5 +1,5 @@
 import { basename, resolve } from 'node:path'
-import type { GitDiff, GitFileChange, GitStatus, GitWorktree, ProcessOutcome } from '../../src/types/api'
+import type { GitDiff, GitFileChange, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
 import { restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
 import { errorMessage, requireGitPath, requireString, stripAnsi } from './validation'
 
@@ -15,6 +15,8 @@ const GIT_ERROR_LIMIT = 2_000
 const GIT_IDENTITY_VALUE_LIMIT = 320
 const GIT_WORKTREE_OUTPUT_LIMIT = 1024 * 1024
 const GIT_WORKTREE_LIMIT = 1_000
+const GIT_BRANCH_OUTPUT_LIMIT = 1024 * 1024
+const GIT_BRANCH_LIMIT = 1_000
 const EMPTY_CONFIG_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null'
 const BASE_GIT_CONFIG = [
   'core.fsmonitor=false',
@@ -356,6 +358,10 @@ async function inspectRepositoryRoot(cwd: string): Promise<string> {
   return resolve(repositoryRoot)
 }
 
+export function resolveGitRepositoryRoot(cwd: string): Promise<string> {
+  return inspectRepositoryRoot(cwd)
+}
+
 /** Caller must authorize cwd before invoking this privileged fixed-argv helper. */
 export async function listGitWorktrees(cwd: string): Promise<GitWorktree[]> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
@@ -379,6 +385,90 @@ export async function createGitWorktree(cwd: string, targetPath: string, branchV
   const branch = await validateGitBranch(repositoryRoot, branchValue)
   const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT })
   requireProcessSuccess('Git worktree creation', result)
+}
+
+export async function listLocalGitBranches(cwd: string): Promise<LocalGitBranch[]> {
+  const repositoryRoot = await inspectRepositoryRoot(cwd)
+  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:short)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
+    timeoutMs: 10_000,
+    maxBytes: GIT_BRANCH_OUTPUT_LIMIT,
+  })
+  requireProcessSuccess('Git local branch list', result)
+  const fields = result.stdout.split('\0')
+  const branches: LocalGitBranch[] = []
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const name = fields[index].replace(/^\n+|\n+$/g, '')
+    if (!name) continue
+    if (name.length > 255 || /[\0\r\n]/.test(name)) throw new Error('Git local branch list returned an invalid branch')
+    branches.push({ name, current: fields[index + 1].trim() === '*' })
+    if (branches.length > GIT_BRANCH_LIMIT) throw new Error('Git local branch list exceeded the safety limit')
+  }
+  return branches
+}
+
+export type GitWorktreeCleanliness =
+  | { kind: 'clean' }
+  | { kind: 'dirty'; changedPaths: string[]; truncated: boolean }
+
+export type GitBranchChangeResult =
+  | { kind: 'applied' }
+  | { kind: 'unchanged' }
+  | { kind: 'not-found' }
+  | { kind: 'already-exists' }
+  | Extract<GitWorktreeCleanliness, { kind: 'dirty' }>
+
+async function inspectGitWorktreeCleanAtRoot(repositoryRoot: string, overrides: readonly string[]): Promise<GitWorktreeCleanliness> {
+  const result = await runGit(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
+    timeoutMs: 10_000,
+    maxBytes: GIT_STATUS_OUTPUT_LIMIT,
+  }, overrides)
+  requireProcessSuccess('Git worktree inspection', result)
+  if (!result.stdout) return { kind: 'clean' }
+  const changedPaths: string[] = []
+  let cursor = 0
+  while (cursor < result.stdout.length && changedPaths.length < 20) {
+    const record = nextNulField(result.stdout, cursor)
+    cursor = record.cursor
+    if (record.value.length < 4) continue
+    changedPaths.push(record.value.slice(3))
+    if (record.value[0] === 'R' || record.value[0] === 'C' || record.value[1] === 'R' || record.value[1] === 'C') {
+      cursor = nextNulField(result.stdout, cursor).cursor
+    }
+  }
+  return { kind: 'dirty', changedPaths, truncated: cursor < result.stdout.length }
+}
+
+export async function inspectGitWorktreeClean(cwd: string): Promise<GitWorktreeCleanliness> {
+  const repositoryRoot = await inspectRepositoryRoot(cwd)
+  return inspectGitWorktreeCleanAtRoot(repositoryRoot, filterOverridesFromConfig(await repositoryConfig(repositoryRoot)))
+}
+
+async function changeGitBranch(cwd: string, branchValue: unknown, create: boolean): Promise<GitBranchChangeResult> {
+  const repositoryRoot = await inspectRepositoryRoot(cwd)
+  const branch = await validateGitBranch(repositoryRoot, branchValue)
+  const branches = await listLocalGitBranches(repositoryRoot)
+  const existing = branches.find((candidate) => candidate.name === branch)
+  if (!create && !existing) return { kind: 'not-found' }
+  if (create && existing) return { kind: 'already-exists' }
+  const overrides = filterOverridesFromConfig(await repositoryConfig(repositoryRoot))
+  const cleanliness = await inspectGitWorktreeCleanAtRoot(repositoryRoot, overrides)
+  if (cleanliness.kind === 'dirty') return cleanliness
+  if (existing?.current) return { kind: 'unchanged' }
+  if (overrides.length) throw new Error('Git branch checkout is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
+  const result = await runGit(repositoryRoot, create ? ['switch', '--create', branch] : ['switch', '--no-guess', branch], {
+    timeoutMs: 2 * 60_000,
+    maxBytes: GIT_BRANCH_OUTPUT_LIMIT,
+  }, overrides)
+  requireProcessSuccess(create ? 'Git branch creation' : 'Git branch switch', result)
+  return { kind: 'applied' }
+}
+
+export function switchGitBranch(cwd: string, branchValue: unknown): Promise<GitBranchChangeResult> {
+  return changeGitBranch(cwd, branchValue, false)
+}
+
+export function createAndSwitchGitBranch(cwd: string, branchValue: unknown): Promise<GitBranchChangeResult> {
+  return changeGitBranch(cwd, branchValue, true)
 }
 
 export class GitService {

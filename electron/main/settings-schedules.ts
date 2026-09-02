@@ -39,6 +39,10 @@ export class SettingsService {
       sidebarOpen: (value) => requireBoolean(value, 'sidebarOpen'),
       inspectorOpen: (value) => requireBoolean(value, 'inspectorOpen'),
       showFileChangesPopup: (value) => requireBoolean(value, 'showFileChangesPopup'),
+      checkoutStrategy: (value) => {
+        if (value !== 'worktree' && value !== 'branch') throw new TypeError('Invalid checkout strategy')
+        return value
+      },
       keepRunningInBackground: (value) => requireBoolean(value, 'keepRunningInBackground'),
       launchAtLogin: (value) => requireBoolean(value, 'launchAtLogin'),
       terminalOpen: (value) => requireBoolean(value, 'terminalOpen'),
