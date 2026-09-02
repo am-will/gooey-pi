@@ -277,7 +277,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (command.type === 'get_state') {
     send({ type: 'response', id: command.id, command: command.type, success: true, data: { sessionId: 'fixture-session', sessionFile, isStreaming: streaming, thinkingLevel: 'medium', model: { provider: 'fixture', id: 'fixture-model', name: 'Fixture Model' } } })
   } else if (command.type === 'get_session_stats') {
-    send({ type: 'response', id: command.id, command: command.type, success: true, data: { contextUsage: { tokens: 12000, contextWindow: 100000, percent: 12 } } })
+    send({ type: 'response', id: command.id, command: command.type, success: true, data: { contextUsage: { tokens: 12000, contextWindow: 100000, percent: 12 }, cost: 0.42, tokens: { input: 10000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
   } else if (command.type === 'list_schedules') {
     send({ type: 'response', id: command.id, command: command.type, success: true, data: { jobs: [] } })
   } else if (command.type === 'steer') {
@@ -668,6 +668,7 @@ test.describe('Prime Work desktop smoke', () => {
     await composer.fill('Refresh context usage')
     await composer.press('Enter')
     await expect(dial).toHaveText('12')
+    await expect(dial).toHaveAttribute('title', '12,000 / 100,000 tokens \u00b7 $0.42 session cost')
     const offset = await dial.evaluate((node) => {
       const textNode = node.querySelector('span')?.firstChild
       if (!textNode) throw new Error('Missing context dial text')

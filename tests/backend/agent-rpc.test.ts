@@ -284,7 +284,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (command.type === 'get_state') send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'context', isStreaming: false } })
   else if (command.type === 'get_session_stats') {
     stats += 1
-    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: stats * 25000, contextWindow: 100000, percent: stats * 25 } } })
+    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: stats * 25000, contextWindow: 100000, percent: stats * 25 }, cost: stats * 0.21, tokens: { input: stats * 20000, output: stats * 5000, cacheRead: 0, cacheWrite: 0, total: stats * 25000 } } })
   } else if (command.type === 'prompt') {
     send({ id: command.id, type: 'response', command: 'prompt', success: true })
     send({ type: 'agent_end' })
@@ -298,11 +298,23 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 
     const runtime = await manager.start({ cwd })
     expect(runtime.contextUsage).toEqual({ tokens: 25_000, contextWindow: 100_000, percent: 25 })
+    expect(runtime.sessionUsage).toEqual({ cost: 0.21, tokens: { input: 20_000, output: 5_000, cacheRead: 0, cacheWrite: 0, total: 25_000 } })
     await manager.command(runtime.runtimeId, { type: 'prompt', message: 'continue' })
     await waitUntil(() => events.some(({ event }) => event.type === 'context_usage'
       && typeof (event.contextUsage as { percent?: unknown } | undefined)?.percent === 'number'
       && Number((event.contextUsage as { percent: number }).percent) >= 50))
     expect(manager.list()[0]?.contextUsage?.percent).toBeGreaterThanOrEqual(50)
+    await waitUntil(() => events.some(({ event }) => event.type === 'session_usage'
+      && Number((event.sessionUsage as { cost?: unknown } | undefined)?.cost) >= 0.42))
+    expect(manager.list()[0]?.sessionUsage?.cost).toBeGreaterThanOrEqual(0.42)
+  })
+
+  it('reports a null session cost when get_session_stats omits it', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const runtime = await manager.start({ cwd: fake.cwd })
+    expect(runtime.contextUsage).toEqual({ tokens: 25_000, contextWindow: 100_000, percent: 25 })
+    expect(runtime.sessionUsage).toBeUndefined()
   })
 
   it('projects context usage while a response streams and corrects it at message boundaries', async () => {
