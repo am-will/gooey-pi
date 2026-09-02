@@ -1,3 +1,18 @@
+/* Arabic-script text has no family in the UI stack below, so it falls to whatever the OS
+   picks - on Windows that is Segoe UI's thin, cramped Arabic. Vazirmatn is bundled (no
+   network, and `font-src 'self'`) as a weight-variable Arabic subset: the variable axis is
+   required because `font-synthesis: none` would otherwise render bold Persian at regular
+   weight, and `unicode-range` keeps every Latin run on the system font, including inside
+   mixed Latin/Persian lines. */
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/vazirmatn-arabic-var.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200E, U+2010-2011, U+204F, U+2E41;
+}
+
 :root {
   color-scheme: light;
   --canvas: #ffffff;
@@ -52,7 +67,13 @@
   --terminal-bright-cyan: #177f83;
   --terminal-bright-white: #20201e;
   --shadow-popover: 0 10px 30px rgba(0, 0, 0, .12);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  /* Shared transcript column measure: grows with the pane from the reading
+     minimum, capped so prose stays readable on very wide monitors. Sized in
+     cqi against .conversation-pane so the scrolled column and the absolutely
+     positioned surfaces resolve identically even when the scroll area loses
+     width to a non-overlay scrollbar. */
+  --transcript-measure: clamp(760px, 85cqi, 1240px);
+  font-family: Vazirmatn, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   font-size: 13px;
   font-synthesis: none;
 }
