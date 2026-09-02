@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AgentBrowserTabRecord } from '../../../src/types/api'
 import { canonicalSessionPath } from '../session-paths'
 import { requireRecord, requireString } from '../validation'
+import { ACTION_TIMEOUT_MS, guardGuestCall, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
 
 /** The user's own Preview webview, adoptable by the active thread's agent. */
 export const PREVIEW_TAB_ID = 'preview'
@@ -19,7 +20,6 @@ function logNavigationFailure(url: string, error: unknown): void {
   if (message.includes('ERR_ABORTED')) return
   console.warn(`GooeyPi browser could not load ${url}: ${message}`)
 }
-
 const MAX_TABS_PER_SESSION = 6
 const MAX_TABS_TOTAL = 24
 const ATTACH_TIMEOUT_MS = 15_000
@@ -33,18 +33,15 @@ const MAX_READ_ELEMENTS = 300
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024
 const SCREENSHOT_JPEG_QUALITY = 70
 const ACTION_REVOKED_MESSAGE = 'Browser tab access changed before this action could start'
-
 interface CdpKey {
   key: string
   code: string
   keyCode: number
   text?: string
 }
-
 interface TabActionSerial {
   tail: Promise<unknown>
 }
-
 const PRESS_KEYS: Record<string, CdpKey> = {
   enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
   tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
@@ -64,7 +61,6 @@ const PRESS_KEYS: Record<string, CdpKey> = {
 // DevTools protocol modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
 const PRESS_MODIFIER_BITS: Record<string, number> = { alt: 1, control: 2, meta: 4, shift: 8 }
 const CDP_BUTTON_MASKS: Record<string, number> = { left: 1, right: 2, middle: 4 }
-
 interface TabState {
   tabId: string
   sessionKey: string
@@ -81,7 +77,6 @@ interface TabState {
   attachWaiters: Array<{ resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>
   unbindGuest: (() => void) | null
 }
-
 const GLIDE_MAX_MS = 550
 const GLIDE_MIN_MS = 160
 const GLIDE_STEP_MS = 28
@@ -101,6 +96,8 @@ export interface AgentBrowserServiceOptions {
   getGuest(webContentsId: number): WebContents | undefined
   attachTimeoutMs?: number
   loadTimeoutMs?: number
+  /** Deadline for a single guest call; also bounds the per-tab queue release. */
+  actionTimeoutMs?: number
 }
 
 function isAllowedTabUrl(raw: string): boolean {
@@ -144,11 +141,13 @@ export class AgentBrowserService {
   private readonly activityListeners = new Set<(event: AgentBrowserActivityEvent) => void>()
   private readonly attachTimeoutMs: number
   private readonly loadTimeoutMs: number
+  private readonly actionTimeoutMs: number
   private closed = false
 
   constructor(private readonly options: AgentBrowserServiceOptions) {
     this.attachTimeoutMs = options.attachTimeoutMs ?? ATTACH_TIMEOUT_MS
     this.loadTimeoutMs = options.loadTimeoutMs ?? LOAD_TIMEOUT_MS
+    this.actionTimeoutMs = options.actionTimeoutMs ?? ACTION_TIMEOUT_MS
   }
 
   // ---- lifecycle -----------------------------------------------------------
@@ -450,12 +449,12 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       const info = await this.pageInfo(guest)
       // Show the agent its own pointer in the capture so it can calibrate.
-      if (tab.pointer) await guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y)).catch(() => undefined)
+      if (tab.pointer) await guardGuestCall(guest, guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y)), this.actionTimeoutMs).catch(() => undefined)
       let image: Electron.NativeImage
       try {
-        image = await guest.capturePage(undefined, { stayHidden: true, stayAwake: true })
+        image = await guardGuestCall(guest, guest.capturePage(undefined, { stayHidden: true, stayAwake: true }), this.actionTimeoutMs)
       } finally {
-        if (tab.pointer) void guest.executeJavaScript(removeCursorMarkerScript()).catch(() => undefined)
+        if (tab.pointer) void guardGuestCall(guest, guest.executeJavaScript(removeCursorMarkerScript()), this.actionTimeoutMs).catch(() => undefined)
       }
       const size = image.getSize()
       if (!size.width || !size.height) throw new Error('The browser tab has no visible content to capture yet')
@@ -577,7 +576,7 @@ export class AgentBrowserService {
         await delay(SETTLE_MS)
         return this.describe(tab, guest)
       }
-      const payload = parseScriptJson(await guest.executeJavaScript(scrollByScript(deltaX, deltaY)), 'scroll')
+      const payload = await this.runPageScript(guest, scrollByScript(deltaX, deltaY), 'scroll')
       return { ...await this.describe(tab, guest), ...payload }
     })
   }
@@ -586,14 +585,14 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (_tab, guest) => {
       const mode = params.mode === undefined ? 'interactive' : requireString(params.mode, 'mode', { min: 1, max: 16, trim: true })
       if (mode !== 'interactive' && mode !== 'text') throw new TypeError('mode must be interactive or text')
-      return parseScriptJson(await guest.executeJavaScript(readPageScript(mode, MAX_READ_TEXT_CHARS, MAX_READ_ELEMENTS)), 'read_page')
+      return this.runPageScript(guest, readPageScript(mode, MAX_READ_TEXT_CHARS, MAX_READ_ELEMENTS), 'read_page')
     })
   }
 
   async evaluate(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.withTab(sessionKey, params, async (_tab, guest) => {
       const code = requireString(params.code, 'code', { min: 1, max: MAX_EVALUATE_CHARS })
-      return parseScriptJson(await guest.executeJavaScript(evaluateScript(code, MAX_EVALUATE_RESULT_CHARS)), 'evaluate')
+      return this.runPageScript(guest, evaluateScript(code, MAX_EVALUATE_RESULT_CHARS), 'evaluate')
     })
   }
 
@@ -654,10 +653,9 @@ export class AgentBrowserService {
       // already using Electron's guest APIs; it may finish or fail naturally.
       return action(tab, guest)
     })
-    tab.serial.tail = run.catch(() => undefined)
+    tab.serial.tail = releaseQueueEventually(run, this.actionTimeoutMs + QUEUE_RELEASE_GRACE_MS)
     return run
   }
-
   private assertActionAuthority(tab: TabState, sessionKey: string, generation: number): void {
     const current = tab.tabId === PREVIEW_TAB_ID ? this.previewTab : this.tabs.get(tab.tabId)
     if (this.closed || tab.revoked || tab.generation !== generation || tab.sessionKey !== sessionKey || current !== tab) {
@@ -665,6 +663,9 @@ export class AgentBrowserService {
     }
   }
 
+  private async runPageScript(guest: WebContents, script: string, label: string): Promise<Record<string, unknown>> {
+    return parseScriptJson(await guardGuestCall(guest, guest.executeJavaScript(script), this.actionTimeoutMs), label)
+  }
   private emitActivity(tab: TabState): void {
     const event: AgentBrowserActivityEvent = { sessionFile: tab.sessionKey, tabId: tab.tabId }
     for (const listener of this.activityListeners) {
@@ -679,7 +680,6 @@ export class AgentBrowserService {
     if (!guest || guest.isDestroyed()) return null
     return { tab, guest }
   }
-
   private async waitForGuest(tab: TabState): Promise<WebContents> {
     const existing = tab.webContentsId === null ? undefined : this.options.getGuest(tab.webContentsId)
     if (existing && !existing.isDestroyed()) return existing
@@ -786,7 +786,7 @@ export class AgentBrowserService {
   }
 
   private async pageInfo(guest: WebContents): Promise<PageInfo> {
-    const payload = parseScriptJson(await guest.executeJavaScript(pageInfoScript()), 'page info')
+    const payload = await this.runPageScript(guest, pageInfoScript(), 'page info')
     return {
       url: typeof payload.url === 'string' ? payload.url : guest.getURL(),
       title: typeof payload.title === 'string' ? payload.title : '',
@@ -813,7 +813,7 @@ export class AgentBrowserService {
 
   private async elementAt(guest: WebContents, point: { x: number; y: number }): Promise<Record<string, unknown> | null> {
     try {
-      const payload = parseScriptJson(await guest.executeJavaScript(elementAtPointScript(point.x, point.y)), 'element at point')
+      const payload = await this.runPageScript(guest, elementAtPointScript(point.x, point.y), 'element at point')
       return typeof payload.tag === 'string' ? { tag: payload.tag, name: typeof payload.name === 'string' ? payload.name : '' } : null
     } catch { return null }
   }
@@ -821,7 +821,7 @@ export class AgentBrowserService {
   private async resolvePoint(guest: WebContents, params: Record<string, unknown>, focus: boolean): Promise<{ x: number; y: number }> {
     if (params.ref !== undefined) {
       if (!Number.isSafeInteger(params.ref) || (params.ref as number) < 0 || (params.ref as number) > 999) throw new TypeError('ref must be an element number from browser_read_page')
-      const payload = parseScriptJson(await guest.executeJavaScript(refPointScript(params.ref as number, focus)), 'element ref')
+      const payload = await this.runPageScript(guest, refPointScript(params.ref as number, focus), 'element ref')
       if (typeof payload.error === 'string') throw new Error(payload.error.slice(0, 300))
       if (!Number.isSafeInteger(payload.x) || !Number.isSafeInteger(payload.y)) throw new Error('The element position could not be determined')
       return { x: payload.x as number, y: payload.y as number }
