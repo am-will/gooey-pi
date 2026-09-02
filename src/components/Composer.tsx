@@ -56,8 +56,8 @@ interface ComposerProps {
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
   messageEnterAction?: MessageEnterAction
   contextUsage?: PrimeContextUsage
-  sessionUsage?: SessionUsage
   executingModel?: ExecutingModelChipProps['executingModel']
+  sessionUsage?: SessionUsage
   voice?: PrimeWorkApi['voice'] | null
   transcriptionProvider?: VoiceTranscriptionProvider
   skills: SkillRecord[]
@@ -143,8 +143,8 @@ export const Composer = memo(function Composer({
   imageInputSupported,
   messageEnterAction = 'queue',
   contextUsage,
-  sessionUsage,
   executingModel,
+  sessionUsage,
   voice,
   transcriptionProvider = 'openai-live',
   skills,
