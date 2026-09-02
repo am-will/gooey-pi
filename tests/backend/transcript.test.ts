@@ -51,7 +51,7 @@ describe('GooeyPi agent messages', () => {
       fromSessionId: '019f0000-0000-7000-8000-000000000001',
       text: 'Please coordinate ownership before editing.',
     })
-    expect(envelope).toContain('"reply_with":"session_send"')
+    expect(envelope).toContain('"reply_with":"gooeypi_session_send"')
     expect(envelope).not.toContain('Planner')
     expect(envelope).not.toContain('"from_title"')
     expect(envelope).not.toContain('"from_harness"')
@@ -109,6 +109,44 @@ describe('GooeyPi agent messages', () => {
       fromHarness: 'prime',
       text,
     })
+  })
+
+  it('keeps signed version-2 messages readable and rejects mismatched reply hints', () => {
+    const text = 'Versioned compatibility message.'
+    const makeEnvelope = (metadata: Record<string, unknown>, message = text) => {
+      const signature = createHmac('sha256', Buffer.alloc(32, 7))
+        .update(JSON.stringify(metadata))
+        .update('\0')
+        .update(message)
+        .digest('base64url')
+      return [
+        '===== BEGIN GOOEYPI AGENT MESSAGE =====',
+        JSON.stringify({ ...metadata, signature }),
+        '===== END GOOEYPI AGENT MESSAGE =====',
+        '',
+        message,
+      ].join('\n')
+    }
+    const version2 = {
+      version: 2,
+      from_session_id: 'legacy-v2-source',
+      reply_with: 'session_send',
+      nonce: '00000000-0000-4000-8000-000000000001',
+      sent_at: '2026-08-13T12:00:00.000Z',
+    }
+    expect(parseGooeyPiAgentMessage(makeEnvelope(version2))).toEqual({
+      fromSessionId: 'legacy-v2-source',
+      text,
+    })
+    expect(parseGooeyPiAgentMessage(makeEnvelope({
+      ...version2,
+      reply_with: 'session_send',
+      version: 3,
+    }))).toBeUndefined()
+    expect(parseGooeyPiAgentMessage(makeEnvelope({
+      ...version2,
+      reply_with: 'gooeypi_session_send',
+    }))).toBeUndefined()
   })
 })
 

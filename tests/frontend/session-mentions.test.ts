@@ -24,7 +24,7 @@ describe('session mentions', () => {
     expect(routed.match(/019f0000-0000-7000-8000-000000000001/g)).toHaveLength(1)
     const split = splitSessionRouting(routed)
     expect(split.text).toBe('Coordinate with @API owner and @API owner.')
-    expect(split.block).toContain('session_read, session_send, and session_wait')
+    expect(split.block).toContain('gooeypi_session_read, gooeypi_session_send, and gooeypi_session_wait')
     expect(routedSessionReferences(split.block)).toEqual([{
       label: '@API owner',
       harness: 'omp',
