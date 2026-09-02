@@ -65,6 +65,15 @@ class FakeGuest extends EventEmitter {
   }
   async insertText(value: string) { this.insertedText.push(value) }
   sendInputEvent() { throw new Error('sendInputEvent does not reach webview guests; use the debugger') }
+  /**
+   * Mirrors Electron's real `did-start-navigation` emit: a details object
+   * carrying `isSameDocument`/`isMainFrame` first, then the deprecated
+   * positional arguments that still trail it.
+   */
+  startNavigation({ url, isSameDocument, isMainFrame }: { url: string; isSameDocument: boolean; isMainFrame: boolean }) {
+    const details = { preventDefault: () => {}, defaultPrevented: false, url, isSameDocument, isMainFrame, frame: null }
+    this.emit('did-start-navigation', details, url, isSameDocument, isMainFrame, 1, 2)
+  }
   async executeJavaScript(code: string) {
     this.executedScripts.push(code)
     return this.scriptResult(code)
@@ -511,7 +520,7 @@ describe('AgentBrowserService', () => {
 
     const stranded = service.evaluate('/sessions/a.jsonl', { tabId, code: "'navigates-away'" })
     await started.promise
-    guest.emit('did-start-navigation', { url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
+    guest.startNavigation({ url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
 
     await expect(stranded).rejects.toThrow(/page navigated while this action was running/i)
   })
@@ -530,7 +539,7 @@ describe('AgentBrowserService', () => {
 
     const stranded = service.evaluate('/sessions/a.jsonl', { tabId, code: "'navigates-away'" })
     await started.promise
-    guest.emit('did-start-navigation', { url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
+    guest.startNavigation({ url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
     await expect(stranded).rejects.toThrow(/page navigated while this action was running/i)
 
     // Before the fix the per-tab queue stayed chained to the stranded promise,
@@ -554,8 +563,8 @@ describe('AgentBrowserService', () => {
     const running = service.evaluate('/sessions/a.jsonl', { tabId, code: "'same-document'" })
     await started.promise
     // pushState and hash changes keep the execution context alive.
-    guest.emit('did-start-navigation', { url: 'https://example.com/#section', isSameDocument: true, isMainFrame: true })
-    guest.emit('did-start-navigation', { url: 'https://example.com/frame', isSameDocument: false, isMainFrame: false })
+    guest.startNavigation({ url: 'https://example.com/#section', isSameDocument: true, isMainFrame: true })
+    guest.startNavigation({ url: 'https://example.com/frame', isSameDocument: false, isMainFrame: false })
     release.resolve(JSON.stringify({ completed: true }))
 
     await expect(running).resolves.toEqual({ completed: true })

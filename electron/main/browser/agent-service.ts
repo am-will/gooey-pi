@@ -1,4 +1,4 @@
-import type { WebContents } from 'electron'
+import type { Event, WebContents, WebContentsDidStartNavigationEventParams } from 'electron'
 import { randomBytes } from 'node:crypto'
 import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AgentBrowserTabRecord } from '../../../src/types/api'
 import { canonicalSessionPath } from '../session-paths'
@@ -703,9 +703,10 @@ export class AgentBrowserService {
         cleanup()
         reject(new Error(message))
       }
-      const onNavigation = (details: { isSameDocument?: boolean; isMainFrame?: boolean }) => {
-        if (details?.isSameDocument) return
-        if (details?.isMainFrame === false) return
+      const onNavigation = (details: Event<WebContentsDidStartNavigationEventParams>) => {
+        // Same-document navigations (pushState/replaceState, fragment) and
+        // subframe navigations leave the main-frame context intact.
+        if (details.isSameDocument || !details.isMainFrame) return
         fail(NAVIGATION_ABORTED_MESSAGE)
       }
       // Guest destruction is deliberately not an interrupt: Electron settles the
