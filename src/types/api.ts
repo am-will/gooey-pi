@@ -359,6 +359,41 @@ export interface GitWorktree {
   detached: boolean
 }
 
+export const CHECKOUT_STRATEGIES = ['worktree', 'branch'] as const
+export type CheckoutStrategy = (typeof CHECKOUT_STRATEGIES)[number]
+
+export interface LocalGitBranch {
+  name: string
+  current: boolean
+}
+
+export type CheckoutCatalog =
+  | { strategy: 'worktree'; activePath: string; checkouts: GitWorktree[] }
+  | { strategy: 'branch'; activeName: string; checkouts: LocalGitBranch[] }
+
+export type CheckoutAction =
+  | { strategy: 'worktree'; operation: 'open'; path: string }
+  | { strategy: 'worktree'; operation: 'create'; branch: string }
+  | { strategy: 'branch'; operation: 'switch'; branch: string }
+  | { strategy: 'branch'; operation: 'create'; branch: string }
+
+export type CheckoutSelection =
+  | { strategy: 'worktree'; path: string }
+  | { strategy: 'branch'; branch: string }
+
+export type CheckoutRefusalCode =
+  | 'strategy-changed'
+  | 'active-work'
+  | 'dirty-worktree'
+  | 'checkout-not-found'
+  | 'checkout-already-exists'
+
+export type CheckoutChangeResult =
+  | { kind: 'applied'; project: ProjectRecord; checkout: CheckoutSelection }
+  | { kind: 'unchanged'; project: ProjectRecord; checkout: CheckoutSelection }
+  | { kind: 'cancelled' }
+  | { kind: 'refused'; code: CheckoutRefusalCode; message: string }
+
 export interface GitFileChange {
   path: string
   status: string
@@ -447,6 +482,7 @@ export interface AppSettings {
   sidebarOpen: boolean
   inspectorOpen: boolean
   showFileChangesPopup: boolean
+  checkoutStrategy: CheckoutStrategy
   /** Keep the desktop process available for scheduled work after its window closes. */
   keepRunningInBackground: boolean
   /** Ask the operating system to launch GooeyPi when the user signs in. */
@@ -724,9 +760,8 @@ export interface PrimeWorkApi {
   projects: {
     list(harness?: HarnessId): Promise<ProjectRecord[]>
     listFiles(root: string, harness?: HarnessId): Promise<ProjectFileListing>
-    listWorktrees(cwd: string, harness?: HarnessId): Promise<GitWorktree[]>
-    openWorktree(cwd: string, path: string, harness?: HarnessId): Promise<ProjectRecord>
-    createWorktree(cwd: string, branch: string, harness?: HarnessId): Promise<ProjectRecord | null>
+    listCheckouts(projectId: string, harness?: HarnessId): Promise<CheckoutCatalog>
+    executeCheckout(projectId: string, action: CheckoutAction, harness?: HarnessId): Promise<CheckoutChangeResult>
     add(harness?: HarnessId): Promise<ProjectRecord | null>
     grantInferred(path: string, harness?: HarnessId): Promise<ProjectRecord>
     remove(id: string, harness?: HarnessId): Promise<boolean>

@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isBroadProjectRoot, ProjectService } from '../../electron/main/projects'
+import { CheckoutService } from '../../electron/main/checkouts'
+import { RepositoryUseGate } from '../../electron/main/repository-use-gate'
 import { JsonStateStore } from '../../electron/main/store'
 import type { SessionRecord } from '../../src/types/api'
 
@@ -1025,7 +1027,8 @@ describe('ProjectService worktrees', () => {
     }) })
     await service.list()
 
-    await expect(service.listWorktrees(root)).resolves.toEqual([])
+    const checkouts = new CheckoutService(() => 'worktree', service, new RepositoryUseGate())
+    await expect(checkouts.list('plain-project')).resolves.toMatchObject({ strategy: 'worktree', checkouts: [] })
   })
 
   it('lists linked worktrees and grants only paths registered to the authorized repository', async () => {
@@ -1052,18 +1055,21 @@ describe('ProjectService worktrees', () => {
     }) })
     await service.list()
 
-    expect(await service.listWorktrees(root)).toEqual(expect.arrayContaining([
+    const checkouts = new CheckoutService(() => 'worktree', service, new RepositoryUseGate())
+    await expect(checkouts.list('project')).resolves.toMatchObject({ strategy: 'worktree', checkouts: expect.arrayContaining([
       expect.objectContaining({ path: realpathSync(root), current: true }),
       expect.objectContaining({ path: realpathSync(linked), branch: 'linked-test', current: false }),
-    ]))
-    const opened = await service.openWorktree(root, realpathSync(linked))
+    ]) })
+    const transition = await checkouts.execute('project', { strategy: 'worktree', operation: 'open', path: realpathSync(linked) })
+    if (transition.kind !== 'applied') throw new Error(`Expected applied transition, received ${transition.kind}`)
+    const opened = transition.project
     expect(opened.id).toBe('project')
     expect(opened.path).toBe(root)
     expect(opened.primaryFolder).toBe(realpathSync(linked))
     expect(opened.folders).toEqual(expect.arrayContaining([root, realpathSync(linked)]))
     expect(store.snapshot().projects.filter((project) => project.harness === 'prime')).toHaveLength(1)
     await expect(service.authorizeCwd(linked)).resolves.toBe(realpathSync(linked))
-    await expect(service.openWorktree(root, outsider)).rejects.toThrow(/not linked to the authorized Git repository/i)
+    await expect(checkouts.execute('project', { strategy: 'worktree', operation: 'open', path: outsider })).resolves.toMatchObject({ kind: 'refused', code: 'checkout-not-found' })
     expect(store.snapshot().projects.some((project) => resolve(project.path) === resolve(outsider))).toBe(false)
   })
 
@@ -1120,7 +1126,10 @@ describe('ProjectService worktrees', () => {
     ) })
     await service.list()
 
-    const opened = await service.openWorktree(root, linkedPath)
+    const checkouts = new CheckoutService(() => 'worktree', service, new RepositoryUseGate())
+    const transition = await checkouts.execute('project', { strategy: 'worktree', operation: 'open', path: linkedPath })
+    if (transition.kind !== 'applied') throw new Error(`Expected applied transition, received ${transition.kind}`)
+    const opened = transition.project
     expect(opened.id).toBe('project')
     expect(store.snapshot().projects.map((project) => project.id)).toEqual(['project'])
     const listed = await service.list()

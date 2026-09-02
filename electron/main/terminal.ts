@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import * as pty from 'node-pty'
 import type { TerminalActiveContext, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
+import type { WorkspaceUseLease, WorkspaceUseOwner } from './repository-use-gate'
 import { killProcessTree, safeChildEnvironment } from './process-utils'
 import { canonicalSessionPath } from './session-paths'
 import { isPathWithin, rejectUnknownKeys, requireInteger, requireRecord, requireString } from './validation'
@@ -25,6 +26,7 @@ interface OwnedTerminal {
   flushTimer?: NodeJS.Timeout
   terminating: boolean
   exited: boolean
+  workspaceUse: WorkspaceUseLease
 }
 
 function systemShells(): Set<string> {
@@ -112,6 +114,7 @@ export class TerminalService {
     private readonly authorizeCwd: (cwd: string) => Promise<string>,
     private readonly configuredShell: () => string,
     private readonly authorizeSessionPath: (path: string) => Promise<string> = async (path) => canonicalSessionPath(path),
+    private readonly beginWorkspaceUse: (cwd: string, owner: WorkspaceUseOwner) => Promise<WorkspaceUseLease> = async () => ({ release: () => undefined }),
   ) {}
 
   validateShell(value: unknown): string {
@@ -148,14 +151,22 @@ export class TerminalService {
     const cols = options.cols === undefined ? 100 : requireInteger(options.cols, 'cols', 2, 1_000)
     const rows = options.rows === undefined ? 30 : requireInteger(options.rows, 'rows', 1, 1_000)
     const env = terminalEnvironment(command !== undefined)
-    const terminal = pty.spawn(shell, shellArguments(shell, command), { cwd, cols, rows, name: 'xterm-256color', env })
-    if (owner.isDestroyed()) { try { terminal.kill() } catch { /* owner closed during spawn */ }; throw new Error('Terminal owner was closed') }
     const terminalId = randomUUID()
-    const owned: OwnedTerminal = { terminal, owner, ownerId: owner.id, cwd, shell, sessionPath, outputWindowStartedAt: Date.now(), outputWindowBytes: 0, pendingOutput: '', pendingOutputBytes: 0, terminating: false, exited: false }
+    const workspaceUse = await this.beginWorkspaceUse(cwd, { kind: 'terminal', terminalId })
+    let terminal: pty.IPty
+    try {
+      terminal = pty.spawn(shell, shellArguments(shell, command), { cwd, cols, rows, name: 'xterm-256color', env })
+    } catch (error) {
+      workspaceUse.release()
+      throw error
+    }
+    if (owner.isDestroyed()) { try { terminal.kill() } catch { /* owner closed during spawn */ }; workspaceUse.release(); throw new Error('Terminal owner was closed') }
+    const owned: OwnedTerminal = { terminal, owner, ownerId: owner.id, cwd, shell, sessionPath, outputWindowStartedAt: Date.now(), outputWindowBytes: 0, pendingOutput: '', pendingOutputBytes: 0, terminating: false, exited: false, workspaceUse }
     this.terminals.set(terminalId, owned)
     terminal.onData((data) => this.forwardOutput(terminalId, owned, data))
     terminal.onExit(({ exitCode, signal }) => {
       owned.exited = true
+      owned.workspaceUse.release()
       this.terminals.delete(terminalId)
       this.removeActive(terminalId, owned)
       if (owned.flushTimer) clearTimeout(owned.flushTimer)
