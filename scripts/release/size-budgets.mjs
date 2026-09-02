@@ -17,7 +17,7 @@ export const BUNDLE_SIZE_BUDGETS = Object.freeze({
   preloadBytes: 16 * KIB,
   initialRendererBytes: 1280 * KIB,
   largestRendererChunkBytes: 600 * KIB,
-  rendererJsCssBytes: 2328 * KIB,
+  rendererJsCssBytes: 2320 * KIB,
 })
 
 /**
