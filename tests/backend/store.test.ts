@@ -109,6 +109,17 @@ describe('JsonStateStore', () => {
     expect(new JsonStateStore(path).snapshot().settings.messageEnterAction).toBe('queue')
   })
 
+  it('defaults missing or invalid checkout strategies to worktrees', () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    const settings = { ...defaultSettings(), checkoutStrategy: 'branch' as const }
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).snapshot().settings.checkoutStrategy).toBe('branch')
+
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings: { ...settings, checkoutStrategy: 'folders' }, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).snapshot().settings.checkoutStrategy).toBe('worktree')
+  })
+
   it('keeps supported interface font scales and resets values outside the bounded choices', () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')

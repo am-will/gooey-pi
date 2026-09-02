@@ -6,7 +6,7 @@ import { dialog, type BrowserWindow } from 'electron'
 import { homedir } from 'node:os'
 import { sortProjects } from '../../src/lib/project-order'
 import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
-import { createGitWorktree, isNotARepositoryFailure, listGitWorktrees, validateGitBranch } from './git'
+import { listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
@@ -527,13 +527,46 @@ export class ProjectService {
     return sortProjects(records, 'recent')
   }
 
-  async listWorktrees(cwdValue: unknown): Promise<GitWorktree[]> {
+  async resolveCheckoutProject(idValue: unknown): Promise<ProjectRecord> {
+    const id = requireId(idValue, 'project id')
+    const project = (await this.list()).find((record) => record.id === id && !record.inferred && !record.readOnly)
+    if (!project) throw new TypeError('Project is not explicitly granted to this harness')
+    const primaryFolder = await this.authorizeCwd(project.primaryFolder)
+    return { ...project, primaryFolder }
+  }
+
+  async refreshCheckoutProject(idValue: unknown): Promise<ProjectRecord> {
+    return this.resolveCheckoutProject(idValue)
+  }
+
+  async adoptCheckoutWorktree(idValue: unknown, parentCwdValue: unknown, pathValue: unknown): Promise<ProjectRecord> {
+    const id = requireId(idValue, 'project id')
+    const project = await this.resolveCheckoutProject(id)
+    const parentCwd = await this.authorizeCwd(requireString(parentCwdValue, 'cwd', { min: 1, max: 4096 }))
+    if (resolve(project.primaryFolder) !== parentCwd) throw new TypeError('worktree parent project is not an authorized grant')
+    const requested = resolve(requireString(pathValue, 'worktree path', { min: 1, max: 4096 }))
+    const linked = (await listGitWorktrees(parentCwd)).find((worktree) => resolve(worktree.path) === requested)
+    if (!linked) throw new TypeError('worktree path is not linked to the authorized Git repository')
+    const { path, identity } = await this.captureFolderIdentity(linked.path)
+    const next = await this.persistWorktree(parentCwd, path, identity)
+    if (next.id !== id) throw new TypeError('worktree belongs to a different project grant')
+    return next
+  }
+
+  async chooseCheckoutWorktreePath(cwdValue: unknown, branchValue: unknown, worktrees: readonly GitWorktree[]): Promise<string | undefined> {
     const cwd = await this.authorizeCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }))
-    try { return await listGitWorktrees(cwd) }
-    catch (error) {
-      if (isNotARepositoryFailure(error)) return []
-      throw error
-    }
+    const branch = requireString(branchValue, 'branch', { min: 1, max: 255, trim: true })
+    const current = worktrees.find((worktree) => worktree.current) ?? worktrees.find((worktree) => resolve(worktree.path) === cwd)
+    if (!current) throw new Error('Git worktree list did not include the current worktree')
+    const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+|\.+$/g, '').slice(0, 120) || 'worktree'
+    const defaultPath = join(dirname(current.path), `${basename(current.path)}-${safeBranch}`)
+    const parent = this.windowProvider()
+    const options = { title: 'Create Git worktree', buttonLabel: 'Create Worktree', defaultPath }
+    const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return undefined
+    const targetPath = resolve(requireString(result.filePath, 'worktree path', { min: 1, max: 4096 }))
+    if (await this.isBroadRoot(targetPath)) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
+    return targetPath
   }
 
   /**
@@ -624,38 +657,6 @@ export class ProjectService {
       sessionCount: sessions.filter((session) => granted.has(resolve(session.projectPath))).length,
       gitBranch: await this.branchProvider(project.primaryFolder),
     }
-  }
-
-  async openWorktree(cwdValue: unknown, pathValue: unknown): Promise<ProjectRecord> {
-    const cwd = await this.authorizeCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }))
-    const requested = resolve(requireString(pathValue, 'worktree path', { min: 1, max: 4096 }))
-    const worktrees = await listGitWorktrees(cwd)
-    const linked = worktrees.find((worktree) => resolve(worktree.path) === requested)
-    if (!linked) throw new TypeError('worktree path is not linked to the authorized Git repository')
-    // Only inspect the filesystem after exact membership in Git's bounded
-    // worktree catalog is established; arbitrary renderer paths stay opaque.
-    const { path, identity } = await this.captureFolderIdentity(linked.path)
-    return this.persistWorktree(cwd, path, identity)
-  }
-
-  async createWorktree(cwdValue: unknown, branchValue: unknown): Promise<ProjectRecord | null> {
-    const cwd = await this.authorizeCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }))
-    const branch = await validateGitBranch(cwd, branchValue)
-    const worktrees = await listGitWorktrees(cwd)
-    const current = worktrees.find((worktree) => worktree.current)
-    if (!current) throw new Error('Git worktree list did not include the current worktree')
-    const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+|\.+$/g, '').slice(0, 120) || 'worktree'
-    const defaultPath = join(dirname(current.path), `${basename(current.path)}-${safeBranch}`)
-    const parent = this.windowProvider()
-    const options = { title: 'Create Git worktree', buttonLabel: 'Create Worktree', defaultPath }
-    const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return null
-    const targetPath = resolve(requireString(result.filePath, 'worktree path', { min: 1, max: 4096 }))
-    // Keep the guard before the Git side effect as well as at the central
-    // grant boundary reached by openWorktree.
-    if (await this.isBroadRoot(targetPath)) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
-    await createGitWorktree(cwd, targetPath, branch)
-    return this.openWorktree(cwd, targetPath)
   }
 
   async add(): Promise<ProjectRecord | null> {

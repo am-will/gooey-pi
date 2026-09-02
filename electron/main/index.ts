@@ -13,6 +13,7 @@ import { BrowserDownloadGuard } from './browser-downloads'
 import { installCrashGuards } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
+import { CheckoutService } from './checkouts'
 import { isTrustedRendererUrl, registerIpc, type IpcRegistration } from './ipc'
 import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-discovery'
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
@@ -38,6 +39,7 @@ import { ompSessionServiceOptions } from './sessions/omp'
 import { piSessionServiceOptions } from './sessions/pi'
 import { type JsonStateStore, openDesktopStateStore, StateCompatibilityError, StateMigrationError } from './store'
 import { TerminalService } from './terminal'
+import { RepositoryUseGate } from './repository-use-gate'
 import { VoiceService, voiceSecretStorageStatus } from './voice'
 import { isAllowedRendererAudioPermission } from './voice-permissions'
 import { createManualUpdateCheck, getAutoUpdater, UpdateService } from './updates'
@@ -590,6 +592,12 @@ async function bootstrap(): Promise<void> {
   const projects = new ProjectService(stateStore, () => mainWindow)
   const ompProjects = new ProjectService(stateStore, () => mainWindow, 'omp')
   const piProjects = new ProjectService(stateStore, () => mainWindow, 'pi')
+  const repositoryUseGate = new RepositoryUseGate()
+  const checkouts: Record<HarnessId, CheckoutService> = {
+    prime: new CheckoutService(() => stateStore.getSettings().checkoutStrategy, projects, repositoryUseGate),
+    omp: new CheckoutService(() => stateStore.getSettings().checkoutStrategy, ompProjects, repositoryUseGate),
+    pi: new CheckoutService(() => stateStore.getSettings().checkoutStrategy, piProjects, repositoryUseGate),
+  }
   // Git and terminals are harness-agnostic: a cwd (or bound session) is valid
   // when any harness's own grants authorize it. Prime is consulted first so
   // Prime-only setups keep their exact behavior and error text.
@@ -641,6 +649,7 @@ async function bootstrap(): Promise<void> {
     disabledProviders,
   )
   agents.setDisabledModelsProvider(disabledModels)
+  agents.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
   // The OMP manager exists whether or not the omp CLI is installed; starting a
   // runtime without it fails with the adapter's per-harness not-found error.
   // OMP provider visibility is desktop-owned and independent from both Prime's
@@ -658,6 +667,7 @@ async function bootstrap(): Promise<void> {
     },
   )
   ompManager.setDisabledModelsProvider(ompDisabledModels)
+  ompManager.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
   ompAgents = ompManager
   // Pi mirrors the OMP construction, minus the approval-mode getter: pi has no
   // permission system, so the manager keeps its default (undefined) override.
@@ -670,6 +680,7 @@ async function bootstrap(): Promise<void> {
     PI_RPC_ADAPTER,
   )
   piManager.setDisabledModelsProvider(piDisabledModels)
+  piManager.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
   piAgents = piManager
   sessions.bindRuntimeHooks({
     get: (path) => agents?.getForSession(path),
@@ -693,6 +704,7 @@ async function bootstrap(): Promise<void> {
     authorizeEitherCwd,
     () => stateStore.getSettings().terminalShell,
     requireEitherSessionPath,
+    (cwd, owner) => repositoryUseGate.beginWorkspaceUse(cwd, owner),
   )
   projects.bindProviders({
     sessions: listCatalogSessions,
@@ -1020,7 +1032,7 @@ async function bootstrap(): Promise<void> {
   }
   trustedRendererUrl = resolveRendererUrl()
   ipc = registerIpc({
-    meta, refreshHarnesses, projects, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,
+    meta, refreshHarnesses, projects, checkouts, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,
     popupApplicationMenu, setTitleBarTheme,
     omp: { projects: ompProjects, sessions: ompSessions, agents: ompManager, catalog: ompCatalog, plugins: ompPlugins },
     pi: { projects: piProjects, sessions: piSessions, agents: piManager, catalog: piCatalog, plugins: piPlugins },

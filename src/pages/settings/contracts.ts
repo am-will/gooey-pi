@@ -22,6 +22,7 @@ export const SETTINGS_FIELD_SECTIONS = {
   sidebarOpen: 'general',
   inspectorOpen: 'general',
   showFileChangesPopup: 'general',
+  checkoutStrategy: 'general',
   keepRunningInBackground: 'general',
   launchAtLogin: 'general',
   terminalOpen: 'terminal',

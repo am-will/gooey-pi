@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sidebarOpen: true,
   inspectorOpen: true,
   showFileChangesPopup: true,
+  checkoutStrategy: 'worktree',
   keepRunningInBackground: false,
   launchAtLogin: false,
   terminalOpen: false,
