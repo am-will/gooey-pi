@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react'
 import { CalendarClock, Check, CircleDot, GitBranch, HeartPulse, LoaderCircle } from 'lucide-react'
 import type { AutomationScheduleRecord, GitStatus, NativeHeartbeatRecord, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
 import { formatRelative } from '@/lib/data'
+import { formatSessionCost, formatSessionTokens } from '@/lib/format-cost'
 import { MarkdownText } from '../MarkdownText'
 
 interface SummaryPanelProps {
@@ -46,6 +47,8 @@ export function summarizeTranscript(messages: TranscriptMessage[]): TranscriptSu
 export const SummaryPanel = memo(function SummaryPanel({ agentName = 'Prime Agent', shortName = 'Prime', project, runtime, messages, git, automations, heartbeats, onOpenAutomation }: SummaryPanelProps) {
   const { toolCount, lastText } = useMemo(() => summarizeTranscript(messages), [messages])
   const active = Boolean(runtime?.isStreaming || runtime?.isCompacting)
+  const sessionCost = formatSessionCost(runtime?.sessionUsage)
+  const sessionTokens = formatSessionTokens(runtime?.sessionUsage)
   return (
     <div className="inspector-scroll scroll-area summary-panel">
       <section className="summary-hero">
@@ -64,7 +67,8 @@ export const SummaryPanel = memo(function SummaryPanel({ agentName = 'Prime Agen
         </button>)}
         {automations.length + heartbeats.length > 2 ? <button type="button" className="summary-automation-more" onClick={() => onOpenAutomation(automations[0]?.id ?? heartbeats[0]!.id)}>View all {automations.length + heartbeats.length} automations</button> : null}
       </div></section> : null}
-      <section className="summary-section"><h3>Context</h3><div className="context-meter"><div><span>Session context</span><span>Managed</span></div><small>{agentName} monitors and compacts context when needed.</small></div></section>
+      <section className="summary-section"><h3>Context</h3><div className="context-meter"><div><span>Session context</span><span>Managed</span></div><small>{agentName} monitors and compacts context when needed.</small></div>
+        {sessionCost !== null ? <dl className="detail-list summary-cost"><div><dt>Cost</dt><dd title={sessionTokens ?? undefined}>{sessionCost}</dd></div>{sessionTokens ? <div><dt>Tokens</dt><dd className="mono truncate" title={sessionTokens}>{sessionTokens}</dd></div> : null}</dl> : null}</section>
     </div>
   )
 })

@@ -1,5 +1,5 @@
 import type { PrimeEventBuffer } from '@/lib/events'
-import type { PrimeContextUsage, TranscriptMessage } from '@/types/api'
+import type { PrimeContextUsage, SessionUsage, SessionUsageTokens, TranscriptMessage } from '@/types/api'
 
 export interface PendingAgentEvent {
   generation: number
@@ -38,6 +38,25 @@ export function contextUsageFromEvent(event: Record<string, unknown>): PrimeCont
   const percent = raw.percent === null ? null : typeof raw.percent === 'number' && Number.isFinite(raw.percent) && raw.percent >= 0 ? raw.percent : undefined
   if (tokens === undefined || percent === undefined) return null
   return { tokens, contextWindow: Number(raw.contextWindow), percent }
+}
+
+const SESSION_TOKEN_FIELDS: Array<keyof SessionUsageTokens> = ['input', 'output', 'cacheRead', 'cacheWrite', 'total']
+
+export function sessionUsageFromEvent(event: Record<string, unknown>): SessionUsage | null {
+  if (eventType(event) !== 'session_usage' || typeof event.sessionUsage !== 'object' || event.sessionUsage === null || Array.isArray(event.sessionUsage)) return null
+  const raw = event.sessionUsage as Record<string, unknown>
+  const cost = raw.cost === null ? null : typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? raw.cost : undefined
+  if (cost === undefined) return null
+  if (raw.tokens === undefined) return { cost }
+  if (typeof raw.tokens !== 'object' || raw.tokens === null || Array.isArray(raw.tokens)) return null
+  const rawTokens = raw.tokens as Record<string, unknown>
+  const tokens: Partial<SessionUsageTokens> = {}
+  for (const field of SESSION_TOKEN_FIELDS) {
+    const value = rawTokens[field]
+    if (!Number.isSafeInteger(value) || Number(value) < 0) return null
+    tokens[field] = Number(value)
+  }
+  return { cost, tokens: tokens as SessionUsageTokens }
 }
 
 export function needsTranscriptReconciliation(event: Record<string, unknown>): boolean {

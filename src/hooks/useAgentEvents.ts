@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { contextUsageFromEvent } from '@/app/agent-events'
+import { contextUsageFromEvent, sessionUsageFromEvent } from '@/app/agent-events'
 import { applySessionLifecycleEvent, sessionLifecycleChange } from '@/app/session-attention'
 import { fallbackModelFromRecord } from '@/lib/events/model-fallback'
 import { parseSessionActionSnapshot } from '@/lib/session-actions'
@@ -77,6 +77,11 @@ export function useAgentEvents({
       if (type === 'context_usage') {
         const contextUsage = contextUsageFromEvent(event)
         if (contextUsage) setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, contextUsage } : current)
+        return
+      }
+      if (type === 'session_usage') {
+        const sessionUsage = sessionUsageFromEvent(event)
+        if (sessionUsage) setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, sessionUsage } : current)
         return
       }
       if (type === 'session_action_update') {
