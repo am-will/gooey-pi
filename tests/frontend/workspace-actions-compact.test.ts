@@ -189,7 +189,7 @@ describe('/compact dispatch', () => {
 
     expect(fixtureState.command).not.toHaveBeenCalled()
     expect(fixtureState.followUp).not.toHaveBeenCalled()
-    expect(fixtureState.queuePrompt).toHaveBeenCalledWith('/compact', 'steer')
+    expect(fixtureState.queuePrompt).toHaveBeenCalledWith('/compact', 'queue')
     expect(fixtureState.setToast).toHaveBeenCalledWith('Compaction will run when the current turn finishes.')
   })
 })
