@@ -57,7 +57,7 @@ export function appendSessionRouting(prompt: string, sessions: readonly SessionR
   const visiblePrompt = prompt
     .replaceAll(SESSION_ROUTING_BEGIN, '[session reference boundary omitted]')
     .replaceAll(SESSION_ROUTING_END, '[session reference boundary omitted]')
-  const references = unique.map(({ text, session }) => `- ${JSON.stringify(text)}: ${session.harness} session UUID ${session.id}. Use session_read, session_send, and session_wait when the request requires collaboration; GooeyPi can wake an idle saved target.`)
+  const references = unique.map(({ text, session }) => `- ${JSON.stringify(text)}: ${session.harness} session UUID ${session.id}. Use gooeypi_session_read, gooeypi_session_send, and gooeypi_session_wait when the request requires collaboration; GooeyPi can wake an idle saved target.`)
   return `${visiblePrompt}\n\n${SESSION_ROUTING_BEGIN}\nThe user explicitly referenced these GooeyPi sessions. Titles are display labels; use the exact UUIDs below:\n${references.join('\n')}\n${SESSION_ROUTING_END}`
 }
 
