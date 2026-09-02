@@ -100,6 +100,16 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
   await indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle: title, isCurrent }).catch(() => undefined)
 }
 
+export function parseCompactCommand(prompt: string): { customInstructions?: string } | undefined {
+  const trimmed = prompt.trim()
+  if (trimmed === '/compact') return {}
+  if (trimmed.startsWith('/compact ')) {
+    const customInstructions = trimmed.slice(9).trim()
+    return customInstructions ? { customInstructions } : {}
+  }
+  return undefined
+}
+
 export function parseMcpCommand(prompt: string, harness: HarnessId): McpCommand | undefined {
   const value = prompt.trim()
   if (harness === 'prime' && value === '/mcp') return { type: 'open' }
@@ -277,6 +287,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   ) => {
     const { bridge, sessions, workspace, provider, settingsState, submissionAdmissionRef, demoTimerRef, setSessions, setSubmitting, setView, setToast, reportError } = getDeps()
     const commandHarness = workspace.workspaceRef?.current?.project?.harness ?? settingsState.settings.activeHarness
+    const compactCommand = parseCompactCommand(prompt)
     const mcpCommand = parseMcpCommand(prompt, commandHarness)
     if (mcpCommand?.type === 'open' && images.length === 0) {
       setView('plugins')
@@ -286,6 +297,10 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     if (mcpCommand?.type === 'authenticate') {
       const target = mcpCommand.server ? ` to sign in to ${mcpCommand.server}` : ' to authenticate network MCP servers'
       setToast(`Network MCP authentication is managed outside GooeyPi. Use ${HARNESS_AGENT_NAMES[commandHarness]} directly${target}.`)
+      return
+    }
+    if (compactCommand && images.length > 0) {
+      reportError('/compact does not accept attachments. Remove the attachment and try again.')
       return
     }
     const currentWorkspace = workspace.workspaceRef.current
@@ -301,6 +316,13 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       if (queuedFlushPromptId) workspace.removeQueuedPrompt(queuedFlushPromptId)
     }
     if (ownsStreamingRuntime && currentRuntime && bridge) {
+      if (compactCommand) {
+        // Compacting mid-turn would abort the running turn, so it waits for the
+        // idle flush like any queued prompt.
+        if (!queuedFlushPromptId) workspace.queuePrompt(prompt, 'queue')
+        if (intent === 'steer') setToast('Compaction will run when the current turn finishes.')
+        return
+      }
       if (intent === 'queue' && images.length === 0) {
         if (!queuedFlushPromptId) workspace.queuePrompt(prompt, intent)
         return
@@ -389,8 +411,16 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
         let activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
         const selectedSession = selected.sessionFile ? sessions.find((session) => session.filePath === selected.sessionFile) : undefined
-        if (intent === 'queue' && images.length === 0 && (activeRuntime?.isStreaming || selectedSession?.status === 'running')) {
-          if (!queuedFlushPromptId) queuedPromptId = workspace.queuePrompt(prompt, intent)
+        if (compactCommand && !activeRuntime) {
+          if (!selected.sessionFile) { setToast('Nothing to compact yet.'); return }
+          if (selectedSession?.status === 'running') {
+            setToast('Compaction is unavailable while this session is running outside GooeyPi.')
+            return
+          }
+        }
+        if ((intent === 'queue' || compactCommand) && images.length === 0 && (activeRuntime?.isStreaming || selectedSession?.status === 'running')) {
+          if (!queuedFlushPromptId) queuedPromptId = workspace.queuePrompt(prompt, compactCommand ? 'queue' : intent)
+          if (compactCommand && intent === 'steer') setToast('Compaction will run when the current turn finishes.')
           return
         }
         let startedRuntime = false
@@ -437,7 +467,13 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           throw new Error(`${HARNESS_AGENT_NAMES[activeHarness]} returned a runtime for a different workspace or session.`)
         }
         workspace.attachRuntime(activeRuntime, generation)
-        if (activeRuntime.isStreaming) {
+        if (compactCommand) {
+          await bridge.agent.command(activeRuntime.runtimeId, {
+            type: 'compact',
+            ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}),
+          })
+          completeQueuedFlush()
+        } else if (activeRuntime.isStreaming) {
           // Follow-ups are daemon-owned. Steers get a renderer-only pending
           // row so pickup can move them into history without redelivery.
           if (intent === 'steer') queuedPromptId = workspace.queuePrompt(prompt, intent, userMessage.parts, sentAt)
