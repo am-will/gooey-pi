@@ -2016,6 +2016,39 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.locator('.workbench')).not.toHaveAttribute('inert')
   })
 
+  test('grows the transcript column on a wide pane and keeps the docked surfaces aligned', async () => {
+    await page.getByRole('button', { name: /^New session/ }).first().click()
+    await page.setViewportSize({ width: 1800, height: 900 })
+    if (await page.locator('.inspector').count()) {
+      await page.locator('.inspector').getByRole('button', { name: 'Close inspector' }).click()
+      await expect(page.locator('.inspector')).toHaveCount(0)
+    }
+    const measure = () => page.evaluate(() => {
+      const width = (selector: string) => document.querySelector(selector)?.getBoundingClientRect().width ?? 0
+      return { pane: width('.conversation-pane'), column: width('.transcript__inner'), dock: width('.conversation-bottom-dock'), scroller: document.querySelector('.transcript')?.clientWidth ?? 0 }
+    })
+
+    // The window manager may hand back less than the requested viewport, so the
+    // expected column is derived from the pane the app actually got.
+    await expect.poll(async () => (await measure()).pane).toBeGreaterThan(894)
+    const wide = await measure()
+    expect(wide.column).toBeCloseTo(Math.min(1240, Math.max(760, wide.pane * 0.85)), 0)
+    expect(wide.column).toBeGreaterThan(760)
+    expect(wide.column).toBeLessThanOrEqual(1240)
+    // The scrolled column and the absolutely positioned dock share one measure,
+    // so they must stay the same width even when a scrollbar takes up space.
+    expect(wide.column).toBeCloseTo(wide.dock, 1)
+
+    await page.setViewportSize({ width: 720, height: 700 })
+    await expect.poll(async () => (await measure()).pane).toBeLessThan(760)
+    const compact = await measure()
+    // Below the reading minimum the column fills the scroll area, which is the
+    // pane minus whatever a non-overlay scrollbar takes.
+    // clientWidth is integer rounded, so allow a pixel of slack.
+    expect(Math.abs(compact.column - compact.scroller)).toBeLessThanOrEqual(1)
+    expect(compact.column).toBeLessThanOrEqual(compact.pane)
+  })
+
   test('auto-closes both drawers at the smallest breakpoint while keeping them user-toggleable', async () => {
     await expect(page.locator('.sidebar')).toBeVisible()
     await page.setViewportSize({ width: 720, height: 700 })
