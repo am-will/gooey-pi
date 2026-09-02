@@ -8,7 +8,7 @@ import { killProcessTree, prepareExecutableSpawn, safeChildEnvironment, waitForP
 import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
 import { AgentEventForwarder } from './events'
-import { PRIME_RPC_ADAPTER, parseContextUsage, type HarnessRpcAdapter } from './harness-adapter'
+import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { LiveContextUsageTracker, withLiveContextUsage } from './context-usage'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import type { RpcObject } from './types'
@@ -667,10 +667,13 @@ export class RpcRuntime {
     try {
       const response = await this.request({ type: 'get_session_stats' }, 10_000)
       const usage = isRecord(response.data) ? parseContextUsage(response.data.contextUsage) : null
-      if (!usage
-        || request.generation !== this.contextUsageGeneration
-        || request.sessionId !== this.info.sessionId) return
-      this.applyAuthoritativeContextUsage(usage, request.activityTokens)
+      const sessionUsage = parseSessionUsage(response.data)
+      if (request.generation !== this.contextUsageGeneration || request.sessionId !== this.info.sessionId) return
+      if (sessionUsage && !this.stopped) {
+        this.info.sessionUsage = sessionUsage
+        this.emit({ type: 'session_usage', sessionUsage })
+      }
+      if (usage) this.applyAuthoritativeContextUsage(usage, request.activityTokens)
     } catch { /* older Prime Agent versions may not expose session stats */ }
   }
 
@@ -754,6 +757,7 @@ export class RpcRuntime {
         this.contextUsageGeneration += 1
         this.authoritativeContextUsage = undefined
         delete this.info.contextUsage
+        delete this.info.sessionUsage
       }
       this.info.sessionId = raw.sessionId
     }
