@@ -92,6 +92,7 @@
 .select-control__icon, .select-control__chevron { display: inline-grid; place-items: center; flex: 0 0 auto; }
 .select-control select { min-width: 0; max-width: 122px; overflow: hidden; border: 0; outline: 0; color: inherit; background: transparent; appearance: none; field-sizing: content; text-overflow: ellipsis; font-size: 11px; font-weight: 520; }
 .select-control--compact { height: 26px; border-radius: 999px; }
+.model-fallback-chip { max-width: 210px; height: 26px; display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 0 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border)); border-radius: 999px; color: var(--warning); background: var(--warning-soft); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .permissions-chip { height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); background: var(--surface-subtle); font-size: 10.5px; }
 .worktree-picker, .model-picker { position: relative; min-width: 0; flex: 0 1 auto; }
 .worktree-picker__trigger, .model-picker__trigger { max-width: 150px; cursor: pointer; }

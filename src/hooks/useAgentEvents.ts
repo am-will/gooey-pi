@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { contextUsageFromEvent, sessionUsageFromEvent } from '@/app/agent-events'
 import { applySessionLifecycleEvent, sessionLifecycleChange } from '@/app/session-attention'
+import { fallbackModelFromRecord } from '@/lib/events/model-fallback'
 import { parseSessionActionSnapshot } from '@/lib/session-actions'
 import type { WorkspaceSnapshot } from '@/app/workspace'
 import type { PrimeWorkApi, RuntimeInfo, SessionActionSnapshot, SessionRecord } from '@/types/api'
@@ -73,7 +74,6 @@ export function useAgentEvents({
         if (type === 'runtime_exit') runtimeSessionsRef.current.delete(runtimeId)
         return
       }
-
       if (type === 'context_usage') {
         const contextUsage = contextUsageFromEvent(event)
         if (contextUsage) setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, contextUsage } : current)
@@ -95,7 +95,17 @@ export function useAgentEvents({
       queueAgentEvent(event)
       reconcileTranscriptForEvent(runtimeId, event)
       if (type === 'agent_start') {
-        setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, isStreaming: true, isCompacting: false } : current)
+        setRuntime((current) => current?.runtimeId === runtimeId
+          ? { ...current, isStreaming: true, isCompacting: false, executingModel: null }
+          : current)
+      }
+      if (type === 'retry_fallback_applied' || type === 'retry_fallback_succeeded') {
+        const fallback = fallbackModelFromRecord(event)
+        if (fallback) {
+          setRuntime((current) => current?.runtimeId === runtimeId
+            ? { ...current, executingModel: { provider: fallback.provider, id: fallback.id, label: fallback.label, isFallback: true } }
+            : current)
+        }
       }
       if (type === 'compaction_start') {
         setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, isCompacting: true } : current)

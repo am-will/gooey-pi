@@ -347,6 +347,62 @@ describe('inactive harness event isolation', () => {
   })
 })
 
+describe('provider fallback runtime state', () => {
+  it('tracks the fallback separately from the selected runtime model', async () => {
+    let handler!: (payload: { runtimeId: string; event: Record<string, unknown> }) => void
+    const bridge = {
+      agent: { onEvent: (callback: typeof handler) => { handler = callback; return () => undefined } },
+    } as unknown as PrimeWorkApi
+    const setRuntime = vi.fn()
+    function AgentEventsProbe() {
+      useAgentEvents({
+        bridge,
+        runtimeIdRef: { current: primeRuntime.runtimeId },
+        runtimeSessionsRef: { current: new Map() },
+        runtimeOwnerRef: { current: null },
+        workspaceRef: { current: { generation: 0, sessionFile: primeSession.filePath, cwd: '/prime' } },
+        setSessions: vi.fn(),
+        setRuntime,
+        queueAgentEvent: vi.fn(),
+        reconcileTranscriptForEvent: vi.fn(),
+        showExtensionUi: vi.fn(),
+        clearExtensionUi: vi.fn(),
+        refreshGit: vi.fn(async () => undefined),
+        refreshGitOnTerminalEvent: false,
+        activeSessionVisible: true,
+      })
+      return <Probe />
+    }
+
+    await act(async () => { root.render(<AgentEventsProbe />) })
+    act(() => {
+      handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'retry_fallback_applied', from: 'anthropic/claude-opus', to: 'anthropic/claude-sonnet', role: 'fallback' } })
+    })
+
+    const update = setRuntime.mock.calls.at(-1)?.[0] as (current: RuntimeInfo) => RuntimeInfo
+    const next = update({ ...primeRuntime, model: { provider: 'provider', id: 'vision' } })
+    expect(next.model).toEqual({ provider: 'provider', id: 'vision' })
+    expect(next.executingModel).toEqual({
+      provider: 'anthropic',
+      id: 'claude-sonnet',
+      label: 'anthropic/claude-sonnet',
+      isFallback: true,
+    })
+
+    act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'retry_fallback_succeeded', model: 'anthropic/claude-sonnet', role: 'fallback' } }) })
+    const succeededUpdate = setRuntime.mock.calls.at(-1)?.[0] as (current: RuntimeInfo) => RuntimeInfo
+    expect(succeededUpdate(next).executingModel).toEqual(next.executingModel)
+
+    const callsBeforeModelChanged = setRuntime.mock.calls.length
+    act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'model_changed' } }) })
+    expect(setRuntime.mock.calls).toHaveLength(callsBeforeModelChanged)
+
+    act(() => { handler({ runtimeId: primeRuntime.runtimeId, event: { type: 'agent_start' } }) })
+    const reset = setRuntime.mock.calls.at(-1)?.[0] as (current: RuntimeInfo) => RuntimeInfo
+    expect(reset({ ...next }).executingModel).toBeNull()
+  })
+})
+
 describe('sidebar brand switcher', () => {
   const noop = () => undefined
   function renderSidebar(onSelectHarness: (harness: HarnessId) => void, activeHarness: HarnessId = 'prime', appMeta = meta) {
