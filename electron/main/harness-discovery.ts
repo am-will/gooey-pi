@@ -1,5 +1,6 @@
 import { HARNESS_IDS, type AppSettings, type HarnessId, type HarnessStatus } from '../../src/types/api'
 import { HARNESSES, type HarnessDescriptor } from './harness'
+import { hasControlCharacter, lastNonEmptyLine, sanitizedDetail } from './lib/process-detail'
 import { findHarnessExecutable, processFailureReason, runProcess, type ExecutableCandidateFailure } from './process-utils'
 import type { JsonStateStore } from './store'
 
@@ -25,19 +26,7 @@ export interface HarnessDiscoveryOptions {
   probeExecutable?: ExecutableProbe
 }
 
-function hasControlCharacter(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.charCodeAt(0)
-    return code <= 0x1f || code === 0x7f
-  })
-}
-
-function sanitizedDetail(value: string): string {
-  return [...value].filter((character) => !hasControlCharacter(character)).join('').trim().slice(0, 200)
-}
-
 function processDetail(stdout: string, stderr: string): string {
-  const lastNonEmptyLine = (value: string): string | undefined => value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).at(-1)
   return sanitizedDetail(lastNonEmptyLine(stderr) ?? lastNonEmptyLine(stdout) ?? '')
 }
 

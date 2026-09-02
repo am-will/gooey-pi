@@ -23,6 +23,67 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+describe('agent RPC exit details', () => {
+  const writeExitingAgent = (body: string): { cwd: string; executable: string } => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-exit-'))
+    dirs.push(cwd)
+    const executable = join(cwd, 'exit-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+${body}
+`)
+    chmodSync(executable, 0o755)
+    return { cwd, executable }
+  }
+
+  it('includes a sanitized stderr tail when the agent exits before any frame', async () => {
+    const fake = writeExitingAgent(`process.stderr.write('Error: Tool "session_list" from extension "pi-session-search" conflicts with extension "omp-work-collaboration"')
+process.exit(1)`)
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, () => undefined, () => undefined)
+    try {
+      await expect(runtime.handshake()).rejects.toThrow(/RPC exited \(1\): Error: Tool "session_list"/)
+    } finally {
+      await runtime.stop()
+    }
+  })
+
+  it('redacts secrets and bounds the early exit message', async () => {
+    const fake = writeExitingAgent(`process.stderr.write('\\u001b[31mtoken ghp_' + 'a'.repeat(40) + ' leaked\\u001b[0m\\n' + 'x'.repeat(5000) + '\\n' + 'final line ' + 'B'.repeat(300))
+process.exit(1)`)
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, () => undefined, () => undefined)
+    try {
+      await expect(runtime.handshake()).rejects.toSatisfy((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        return !message.includes('ghp_a') && !message.includes('\u001b') && message.length < 400
+      })
+    } finally {
+      await runtime.stop()
+    }
+  })
+
+  it('does not append stderr after the agent has emitted a frame', async () => {
+    const fake = writeExitingAgent(`const readline = require('node:readline')
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line)
+  if (command.type === 'get_state') {
+    process.stdout.write(JSON.stringify({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'framed', isStreaming: false } }) + '\\n')
+  } else if (command.type === 'trigger_exit') {
+    process.stderr.write('secret')
+    process.exit(1)
+  }
+})`)
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, () => undefined, () => undefined)
+    try {
+      await runtime.handshake()
+      const request = (runtime as unknown as { request(command: RpcObject, timeoutMs: number): Promise<RpcObject> }).request.bind(runtime)
+      const error = await request({ type: 'trigger_exit' }, 10_000).catch((reason: unknown) => reason)
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toBe('Prime Agent RPC exited (1)')
+    } finally {
+      await runtime.stop()
+    }
+  })
+})
+
 function fakeAgent(promptResponse: string, stateResponse?: string): { cwd: string; executable: string } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-'))
   dirs.push(cwd)
