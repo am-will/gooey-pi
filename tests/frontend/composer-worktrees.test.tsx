@@ -52,6 +52,7 @@ describe('composer worktree picker', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+    window.sessionStorage.clear()
   })
 
   it('does not expose an automatic model choice before the catalog loads', () => {
@@ -106,5 +107,21 @@ describe('composer worktree picker', () => {
 
     expect(onCreateWorktree).toHaveBeenCalledWith('feature/new-picker')
     expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  it('restores an unsent draft and model after the composer remounts', async () => {
+    act(() => root.render(<Composer {...props({ draftKey: 'project:new', model: 'openai:chosen' })} />))
+    const textarea = container.querySelector('textarea')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(textarea, 'Keep this prompt')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => root.unmount())
+    root = createRoot(container)
+    const onModelChange = vi.fn()
+    act(() => root.render(<Composer {...props({ draftKey: 'project:new', model: '', onModelChange })} />))
+    expect(container.querySelector('textarea')?.value).toBe('Keep this prompt')
+    expect(onModelChange).toHaveBeenCalledWith('openai:chosen')
   })
 })

@@ -34,6 +34,7 @@ interface FakeOmpOptions {
   /** When false the fake rejects negotiate_protocol like an unsupported version. */
   acceptNegotiate?: boolean
   sessionActions?: Record<string, unknown>
+  queuedMessageCount?: number
   /** Optional model payload served when the same fake is probed as an OMP catalog CLI. */
   catalogModels?: unknown[]
 }
@@ -73,6 +74,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       sessionId: 'omp-session', isStreaming: streaming, isCompacting: false, thinkingLevel: 'medium',
       fastModeEnabled: true, model: { provider: 'openai-codex', id: 'gpt-5.6-luna', name: 'Luna GPT-5.6' },
       contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+      queuedMessageCount: ${options.queuedMessageCount ?? 0},
       ...(sessionActions ? { sessionActions } : {}),
     } })
   } else if (command.type === 'get_session_stats') {
@@ -89,8 +91,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (command.type === 'prompt') {
     send({ id: command.id, type: 'response', command: 'prompt', success: true, data: { agentInvoked: true } })
     ${options.promptScript ?? ''}
-  } else if (command.type === 'steer') {
-    send({ id: command.id, type: 'response', command: 'steer', success: true, data: { accepted: true } })
+  } else if (command.type === 'steer' || command.type === 'follow_up') {
+    send({ id: command.id, type: 'response', command: command.type, success: true, data: { accepted: true } })
   } else if (command.type === 'abort') {
     send({ id: command.id, type: 'response', command: 'abort', success: true })
   }
@@ -390,6 +392,22 @@ describe('OMP RPC command translation', () => {
     const omittedRuntime = await omittedManager.start({ cwd: omittedFake.cwd })
     const omitted = await omittedManager.command(omittedRuntime.runtimeId, { type: 'steer', message: 'redirect' })
     expect(omitted).not.toHaveProperty('sessionActions')
+  })
+
+  it('normalizes OMP queuedMessageCount and returns it after follow-up admission', async () => {
+    const fake = fakeOmpAgent({ queuedMessageCount: 2 })
+    const manager = ompManager(fake.executable)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    expect(manager.list()[0]?.sessionActions).toEqual({
+      queuedCount: 2,
+      steering: [],
+      followUps: [],
+    })
+    await expect(manager.command(runtime.runtimeId, { type: 'follow_up', message: 'next turn' }))
+      .resolves.toMatchObject({
+        sessionActions: { queuedCount: 2, steering: [], followUps: [] },
+      })
   })
 
   it('translates fork to branch and correlates the branch response', async () => {

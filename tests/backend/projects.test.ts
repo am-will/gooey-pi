@@ -1057,10 +1057,75 @@ describe('ProjectService worktrees', () => {
       expect.objectContaining({ path: realpathSync(linked), branch: 'linked-test', current: false }),
     ]))
     const opened = await service.openWorktree(root, realpathSync(linked))
-    expect(opened.path).toBe(realpathSync(linked))
+    expect(opened.id).toBe('project')
+    expect(opened.path).toBe(root)
+    expect(opened.primaryFolder).toBe(realpathSync(linked))
+    expect(opened.folders).toEqual(expect.arrayContaining([root, realpathSync(linked)]))
+    expect(store.snapshot().projects.filter((project) => project.harness === 'prime')).toHaveLength(1)
     await expect(service.authorizeCwd(linked)).resolves.toBe(realpathSync(linked))
     await expect(service.openWorktree(root, outsider)).rejects.toThrow(/not linked to the authorized Git repository/i)
     expect(store.snapshot().projects.some((project) => resolve(project.path) === resolve(outsider))).toBe(false)
+  })
+
+  it('folds a separately granted linked worktree under its repository project when listing', async () => {
+    const { root, service, store } = setup()
+    const runGit = (...args: string[]): void => {
+      const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+      if (result.status !== 0) throw new Error(result.stderr)
+    }
+    runGit('init', '-q')
+    runGit('config', 'user.name', 'Prime Work Test')
+    runGit('config', 'user.email', 'test@example.com')
+    writeFileSync(join(root, 'file.txt'), 'base\n')
+    runGit('add', 'file.txt')
+    runGit('commit', '-qm', 'base')
+    const linked = join(resolve(root, '..'), 'sidebar-worktree')
+    dirs.push(linked)
+    runGit('worktree', 'add', '-qb', 'sidebar-test', linked)
+    const linkedPath = realpathSync(linked)
+    const now = new Date().toISOString()
+    await store.update((state) => { state.projects.push(
+      { id: 'repository', harness: 'prime', name: 'Repository', path: root, folders: [root], primaryFolder: root, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root) },
+      { id: 'stray-worktree', harness: 'prime', name: 'Stray worktree', path: linkedPath, folders: [linkedPath], primaryFolder: linkedPath, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(linkedPath) },
+    ) })
+
+    const listed = await service.list()
+
+    expect(listed.map((project) => project.id)).toEqual(['repository'])
+    expect(listed[0]?.folders).toEqual(expect.arrayContaining([root, linkedPath]))
+    expect(store.snapshot().projects.map((project) => project.id)).toEqual(['repository'])
+    await expect(service.authorizeCwd(linkedPath)).resolves.toBe(linkedPath)
+  })
+
+  it('absorbs a previously separate worktree project back into the parent grant', async () => {
+    const { root, service, store } = setup()
+    const runGit = (...args: string[]): void => {
+      const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+      if (result.status !== 0) throw new Error(result.stderr)
+    }
+    runGit('init', '-q')
+    runGit('config', 'user.name', 'Prime Work Test')
+    runGit('config', 'user.email', 'test@example.com')
+    writeFileSync(join(root, 'file.txt'), 'base\n')
+    runGit('add', 'file.txt')
+    runGit('commit', '-qm', 'base')
+    const linked = join(resolve(root, '..'), 'absorbed-worktree')
+    dirs.push(linked)
+    runGit('worktree', 'add', '-qb', 'absorbed-test', linked)
+    const now = new Date().toISOString()
+    const linkedPath = realpathSync(linked)
+    await store.update((state) => { state.projects.push(
+      { id: 'project', harness: 'prime', name: 'Project', path: root, folders: [root], primaryFolder: root, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(root) },
+      { id: 'worktree-project', harness: 'prime', name: 'Worktree', path: linkedPath, folders: [linkedPath], primaryFolder: linkedPath, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(linkedPath) },
+    ) })
+    await service.list()
+
+    const opened = await service.openWorktree(root, linkedPath)
+    expect(opened.id).toBe('project')
+    expect(store.snapshot().projects.map((project) => project.id)).toEqual(['project'])
+    const listed = await service.list()
+    expect(listed.map((project) => project.id)).toEqual(['project'])
+    expect(listed[0]?.folders).toEqual(expect.arrayContaining([root, linkedPath]))
   })
 })
 
