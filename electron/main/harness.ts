@@ -19,6 +19,8 @@ export interface HarnessDescriptor {
   bundledResourceDirs: readonly (readonly string[])[]
   /** Harness-specific locations beyond the shared package-manager and system directories. */
   candidateDirs: (platform: NodeJS.Platform, home: string, env: NodeJS.ProcessEnv) => string[]
+  /** Official npm `.cmd` shim on Windows and the package entrypoint below `<shim dir>\node_modules`. */
+  windowsNpmShim?: { shim: string; entrypoint: readonly string[] }
   agentDir: (home: string) => string
   sessionRoot: (home: string) => string
 }
@@ -34,6 +36,7 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     candidateDirs: (platform, home, env) => platform === 'win32' ? [] : [
       join(env.XDG_DATA_HOME ?? join(home, '.local', 'share'), 'prime-agent-node', 'current', 'bin'),
     ],
+    windowsNpmShim: { shim: 'prime-agent.cmd', entrypoint: ['prime-agent', 'dist', 'bundle', 'cli.js'] },
     agentDir: (home) => join(home, '.prime', 'agent'),
     sessionRoot: (home) => join(home, '.prime', 'agent', 'sessions'),
   },
@@ -61,6 +64,7 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     candidateDirs: (platform, home, env) => platform === 'win32' ? [] : [
       join(env.XDG_DATA_HOME ?? join(home, '.local', 'share'), 'pi-node', 'current', 'bin'),
     ],
+    windowsNpmShim: { shim: 'pi.cmd', entrypoint: ['@earendil-works', 'pi-coding-agent', 'dist', 'cli.js'] },
     agentDir: (home) => join(home, '.pi', 'agent'),
     sessionRoot: (home) => join(home, '.pi', 'agent', 'sessions'),
   },

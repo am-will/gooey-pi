@@ -252,9 +252,10 @@ function canAccessPath(candidate: string, mode: number): boolean {
 }
 
 /**
- * Resolves the official Windows npm Pi shim without running cmd.exe. npm puts
- * the package entry point below the shim directory, so GooeyPi can invoke that
- * fixed JavaScript file with a validated Node executable and keep shell=false.
+ * Resolves official Windows npm shims declared on harness descriptors without
+ * running cmd.exe. npm puts the package entry point below the shim directory,
+ * so GooeyPi can invoke that fixed JavaScript file with a validated Node
+ * executable and keep shell=false.
  */
 export function prepareExecutableSpawn(
   file: string,
@@ -264,13 +265,16 @@ export function prepareExecutableSpawn(
 ): ExecutableSpawnInvocation {
   const platform = options.platform ?? process.platform
   const childEnvironment = executableChildEnvironment(file, env, platform)
-  if (platform !== 'win32' || win32.basename(file).toLowerCase() !== 'pi.cmd') {
+  const descriptor = platform === 'win32'
+    ? Object.values(HARNESSES).find((harness) => harness.windowsNpmShim?.shim === win32.basename(file).toLowerCase())
+    : undefined
+  if (!descriptor?.windowsNpmShim) {
     return { file, args: [...args], env: childEnvironment }
   }
 
   const canAccess = options.canAccess ?? canAccessPath
-  const entrypoint = win32.join(win32.dirname(file), 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'cli.js')
-  if (!canAccess(entrypoint, fsConstants.F_OK)) throw new Error('The Pi npm command shim does not point to an official Pi installation')
+  const entrypoint = win32.join(win32.dirname(file), 'node_modules', ...descriptor.windowsNpmShim.entrypoint)
+  if (!canAccess(entrypoint, fsConstants.F_OK)) throw new Error(`The ${descriptor.agentName} npm command shim does not point to an official ${descriptor.agentName} installation`)
   const homeValue = options.home ?? childEnvironment.USERPROFILE
   const home = homeValue && win32.isAbsolute(homeValue) ? homeValue : homedir()
   const pathDirectories = [childEnvironment.Path, childEnvironment.PATH]
@@ -293,7 +297,7 @@ export function prepareExecutableSpawn(
     })
     .map((directory) => win32.join(directory, 'node.exe'))
     .find((candidate) => canAccess(candidate, fsConstants.X_OK))
-  if (!node) throw new Error('Node.js was not found for the Pi npm command shim')
+  if (!node) throw new Error(`Node.js was not found for the ${descriptor.agentName} npm command shim`)
   return { file: node, args: [entrypoint, ...args], env: childEnvironment }
 }
 
@@ -410,7 +414,7 @@ export function harnessExecutableCandidates(
 ): string[] {
   const pathApi = platform === 'win32' ? win32 : posix
   const executable = descriptor.executableName(platform)
-  const executableNames = platform === 'win32' && descriptor.id === 'pi' ? [executable, 'pi.cmd'] : [executable]
+  const executableNames = platform === 'win32' && descriptor.windowsNpmShim ? [executable, descriptor.windowsNpmShim.shim] : [executable]
   const candidates: string[] = []
   if (configuredPath && isAbsolutePathForPlatform(configuredPath, platform)) candidates.push(configuredPath)
   const configured = env[descriptor.binaryEnvVar]
