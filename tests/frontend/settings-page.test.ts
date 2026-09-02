@@ -155,6 +155,7 @@ describe('settings field ownership', () => {
       terminalOpen: 'terminal',
       defaultInspectorTab: 'general',
       browserHome: 'browser',
+      checkoutStrategy: 'general',
       browserAskForDownloads: 'browser',
       terminalShell: 'terminal',
       reduceMotion: 'appearance',

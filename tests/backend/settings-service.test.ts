@@ -27,6 +27,7 @@ describe('SettingsService.update', () => {
       sidebarOpen: false,
       inspectorOpen: true,
       showFileChangesPopup: false,
+      checkoutStrategy: 'branch',
       keepRunningInBackground: true,
       launchAtLogin: true,
       terminalOpen: true,
@@ -67,7 +68,7 @@ describe('SettingsService.update', () => {
       voiceRealtimeVoice: 'cedar',
     })
     expect(next).toMatchObject({
-      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, projectSortMode: 'alphabetical', sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, keepRunningInBackground: true, launchAtLogin: true, terminalOpen: true,
+      theme: 'dark', locale: 'zh-CN', interfaceFontScale: 105, projectSortMode: 'alphabetical', sidebarOpen: false, inspectorOpen: true, showFileChangesPopup: false, checkoutStrategy: 'branch', keepRunningInBackground: true, launchAtLogin: true, terminalOpen: true,
       defaultInspectorTab: 'changes', browserHome: 'https://example.test/',
       browserAskForDownloads: false, terminalShell: '/bin/zsh', reduceMotion: true,
       showReasoningSummaries: false, showToolCalls: false, messageEnterAction: 'steer',
@@ -100,6 +101,7 @@ describe('SettingsService.update', () => {
     await expect(service.update({ interfaceFontScale: 111 })).rejects.toThrow(/Invalid interface font scale/)
     await expect(service.update({ projectSortMode: 'invalid' })).rejects.toThrow(/Invalid project sort mode/)
     await expect(service.update({ defaultInspectorTab: 'tools' })).rejects.toThrow(/Invalid inspector tab/)
+    await expect(service.update({ checkoutStrategy: 'folders' })).rejects.toThrow(/Invalid checkout strategy/)
     await expect(service.update({ messageEnterAction: 'send' })).rejects.toThrow(/Invalid message Enter action/)
     await expect(service.update({ runtimePaths: { prime: 'relative/prime-agent', omp: '', pi: '' } })).rejects.toThrow(/must be absolute/)
     await expect(service.update({ runtimePaths: { prime: '/opt/prime-agent', omp: '', pi: '', extra: '/tmp/evil' } })).rejects.toThrow(/not supported/)
