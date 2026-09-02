@@ -110,6 +110,8 @@ export abstract class CapabilityBridge {
       if (request.method !== 'POST' || request.url !== '/v1/call' || request.headers.origin !== undefined) {
         send(response, 404, { ok: false, error: 'Not found' }); return
       }
+      const contentType = request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
+      if (contentType !== 'application/json') { send(response, 415, { ok: false, error: 'Unsupported media type' }); return }
       const authorization = request.headers.authorization
       if (!authorization?.startsWith('Bearer ')) { send(response, 401, { ok: false, error: 'Unauthorized' }); return }
       const presented = authorization.slice(7)
