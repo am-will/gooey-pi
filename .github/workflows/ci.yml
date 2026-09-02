@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-run-{1}', github.event.pull_request.number, github.run_id) || github.event_name == 'push' && format('push-{0}', github.sha) || format('dispatch-{0}', github.run_id) }}
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.sha) || format('dispatch-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
