@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { addAnnotation, type BrowserAnnotationInput, createAnnotation, MAX_BROWSER_ANNOTATIONS, reconcileAnnotationsForUrl, removeAnnotation } from '@/lib/browser-annotations'
 import type { BrowserAnnotation } from '@/types/api'
 
@@ -41,5 +41,7 @@ export function useBrowserAnnotations(): BrowserAnnotationsApi {
   const clear = useCallback(() => commit([]), [commit])
   const handleNavigation = useCallback((url: string) => commit(reconcileAnnotationsForUrl(annotationsRef.current, url)), [commit])
 
-  return { annotations, atCapacity: annotations.length >= MAX_BROWSER_ANNOTATIONS, add, remove, clear, handleNavigation, sendSignal, requestSend }
+  // Stable container identity so memoized consumers (Inspector, Composer) do
+  // not re-render while an agent streams; fields update independently.
+  return useMemo(() => ({ annotations, atCapacity: annotations.length >= MAX_BROWSER_ANNOTATIONS, add, remove, clear, handleNavigation, sendSignal, requestSend }), [add, annotations, clear, handleNavigation, remove, requestSend, sendSignal])
 }
