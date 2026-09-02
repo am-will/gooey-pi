@@ -413,6 +413,8 @@ export type GitWorktreeCleanliness =
 export type GitBranchChangeResult =
   | { kind: 'applied' }
   | { kind: 'unchanged' }
+  | { kind: 'not-found' }
+  | { kind: 'already-exists' }
   | Extract<GitWorktreeCleanliness, { kind: 'dirty' }>
 
 async function inspectGitWorktreeCleanAtRoot(repositoryRoot: string, overrides: readonly string[]): Promise<GitWorktreeCleanliness> {
@@ -446,8 +448,8 @@ async function changeGitBranch(cwd: string, branchValue: unknown, create: boolea
   const branch = await validateGitBranch(repositoryRoot, branchValue)
   const branches = await listLocalGitBranches(repositoryRoot)
   const existing = branches.find((candidate) => candidate.name === branch)
-  if (!create && !existing) throw new Error('The local branch was not found')
-  if (create && existing) throw new Error('The local branch already exists')
+  if (!create && !existing) return { kind: 'not-found' }
+  if (create && existing) return { kind: 'already-exists' }
   const overrides = filterOverridesFromConfig(await repositoryConfig(repositoryRoot))
   const cleanliness = await inspectGitWorktreeCleanAtRoot(repositoryRoot, overrides)
   if (cleanliness.kind === 'dirty') return cleanliness

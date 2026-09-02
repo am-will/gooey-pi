@@ -92,17 +92,15 @@ export class CheckoutService {
     action: Extract<CheckoutAction, { strategy: 'branch' }>,
   ): Promise<CheckoutChangeResult> {
     const branch = await validateGitBranch(project.primaryFolder, action.branch)
-    const branches = await listLocalGitBranches(project.primaryFolder)
-    const existing = branches.find((candidate) => candidate.name === branch)
-    if (action.operation === 'switch' && !existing) {
-      return { kind: 'refused', code: 'checkout-not-found', message: 'That local branch no longer exists.' }
-    }
-    if (action.operation === 'create' && existing) {
-      return { kind: 'refused', code: 'checkout-already-exists', message: 'That local branch already exists.' }
-    }
     const outcome = action.operation === 'create'
       ? await createAndSwitchGitBranch(project.primaryFolder, branch)
       : await switchGitBranch(project.primaryFolder, branch)
+    if (outcome.kind === 'not-found') {
+      return { kind: 'refused', code: 'checkout-not-found', message: 'That local branch no longer exists.' }
+    }
+    if (outcome.kind === 'already-exists') {
+      return { kind: 'refused', code: 'checkout-already-exists', message: 'That local branch already exists.' }
+    }
     if (outcome.kind === 'dirty') {
       const detail = outcome.changedPaths.length ? ` ${outcome.changedPaths.length} changed path${outcome.changedPaths.length === 1 ? '' : 's'} must be resolved first.` : ''
       return { kind: 'refused', code: 'dirty-worktree', message: `Branch checkout requires a clean project. GooeyPi did not modify your files.${detail}` }
