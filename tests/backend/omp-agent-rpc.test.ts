@@ -78,7 +78,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       ...(sessionActions ? { sessionActions } : {}),
     } })
   } else if (command.type === 'get_session_stats') {
-    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 } } })
+    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 }, tokens: { input: 9000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
   } else if (command.type === 'branch' || command.type === 'get_branch_messages') {
     send({ id: command.id, type: 'response', command: command.type, success: true, data: { received: command.type, entryId: command.entryId } })
   } else if (command.type === 'fork' || command.type === 'get_fork_messages') {
@@ -292,6 +292,8 @@ describe('OMP RPC handshake', () => {
     expect(runtime.fastModeSupported).toBe(true)
     // contextUsage arrives directly in get_state data.
     expect(runtime.contextUsage).toEqual({ tokens: 12_000, contextWindow: 200_000, percent: 6 })
+    // Stats without a cost field (older builds) still surface token totals with a null cost.
+    expect(runtime.sessionUsage).toEqual({ cost: null, tokens: { input: 9_000, output: 3_000, cacheRead: 0, cacheWrite: 0, total: 12_000 } })
     // Unsolicited pre-request frames are tolerated and forwarded for the renderer to ignore.
     await waitUntil(() => events.some((event) => event.type === 'ready'))
     expect(events.some((event) => event.type === 'available_commands_update')).toBe(true)
