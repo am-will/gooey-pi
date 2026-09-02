@@ -53,7 +53,8 @@ interface ComposerProps {
   imageInputSupported: boolean
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
   messageEnterAction?: MessageEnterAction
-  contextUsage?: PrimeContextUsage; executingModel?: ExecutingModelChipProps['executingModel']
+  contextUsage?: PrimeContextUsage
+  executingModel?: ExecutingModelChipProps['executingModel']
   voice?: PrimeWorkApi['voice'] | null
   transcriptionProvider?: VoiceTranscriptionProvider
   skills: SkillRecord[]
@@ -138,7 +139,8 @@ export const Composer = memo(function Composer({
   harness = 'prime',
   imageInputSupported,
   messageEnterAction = 'queue',
-  contextUsage, executingModel,
+  contextUsage,
+  executingModel,
   voice,
   transcriptionProvider = 'openai-live',
   skills,
@@ -745,7 +747,8 @@ export const Composer = memo(function Composer({
                 void imageAttachments.ingest(files)
               }}
             />
-            <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} /><ExecutingModelChip executingModel={executingModel} />
+            <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} />
+            <ExecutingModelChip executingModel={executingModel} />
             <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>
