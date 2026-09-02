@@ -10,6 +10,7 @@ import type {
   PrimeModelDescriptor,
   PrimeProviderDescriptor,
   PrimeThinkingLevel,
+  SessionUsage,
   PrimeWorkApi,
   PromptDeliveryIntent,
   PromptImage,
@@ -25,6 +26,7 @@ import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
 import { clearComposerDraft, readComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
+import { contextDialLabel } from '@/lib/format-cost'
 import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
@@ -53,6 +55,7 @@ interface ComposerProps {
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
   messageEnterAction?: MessageEnterAction
   contextUsage?: PrimeContextUsage
+  sessionUsage?: SessionUsage
   voice?: PrimeWorkApi['voice'] | null
   transcriptionProvider?: VoiceTranscriptionProvider
   skills: SkillRecord[]
@@ -138,6 +141,7 @@ export const Composer = memo(function Composer({
   imageInputSupported,
   messageEnterAction = 'queue',
   contextUsage,
+  sessionUsage,
   voice,
   transcriptionProvider = 'openai-live',
   skills,
@@ -469,10 +473,7 @@ export const Composer = memo(function Composer({
   }, [menu, value, suggestions.length])
   const chooseSuggestion = (index: number) => suggestions[index]?.choose()
   const contextPercent = contextUsage?.percent === null || contextUsage?.percent === undefined ? null : Math.min(100, Math.max(0, contextUsage.percent))
-  const contextLabel =
-    contextUsage && contextUsage.tokens !== null
-      ? `${contextUsage.tokens.toLocaleString('en-US')} / ${contextUsage.contextWindow.toLocaleString('en-US')} tokens`
-      : 'Context usage unavailable until the next response'
+  const contextLabel = contextDialLabel(contextUsage, sessionUsage)
   const contextDisplayPercent = contextPercent === null ? null : Math.min(99, Math.round(contextPercent))
   const contextStyle = { '--context-percent': `${contextPercent ?? 0}%` } as CSSProperties
   const sendQueuedMessageImmediately = async (queued: QueuedPrompt) => {
