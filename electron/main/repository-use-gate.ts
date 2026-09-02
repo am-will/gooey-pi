@@ -9,11 +9,30 @@ export interface WorkspaceUseLease {
   release(): void
 }
 
+function describeOwners(owners: readonly WorkspaceUseOwner[]): string {
+  const terminals = owners.filter((owner) => owner.kind === 'terminal')
+  const agents = owners.filter((owner) => owner.kind === 'agent')
+  const details: string[] = []
+  if (terminals.length) details.push(`${terminals.length} terminal${terminals.length === 1 ? '' : 's'}`)
+  if (agents.length) {
+    const harnesses = [...new Set(agents.map((owner) => owner.harness))]
+    details.push(`${agents.length} agent${agents.length === 1 ? '' : 's'} (${harnesses.join(', ')})`)
+  }
+  return details.join(' and ')
+}
+
 export class RepositoryUseError extends Error {
   readonly code = 'active-work'
 
   constructor(readonly owners: readonly WorkspaceUseOwner[]) {
-    super('Branch checkout is unavailable while an agent or terminal is using this folder.')
+    const hasTerminal = owners.some((owner) => owner.kind === 'terminal')
+    const hasAgent = owners.some((owner) => owner.kind === 'agent')
+    const hint = hasTerminal && hasAgent
+      ? 'Close the terminal or wait for the agent to finish.'
+      : hasTerminal
+        ? 'Close the terminal.'
+        : 'Wait for the agent to finish.'
+    super(`Branch checkout is unavailable while ${describeOwners(owners)} ${owners.length === 1 ? 'is' : 'are'} using this folder. ${hint}`)
     this.name = 'RepositoryUseError'
   }
 }
