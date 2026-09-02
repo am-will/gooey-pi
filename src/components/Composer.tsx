@@ -24,7 +24,7 @@ import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
 import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
-import { takeComposerDraft } from '@/lib/composer-draft'
+import { clearComposerDraft, readComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
 import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
@@ -66,6 +66,8 @@ interface ComposerProps {
   getTerminalContext?(): TerminalPromptContext | undefined
   /** Messages accepted by Prime but waiting for a turn boundary. */
   queuedMessages?: QueuedPrompt[]
+  /** Messages held inside the harness when it exposes only a count, not previews. */
+  harnessQueuedMessageCount?: number
   onDeleteQueuedMessage?(message: QueuedPrompt): void
   onEditQueuedMessage?(message: QueuedPrompt): void
   /** Each bump submits the current draft immediately (Ctrl/Cmd+Enter from the annotation popover). */
@@ -86,6 +88,8 @@ interface ComposerProps {
   /** Called after a send that included the annotations, and by the attachment's remove control. */
   onClearAnnotations?(): void
   onClearTerminalSelection?(): void
+  /** Stable per-workspace key; without it the composer keeps no draft of its own. */
+  draftKey?: string
 }
 
 const commands = [
@@ -142,6 +146,7 @@ export const Composer = memo(function Composer({
   terminalSelection,
   getTerminalContext,
   queuedMessages = [],
+  harnessQueuedMessageCount = 0,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   sendSignal = 0,
@@ -159,8 +164,9 @@ export const Composer = memo(function Composer({
   onRemoveAnnotation = noop,
   onClearAnnotations = noop,
   onClearTerminalSelection = noop,
+  draftKey,
 }: ComposerProps) {
-  const [value, setValue] = useState(takeComposerDraft)
+  const [value, setValue] = useState(() => (draftKey ? readComposerDraft(draftKey)?.text : undefined) ?? takeComposerDraft())
   const [menu, setMenu] = useState<'add' | 'mention' | 'command' | null>(null)
   const [sessionReferenceIds, setSessionReferenceIds] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [activeSuggestion, setActiveSuggestion] = useState(0)
@@ -185,7 +191,22 @@ export const Composer = memo(function Composer({
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
   const mountedRef = useRef(true)
+  const restoredDraftRef = useRef(false)
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills])
+
+  useEffect(() => {
+    if (!draftKey || restoredDraftRef.current) return
+    restoredDraftRef.current = true
+    const draft = readComposerDraft(draftKey)
+    if (!draft) return
+    if (draft.model && draft.model !== model) onModelChange(draft.model)
+    if (draft.effort && draft.effort !== effort) onEffortChange(draft.effort as PrimeThinkingLevel)
+    if (draft.fast !== undefined && draft.fast !== fast) onFastChange(draft.fast)
+  }, [draftKey, effort, fast, model, onEffortChange, onFastChange, onModelChange])
+
+  useEffect(() => {
+    if (draftKey) saveComposerDraft(draftKey, { text: value, model, effort, fast })
+  }, [draftKey, effort, fast, model, value])
 
   useEffect(() => {
     const mentionMatch = /(?:^|\s)@([^@\n]*)$/.exec(value)
@@ -334,6 +355,7 @@ export const Composer = memo(function Composer({
     setMenu(null)
     try {
       await onSend(promptWithContext, submittedImages, intent)
+      if (draftKey) clearComposerDraft(draftKey)
       // The annotations were delivered: clear the attachment and page markers.
       if (currentAnnotations.length > 0) onClearAnnotations()
     } catch {
@@ -464,11 +486,11 @@ export const Composer = memo(function Composer({
 
   return (
     <div className="composer-wrap">
-      {queuedMessages.length ? (
+      {queuedMessages.length || harnessQueuedMessageCount ? (
         <section className="composer-queue" aria-label="Queued messages" aria-live="polite">
           <div className="composer-queue__header">
             <span><Clock3 size={13} />Queued messages</span>
-            <strong>{queuedMessages.length}</strong>
+            <strong>{queuedMessages.length + harnessQueuedMessageCount}</strong>
           </div>
           <div className="composer-queue__list">
             {queuedMessages.map((queued) => (
@@ -481,6 +503,11 @@ export const Composer = memo(function Composer({
                 </span>
               </div>
             ))}
+            {harnessQueuedMessageCount ? (
+              <div className="composer-queue__item composer-queue__item--harness">
+                <span className="composer-queue__text">{agentName} is holding {harnessQueuedMessageCount} {harnessQueuedMessageCount === 1 ? 'message' : 'messages'} for the next turn.</span>
+              </div>
+            ) : null}
           </div>
         </section>
       ) : null}

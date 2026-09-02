@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, join, posix, relative, resolve, win32 } from 'node:path'
-import { lstat, readdir, realpath } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises'
 import type { BigIntStats, Dirent } from 'node:fs'
 import { dialog, type BrowserWindow } from 'electron'
 import { homedir } from 'node:os'
@@ -321,8 +321,79 @@ export class ProjectService {
     return canonicalSessionPaths
   }
 
+  /**
+   * Resolves the main repository of a linked Git worktree from its `.git`
+   * pointer file. Returns undefined for a normal checkout, a bare repository,
+   * or anything that does not parse as a bounded worktree pointer.
+   */
+  private async linkedWorktreeMainRepository(path: string): Promise<string | undefined> {
+    const pointer = join(path, '.git')
+    try {
+      const info = await this.identityFilesystem.lstat(pointer)
+      if (!info.isFile() || info.size > 4096n) return undefined
+      const contents = await readFile(pointer, 'utf8')
+      const match = /^gitdir:\s*(.+?)\s*$/m.exec(contents)
+      if (!match) return undefined
+      const gitDir = resolve(dirname(pointer), match[1])
+      const worktrees = dirname(gitDir)
+      if (basename(worktrees) !== 'worktrees') return undefined
+      const mainGitDir = dirname(worktrees)
+      if (basename(mainGitDir) !== '.git') return undefined
+      return await requireExistingDirectory(dirname(mainGitDir), 'worktree main repository')
+    } catch { return undefined }
+  }
+
+  /**
+   * Folds a linked worktree that was granted as its own project back into the
+   * project holding its main repository, so a worktree keeps showing under the
+   * repository it belongs to instead of as a sibling project.
+   */
+  private async absorbLinkedWorktreeProjects(): Promise<void> {
+    const own = this.ownProjects(this.store.snapshot().projects)
+    if (own.length < 2) return
+    const ownerByFolder = new Map<string, string>()
+    for (const project of own) {
+      for (const folder of new Set([project.path, ...project.folders])) {
+        try { ownerByFolder.set(await requireExistingDirectory(folder, 'project folder'), project.id) }
+        catch { /* stale folders never own a worktree */ }
+      }
+    }
+
+    const absorptions = new Map<string, string>()
+    for (const project of own) {
+      let canonical: string
+      try { canonical = await requireExistingDirectory(project.primaryFolder, 'project folder') }
+      catch { continue }
+      if (project.folders.length !== 1) continue
+      const mainRepository = await this.linkedWorktreeMainRepository(canonical)
+      if (!mainRepository) continue
+      const parentId = ownerByFolder.get(mainRepository)
+      if (!parentId || parentId === project.id) continue
+      absorptions.set(project.id, parentId)
+    }
+    if (!absorptions.size) return
+
+    await this.store.update((state) => {
+      const byId = new Map(state.projects.map((project) => [project.id, project]))
+      const absorbed = new Set<string>()
+      for (const [childId, parentId] of absorptions) {
+        const child = byId.get(childId)
+        const parent = byId.get(parentId)
+        if (!child || !parent || parent.harness !== child.harness) continue
+        const folders = new Set(parent.folders.map((folder) => resolve(folder)))
+        for (const folder of child.folders) folders.add(resolve(folder))
+        parent.folders = [...folders]
+        parent.folderIdentities = { ...parent.folderIdentities, ...child.folderIdentities }
+        absorbed.add(childId)
+      }
+      if (absorbed.size) state.projects = state.projects.filter((project) => !absorbed.has(project.id))
+    })
+    this.authorizationRevision += 1
+  }
+
   private async buildAuthorizationContext(authorizationRevision: number): Promise<AuthorizationContext> {
     await this.migrateLegacyFolderIdentities()
+    await this.absorbLinkedWorktreeProjects()
     const nextAuthorized = new Map<string, FolderIdentity>()
     const nextReadOnly = new Map<string, FolderIdentity>()
     const nextQuarantinedBroadRoots = new Set<string>()
@@ -398,7 +469,14 @@ export class ProjectService {
     const records: ProjectRecord[] = []
     const branchTargets: Array<{ record: ProjectRecord; cwd: string }> = []
 
+    const nestedWorktreePaths = new Set<string>()
+    for (const { project, folders } of persisted) {
+      const root = resolve(project.path)
+      for (const folder of folders) if (folder !== root) nestedWorktreePaths.add(folder)
+    }
+
     for (const { project, folders, primaryGranted } of persisted) {
+      if (nestedWorktreePaths.has(resolve(project.path))) continue
       let sessionCount = 0
       for (const folder of folders) sessionCount += sessionStats.get(folder)?.count ?? 0
       const record: ProjectRecord = {
@@ -495,8 +573,56 @@ export class ProjectService {
     return { ...project, sessionCount: sessions.filter((session) => resolve(session.projectPath) === path).length, gitBranch: await this.branchProvider(path) }
   }
 
-  private async persistWorktree(path: string, identity: FolderIdentity): Promise<ProjectRecord> {
-    return this.grantProjectFolder(path, identity)
+  private async persistWorktree(parentCwd: string, path: string, identity: FolderIdentity): Promise<ProjectRecord> {
+    if (await this.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
+    this.removalRoots.delete(path)
+    const now = new Date().toISOString()
+    let parentId: string | undefined
+    for (const item of this.ownProjects(this.store.snapshot().projects)) {
+      for (const candidate of new Set([item.path, ...item.folders])) {
+        try {
+          if (await requireExistingDirectory(candidate, 'project folder') === parentCwd) {
+            parentId = item.id
+            break
+          }
+        } catch { /* missing configured folders do not identify the parent grant */ }
+      }
+      if (parentId) break
+    }
+    if (!parentId) throw new TypeError('worktree parent project is not an authorized grant')
+    const project = await this.store.update((state): PersistedProject => {
+      state.dismissedProjectPaths = state.dismissedProjectPaths.filter((item) => resolve(item) !== path)
+      const own = this.ownProjects(state.projects)
+      const parent = own.find((item) => item.id === parentId)
+      if (!parent) throw new TypeError('worktree parent project is not an authorized grant')
+      const absorbed = own.filter((item) => item.id !== parent.id && (resolve(item.path) === path || item.folders.some((folder) => resolve(folder) === path)))
+      const folders = new Set(parent.folders.map((folder) => resolve(folder)))
+      folders.add(path)
+      const identities = { ...parent.folderIdentities, [path]: identity }
+      for (const item of absorbed) {
+        for (const folder of item.folders) folders.add(resolve(folder))
+        Object.assign(identities, item.folderIdentities)
+        identities[path] = identity
+      }
+      parent.folders = [...folders]
+      parent.primaryFolder = path
+      parent.lastOpenedAt = now
+      parent.folderIdentities = identities
+      if (absorbed.length) {
+        const absorbedIds = new Set(absorbed.map((item) => item.id))
+        state.projects = state.projects.filter((item) => !absorbedIds.has(item.id))
+      }
+      return parent
+    })
+    this.authorizationRevision += 1
+    this.authorizedRoots.set(path, identity)
+    const sessions = await this.sessionProvider()
+    const granted = new Set(project.folders.map((folder) => resolve(folder)))
+    return {
+      ...project,
+      sessionCount: sessions.filter((session) => granted.has(resolve(session.projectPath))).length,
+      gitBranch: await this.branchProvider(project.primaryFolder),
+    }
   }
 
   async openWorktree(cwdValue: unknown, pathValue: unknown): Promise<ProjectRecord> {
@@ -508,7 +634,7 @@ export class ProjectService {
     // Only inspect the filesystem after exact membership in Git's bounded
     // worktree catalog is established; arbitrary renderer paths stay opaque.
     const { path, identity } = await this.captureFolderIdentity(linked.path)
-    return this.persistWorktree(path, identity)
+    return this.persistWorktree(cwd, path, identity)
   }
 
   async createWorktree(cwdValue: unknown, branchValue: unknown): Promise<ProjectRecord | null> {
