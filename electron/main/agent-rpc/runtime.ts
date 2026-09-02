@@ -7,6 +7,7 @@ import { RPC_READ_FRAME_LIMIT_BYTES } from '../jsonl-limits'
 import { killProcessTree, prepareExecutableSpawn, safeChildEnvironment, waitForProcessExit } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
+import { redactedStderrTail } from '../lib/process-detail'
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { LiveContextUsageTracker, withLiveContextUsage } from './context-usage'
@@ -76,6 +77,7 @@ export class RpcRuntime {
   private readonly uncertainDeliveries = new Set<string>()
   private pendingBytes = 0
   private transportFailed = false
+  private receivedFrame = false
   private readonly child: ChildProcessWithoutNullStreams
   private readonly transport: FramedRpcTransport
   private stopPromise: Promise<boolean> | null = null
@@ -147,7 +149,8 @@ export class RpcRuntime {
     this.child.once('close', (code, signal) => {
       this.disposeCompactionWatchdog()
       this.disposeContextUsage()
-      this.fail(new Error(`${this.adapter.agentName} RPC exited (${code ?? signal ?? 'unknown'})`))
+      const detail = code !== 0 && code !== null && !this.stopped && !this.receivedFrame ? redactedStderrTail(this.transport.stderrTail()) : ''
+      this.fail(new Error(`${this.adapter.agentName} RPC exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`))
       this.emit({ type: 'runtime_exit', code, signal, expected: this.stopped })
       this.onExit(this)
     })
@@ -429,6 +432,7 @@ export class RpcRuntime {
 
   private handleFrame(raw: unknown): void {
     if (!isRecord(raw) || typeof raw.type !== 'string') return
+    this.receivedFrame = true
     if (raw.type !== 'response') this.lastActivityAt = Date.now()
     if (raw.type === 'response' && typeof raw.id === 'string') {
       const pending = this.pending.get(raw.id)

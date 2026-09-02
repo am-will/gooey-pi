@@ -20,6 +20,7 @@ export interface QueuedRpcWrite {
 export class FramedRpcTransport {
   private readonly decoder: StrictJsonlDecoder
   private frameFailed = false
+  private recentStderr = ''
   private writeQueue: Promise<void> = Promise.resolve()
   private queuedWriteBytes = 0
 
@@ -41,7 +42,10 @@ export class FramedRpcTransport {
       if (this.frameFailed) return
       try { this.decoder.end() } catch (error) { onFatalTransportError(error) }
     })
-    this.child.stderr.on('data', () => { /* stderr can contain secrets; never forward it to the renderer */ })
+    this.child.stderr.on('data', (chunk: Buffer) => {
+      this.recentStderr += chunk.toString('utf8')
+      if (this.recentStderr.length > 4096) this.recentStderr = this.recentStderr.slice(-4096)
+    }) // stderr can contain secrets; never forward it live to the renderer
     // A SIGKILLed child surfaces EPIPE/ECONNRESET on its pipes; without listeners that error crashes the whole app.
     const failPipe = (error: unknown): void => {
       if (this.frameFailed) return
@@ -109,4 +113,5 @@ export class FramedRpcTransport {
   endInput(): void { this.child.stdin.end() }
   destroyInput(): void { this.child.stdin.destroy() }
   pauseOutput(): void { this.child.stdout.pause() }
+  stderrTail(): string { return this.recentStderr }
 }
