@@ -194,17 +194,18 @@ export default function App() {
       lastSelectedModels: { ...settingsState.settings.lastSelectedModels, [activeHarness]: modelKey },
     })
   }, [activeHarness, settingsState.settings.lastSelectedModels, settingsState.updateSettings])
+  const activeSession = useMemo(() => sessions.find((session) => session.id === workspace.activeSessionId), [sessions, workspace.activeSessionId])
   const provider = useProviderCatalog({
     bridge,
     ready: settingsState.initialized,
     harness: activeHarness,
     runtime: workspace.runtime,
+    activeSession,
     lastSelectedModel: settingsState.settings.lastSelectedModels[activeHarness],
     rememberModel: rememberSelectedModel,
     syncRuntime: syncProviderRuntime,
     reportError,
   })
-  const activeSession = useMemo(() => sessions.find((session) => session.id === workspace.activeSessionId), [sessions, workspace.activeSessionId])
   const activeProject = useMemo(() => findProjectForSession(projects, activeSession)
     ?? projects.find((project) => project.id === workspace.activeProjectId)
     ?? projects[0], [projects, activeSession, workspace.activeProjectId])
