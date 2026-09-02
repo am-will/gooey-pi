@@ -22,6 +22,7 @@ export interface ProviderCatalog {
 export class AgentRpcManager {
   private readonly runtimes = new Map<string, RpcRuntime>()
   private readonly startingRuntimes = new Set<string>()
+  private readonly retiringRuntimes = new Set<string>()
   private readonly runtimeEnvironmentRevisions = new Map<string, number>()
   private runtimeEnvironmentRevision = 0
   private disabledModels: () => ReadonlySet<string> = () => new Set()
@@ -152,6 +153,7 @@ export class AgentRpcManager {
           (closed) => {
             this.startingRuntimes.delete(closed.runtimeId)
             this.runtimes.delete(closed.runtimeId)
+            this.retiringRuntimes.delete(closed.runtimeId)
             this.runtimeEnvironmentRevisions.delete(closed.runtimeId)
             notifyRuntimeEnd(closed.snapshot())
           },
@@ -199,7 +201,7 @@ export class AgentRpcManager {
 
   async command(runtimeId: unknown, rawCommand: unknown): Promise<RpcObject> {
     try {
-      return await this.withRuntimeAdmission(() => this.dispatchCommand(runtimeId, rawCommand))
+      return await this.dispatchCommand(runtimeId, rawCommand)
     } catch (error) {
       // Delivery failures for user-visible commands (steer, prompt, follow_up)
       // are otherwise only surfaced as a transient renderer toast; keep a
@@ -213,6 +215,7 @@ export class AgentRpcManager {
   private async dispatchCommand(runtimeId: unknown, rawCommand: unknown): Promise<RpcObject> {
     this.requireOpen()
     const runtime = this.requireRuntime(runtimeId)
+    if (this.retiringRuntimes.has(runtime.runtimeId)) throw new Error('Runtime is being retired for a branch checkout')
     const command = await validateRpcCommand(rawCommand, this.validateSessionPath)
     this.requireOpen()
     const policyPrompt = command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up'
@@ -349,17 +352,26 @@ export class AgentRpcManager {
   }
 
   private async retireForCheckout(runtime: RpcRuntime): Promise<boolean> {
-    return this.withRuntimeAdmission(async () => {
-      if (!this.runtimes.has(runtime.runtimeId)) return true
-      if (!this.isIdle(runtime)) return false
+    const decision = await this.withRuntimeAdmission(async () => {
+      if (!this.runtimes.has(runtime.runtimeId)) return 'gone'
+      if (!this.isIdle(runtime)) return 'busy'
+      this.retiringRuntimes.add(runtime.runtimeId)
+      return 'retiring'
+    })
+    if (decision === 'gone') return true
+    if (decision === 'busy') return false
+    try {
       const stopped = await runtime.stop()
       if (stopped && this.runtimes.get(runtime.runtimeId) === runtime) this.runtimes.delete(runtime.runtimeId)
       return stopped
-    })
+    } finally {
+      this.retiringRuntimes.delete(runtime.runtimeId)
+    }
   }
 
   private isIdle(runtime: RpcRuntime): boolean {
     if (this.startingRuntimes.has(runtime.runtimeId)) return false
+    if (this.retiringRuntimes.has(runtime.runtimeId)) return false
     const snapshot = runtime.snapshot()
     const actions = snapshot.sessionActions
     return !snapshot.isStreaming && !snapshot.isCompacting && !actions?.active

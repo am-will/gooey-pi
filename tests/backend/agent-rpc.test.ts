@@ -24,13 +24,14 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-function fakeAgent(promptResponse: string, stateResponse?: string): { cwd: string; executable: string } {
+function fakeAgent(promptResponse: string, stateResponse?: string, exitDelayMs = 0): { cwd: string; executable: string } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-'))
   dirs.push(cwd)
-  const executable = join(cwd, 'fake-agent.cjs')
+const executable = join(cwd, 'fake-agent.cjs')
   writeFileSync(executable, `#!/usr/bin/env node
 const readline = require('node:readline')
 const input = readline.createInterface({ input: process.stdin })
+let stateCalls = 0
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
 input.on('line', (line) => {
   const command = JSON.parse(line)
@@ -44,6 +45,14 @@ input.on('line', (line) => {
     send({ id: command.id, type: 'response', command: 'abort', success: true })
   } else if (command.type === 'set_service_tier') {
     send({ id: command.id, type: 'response', command: 'set_service_tier', success: true })
+  }
+})
+input.on('close', () => {
+  if (${exitDelayMs} > 0) {
+    process.on('SIGTERM', () => {})
+    setTimeout(() => process.exit(0), ${exitDelayMs})
+  } else {
+    process.exit(0)
   }
 })
 `)
@@ -88,6 +97,48 @@ describe('agent RPC command frame bounds', () => {
     await expect(gate.runBranchCheckout(fake.cwd, async () => 'changed')).resolves.toBe('changed')
     expect(manager.list()).toEqual([])
   })
+
+  it('keeps commanding other runtimes while a checkout retires an idle one', async () => {
+    const slowState = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-1', isStreaming: stateCalls++ === 0, isCompacting: false } }"
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", slowState, 1_500)
+    const other = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const gate = new RepositoryUseGate()
+    manager.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => gate.beginWorkspaceUse(cwd, owner, retireIfIdle))
+    const runtime = await manager.start({ cwd: fake.cwd })
+    const otherRuntime = await manager.start({ cwd: other.cwd })
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'complete work' })
+    await waitUntil(() => manager.list().find((candidate) => candidate.runtimeId === runtime.runtimeId)?.isStreaming === false)
+
+    const retirement = gate.runBranchCheckout(fake.cwd, async () => 'changed')
+    await expect(Promise.race([
+      retirement.then(() => 'retired'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 500)),
+    ])).resolves.toBe('pending')
+    await expect(Promise.race([
+      manager.command(otherRuntime.runtimeId, { type: 'prompt', message: 'keep working' }).then(() => 'commanded'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('timed out'), 1_000)),
+    ])).resolves.toBe('commanded')
+    await retirement
+  }, 10_000)
+
+  it('rejects commands to a runtime that is being retired', async () => {
+    const slowState = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-1', isStreaming: stateCalls++ === 0, isCompacting: false } }"
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", slowState, 1_500)
+    const other = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const gate = new RepositoryUseGate()
+    manager.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => gate.beginWorkspaceUse(cwd, owner, retireIfIdle))
+    const runtime = await manager.start({ cwd: fake.cwd })
+    await manager.start({ cwd: other.cwd })
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'complete work' })
+    await waitUntil(() => manager.list().find((candidate) => candidate.runtimeId === runtime.runtimeId)?.isStreaming === false)
+
+    const retirement = gate.runBranchCheckout(fake.cwd, async () => 'changed')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await expect(manager.command(runtime.runtimeId, { type: 'prompt', message: 'too late' })).rejects.toThrow(/being retired/)
+    await retirement
+  }, 10_000)
 
   it('keeps a busy resident runtime and refuses branch checkout', async () => {
     const state = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'busy', isStreaming: true, isCompacting: false } }"
