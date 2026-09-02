@@ -31,46 +31,31 @@ function openMarkdownLink(event: MouseEvent<HTMLAnchorElement>, href?: string): 
 
 const markdownPlugins = [remarkGfm]
 
-const RTL_STRONG_CHARACTER = /[\u05D0-\u05EA\u05F0-\u05F2\u0621-\u064A\u066E-\u066F\u0671-\u06D3\u06D5\u06EE-\u06EF\u06FA-\u06FC\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFC]/u
-const LTR_STRONG_CHARACTER = /\p{Letter}/u
-
 /**
- * Removes Markdown code from direction detection: code often starts an
- * otherwise RTL answer, but it must always retain its own LTR rendering.
+ * Each block resolves its own base direction from its first strong character.
+ * The browser skips descendants that carry their own `dir`, so a paragraph
+ * opening with LTR code still lays out RTL prose correctly.
  */
-function proseForDirection(text: string): string {
-  let fence: string | undefined
-  return text.split('\n').map((line) => {
-    const opening = line.match(/^ {0,3}(`{3,}|~{3,})/)
-    if (!fence && opening) {
-      fence = opening[1]
-      return ''
-    }
-    if (fence) {
-      const closing = new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`)
-      if (closing.test(line)) fence = undefined
-      return ''
-    }
-    return line.replace(/`[^`\n]*`/g, '')
-  }).join('\n')
-}
-
-/** Find the first strong prose character, defaulting neutral-only text to LTR. */
-export function markdownTextDirection(text: string): 'ltr' | 'rtl' {
-  for (const character of proseForDirection(text)) {
-    if (RTL_STRONG_CHARACTER.test(character)) return 'rtl'
-    if (LTR_STRONG_CHARACTER.test(character)) return 'ltr'
-  }
-  return 'ltr'
-}
-
 const markdownComponents: Components = {
   a: ({ node: _node, href, children, ...props }) => href && (/^(https?:|mailto:|#)/i.test(href))
     ? <a {...props} href={href} rel="noreferrer" onClick={(event) => openMarkdownLink(event, href)}><bdi>{children}</bdi></a>
     : <span className="markdown-link-unsupported" title={href ? `Project-relative link: ${href}` : undefined}>{children}</span>,
+  blockquote: ({ node: _node, ...props }) => <blockquote {...props} dir="auto" />,
   code: ({ node: _node, children, ...props }) => <code {...props} dir="ltr">{children}</code>,
+  h1: ({ node: _node, ...props }) => <h1 {...props} dir="auto" />,
+  h2: ({ node: _node, ...props }) => <h2 {...props} dir="auto" />,
+  h3: ({ node: _node, ...props }) => <h3 {...props} dir="auto" />,
+  h4: ({ node: _node, ...props }) => <h4 {...props} dir="auto" />,
+  h5: ({ node: _node, ...props }) => <h5 {...props} dir="auto" />,
+  h6: ({ node: _node, ...props }) => <h6 {...props} dir="auto" />,
   img: ({ alt }) => <span className="markdown-image-placeholder">[Image: {alt || 'attachment'}]</span>,
+  li: ({ node: _node, ...props }) => <li {...props} dir="auto" />,
+  ol: ({ node: _node, ...props }) => <ol {...props} dir="auto" />,
+  p: ({ node: _node, ...props }) => <p {...props} dir="auto" />,
   pre: ({ node: _node, children, ...props }) => <pre {...props} dir="ltr">{children}</pre>,
+  td: ({ node: _node, ...props }) => <td {...props} dir="auto" />,
+  th: ({ node: _node, ...props }) => <th {...props} dir="auto" />,
+  ul: ({ node: _node, ...props }) => <ul {...props} dir="auto" />,
 }
 
 export const STREAMING_PARSE_INTERVAL_MS = 100
@@ -141,5 +126,5 @@ export const MarkdownText = memo(function MarkdownText({ text, streaming = false
     () => <ReactMarkdown remarkPlugins={markdownPlugins} skipHtml components={markdownComponents}>{parsedText}</ReactMarkdown>,
     [parsedText],
   )
-  return <div className="prose" dir={markdownTextDirection(parsedText)}>{markdown}</div>
+  return <div className="prose">{markdown}</div>
 })

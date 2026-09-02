@@ -9,9 +9,9 @@ describe('chat Markdown rendering', () => {
       text: '## Result\n\n**Done** with `code`.\n\n- one\n- two\n\n```ts\nconst ok = true\n```\n\n| A | B |\n| - | - |\n| 1 | 2 |',
     }))
 
-    expect(html).toContain('<h2>Result</h2>')
+    expect(html).toContain('<h2 dir="auto">Result</h2>')
     expect(html).toContain('<strong>Done</strong>')
-    expect(html).toContain('<ul>')
+    expect(html).toContain('<ul dir="auto">')
     expect(html).toContain('<pre dir="ltr"><code class="language-ts" dir="ltr">')
     expect(html).toContain('<table>')
   })
