@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createGitWorktree, GIT_DIFF_LINE_LIMIT, GIT_STATUS_ENTRY_LIMIT, GitService, listGitWorktrees } from '../../electron/main/git'
+import { createAndSwitchGitBranch, createGitWorktree, GIT_DIFF_LINE_LIMIT, GIT_STATUS_ENTRY_LIMIT, GitService, inspectGitWorktreeClean, listGitWorktrees, listLocalGitBranches, switchGitBranch } from '../../electron/main/git'
 import { restrictedGitEnvironment } from '../../electron/main/process-utils'
 
 const dirs: string[] = []
@@ -20,6 +20,55 @@ const repository = (prefix = 'prime-work-git-') => {
 }
 
 describe('GitService', () => {
+  it('lists local branches and switches without consulting remotes', async () => {
+    const cwd = repository('prime-work-git-branches-')
+    git(cwd, 'branch', 'feature/local')
+    git(cwd, 'remote', 'add', 'origin', cwd)
+    git(cwd, 'fetch', '-q', 'origin', 'feature/local:refs/remotes/origin/remote-only')
+    const initialBranch = spawnSync('git', ['branch', '--show-current'], { cwd, encoding: 'utf8' }).stdout.trim()
+
+    expect(await listLocalGitBranches(cwd)).toEqual([
+      { name: 'feature/local', current: false },
+      { name: initialBranch, current: true },
+    ])
+    await expect(switchGitBranch(cwd, 'feature/local')).resolves.toEqual({ kind: 'applied' })
+    await expect(switchGitBranch(cwd, 'feature/local')).resolves.toEqual({ kind: 'unchanged' })
+    await expect(switchGitBranch(cwd, 'remote-only')).resolves.toEqual({ kind: 'not-found' })
+    await expect(createAndSwitchGitBranch(cwd, initialBranch)).resolves.toEqual({ kind: 'already-exists' })
+    writeFileSync(join(cwd, 'untracked.txt'), 'keep me\n')
+    await expect(switchGitBranch(cwd, initialBranch)).resolves.toMatchObject({ kind: 'dirty', changedPaths: ['untracked.txt'] })
+    expect((await listLocalGitBranches(cwd)).find((branch) => branch.current)?.name).toBe('feature/local')
+  })
+
+  it('creates a local branch from HEAD and refuses dirty work', async () => {
+    const cwd = repository('prime-work-git-create-branch-')
+    expect(await inspectGitWorktreeClean(cwd)).toEqual({ kind: 'clean' })
+    await expect(createAndSwitchGitBranch(cwd, 'feature/new')).resolves.toEqual({ kind: 'applied' })
+    expect((await listLocalGitBranches(cwd)).find((branch) => branch.current)?.name).toBe('feature/new')
+
+    writeFileSync(join(cwd, 'untracked.txt'), 'keep me\n')
+    await expect(inspectGitWorktreeClean(cwd)).resolves.toMatchObject({ kind: 'dirty', changedPaths: ['untracked.txt'] })
+    await expect(createAndSwitchGitBranch(cwd, 'feature/refused')).resolves.toMatchObject({ kind: 'dirty', changedPaths: ['untracked.txt'] })
+    expect((await listLocalGitBranches(cwd)).some((branch) => branch.name === 'feature/refused')).toBe(false)
+  })
+
+  it('does not execute repository clean filters while inspecting or switching branches', async () => {
+    const cwd = repository('prime-work-git-branch-filter-')
+    const marker = join(cwd, 'filter-ran')
+    const filter = join(cwd, 'filter.sh')
+    writeFileSync(filter, `#!/bin/sh\nprintf ran >> ${JSON.stringify(marker)}\ncat\n`)
+    chmodSync(filter, 0o755)
+    git(cwd, 'add', 'filter.sh')
+    git(cwd, 'commit', '-qm', 'add inert filter fixture')
+    git(cwd, 'branch', 'feature/filtered')
+    git(cwd, 'config', 'filter.hostile.clean', filter)
+    git(cwd, 'config', 'filter.hostile.smudge', filter)
+
+    await expect(inspectGitWorktreeClean(cwd)).resolves.toEqual({ kind: 'clean' })
+    await expect(switchGitBranch(cwd, 'feature/filtered')).rejects.toThrow(/clean\/smudge filters/i)
+    expect(existsSync(marker)).toBe(false)
+  })
+
   it('reports, diffs, stages, unstages, restores, and commits through argv-only commands', async () => {
     const cwd = repository()
     const service = new GitService(async () => cwd)

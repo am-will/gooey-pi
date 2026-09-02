@@ -35,7 +35,7 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { HARNESS_IDS, type GitStatus, type GitWorktree, type HarnessId, type NativeHeartbeatRecord, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type GitStatus, type HarnessId, type NativeHeartbeatRecord, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
@@ -99,8 +99,8 @@ export default function App() {
   const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
   const [scheduleError, setScheduleError] = useState('')
   const [gitSnapshot, setGitSnapshot] = useState(() => ({ cwd: bridge ? undefined : SAMPLE_PROJECTS[0]?.primaryFolder, status: bridge ? { isRepo: false, files: [] } as GitStatus : SAMPLE_GIT }))
-  const [worktrees, setWorktrees] = useState<GitWorktree[]>([])
-  const [worktreesLoading, setWorktreesLoading] = useState(false)
+  const [checkoutCatalog, setCheckoutCatalog] = useState<CheckoutCatalog>()
+  const [checkoutsLoading, setCheckoutsLoading] = useState(false)
   const [view, setView] = useState<WorkspaceView>('session')
   const [settingsSectionRequest, setSettingsSectionRequest] = useState<{ section: 'general' | 'agent'; id: number }>({ section: 'general', id: 0 })
   const [noHarnessPromptDismissed, setNoHarnessPromptDismissed] = useState(false)
@@ -116,7 +116,7 @@ export default function App() {
   const submissionAdmissionRef = useRef(createSingleFlightAdmission())
   const queuedFlushRef = useRef(false)
   const gitRequestRef = useRef(0)
-  const worktreeRequestRef = useRef(0)
+  const checkoutRequestRef = useRef(0)
   const scheduleRequestRef = useRef(0)
   const demoTimerRef = useRef<number[]>([])
   const [activeProjectScriptRun, setActiveProjectScriptRun] = useState<ActiveProjectScriptRun>()
@@ -299,21 +299,20 @@ export default function App() {
   })
 
   useEffect(() => { void refreshGit(); return () => { gitRequestRef.current += 1 } }, [refreshGit])
-  const refreshWorktrees = useCallback(async () => {
-    const requestId = ++worktreeRequestRef.current
-    const cwd = activeProject?.primaryFolder
-    if (!bridge || !cwd || activeProject.inferred) { setWorktrees([]); setWorktreesLoading(false); return }
-    setWorktreesLoading(true)
+  const refreshCheckouts = useCallback(async () => {
+    const requestId = ++checkoutRequestRef.current
+    if (!bridge || !activeProject || activeProject.inferred) { setCheckoutCatalog(undefined); setCheckoutsLoading(false); return }
+    setCheckoutsLoading(true)
     try {
-      const next = await bridge.projects.listWorktrees(cwd, activeProject.harness)
-      if (worktreeRequestRef.current === requestId) setWorktrees(next)
+      const next = await bridge.projects.listCheckouts(activeProject.id, activeProject.harness)
+      if (checkoutRequestRef.current === requestId) setCheckoutCatalog(next)
     } catch (error) {
-      if (worktreeRequestRef.current === requestId) { setWorktrees([]); reportError(error) }
+      if (checkoutRequestRef.current === requestId) { setCheckoutCatalog(undefined); reportError(error) }
     } finally {
-      if (worktreeRequestRef.current === requestId) setWorktreesLoading(false)
+      if (checkoutRequestRef.current === requestId) setCheckoutsLoading(false)
     }
-  }, [activeProject?.harness, activeProject?.inferred, activeProject?.primaryFolder, bridge, reportError])
-  useEffect(() => { void refreshWorktrees(); return () => { worktreeRequestRef.current += 1 } }, [refreshWorktrees])
+  }, [activeProject, bridge, reportError, settingsState.settings.checkoutStrategy])
+  useEffect(() => { void refreshCheckouts(); return () => { checkoutRequestRef.current += 1 } }, [refreshCheckouts])
   const previousSessionStatusRef = useRef<SessionRecord['status'] | undefined>(undefined)
   const activeSessionStatus = activeSession?.status
   const locallyOwnedActiveSession = Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath)
@@ -481,21 +480,14 @@ export default function App() {
       return kept.map((item, index) => index === existing ? project : item)
     })
   }, [])
-  const openWorktree = useCallback(async (worktree: GitWorktree) => {
-    if (!bridge || !activeProject?.primaryFolder) return
+  const executeCheckout = useCallback(async (action: CheckoutAction) => {
+    if (!bridge || !activeProject) return
     try {
-      const project = await bridge.projects.openWorktree(activeProject.primaryFolder, worktree.path, activeProject.harness)
-      addOrReplaceProject(project)
-      newSession(project)
-    } catch (error) { reportError(error); throw error }
-  }, [activeProject, addOrReplaceProject, bridge, newSession, reportError])
-  const createWorktree = useCallback(async (branch: string) => {
-    if (!bridge || !activeProject?.primaryFolder) return
-    try {
-      const project = await bridge.projects.createWorktree(activeProject.primaryFolder, branch, activeProject.harness)
-      if (!project) return
-      addOrReplaceProject(project)
-      newSession(project)
+      const result = await bridge.projects.executeCheckout(activeProject.id, action, activeProject.harness)
+      if (result.kind === 'refused') throw new Error(result.message)
+      if (result.kind !== 'applied') return
+      addOrReplaceProject(result.project)
+      newSession(result.project)
     } catch (error) { reportError(error); throw error }
   }, [activeProject, addOrReplaceProject, bridge, newSession, reportError])
 
@@ -734,7 +726,7 @@ export default function App() {
             <Suspense fallback={<LoadingPanel label="conversation" />}><Transcript key={workspace.activeSessionId ?? 'new-session'} messages={workspace.messages} git={git} harness={activeHarness} loading={workspace.loadingSession} active={busy || activeSession?.status === 'running'} showReasoning={settingsState.settings.showReasoningSummaries} showTools={settingsState.settings.showToolCalls} onOpenChanges={openChanges} onSuggestion={(prompt) => { void sendPrompt(prompt).catch(() => undefined) }} suggestionsDisabled={!activeProject || workspace.loadingSession || submitting} showPinnedChanges={false} bottomDockHasChanges={Boolean(git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed)} queuedMessageCount={queuedMessages.length + harnessQueuedMessageCount} onOpenSessionReference={(sessionId, harness) => { const session = sessions.find((candidate) => candidate.id === sessionId && candidate.harness === harness && !candidate.archived && candidate.depth === 0); if (session) void selectSession(session); else setToast('That referenced session is archived or no longer available.') }} /></Suspense>
             <div className="conversation-bottom-dock">
               {git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed ? <ChangesCard git={git} onOpenChanges={openChanges} onClose={() => setChangesCardDismissed(true)} /> : null}
-              <Composer key={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new:${workspace.workspaceGeneration}`} draftKey={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new`} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={provider.selectedModel?.fastModeSupported ?? false} fastAvailable={workspace.runtime?.fastModeAvailable !== false} worktrees={worktrees} activeWorktreePath={activeProject?.primaryFolder} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} worktreesLoading={worktreesLoading} onOpenWorktree={bridge && activeProject && !activeProject.inferred && worktrees.length > 0 ? openWorktree : undefined} onCreateWorktree={bridge && activeProject && !activeProject.inferred && worktrees.length > 0 ? createWorktree : undefined} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
+              <Composer key={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new:${workspace.workspaceGeneration}`} draftKey={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new`} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={provider.selectedModel?.fastModeSupported ?? false} fastAvailable={workspace.runtime?.fastModeAvailable !== false} checkoutCatalog={checkoutCatalog} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} checkoutsLoading={checkoutsLoading} onExecuteCheckout={bridge && activeProject && !activeProject.inferred && checkoutCatalog ? executeCheckout : undefined} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
             </div>
           </main>
           {terminalSessions.map((terminal) => <Suspense key={terminal.id} fallback={terminal.id === activeTerminalSession?.id ? <TerminalLoadingPanel /> : null}><TerminalDrawer ref={(handle) => { if (handle) terminalDrawerRefs.current.set(terminal.id, handle); else terminalDrawerRefs.current.delete(terminal.id) }} visible={terminal.id === activeTerminalSession?.id} cwd={terminal.cwd} sessionPath={terminal.sessionPath} shell={settingsState.settings.terminalShell} initialCommand={terminal.initialCommand} height={layout.terminalHeight} minHeight={TERMINAL_MIN} maxHeight={layout.terminalMax} defaultHeight={TERMINAL_DEFAULT} onHeightChange={layout.setTerminalHeight} onClose={() => closeTerminal(terminal.id)} onError={reportError} onInitialCommandConsumed={() => setTerminalSessions((current) => current.map((item) => item.id === terminal.id ? { ...item, initialCommand: undefined } : item))} onOpenLink={openTerminalLink} onReady={() => setTerminalDrawerRevision((revision) => revision + 1)} onSelectionChange={(selection) => { if (terminal.id === activeTerminalSession?.id) setTerminalSelection(selection) }} /></Suspense>)}

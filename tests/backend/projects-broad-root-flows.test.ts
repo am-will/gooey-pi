@@ -86,7 +86,7 @@ describe('broad-root flow boundaries', () => {
       { path: filesystemRoot, name: 'root', branch: 'unsafe', head: 'b'.repeat(40), current: false, detached: false },
     ])
 
-    await expect(service.openWorktree(root, filesystemRoot)).rejects.toThrow(/Broad filesystem roots cannot be added as projects/)
+    await expect(service.adoptCheckoutWorktree('narrow-project', root, filesystemRoot)).rejects.toThrow(/Broad filesystem roots cannot be added as projects/)
     expect(store.snapshot().projects).toHaveLength(1)
   })
 
@@ -98,7 +98,7 @@ describe('broad-root flow boundaries', () => {
     ])
     mocks.showSaveDialog.mockResolvedValue({ canceled: false, filePath: realpathSync(homedir()) })
 
-    await expect(service.createWorktree(root, 'feature')).rejects.toThrow(/Broad filesystem roots cannot be added as worktrees/)
+    await expect(service.chooseCheckoutWorktreePath(root, 'feature', await mocks.listGitWorktrees())).rejects.toThrow(/Broad filesystem roots cannot be added as worktrees/)
     expect(mocks.createGitWorktree).not.toHaveBeenCalled()
     expect(store.snapshot().projects).toHaveLength(1)
   })

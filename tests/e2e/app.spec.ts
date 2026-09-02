@@ -113,6 +113,7 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
       ['config', 'user.email', 'e2e@example.com'],
       ['add', file],
       ['commit', '-qm', 'base'],
+      ['branch', 'feature/e2e'],
     ]) {
       const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
       if (result.status !== 0) throw new Error(result.stderr)
@@ -800,6 +801,17 @@ test.describe('Prime Work desktop smoke', () => {
     })
 
     await expect(page.getByRole('heading', { name: 'Startup & background' })).toBeVisible()
+  })
+
+  test('uses the branch checkout picker after changing the global checkout style', async () => {
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await page.getByRole('combobox', { name: 'Git checkout style' }).selectOption('branch')
+    await page.getByRole('button', { name: 'Back to session' }).click()
+
+    await page.getByRole('button', { name: /^Checkout:/ }).click()
+    const branchMenu = page.getByRole('menu', { name: 'Git branches' })
+    await expect(branchMenu).toBeVisible()
+    await expect(branchMenu.getByRole('menuitemradio').filter({ hasText: 'feature/e2e' })).toBeVisible()
   })
 
   test('returns from settings with its back button, New session, Escape, and Ctrl+W', async () => {
