@@ -1,3 +1,4 @@
+import { closeSync, openSync, readSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isRecord } from '../validation'
@@ -74,6 +75,49 @@ async function readOmpTitleSlot(io: SessionMetadataReaderIo, filePath: string): 
   if (!isRecord(value) || value.type !== 'title' || typeof value.title !== 'string' || !value.title.trim()) return undefined
   return value.title
 }
+/**
+ * Rewrite the 256-byte in-place title slot at the start of an OMP session
+ * file. Used as a fallback when no live runtime is available to accept
+ * `set_session_name` (e.g. the session has finished and the agent exited).
+ *
+ * The slot is a single JSON line padded with spaces to exactly
+ * `OMP_TITLE_SLOT_BYTES` bytes, followed by `\n`. OMP rewrites this slot
+ * in place without touching the rest of the file.
+ */
+export function writeOmpTitleSlot(filePath: string, title: string): boolean {
+  try {
+    const fd = openSync(filePath, 'r+')
+    try {
+      const slot = Buffer.alloc(OMP_TITLE_SLOT_BYTES)
+      const bytesRead = readSync(fd, slot, 0, OMP_TITLE_SLOT_BYTES, 0)
+      if (bytesRead !== OMP_TITLE_SLOT_BYTES || slot[OMP_TITLE_SLOT_BYTES - 1] !== 0x0a) return false
+      let existing: unknown
+      try { existing = JSON.parse(slot.toString('utf8', 0, OMP_TITLE_SLOT_BYTES - 1)) } catch { return false }
+      if (!isRecord(existing) || existing.type !== 'title') return false
+
+      const updatedAt = new Date().toISOString()
+      const targetLen = OMP_TITLE_SLOT_BYTES - 1
+      const build = (name: string, pad: string) => JSON.stringify({ ...existing, title: name, updatedAt, pad })
+      let name = title
+      while (name.length > 0 && Buffer.byteLength(build(name, ''), 'utf8') > targetLen) {
+        const points = Array.from(name)
+        points.pop()
+        name = points.join('')
+      }
+      const unpadded = build(name, '')
+      const padding = targetLen - Buffer.byteLength(unpadded, 'utf8')
+      if (padding < 0) return false
+      const line = build(name, ' '.repeat(padding))
+      if (Buffer.byteLength(line, 'utf8') !== targetLen) return false
+      writeSync(fd, `${line}\n`, 0, 'utf8')
+      return true
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
 
 /**
  * OMP metadata reader: the append-only tail (everything after the 256-byte
@@ -108,5 +152,6 @@ export function ompSessionServiceOptions(sessionRoot = ompSessionRoot()): Sessio
     // Session files sit one bucket directory below the root; bounded one-level
     // watchers keep catalog refresh behavior identical across platforms.
     recursiveWatch: true,
+    renameFile: writeOmpTitleSlot,
   }
 }

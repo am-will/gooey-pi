@@ -1,4 +1,4 @@
-import { appendFileSync, closeSync, createReadStream, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, closeSync, createReadStream, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,7 @@ import {
   OMP_TITLE_SLOT_BYTES,
   ompSessionServiceOptions,
   ompTimestampFromSessionName,
+  writeOmpTitleSlot,
 } from '../../electron/main/sessions/omp'
 import { JsonStateStore } from '../../electron/main/store'
 
@@ -293,5 +294,35 @@ describe('OMP session service harness identity', () => {
     } finally {
       unsubscribe()
     }
+  })
+})
+
+describe('OMP file-level rename fallback', () => {
+  it('rewrites the title slot in place without touching the session header', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, '-bucket'))
+    const file = join(root, '-bucket', NAME_A)
+    writeOmpSession(file, {
+      cwd: project,
+      title: 'Slot title',
+      entries: [ompEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } })],
+    })
+    const before = readFileSync(file)
+    const header = before.toString('utf8').split('\n')[1]
+
+    expect(writeOmpTitleSlot(file, 'Renamed offline')).toBe(true)
+    const after = readFileSync(file)
+    expect(after.length).toBe(before.length)
+    expect(after.toString('utf8').split('\n')[1]).toBe(header)
+    expect((await service.list())[0]?.title).toBe('Renamed offline')
+  })
+
+  it('leaves a file whose first line is the session header untouched', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-omp-no-slot-')); dirs.push(dir)
+    const file = join(dir, NAME_A)
+    const body = `${JSON.stringify({ type: 'session', version: 3, id: 'no-slot', timestamp: '2026-08-08T02:12:49.414Z', cwd: '/tmp' })}\n`
+    writeFileSync(file, body)
+    expect(writeOmpTitleSlot(file, 'Should not write')).toBe(false)
+    expect(readFileSync(file, 'utf8')).toBe(body)
   })
 })

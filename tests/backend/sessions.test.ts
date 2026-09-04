@@ -1260,4 +1260,48 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect(stop).toHaveBeenCalledTimes(1)
     expect((await service.list())[0]?.archived).toBe(false)
   })
+
+  it('calls renameFile only when the runtime hook returns false and the CLI path is null', async () => {
+    const renameFile = vi.fn(() => true)
+    const { root, project, service } = setup(undefined, { renameFile })
+    const file = join(root, 'offline.jsonl')
+    writeSession(file, project, 'offline')
+    const safePath = await service.requireSessionPath(file)
+    const runtimeRename = vi.fn(async () => false)
+    service.bindRuntimeHooks({
+      get: () => undefined,
+      stop: async () => undefined,
+      rename: runtimeRename,
+    })
+
+    await expect(service.rename(file, 'Offline title')).resolves.toBe(true)
+    expect(runtimeRename).toHaveBeenCalledWith(safePath, 'Offline title')
+    expect(renameFile).toHaveBeenCalledWith(safePath, 'Offline title')
+    expect(renameFile).toHaveBeenCalledTimes(1)
+
+    renameFile.mockClear()
+    runtimeRename.mockImplementation(async () => true)
+    await expect(service.rename(file, 'Live title')).resolves.toBe(true)
+    expect(renameFile).not.toHaveBeenCalled()
+  })
+
+  it('does not call renameFile for Prime when a CLI path exists', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-rename-cli-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const file = join(root, 'prime.jsonl')
+    writeSession(file, project, 'prime')
+    const renameFile = vi.fn(() => true)
+    const store = new JsonStateStore(join(dir, 'state.json'))
+    const service = new SessionService(store, process.execPath, undefined, { renameFile })
+    Object.defineProperty(service, 'sessionRoot', { value: root })
+    service.bindRuntimeHooks({
+      get: () => undefined,
+      stop: async () => undefined,
+      rename: async () => false,
+    })
+
+    await expect(service.rename(file, 'Prime title')).resolves.toBe(false)
+    expect(renameFile).not.toHaveBeenCalled()
+  })
 })

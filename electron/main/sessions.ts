@@ -64,6 +64,12 @@ export interface SessionServiceOptions {
   recursiveWatch?: boolean
   /** Injectable watch seam for deterministic filesystem-event tests. */
   watchDirectory?: SessionWatchFactory
+  /**
+   * File-level rename fallback for harnesses whose CLI does not expose a
+   * `rename` subcommand (OMP, pi). Called when no live runtime is available
+   * to accept `set_session_name` and no CLI fallback exists.
+   */
+  renameFile?: (filePath: string, title: string) => boolean
   maxConcurrentTranscriptReads?: number
   maxPendingTranscriptReads?: number
 }
@@ -83,6 +89,7 @@ export class SessionService {
   private readonly transcriptReader: TranscriptReader
   private readonly isSessionPathAuthorized: SessionPathAuthorizer
   private readonly watchDirectory: SessionWatchFactory
+  private readonly renameFile: ((filePath: string, title: string) => boolean) | undefined
   private readonly changeListeners = new Set<(event: SessionChangeEvent) => void>()
   private sessionWatcher: SessionWatcher | null = null
   private readonly bucketWatchers = new Map<string, SessionWatcher>()
@@ -125,6 +132,7 @@ export class SessionService {
       options.catalogIo,
       options.catalogNameTimestamp,
     )
+    this.renameFile = options.renameFile
   }
 
   bindRuntimeHooks(hooks: {
@@ -247,7 +255,8 @@ export class SessionService {
     if (safeTitle.startsWith('-') || /[\r\n]/.test(safeTitle)) throw new TypeError('title contains invalid characters')
     if (await this.renameRuntimeSession(safePath, safeTitle)) return true
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
-    if (!primeAgentPath) return false
+    // OMP/pi services are constructed with a null CLI path (electron/main/index.ts).
+    if (!primeAgentPath) return this.renameFile?.(safePath, safeTitle) ?? false
     const metadata = await this.readMetadata(safePath)
     const result = await runProcess(primeAgentPath, ['rename', metadata.id, safeTitle, '--json'], { timeoutMs: 30_000 })
     return result.code === 0

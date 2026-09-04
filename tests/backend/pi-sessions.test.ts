@@ -1,4 +1,4 @@
-import { appendFileSync, createReadStream, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, createReadStream, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SessionService } from '../../electron/main/sessions'
 import { METADATA_VERIFY_TAIL_BYTES } from '../../electron/main/sessions/metadata'
 import {
+  appendPiSessionInfo,
   createPiSessionMetadataReader,
   isPiSessionPath,
   piSessionServiceOptions,
@@ -377,5 +378,46 @@ describe('pi session service harness identity', () => {
     } finally {
       unsubscribe()
     }
+  })
+})
+
+describe('pi file-level rename fallback', () => {
+  it('appends a named session_info entry and leaves prior entries unchanged', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('session_info', '15f3a4e9', null, { name: 'First name' }),
+        piEntry('message', 'aa11bb22', '15f3a4e9', { message: { role: 'user', content: 'first prompt' } }),
+      ],
+    })
+    const before = readFileSync(file, 'utf8')
+
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const after = readFileSync(file, 'utf8')
+    expect(after.startsWith(before)).toBe(true)
+    const appended = JSON.parse(after.slice(before.length).trim()) as { type: string; id: string; parentId: string | null; name: string }
+    expect(appended).toMatchObject({ type: 'session_info', parentId: 'aa11bb22', name: 'Renamed offline' })
+    expect(appended.id).toMatch(/^[0-9a-f]{8}$/)
+    expect((await service.list())[0]?.title).toBe('Renamed offline')
+  })
+
+  it('parents the appended session_info to the last entry even when that entry exceeds 256KiB', () => {
+    const { root, project } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } }),
+        piEntry('message', 'deadbeef', 'aa11bb22', { message: { role: 'assistant', content: 'x'.repeat(256 * 1024 + 1) } }),
+      ],
+    })
+    const before = readFileSync(file, 'utf8')
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const appended = JSON.parse(readFileSync(file, 'utf8').slice(before.length).trim()) as { parentId: string }
+    expect(appended.parentId).toBe('deadbeef')
   })
 })
