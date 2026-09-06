@@ -330,7 +330,10 @@ function versionManagerRuntimeDirs(
 export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
   // Git is invoked for repository-derived work, so inherit only process-location
   // values rather than credentials, provider tokens, signing agents, or Git's
-  // many environment-based configuration injection mechanisms.
+  // many environment-based configuration injection mechanisms. HOME/XDG_CONFIG_HOME
+  // are included so Git can still find the user's global excludes file
+  // (~/.config/git/ignore) — GIT_CONFIG_GLOBAL=/dev/null above already keeps it
+  // from reading ~/.gitconfig itself.
   const env: NodeJS.ProcessEnv = {
     LANG: 'C',
     LC_ALL: 'C',
@@ -346,8 +349,8 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
     GIT_OPTIONAL_LOCKS: '0',
   }
   for (const key of process.platform === 'win32'
-    ? ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP']
-    : ['PATH', 'TMPDIR']) {
+    ? ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'HOME']
+    : ['PATH', 'TMPDIR', 'HOME', 'XDG_CONFIG_HOME']) {
     const value = process.env[key]
     if (value !== undefined) env[key] = value
   }

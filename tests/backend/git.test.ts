@@ -175,6 +175,26 @@ describe('GitService', () => {
     expect(changes.find((file) => file.staged)?.additions).toBe(1)
     expect(changes.find((file) => !file.staged)?.additions).toBe(1)
   })
+  it('respects the user global excludes file (~/.config/git/ignore) for untracked files', async () => {
+    const cwd = repository('prime-work-git-global-excludes-')
+    const home = mkdtempSync(join(tmpdir(), 'prime-work-git-home-'))
+    dirs.push(home)
+    mkdirSync(join(home, '.config', 'git'), { recursive: true })
+    writeFileSync(join(home, '.config', 'git', 'ignore'), '.idea/\n')
+    mkdirSync(join(cwd, '.idea'))
+    writeFileSync(join(cwd, '.idea', 'misc.xml'), '<misc/>\n')
+    const oldHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      const service = new GitService(async () => cwd)
+      const status = await service.status(cwd)
+      expect(status.files.find((file) => file.path === '.idea/misc.xml')).toBeUndefined()
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME
+      else process.env.HOME = oldHome
+    }
+  })
+
   it('restores staged, unstaged, and untracked changes to a clean worktree', async () => {
     const cwd = repository('prime-work-git-restore-all-')
     const service = new GitService(async () => cwd)
