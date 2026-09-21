@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isBroadProjectRoot, ProjectService } from '../../electron/main/projects'
+import { collectProjectFiles, isBroadProjectRoot, ProjectService } from '../../electron/main/projects'
 import { CheckoutService } from '../../electron/main/checkouts'
 import { RepositoryUseGate } from '../../electron/main/repository-use-gate'
 import { JsonStateStore } from '../../electron/main/store'
@@ -449,6 +449,7 @@ describe('ProjectService file listing', () => {
         { path: 'README.md', type: 'file' },
       ],
       skipped: 0,
+      truncated: false,
     })
   })
 
@@ -476,6 +477,24 @@ describe('ProjectService file listing', () => {
     await expect(service.listFiles(root)).rejects.toThrow(/not inside an added Prime Work project/)
   })
 
+  it('flags truncation once the entry budget is spent instead of silently dropping the tail', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-files-cap-')); dirs.push(dir)
+    for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt']) writeFileSync(join(dir, name), 'x')
+
+    const capped = await collectProjectFiles(dir, 3)
+    expect(capped.entries).toHaveLength(3)
+    expect(capped.truncated).toBe(true)
+    // Directories are visited before files and names sort within each group, so the cut is deterministic.
+    expect(capped.entries.map((entry) => entry.path)).toEqual(['a.txt', 'b.txt', 'c.txt'])
+
+    const complete = await collectProjectFiles(dir, 5)
+    expect(complete.entries).toHaveLength(5)
+    expect(complete.truncated).toBe(false)
+
+    const roomToSpare = await collectProjectFiles(dir, 100)
+    expect(roomToSpare.truncated).toBe(false)
+  })
+
   it('lists files for an inferred project discovered from sessions without manual addition', async () => {
     const { root, service } = setup()
     writeFileSync(join(root, 'README.md'), 'inferred project readme')
@@ -494,6 +513,7 @@ describe('ProjectService file listing', () => {
         { path: 'README.md', type: 'file' },
       ],
       skipped: 0,
+      truncated: false,
     })
   })
 
@@ -523,6 +543,7 @@ describe('ProjectService file listing', () => {
         { path: 'config.json', type: 'file' },
       ],
       skipped: 0,
+      truncated: false,
     })
   })
 
@@ -552,6 +573,7 @@ describe('ProjectService file listing', () => {
         { path: 'omp-config.yaml', type: 'file' },
       ],
       skipped: 0,
+      truncated: false,
     })
   })
 
@@ -565,7 +587,7 @@ describe('ProjectService file listing', () => {
 
     const listed = await service.list()
     expect(listed).toHaveLength(1)
-    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0, truncated: false })
 
     expect(await service.remove(listed[0].id)).toBe(true)
     await expect(service.listFiles(root)).rejects.toThrow(/not inside an added Prime Work project/)
@@ -598,7 +620,7 @@ describe('ProjectService file listing', () => {
       branch: async () => undefined,
     })
 
-    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'index.ts', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'index.ts', type: 'file' }], skipped: 0, truncated: false })
   })
 
   it('continues rebuild past empty projectPath entries to authorize later valid session roots', async () => {
@@ -613,7 +635,7 @@ describe('ProjectService file listing', () => {
     })
 
     await service.list()
-    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'main.ts', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'main.ts', type: 'file' }], skipped: 0, truncated: false })
   })
 
   it('lazily re-lists and authorizes newly discovered session roots during file listing', async () => {
@@ -632,7 +654,7 @@ describe('ProjectService file listing', () => {
 
     sessionsList = [session('new-session', newlyDiscovered, '2026-03-01T00:00:00.000Z', '2026-03-02T00:00:00.000Z')]
     const listing = await service.listFiles(newlyDiscovered)
-    expect(listing).toEqual({ entries: [{ path: 'app.ts', type: 'file' }], skipped: 0 })
+    expect(listing).toEqual({ entries: [{ path: 'app.ts', type: 'file' }], skipped: 0, truncated: false })
   })
 
   it('canonicalizes symlinked session roots and deduplicates aliases', async () => {
@@ -652,7 +674,7 @@ describe('ProjectService file listing', () => {
     expect(records).toHaveLength(1)
     expect(records[0].path).toBe(realpathSync(root))
     expect(records[0].sessionCount).toBe(2)
-    expect(await service.listFiles(symlinkAlias)).toEqual({ entries: [{ path: 'index.ts', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(symlinkAlias)).toEqual({ entries: [{ path: 'index.ts', type: 'file' }], skipped: 0, truncated: false })
   })
 
   it.skipIf(process.platform === 'win32')('preserves backslashes in POSIX filenames', async () => {
@@ -661,7 +683,7 @@ describe('ProjectService file listing', () => {
     await store.update((state) => { state.projects.push({ id: 'project', harness: 'prime', name: 'Project', path: root, folders: [root], primaryFolder: root, pinned: false, createdAt: new Date().toISOString(), lastOpenedAt: new Date().toISOString(), folderIdentities: identities(root) }) })
 
     await service.list()
-    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'weird\\name.txt', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'weird\\name.txt', type: 'file' }], skipped: 0, truncated: false })
   })
 
   it('migrates explicit project grants created before folder identities were persisted', async () => {
@@ -672,7 +694,7 @@ describe('ProjectService file listing', () => {
       createdAt: new Date().toISOString(), lastOpenedAt: new Date().toISOString(),
     }) })
 
-    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(root)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0, truncated: false })
     expect(store.snapshot().projects[0].folderIdentities).toEqual(identities(root))
   })
 
@@ -973,9 +995,9 @@ describe('ProjectService harness scoping', () => {
     expect(ompRecord.inferred).toBe(true)
     expect(piRecord.inferred).toBe(true)
 
-    expect(await primeService.listFiles(root)).toEqual({ entries: [{ path: 'file.txt', type: 'file' }], skipped: 0 })
-    expect(await ompService.listFiles(root)).toEqual({ entries: [{ path: 'file.txt', type: 'file' }], skipped: 0 })
-    expect(await piService.listFiles(root)).toEqual({ entries: [{ path: 'file.txt', type: 'file' }], skipped: 0 })
+    expect(await primeService.listFiles(root)).toEqual({ entries: [{ path: 'file.txt', type: 'file' }], skipped: 0, truncated: false })
+    expect(await ompService.listFiles(root)).toEqual({ entries: [{ path: 'file.txt', type: 'file' }], skipped: 0, truncated: false })
+    expect(await piService.listFiles(root)).toEqual({ entries: [{ path: 'file.txt', type: 'file' }], skipped: 0, truncated: false })
 
     // Prime dismisses the inferred project -> shared dismissedProjectPaths is updated
     expect(await primeService.remove(primeRecord.id)).toBe(true)

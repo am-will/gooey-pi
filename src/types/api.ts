@@ -350,7 +350,9 @@ export interface ExtensionInstallInput {
 }
 
 export interface ProjectFileEntry { path: string; type: 'file' | 'directory' }
-export interface ProjectFileListing { entries: ProjectFileEntry[]; skipped: number }
+export interface ProjectFileListing { entries: ProjectFileEntry[]; skipped: number; truncated: boolean }
+/** Upper bound on entries returned by a single Files-panel listing; `truncated` reports when it is hit. */
+export const PROJECT_FILE_LISTING_LIMIT = 50_000
 
 export interface GitWorktree {
   path: string

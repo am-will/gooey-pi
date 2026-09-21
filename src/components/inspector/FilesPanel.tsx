@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { basename } from '@/lib/data'
 import { errorMessage } from '@/lib/errors'
+import { PROJECT_FILE_LISTING_LIMIT } from '@/types/api'
 import type { GitStatus, ProjectFileEntry, ProjectRecord } from '@/types/api'
 import { EmptyState, IconButton } from '../ui'
 
@@ -225,6 +226,7 @@ export function FilesPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [skipped, setSkipped] = useState(0)
+  const [truncated, setTruncated] = useState(false)
   const [visibleLimit, setVisibleLimit] = useState(1_000)
   const loadToken = useRef(0)
 
@@ -234,6 +236,7 @@ export function FilesPanel({
     setExpandedIds(new Set())
     setError('')
     setSkipped(0)
+    setTruncated(false)
     setVisibleLimit(1_000)
     if (!project || !window.prime) return
     setLoading(true)
@@ -247,6 +250,7 @@ export function FilesPanel({
       )
       if (loadToken.current !== token) return
       setSkipped(groups.reduce((sum, group) => sum + group.listing.skipped, 0))
+      setTruncated(groups.some((group) => group.listing.truncated))
       const builtTree = buildProjectTree(groups, project.primaryFolder)
       setTreeRoots(builtTree)
     } catch (reason) {
@@ -352,6 +356,11 @@ export function FilesPanel({
           <p className="file-tree__skipped">
             {skipped} {skipped === 1 ? 'folder' : 'folders'} could not be read and{' '}
             {skipped === 1 ? 'was' : 'were'} skipped.
+          </p>
+        ) : null}
+        {!loading && !error && truncated ? (
+          <p className="file-tree__skipped">
+            Showing the first {PROJECT_FILE_LISTING_LIMIT.toLocaleString('en-US')} files. The list was truncated and some files are not shown.
           </p>
         ) : null}
 

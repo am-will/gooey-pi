@@ -417,6 +417,26 @@ describe('FilesPanel component', () => {
     expect(container.textContent).toContain('2 folders could not be read and were skipped.')
   })
 
+  it('displays a truncation notice when the listing was capped', async () => {
+    const listFiles = vi.fn(async () => ({
+      entries: [{ path: 'App.tsx', type: 'file' as const }],
+      skipped: 0,
+      truncated: true,
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Showing the first 50,000 files.')
+    expect(container.textContent).toContain('The list was truncated and some files are not shown.')
+  })
+
   it('handles collapse all and expand all toolbar actions', async () => {
     const listFiles = vi.fn(async () => ({
       entries: sampleEntries,

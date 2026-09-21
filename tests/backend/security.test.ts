@@ -58,7 +58,7 @@ describe('security boundaries', () => {
     expect(listed[0].inferred).toBe(true)
     expect(branchCalls).toBe(0)
     expect(await service.authorizeReadOnlyCwd(folder)).toBe(realpathSync(folder))
-    expect(await service.listFiles(folder)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0 })
+    expect(await service.listFiles(folder)).toEqual({ entries: [{ path: 'README.md', type: 'file' }], skipped: 0, truncated: false })
     await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
 
     const granted = await service.grantInferred(folder)

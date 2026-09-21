@@ -5,6 +5,7 @@ import type { BigIntStats, Dirent } from 'node:fs'
 import { dialog, type BrowserWindow } from 'electron'
 import { homedir } from 'node:os'
 import { sortProjects } from '../../src/lib/project-order'
+import { PROJECT_FILE_LISTING_LIMIT } from '../../src/types/api'
 import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
 import { listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
@@ -129,6 +130,61 @@ function isSameFolderIdentity(expected: FolderIdentity, current: FolderIdentity,
     // whose birth time and the desktop clock have different precision.
     return BigInt(current.birthtimeNs) <= BigInt(Math.ceil(grantedAtMs + 5_000)) * 1_000_000n
   } catch { return false }
+}
+
+const IGNORED_LISTING_DIRECTORIES = new Set([
+  '.git',
+  'node_modules',
+  'vendor',
+  'out',
+  'dist',
+  'build',
+  'release',
+  'coverage',
+  '.next',
+  '.venv',
+])
+
+/**
+ * Depth-first walk of an authorized project root, breadth-capped at `maxEntries`.
+ * Directories are visited before files at each level and names are sorted so the
+ * result is stable. Symlinks are skipped (they can escape the root or form cycles)
+ * and unreadable directories are counted in `skipped` rather than aborting the walk.
+ * `truncated` is true when the entry budget was exhausted before the tree was fully
+ * enumerated, so callers can surface an explicit notice.
+ */
+export async function collectProjectFiles(root: string, maxEntries = PROJECT_FILE_LISTING_LIMIT): Promise<ProjectFileListing> {
+  const entries: ProjectFileEntry[] = []
+  let skipped = 0
+  let truncated = false
+
+  const visit = async (directory: string): Promise<void> => {
+    if (entries.length >= maxEntries) return
+    let children: Dirent[]
+    try {
+      children = await readdir(directory, { withFileTypes: true })
+    } catch {
+      // An unreadable directory (permissions, races) must not fail the whole
+      // listing; report it so the UI can note the gap.
+      skipped += 1
+      return
+    }
+    children.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+    for (const child of children) {
+      if (entries.length >= maxEntries) { truncated = true; break }
+      if (child.isSymbolicLink()) continue
+      if (child.isDirectory() && IGNORED_LISTING_DIRECTORIES.has(child.name)) continue
+      if (!child.isDirectory() && !child.isFile()) continue
+      const absolutePath = resolve(directory, child.name)
+      const relativePath = relative(root, absolutePath)
+      const path = process.platform === 'win32' ? relativePath.split('\\').join('/') : relativePath
+      entries.push({ path, type: child.isDirectory() ? 'directory' : 'file' })
+      if (child.isDirectory()) await visit(absolutePath)
+    }
+  }
+
+  await visit(root)
+  return { entries, skipped, truncated }
 }
 
 /**
@@ -844,49 +900,7 @@ export class ProjectService {
 
   async listFiles(rootValue: unknown): Promise<ProjectFileListing> {
     const root = await this.authorizeReadOnlyCwd(rootValue as string)
-    const entries: ProjectFileEntry[] = []
-    let skipped = 0
-    const ignoredDirectories = new Set([
-      '.git',
-      'node_modules',
-      'vendor',
-      'out',
-      'dist',
-      'build',
-      'release',
-      'coverage',
-      '.next',
-      '.venv',
-    ])
-    const maxEntries = 5_000
-
-    const visit = async (directory: string): Promise<void> => {
-      if (entries.length >= maxEntries) return
-      let children: Dirent[]
-      try {
-        children = await readdir(directory, { withFileTypes: true })
-      } catch {
-        // An unreadable directory (permissions, races) must not fail the whole
-        // listing; report it so the UI can note the gap.
-        skipped += 1
-        return
-      }
-      children.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
-      for (const child of children) {
-        if (entries.length >= maxEntries) break
-        if (child.isSymbolicLink()) continue
-        if (child.isDirectory() && ignoredDirectories.has(child.name)) continue
-        if (!child.isDirectory() && !child.isFile()) continue
-        const absolutePath = resolve(directory, child.name)
-        const relativePath = relative(root, absolutePath)
-        const path = process.platform === 'win32' ? relativePath.split('\\').join('/') : relativePath
-        entries.push({ path, type: child.isDirectory() ? 'directory' : 'file' })
-        if (child.isDirectory()) await visit(absolutePath)
-      }
-    }
-
-    await visit(root)
-    return { entries, skipped }
+    return collectProjectFiles(root)
   }
 
   private async authorizedRootFor(path: string, options: { readOnly?: boolean } = {}): Promise<string> {
