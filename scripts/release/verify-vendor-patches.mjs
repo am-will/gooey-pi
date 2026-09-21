@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const ROOT = resolve(import.meta.dirname, '../..')
@@ -27,7 +27,18 @@ function sha256(path) {
 }
 
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: false })
+  const useWindowsNpm = command === 'npm' && process.platform === 'win32'
+  const executable = useWindowsNpm ? process.execPath : command
+  const executableArgs = useWindowsNpm
+    ? [process.env.npm_execpath ?? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), ...args]
+    : args
+  const result = spawnSync(executable, executableArgs, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: false,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' },
+  })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim()}`)
   return result.stdout.trim()
@@ -66,7 +77,13 @@ for (const spec of PACKAGES) {
     mkdirSync(rebuilt)
     mkdirSync(reviewed)
     run('tar', ['-xzf', basePath, '-C', work], ROOT)
-    run('git', ['apply', patchPath], work)
+    // Archive extraction can preserve CRLF bytes on Windows, and a checkout
+    // can give the patch file the same line endings. Normalize only the
+    // temporary patch input; the byte-for-byte tree comparison below still
+    // proves the resulting package exactly matches the checked-in archive.
+    const normalizedPatch = join(work, '.vendor.patch')
+    writeFileSync(normalizedPatch, readFileSync(patchPath, 'utf8').replaceAll('\r\n', '\n'))
+    run('git', ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', 'apply', '--ignore-whitespace', normalizedPatch], work)
     run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
     assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
 
