@@ -311,6 +311,16 @@ interface ChangedPathState {
   restorePaths: string[]
 }
 
+// git status --porcelain marks untracked directories and embedded repositories with a
+// trailing slash (`?? name/`), which is a directory marker rather than part of the path.
+// requireGitPath rejects the empty final segment that slash produces, so validating the
+// raw value threw on any repo containing such an entry and killed the entire status parse.
+// Strip a single trailing slash first; a genuinely malformed path (`/`, `a//`) still fails.
+function requireGitStatusPath(value: string): string {
+  const normalized = value.endsWith('/') ? value.slice(0, -1) : value
+  return requireGitPath(normalized, 'Git status path')
+}
+
 function changedPathStatesFromStatus(output: string): Map<string, ChangedPathState> {
   const states = new Map<string, ChangedPathState>()
   let cursor = 0
@@ -322,12 +332,12 @@ function changedPathStatesFromStatus(output: string): Map<string, ChangedPathSta
     const code = record.slice(0, 2)
     const pathValue = record.slice(3)
     if (!pathValue) continue
-    const path = requireGitPath(pathValue, 'Git status path')
+    const path = requireGitStatusPath(pathValue)
     const restorePaths = [path]
     if (code.includes('R') || code.includes('C')) {
       const previous = nextNulField(output, cursor)
       cursor = previous.cursor
-      if (previous.value) restorePaths.push(requireGitPath(previous.value, 'Git status path'))
+      if (previous.value) restorePaths.push(requireGitStatusPath(previous.value))
     }
     states.set(path, { untracked: code === '??', restorePaths })
   }

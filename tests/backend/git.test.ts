@@ -115,6 +115,29 @@ describe('GitService', () => {
     expect(readFileSync(join(nested, 'nested.txt'), 'utf8')).toBe('base\n')
   })
 
+  it('reports status when the worktree contains an untracked directory (trailing-slash record)', async () => {
+    const cwd = repository('prime-work-git-untracked-dir-')
+    const service = new GitService(async () => cwd)
+    // git status --porcelain emits an untracked embedded repository as `?? embed/`, with a
+    // trailing slash it does not recurse into even under --untracked-files=all. The empty final
+    // segment that slash produces previously threw in changedPathStatesFromStatus and killed the
+    // whole panel with "Git status path contains an invalid segment".
+    const embedded = join(cwd, 'embed')
+    mkdirSync(embedded)
+    git(embedded, 'init', '-q')
+    writeFileSync(join(embedded, 'inner.txt'), 'x\n')
+    git(embedded, 'add', 'inner.txt')
+    git(embedded, 'commit', '-qm', 'inner')
+
+    const raw = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], { cwd, encoding: 'utf8' }).stdout
+    expect(raw).toContain('embed/') // guard the fixture: the record really carries a trailing slash
+
+    const status = await service.status(cwd)
+    expect(status.isRepo).toBe(true)
+    expect(status.error).toBeUndefined()
+    expect(status.files.some((file) => file.status === '??' && file.path.startsWith('embed'))).toBe(true)
+  })
+
   it('unstages files on an unborn HEAD without changing working content', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-git-unborn-'))
     dirs.push(cwd)
