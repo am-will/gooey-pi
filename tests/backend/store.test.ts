@@ -14,6 +14,7 @@ import {
   UnsupportedStateVersionError,
 } from '../../electron/main/store'
 import type { JsonStateStoreFileHandle, JsonStateStoreFileSystem } from '../../electron/main/store'
+import { renameWithWindowsRetry, WINDOWS_RENAME_RETRY_DELAYS_MS } from '../../electron/main/lib/durable-write'
 import { SessionService } from '../../electron/main/sessions'
 
 const dirs: string[] = []
@@ -315,6 +316,49 @@ describe('JsonStateStore', () => {
     await store.update((state) => { state.archivedSessions.push('succeeded') })
     expect(store.snapshot().archivedSessions).toEqual(['succeeded'])
     expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['succeeded'])
+  })
+
+  it('retries a transiently locked Windows state replace and publishes the update', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeValidState(path)
+    let attempts = 0
+    const store = new JsonStateStore(path, {
+      ...realFileSystem,
+      rename: async (from, to) => {
+        if (to === path && ++attempts <= 2) throw Object.assign(new Error('injected sharing violation'), { code: 'EPERM' })
+        await rename(from, to)
+      },
+    }, undefined, 'win32')
+    await store.ready()
+
+    await store.update((state) => { state.archivedSessions.push('after-retry') })
+    expect(attempts).toBe(3)
+    expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['after-retry'])
+    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('gives up on a persistently locked Windows state replace and removes the temp file', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeValidState(path)
+    const before = readFileSync(path, 'utf8')
+    let attempts = 0
+    const store = new JsonStateStore(path, {
+      ...realFileSystem,
+      rename: async (from, to) => {
+        if (to !== path) return rename(from, to)
+        attempts += 1
+        throw Object.assign(new Error('injected persistent lock'), { code: 'EBUSY' })
+      },
+    }, undefined, 'win32')
+    await store.ready()
+
+    await expect(store.update((state) => { state.archivedSessions.push('lost') })).rejects.toThrow('injected persistent lock')
+    expect(attempts).toBe(WINDOWS_RENAME_RETRY_DELAYS_MS.length + 1)
+    expect(store.snapshot().archivedSessions).toEqual([])
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
   it('rejects an update that would exceed the load limit before touching the file system', async () => {
@@ -1008,4 +1052,38 @@ describe('JsonStateStore', () => {
     expect(readFileSync(transcript, 'utf8')).toBe('{"type":"session"}\n')
   })
 
+})
+
+describe('renameWithWindowsRetry', () => {
+  function failingRename(codes: string[]) {
+    const attempts: string[] = []
+    const renameFn = async (from: string, to: string): Promise<void> => {
+      attempts.push(`${from}->${to}`)
+      const code = codes.shift()
+      if (code) throw Object.assign(new Error(`injected ${code}`), { code })
+    }
+    return { attempts, renameFn }
+  }
+
+  it('retries retryable Windows codes until the rename succeeds', async () => {
+    const { attempts, renameFn } = failingRename(['EPERM', 'EACCES'])
+    await renameWithWindowsRetry(renameFn, 'a.tmp', 'a', 'win32', [0, 0])
+    expect(attempts).toEqual(['a.tmp->a', 'a.tmp->a', 'a.tmp->a'])
+  })
+
+  it('rejects after the last delay when the target stays locked', async () => {
+    const { attempts, renameFn } = failingRename(['EBUSY', 'EBUSY', 'EBUSY', 'EBUSY'])
+    await expect(renameWithWindowsRetry(renameFn, 'a.tmp', 'a', 'win32', [0, 0])).rejects.toThrow('injected EBUSY')
+    expect(attempts).toHaveLength(3)
+  })
+
+  it('does not retry other codes on Windows or any code elsewhere', async () => {
+    const windows = failingRename(['EIO'])
+    await expect(renameWithWindowsRetry(windows.renameFn, 'a.tmp', 'a', 'win32', [0, 0])).rejects.toThrow('injected EIO')
+    expect(windows.attempts).toHaveLength(1)
+
+    const linux = failingRename(['EPERM'])
+    await expect(renameWithWindowsRetry(linux.renameFn, 'a.tmp', 'a', 'linux', [0, 0])).rejects.toThrow('injected EPERM')
+    expect(linux.attempts).toHaveLength(1)
+  })
 })

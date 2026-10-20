@@ -4,6 +4,7 @@ import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { renameWithWindowsRetry } from './lib/durable-write'
 import { normalizeScheduleRunHistory } from './schedules/retention'
 import { isRecord } from './validation'
 
@@ -904,7 +905,7 @@ export class JsonStateStore {
     }, null, 2)}\n`
     try {
       await this.writeDurableFile(temp, serialized, 'wx')
-      await this.fileSystem.rename(temp, this.legacyFilePath)
+      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
     } finally {
       await this.fileSystem.unlink(temp).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -986,7 +987,7 @@ export class JsonStateStore {
         await file.close()
       }
 
-      await this.fileSystem.rename(temp, this.filePath)
+      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.filePath, this.platform)
 
       await this.syncParentDirectory(this.filePath, requireDirectorySync)
     } finally {
