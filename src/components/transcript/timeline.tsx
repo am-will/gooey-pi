@@ -80,7 +80,7 @@ function ReasoningPart({ part, streaming = false }: { part: Extract<MessagePart,
   return <div className="activity-line activity-line--reasoning"><MarkdownText text={boundText(part.text, 40_000, '\n… [Reasoning truncated in the desktop view.]')} streaming={streaming} /></div>
 }
 
-/** Decorative: every caller pairs the dots with visible text such as "Pi is working". */
+/** Decorative and hidden from assistive technology: render it beside visible status text. */
 export function ThinkingDots() {
   return (
     <span className="thinking-dots" aria-hidden="true">
