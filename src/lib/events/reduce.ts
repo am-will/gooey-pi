@@ -352,7 +352,7 @@ export function replayPrimeEvents(
       continue
     }
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {
-      const text = string(raw.error) ?? string(raw.message) ?? 'Prime encountered an error.'
+      const text = string(raw.error) ?? string(raw.message) ?? 'The agent encountered an error.'
       finalizeStreaming(Date.now(), false)
       // An error right after agent_end says why the run failed, so the turn
       // must not keep the fallback that reads as a completed empty turn.

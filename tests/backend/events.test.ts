@@ -16,6 +16,12 @@ describe('agent transport events', () => {
     expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'Malformed agent output' }])
   })
 
+  it.each(['error', 'extension_error', 'transport_error'])('names no harness when a %s event carries no message', (type) => {
+    const messages = applyPrimeEvent([streamingMessage()], { type })
+
+    expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'The agent encountered an error.' }])
+  })
+
   it('keeps the stream open when the desktop rate limiter drops events', () => {
     const messages = applyPrimeEvent([streamingMessage()], { type: 'transport_limit', kind: 'count', error: 'Prime Agent event rate exceeded the desktop limit' })
 
