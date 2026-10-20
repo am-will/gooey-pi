@@ -835,7 +835,7 @@ async function bootstrap(): Promise<void> {
       kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
     }, await computerUseSkill()],
   })
-  const heartbeats = new HeartbeatService(agents, primeExecutable)
+  const heartbeats = new HeartbeatService(agents, primeExecutable, () => discovery.primeImplementation())
   const primeScheduledRuns = new ScheduledRunExecutor(
     projects,
     sessions,

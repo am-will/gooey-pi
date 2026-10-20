@@ -1,6 +1,7 @@
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import type { NativeHeartbeatRecord } from '../../../src/types/api'
-import type { AgentRpcManager } from '../agent-rpc'
+import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
+import type { NativeHeartbeatRecord, PrimeImplementation } from '../../../src/types/api'
+import { UnsupportedRpcCommandError, type AgentRpcManager } from '../agent-rpc'
 import { resolveExecutable, runProcess, type ExecutableSource } from '../process-utils'
 import { isRecord, requireId } from '../validation'
 
@@ -30,8 +31,32 @@ function normalizeHeartbeat(value: unknown, runtimeId?: string): NativeHeartbeat
   }
 }
 
+type HeartbeatAction = 'pause' | 'resume' | 'stop'
+
+/** A runtime whose harness has no heartbeat commands answers nothing; any other failure is real. */
+function unlessUnsupported(error: unknown): undefined {
+  if (error instanceof UnsupportedRpcCommandError) return undefined
+  throw error
+}
+
+/**
+ * Why GooeyPi could not act on a native heartbeat itself. TypeScript Prime
+ * manages a job through the RPC of the session that owns it. Rust Prime's
+ * in-process RPC has no heartbeat commands: only its background service
+ * pauses or resumes a job, and GooeyPi stops one through the CLI.
+ */
+function heartbeatActionUnavailable(action: HeartbeatAction, implementation: PrimeImplementation | undefined): Error {
+  if (implementation !== 'rust') return new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
+  if (action === 'stop') return new Error(`${RUST_PRIME_AGENT_NAME} could not stop this native heartbeat. Check that its background service is running and try again.`)
+  return new Error(`${RUST_PRIME_AGENT_NAME} pauses and resumes native heartbeats only through its background service, which GooeyPi cannot use yet. Stop still works.`)
+}
+
 export class HeartbeatService {
-  constructor(private readonly agents: AgentRpcManager, private readonly primeAgentPath: ExecutableSource) {}
+  constructor(
+    private readonly agents: AgentRpcManager,
+    private readonly primeAgentPath: ExecutableSource,
+    private readonly primeImplementation: () => PrimeImplementation | undefined = () => undefined,
+  ) {}
 
   async list(): Promise<NativeHeartbeatRecord[]> {
     const byId = new Map<string, NativeHeartbeatRecord>()
@@ -74,10 +99,12 @@ export class HeartbeatService {
     const runtime = heartbeat.runtimeId
       ? this.agents.list().find((candidate) => candidate.runtimeId === heartbeat.runtimeId)
       : this.agents.getForSession(heartbeat.sessionFile)
-    if (runtime) {
-      const response = await this.agents.command(runtime.runtimeId, {
-        type: 'manage_heartbeat', activeSessionId: heartbeat.activeSessionId, jobId: heartbeat.id, action: actionValue,
-      })
+    // A runtime that cannot run manage_heartbeat (Rust Prime) leaves the job
+    // to the CLI, exactly as if no runtime owned it.
+    const response = runtime && await this.agents.command(runtime.runtimeId, {
+      type: 'manage_heartbeat', activeSessionId: heartbeat.activeSessionId, jobId: heartbeat.id, action: actionValue,
+    }).catch(unlessUnsupported)
+    if (runtime && response) {
       const updated = isRecord(response.data) && response.data.heartbeat !== undefined
         ? normalizeHeartbeat(response.data.heartbeat, runtime.runtimeId)
         : null
@@ -89,7 +116,7 @@ export class HeartbeatService {
       const result = await runProcess(primeAgentPath, ['schedule', 'cancel', heartbeat.id], { timeoutMs: 30_000, maxBytes: 1024 * 1024 })
       if (result.code === 0 && !result.timedOut && !result.outputExceeded) return this.confirmStopped(id)
     }
-    throw new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
+    throw heartbeatActionUnavailable(actionValue, this.primeImplementation())
   }
 
   /**
