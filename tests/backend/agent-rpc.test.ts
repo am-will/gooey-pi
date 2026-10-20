@@ -1013,7 +1013,7 @@ setInterval(() => {}, 1000)
     const heldWrites: Array<{ line: string; finish: (error?: Error | null) => void }> = []
     const stdout = new PassThrough()
     const stderr = new PassThrough()
-    const child = {
+    const child = Object.assign(new EventEmitter(), {
       stdout, stderr,
       stdin: {
         writable: true,
@@ -1021,7 +1021,7 @@ setInterval(() => {}, 1000)
         end: () => undefined,
         destroy: () => undefined,
       },
-    } as unknown as ChildProcessWithoutNullStreams
+    }) as unknown as ChildProcessWithoutNullStreams
     const transport = new FramedRpcTransport(child, () => undefined, () => undefined, () => true, 60_000)
     const budget = () => (transport as unknown as { queuedWriteBytes: number }).queuedWriteBytes
 
@@ -1045,10 +1045,10 @@ setInterval(() => {}, 1000)
   it('fails the transport within the write deadline when the child stops reading stdin', async () => {
     const stdout = new PassThrough()
     const stderr = new PassThrough()
-    const child = {
+    const child = Object.assign(new EventEmitter(), {
       stdout, stderr,
       stdin: { writable: true, write: () => true, end: () => undefined, destroy: () => undefined },
-    } as unknown as ChildProcessWithoutNullStreams
+    }) as unknown as ChildProcessWithoutNullStreams
     const onFailure = vi.fn()
     const transport = new FramedRpcTransport(child, () => undefined, onFailure, () => true, 50)
 
