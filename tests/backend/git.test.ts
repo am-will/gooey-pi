@@ -21,6 +21,13 @@ const repository = (prefix = 'prime-work-git-') => {
   initRepository(cwd)
   return cwd
 }
+/** An untracked repository inside cwd, such as an agent-cloned checkout. */
+const untrackedNestedRepository = (cwd: string, name: string) => {
+  const nested = join(cwd, name)
+  mkdirSync(nested)
+  initRepository(nested)
+  return nested
+}
 
 describe('GitService', () => {
   it('lists local branches and switches without consulting remotes', async () => {
@@ -116,6 +123,18 @@ describe('GitService', () => {
     expect(await service.unstage(nested, ['packages/app/nested.txt'])).toBe(true)
     expect(await service.restore(nested, ['packages/app/nested.txt'])).toBe(true)
     expect(readFileSync(join(nested, 'nested.txt'), 'utf8')).toBe('base\n')
+  })
+
+  it('leaves untracked nested repositories out of staging instead of recording a gitlink', async () => {
+    const cwd = repository('prime-work-git-stage-nested-')
+    const service = new GitService(async () => cwd)
+    untrackedNestedRepository(cwd, 'embed')
+    writeFileSync(join(cwd, 'file.txt'), 'base\nchanged\n')
+
+    expect(await service.stage(cwd, ['file.txt', 'embed'])).toBe(true)
+    await expect(service.stage(cwd, ['embed'])).rejects.toThrow(/embed is a nested Git repository/i)
+    expect(spawnSync('git', ['diff', '--cached', '--name-only'], { cwd, encoding: 'utf8' }).stdout).toBe('file.txt\n')
+    expect(spawnSync('git', ['ls-files', '--stage'], { cwd, encoding: 'utf8' }).stdout).not.toMatch(/^160000 /m)
   })
 
   it('unstages files on an unborn HEAD without changing working content', async () => {
