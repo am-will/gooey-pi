@@ -115,7 +115,8 @@ export function ingestMessageActivity(state: MessageActivityAccumulator, record:
   const message = record.message
   if (typeof message.role === 'string') state.lastRole = message.role
   if (typeof message.stopReason === 'string') state.stopReason = message.stopReason
-  const text = textFromContent(message.content, 4_096)
+  // Previews and first prompts show only visible text, never model reasoning.
+  const text = textFromContent(message.content, 4_096, { includeThinking: false })
   if (message.role === 'user') {
     if (!state.firstUser && text) state.firstUser = text
     state.lastUserMessageAt = validTimestamp(message.timestamp, validTimestamp(record.timestamp, state.lastUserMessageAt ?? state.createdAt))

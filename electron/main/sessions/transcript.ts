@@ -18,14 +18,14 @@ export function boundedString(value: string, max: number): string {
   return `${value.slice(0, head)}${TRUNCATION_MARKER}${value.slice(-(available - head))}`
 }
 
-export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS): string {
+export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS, { includeThinking = true }: { includeThinking?: boolean } = {}): string {
   if (typeof content === 'string') return boundedString(content, max)
   if (!Array.isArray(content)) return ''
   let text = ''
   for (const part of content) {
     if (!isRecord(part)) continue
     const addition = part.type === 'text' && typeof part.text === 'string' ? part.text
-      : part.type === 'thinking' && typeof part.thinking === 'string' ? part.thinking : ''
+      : includeThinking && part.type === 'thinking' && typeof part.thinking === 'string' ? part.thinking : ''
     if (!addition) continue
     text += `${text ? '\n' : ''}${addition}`
     if (text.length > max) return boundedString(text, max)

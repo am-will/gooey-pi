@@ -514,6 +514,24 @@ describe('SessionService user-message ordering', () => {
   })
 })
 
+describe('Prime session previews', () => {
+  it('shows only visible assistant text and keeps it across a reasoning-only tool turn', async () => {
+    const { root, project, service } = setup()
+    const file = join(root, 'thinking.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'thinking', cwd: project, timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'question' } }),
+      JSON.stringify({ type: 'message', id: 'answer', parentId: 'user', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'plan...' }, { type: 'text', text: 'Final answer' }] } }),
+      '',
+    ].join('\n'))
+    expect((await service.list())[0]?.preview).toBe('Final answer')
+
+    appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'tool-turn', parentId: 'answer', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'more reasoning' }, { type: 'toolCall', name: 'bash', arguments: {} }] } })}\n`)
+    expect((await service.list(undefined, false, true))[0]?.preview).toBe('Final answer')
+    expect((await readSessionMetadata(file)).preview).toBe('Final answer')
+  })
+})
+
 describe('SessionMetadataCatalog live synchronization', () => {
   it('keeps live overlays when a known-file reconcile refreshes JSONL metadata', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-live-reconcile-')); dirs.push(dir)

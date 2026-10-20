@@ -120,6 +120,24 @@ describe('pi metadata reader', () => {
     expect(titles.get('cleared')).toBe('original prompt')
   })
 
+  it('previews only visible assistant text, never thinking parts', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'question' } }),
+        piEntry('message', 'bb22cc33', 'aa11bb22', { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'plan...' }, { type: 'text', text: 'Final answer' }] } }),
+      ],
+    })
+    expect((await service.list())[0]?.preview).toBe('Final answer')
+
+    appendFileSync(file, `${piEntry('message', 'cc33dd44', 'bb22cc33', { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'more reasoning' }, { type: 'toolCall', name: 'bash', arguments: {} }] } })}\n`)
+    expect((await service.list(undefined, false, true))[0]?.preview).toBe('Final answer')
+    expect((await createPiSessionMetadataReader()(file)).preview).toBe('Final answer')
+  })
+
   it('resumes appended tails incrementally and picks up a session_info rename', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-pi-rename-')); dirs.push(dir)
     const file = join(dir, NAME_A)

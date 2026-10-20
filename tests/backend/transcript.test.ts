@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readSessionMetadata } from '../../electron/main/sessions/metadata'
-import { createTranscriptReader, readTranscript } from '../../electron/main/sessions/transcript'
+import { createTranscriptReader, readTranscript, textFromContent } from '../../electron/main/sessions/transcript'
 import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { configureGooeyPiAgentMessageSigning, encodeGooeyPiAgentMessage, loadOrCreateGooeyPiAgentMessageKey, parseGooeyPiAgentMessage } from '../../electron/main/collaboration/message-envelope'
 
@@ -40,6 +40,24 @@ describe('session file record tolerance', () => {
     const directory = join(dir, 'x.jsonl')
     mkdirSync(directory)
     await expect(readTranscript(directory, false)).rejects.toThrow('Session transcript is not a regular file')
+  })
+})
+
+describe('textFromContent', () => {
+  const content = [
+    { type: 'thinking', thinking: 'plan...' },
+    { type: 'text', text: 'Final answer' },
+    { type: 'toolCall', name: 'bash', arguments: {} },
+  ]
+
+  it('includes thinking parts by default for transcript rendering', () => {
+    expect(textFromContent(content)).toBe('plan...\nFinal answer')
+  })
+
+  it('drops thinking parts when only visible text is requested', () => {
+    expect(textFromContent(content, 4_096, { includeThinking: false })).toBe('Final answer')
+    expect(textFromContent([{ type: 'thinking', thinking: 'only reasoning' }], 4_096, { includeThinking: false })).toBe('')
+    expect(textFromContent('plain string', 4_096, { includeThinking: false })).toBe('plain string')
   })
 })
 
