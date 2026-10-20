@@ -12,6 +12,9 @@ export function sessionLifecycleChange(event: Record<string, unknown>): SessionL
   // extension_ui_request; only a dialog waits on the user.
   if (parseExtensionUiRequest(event)) return { status: 'waiting', markUnread: true }
   if (type === 'agent_start' || type === 'turn_start') return { status: 'running', markUnread: false }
+  // Idle compaction is harness maintenance between turns: it must not look
+  // like new work or re-raise the finished turn's attention.
+  if ((type === 'compaction_start' || type === 'compaction_end') && event.reason === 'idle') return undefined
   if (type === 'compaction_start') return { status: 'running', markUnread: false }
   if (type === 'compaction_end' && event.willRetry !== true && (event.reason === 'manual' || event.reason === 'requested')) return { status: 'complete', markUnread: false }
   // A provider auto-retry continues the turn that the preceding agent_end

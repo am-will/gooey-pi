@@ -110,6 +110,15 @@ describe('session lifecycle attention', () => {
     expect(running.status).toBe('running')
     expect(completed).toMatchObject({ status: 'complete', unread: false, eventRevision: 2 })
   })
+
+  it('leaves a finished turn alone while the harness compacts between turns', () => {
+    const completed = applySessionLifecycleEvent(session(), { type: 'agent_end' }, false, 1)
+    const compacting = applySessionLifecycleEvent(completed, { type: 'compaction_start', reason: 'idle' }, false, 2)
+    const compacted = applySessionLifecycleEvent(compacting, { type: 'compaction_end', reason: 'idle', willRetry: false }, false, 3)
+    expect(compacting).toBe(completed)
+    expect(compacted).toBe(completed)
+    expect(sessionAttentionSignature(compacted)).toBe('complete:1')
+  })
 })
 
 describe('catalog merges over live session state', () => {
