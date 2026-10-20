@@ -134,6 +134,18 @@ describe('/compact dispatch', () => {
     expect(fixtureState.messages().filter((message) => message.role === 'user')).toHaveLength(0)
   })
 
+  it('takes a compaction skipped for lack of history as delivered', async () => {
+    // The runtime answers a refusal this way and shows the skip itself, so
+    // nothing is reported as failed and the composer keeps no draft.
+    const fixtureState = fixture({ runtime: runtime() })
+    fixtureState.command.mockResolvedValueOnce({ type: 'response', command: 'compact', success: true, data: { skipped: true, message: 'Already compacted' } })
+
+    await expect(fixtureState.actions.sendPrompt('/compact')).resolves.toBeUndefined()
+
+    expect(fixtureState.messages()).toEqual([])
+    expect(fixtureState.reportError).not.toHaveBeenCalled()
+  })
+
   it('passes custom instructions to compact', async () => {
     const fixtureState = fixture({ runtime: runtime() })
 
