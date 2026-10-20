@@ -736,10 +736,11 @@ test.describe('Prime Work desktop smoke', () => {
     const menuBounds = await page.getByRole('menu', { name: 'Git worktrees' }).evaluate((menu) => {
       const menuRect = menu.getBoundingClientRect()
       const footerRect = menu.closest('.composer__footer')!.getBoundingClientRect()
-      return { menuLeft: menuRect.left, menuRight: menuRect.right, footerLeft: footerRect.left, footerRight: footerRect.right }
+      return { menuLeft: menuRect.left, menuRight: menuRect.right, menuWidth: menuRect.width, footerLeft: footerRect.left, footerRight: footerRect.right, footerWidth: footerRect.width }
     })
     expect(menuBounds.menuLeft).toBeGreaterThanOrEqual(menuBounds.footerLeft - 0.5)
     expect(menuBounds.menuRight).toBeLessThanOrEqual(menuBounds.footerRight + 0.5)
+    expect(menuBounds.menuWidth).toBeGreaterThanOrEqual(Math.min(340, menuBounds.footerWidth) - 1)
   })
 
   test('loads the sandboxed preload bridge and hermetic service data', async () => {
