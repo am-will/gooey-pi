@@ -1779,6 +1779,18 @@ describe('vendor patch verification', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   }, 60_000)
+
+  test('checks the vendor patches out without line ending conversion', () => {
+    const patches = readdirSync('vendor/patches')
+      .filter((name) => name.endsWith('.patch'))
+      .map((name) => `vendor/patches/${name}`)
+    expect(patches.length).toBeGreaterThan(0)
+    for (const patch of patches) {
+      const result = spawnSync('git', ['check-attr', 'text', '--', patch], { encoding: 'utf8' })
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout.trim()).toBe(`${patch}: text: unset`)
+    }
+  })
 })
 
 const AUDIT_EXCEPTION_REASON = 'no patched release exists upstream yet'
