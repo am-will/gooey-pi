@@ -301,6 +301,17 @@ ${body}
   it('treats an executable that cannot start as Rust', async () => {
     await expect(probePrimeImplementation(join(tmpdir(), 'gooeypi-missing-prime-agent'))).resolves.toBe('rust')
   })
+
+  it('treats an unwritable temporary directory as inconclusive instead of failing discovery', async () => {
+    const target = writeProbeTarget("process.stdout.write('0.9.8\\n')")
+    vi.stubEnv('TMPDIR', join(dirname(target.executable), 'missing', 'tmp'))
+    try {
+      await expect(probePrimeImplementation(target.executable)).resolves.toBe('rust')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(existsSync(target.argvPath)).toBe(false)
+  })
 })
 
 describe('Prime npm migration bridge', () => {

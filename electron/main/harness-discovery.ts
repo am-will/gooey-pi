@@ -102,14 +102,16 @@ export async function probeHarnessExecutable(executable: string): Promise<Harnes
  * created.
  */
 export async function probePrimeImplementation(executable: string): Promise<PrimeImplementation> {
-  const directory = await mkdtemp(join(tmpdir(), 'gooeypi-prime-probe-'))
+  let directory: string | undefined
   try {
+    directory = await mkdtemp(join(tmpdir(), 'gooeypi-prime-probe-'))
     const result = await runProcess(executable, ['--extension', join(directory, 'never-created.ts'), '--version'], PROBE_LIMITS)
     return processFailureReason(result) ? 'rust' : 'typescript'
   } catch {
+    // An unwritable temporary directory leaves the probe inconclusive too.
     return 'rust'
   } finally {
-    await rm(directory, { recursive: true, force: true })
+    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
