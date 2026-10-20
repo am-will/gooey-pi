@@ -213,6 +213,27 @@ describe('manual compaction lifecycle', () => {
     expect(events.some((event) => event.type === 'agent_start')).toBe(true)
   })
 
+  it('leaves the row open through a whole run a steer starts before the end', async () => {
+    // Rust Prime 0.10 streams this order live: the steer's run starts and
+    // ends before the compaction's end and the command's answer.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'requested' })
+      send({ type: 'agent_start' })
+      send({ type: 'turn_start' })
+      send({ type: 'turn_end' })
+      send({ type: 'agent_end', messages: [] })
+      send({ type: 'compaction_end', reason: 'requested', result: ${JSON.stringify(RESULT)}, aborted: false, willRetry: false })
+      ok(${JSON.stringify(RESULT)})`, PRIME_RUST_RPC_ADAPTER, events)
+
+    await runtime.command({ type: 'compact' })
+
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'requested' },
+      { type: 'compaction_end', reason: 'requested', result: RESULT, aborted: false, willRetry: false },
+    ])
+  })
+
   it('forwards at once a streamed end that already reports its result', async () => {
     // Nothing in the answer can change a result, and the run a steer starts
     // right after must not appear to open before the compaction closed.
