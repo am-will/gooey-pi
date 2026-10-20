@@ -856,6 +856,53 @@ describe('extension UI runtime ownership', () => {
     }
   })
 
+  it('keeps the paused time left when a later question of the group arrives', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const command = vi.fn().mockResolvedValue({})
+      const bridge = { agent: { command } } as unknown as PrimeWorkApi
+      const runtimeSessionsRef = { current: new Map<string, string>() }
+      let state!: ReturnType<typeof useExtensionUi>
+      function ExtensionProbe({ activeRuntimeId }: { activeRuntimeId: string }) {
+        state = useExtensionUi({ bridge, activeRuntimeId, runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+        return <Probe />
+      }
+
+      await act(async () => { root.render(<ExtensionProbe activeRuntimeId="runtime" />) })
+      await act(async () => {
+        state.showExtensionUi('runtime', {
+          type: 'extension_ui_request', id: 'question-1', method: 'select', title: 'First question',
+          options: ['__prime_ask_user__group-1:0:2', 'A', 'B'],
+        })
+      })
+      await act(async () => { vi.advanceTimersByTime(30_000) })
+      await act(async () => { root.render(<ExtensionProbe activeRuntimeId="other" />) })
+      await act(async () => {
+        state.showExtensionUi('runtime', {
+          type: 'extension_ui_request', id: 'question-2', method: 'select', title: 'Second question',
+          options: ['__prime_ask_user__group-1:1:2', 'C', 'D'],
+        })
+      })
+      await act(async () => { vi.advanceTimersByTime(10 * 60_000) })
+      expect(command).not.toHaveBeenCalled()
+
+      await act(async () => { root.render(<ExtensionProbe activeRuntimeId="runtime" />) })
+      expect(state.extensionUi?.request.method === 'questionnaire' ? state.extensionUi.request.questions : []).toHaveLength(2)
+      expect(state.extensionUi?.deadline).toBe(Date.now() + 90_000)
+      await act(async () => { vi.advanceTimersByTime(90_000); await Promise.resolve() })
+
+      expect(state.extensionUi).toBeNull()
+      expect(command).toHaveBeenCalledWith('runtime', {
+        type: 'extension_ui_response', id: 'question-1', cancelled: true,
+      })
+      expect(command).toHaveBeenCalledWith('runtime', {
+        type: 'extension_ui_response', id: 'question-2', cancelled: true,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('pauses the Ask User countdown while the window is hidden', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
