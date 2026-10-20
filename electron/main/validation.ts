@@ -13,6 +13,11 @@ export function isOneOf<T extends readonly unknown[]>(values: T, value: unknown)
   return (values as readonly unknown[]).includes(value)
 }
 
+/** Lenient load-time check: a string of at most `max` characters that, unless `allowEmpty`, is not blank. */
+export function isBoundedString(value: unknown, max: number, allowEmpty = false): value is string {
+  return typeof value === 'string' && value.length <= max && (allowEmpty || value.trim().length > 0)
+}
+
 export function requireRecord(value: unknown, label = 'value'): JsonObject {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
   return value

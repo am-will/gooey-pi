@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   firstAccepted,
+  isBoundedString,
   isModelId,
   isModelKey,
   isOneOf,
@@ -439,6 +440,34 @@ describe('provider and model identifier guards', () => {
       expect(isProviderId('openai')).toBe(true)
       expect(isModelId('gpt-5')).toBe(true)
       expect(isModelKey('openai/gpt-5')).toBe(true)
+    }
+  })
+})
+
+describe('isBoundedString', () => {
+  it('accepts non-blank strings up to and including the maximum length', () => {
+    expect(isBoundedString('a', 1)).toBe(true)
+    expect(isBoundedString('x'.repeat(128), 128)).toBe(true)
+    expect(isBoundedString('  padded  ', 10)).toBe(true)
+  })
+
+  it('rejects strings over the maximum, counting untrimmed length', () => {
+    expect(isBoundedString('x'.repeat(129), 128)).toBe(false)
+    expect(isBoundedString(' ab ', 3)).toBe(false)
+  })
+
+  it('rejects empty and whitespace-only strings unless allowEmpty is set', () => {
+    expect(isBoundedString('', 10)).toBe(false)
+    expect(isBoundedString('   ', 10)).toBe(false)
+    expect(isBoundedString('', 10, true)).toBe(true)
+    expect(isBoundedString('   ', 10, true)).toBe(true)
+    expect(isBoundedString('   ', 2, true)).toBe(false)
+  })
+
+  it('rejects non-strings regardless of allowEmpty', () => {
+    for (const value of [undefined, null, 0, false, ['a'], { length: 1 }]) {
+      expect(isBoundedString(value, 10), String(value)).toBe(false)
+      expect(isBoundedString(value, 10, true), String(value)).toBe(false)
     }
   })
 })
