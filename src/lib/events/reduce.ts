@@ -1,4 +1,5 @@
 import type { MessagePart, QueuedPrompt, TranscriptMessage } from '@/types/api'
+import { isSystemReport } from '@/lib/system-rows'
 import { applyCompactionEvent, isCompactionEvent } from './compaction'
 import { nextTranscriptId, withPartId } from './ids'
 import { fallbackModelFromRecord, fallbackNoticeText } from './model-fallback'
@@ -344,11 +345,11 @@ export function replayPrimeEvents(
       if (!fallback) continue
       const text = fallbackNoticeText(fallback.label, fallback.from)
       const last = next.at(-1)
-      if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
+      if (last?.kind === 'notice' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
       const timestamp = Date.now()
       finalizeStreaming(timestamp, false)
       copyTranscript()
-      next.push({ id: nextTranscriptId('fallback'), role: 'system', timestamp, parts: [withPartId({ type: 'text', text })] })
+      next.push({ id: nextTranscriptId('fallback'), role: 'system', kind: 'notice', timestamp, parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {
@@ -357,14 +358,14 @@ export function replayPrimeEvents(
       // An error right after agent_end says why the run failed, so the turn
       // must not keep the fallback that reads as a completed empty turn.
       if (type === 'error' && next.at(-1)?.role === 'assistant') dropTailFallback(next.length - 1)
-      if (next.at(-1)?.role === 'system') continue
+      if (isSystemReport(next.at(-1))) continue
       copyTranscript()
       next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'runtime_exit') {
       finalizeStreaming(Date.now(), false)
-      if (raw.expected === true || next.at(-1)?.role === 'system') continue
+      if (raw.expected === true || isSystemReport(next.at(-1))) continue
       const reason = raw.code !== null && raw.code !== undefined ? `exit code ${String(raw.code)}` : string(raw.signal) ?? 'an unknown error'
       copyTranscript()
       // Harness-neutral: this reducer serves both Prime Agent and OMP events.

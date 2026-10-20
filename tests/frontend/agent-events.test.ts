@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { AGENT_EVENT_QUEUE_LIMIT, admitAgentEvent, contextUsageFromEvent, sessionUsageFromEvent, type PendingAgentEvent } from '../../src/app/agent-events'
 import { applyPrimeEvent, replayPrimeEvents } from '../../src/lib/events'
 import { contextDialLabel, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
+import type { TranscriptMessage } from '../../src/types/api'
 
 describe('context usage events', () => {
   it('accepts bounded authoritative usage and preserves post-compaction unknowns', () => {
@@ -96,6 +97,7 @@ describe('provider fallback events', () => {
     expect(messages[0]?.parts).toEqual([{ type: 'text', text: 'before', partId: expect.any(String) }])
     expect(messages[1]).toMatchObject({
       role: 'system',
+      kind: 'notice',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback (original: anthropic/claude-opus)' }],
     })
     expect(messages[2]?.parts).toEqual([{ type: 'text', text: 'after', partId: expect.any(String) }])
@@ -120,8 +122,19 @@ describe('provider fallback events', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({
       role: 'system',
+      kind: 'notice',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback (original: anthropic/claude-opus)' }],
     })
+  })
+
+  it('deduplicates a replayed fallback against the persisted notice it lands on', () => {
+    const persisted: TranscriptMessage = {
+      id: 'aa000002', role: 'system', kind: 'notice', timestamp: '2026-08-08T02:14:00.000Z',
+      parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }],
+    }
+    const messages = replayPrimeEvents([persisted], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
+
+    expect(messages).toEqual([persisted])
   })
 
   it('ignores unrelated model events without finalizing streaming', () => {
@@ -155,6 +168,16 @@ describe('turn errors', () => {
       expect(texts(messages)).toEqual([['assistant', []], ['system', ['529 overloaded_error: Overloaded']]])
       expect(messages[0]?.streaming).toBe(false)
     }
+  })
+
+  it('still reports an error or exit that follows a neutral system row', () => {
+    const fallback = { type: 'retry_fallback_applied', from: 'anthropic/claude-opus', to: 'anthropic/claude-sonnet', role: 'fallback' }
+    const marker: TranscriptMessage = { id: 'steer-read-user-1', role: 'system', kind: 'steer-read-marker', parts: [{ type: 'text', text: 'Steer read here' }] }
+    const exitText = 'The agent stopped unexpectedly (exit code 1). Send the message again to restart it.'
+
+    expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, fallback, { type: 'error', error: 'later failure' }])).at(-1)).toEqual(['system', ['later failure']])
+    expect(texts(replayPrimeEvents([], [fallback, { type: 'runtime_exit', code: 1 }])).at(-1)).toEqual(['system', [exitText]])
+    expect(texts(replayPrimeEvents([marker], [{ type: 'transport_error', error: 'pipe closed' }])).at(-1)).toEqual(['system', ['pipe closed']])
   })
 
   it('keeps the fallback when an extension or the transport fails after the turn', () => {

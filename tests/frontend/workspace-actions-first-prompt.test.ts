@@ -51,9 +51,9 @@ const startedRuntime: RuntimeInfo = {
   isStreaming: false,
 }
 
-function fixture({ selectedSession }: { selectedSession?: SessionRecord } = {}) {
+function fixture({ selectedSession, transcript = [] }: { selectedSession?: SessionRecord; transcript?: TranscriptMessage[] } = {}) {
   let currentRuntime: RuntimeInfo | null = null
-  let messages: TranscriptMessage[] = []
+  let messages = transcript
   let sessions: SessionRecord[] = [existingSession, otherSession]
   const workspaceRef = {
     current: {
@@ -349,6 +349,18 @@ describe('first prompt delivery across a workspace switch', () => {
     expect(state.command).not.toHaveBeenCalled()
     expect(state.runtimeSessions.has('started-runtime')).toBe(false)
     expect(state.messages().map((message) => message.role)).toEqual(['system'])
+  })
+
+  it('reports the failure below a notice that ends the transcript', async () => {
+    const notice: TranscriptMessage = { id: 'notice-1', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }
+    const state = fixture({ selectedSession: existingSession, transcript: [notice] })
+
+    const sending = state.actions.sendPrompt('Continue the plan')
+    await vi.waitFor(() => expect(state.agentStart).toHaveBeenCalledOnce())
+    state.start.resolve(startedRuntime)
+
+    await expect(sending).rejects.toThrow('Prime Agent returned a runtime for a different workspace or session.')
+    expect(state.messages().map((message) => message.kind ?? message.role)).toEqual(['notice', 'system'])
   })
 
   it('attaches the started runtime and shows the prompt while its workspace stays selected', async () => {

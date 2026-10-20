@@ -372,6 +372,30 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('message--system')
   })
 
+  it('renders a notice as a neutral activity line that shows its text', () => {
+    const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }])
+    expect(html).toContain('message--activity')
+    expect(html).toContain('activity-line--note')
+    expect(html).toContain('Switched to anthropic/claude-sonnet due to a provider fallback')
+    expect(html).not.toContain('Prime message')
+    expect(html).not.toContain('failed')
+    expect(html).not.toContain('is-error')
+  })
+
+  it('announces a notice as a note, unlike a failure row', () => {
+    const notice = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }])
+    const failure = render([{ id: 'error', role: 'system', parts: [{ type: 'text', text: '529 overloaded_error: Overloaded' }] }])
+    expect(notice).toContain('class="message message--activity" role="note"')
+    expect(failure).toContain('message--activity')
+    expect(failure).not.toContain('role="note"')
+  })
+
+  it('bounds a long notice like the other activity markdown', () => {
+    const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: `${'a'.repeat(40_000)}NOTICE-TAIL` }] }])
+    expect(html).toContain('[Note truncated in the desktop view.]')
+    expect(html).not.toContain('NOTICE-TAIL')
+  })
+
   it('renders compaction activity and completion separately from system failures', () => {
     const html = render([{
       id: 'compaction',
