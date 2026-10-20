@@ -225,6 +225,41 @@ describe('transcript read ownership', () => {
     expect(state.messages.some((item) => item.id === 'stale')).toBe(false)
   })
 
+  it('keeps the reason a live compaction reported when the reconciliation read replaces its row', async () => {
+    const result = { summary: 'Earlier work.', firstKeptEntryId: 'kept-1', tokensBefore: 188 }
+    const prompt: TranscriptMessage = { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Investigate' }] }
+    const read = vi.fn()
+      .mockResolvedValueOnce([prompt])
+      // Session files record no compaction trigger.
+      .mockResolvedValueOnce([prompt, { id: 'compact-1', role: 'system', parts: [{ type: 'compaction', status: 'done', ...result }] }])
+    const bridge = { sessions: { read } } as unknown as PrimeWorkApi
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useWorkspaceRuntime>
+    function WorkspaceProbe() {
+      state = useWorkspaceRuntime({
+        bridge, initialProject: project, initialSession: session, sessions: [session],
+        initialMessages: [], reportError,
+      })
+      return <Probe />
+    }
+    await act(async () => { root.render(<WorkspaceProbe />); await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { state.attachRuntime(runtime, 0) })
+    await act(async () => {
+      for (const event of [
+        { type: 'compaction_start', reason: 'manual' },
+        { type: 'compaction_end', reason: 'manual', result, aborted: false, willRetry: false },
+      ]) {
+        state.queueAgentEvent(event)
+        state.reconcileTranscriptForEvent(runtime.runtimeId, event)
+      }
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(state.messages.at(-1)).toMatchObject({ id: 'compact-1', parts: [{ type: 'compaction', status: 'done', reason: 'manual' }] })
+  })
+
   it('performs one initial read and rejects an older same-runtime reconciliation after prompt admission', async () => {
     const staleRead = deferred<TranscriptMessage[]>()
     const read = vi.fn()

@@ -94,6 +94,31 @@ function sameCompactionResult(left: CompactionPart, right: CompactionPart): bool
   return Boolean(left.summary && right.summary && left.summary === right.summary && left.tokensBefore === right.tokensBefore)
 }
 
+/**
+ * Session files record no compaction trigger, so a transcript read replaces a
+ * live compaction row with a persisted one that names no reason. The persisted
+ * row of a pass the live transcript showed keeps the reason its events reported.
+ */
+export function keepLiveCompactionReasons(live: TranscriptMessage[], persisted: TranscriptMessage[]): TranscriptMessage[] {
+  const reported = live.flatMap((message) => message.parts.filter((part): part is CompactionPart => part.type === 'compaction' && part.reason !== undefined))
+  if (!reported.length) return persisted
+  let changed = false
+  const merged = persisted.map((message) => {
+    let learned = false
+    const parts = message.parts.map((part): MessagePart => {
+      if (part.type !== 'compaction' || part.reason) return part
+      const reason = reported.find((candidate) => sameCompactionResult(candidate, part))?.reason
+      if (!reason) return part
+      learned = true
+      return { ...part, reason }
+    })
+    if (!learned) return message
+    changed = true
+    return { ...message, parts }
+  })
+  return changed ? merged : persisted
+}
+
 /** An end that omits a field (OMP ends carry no reason) must not erase what the running row learned at start. */
 function definedCompactionFields(part: CompactionPart): Partial<CompactionPart> {
   return Object.fromEntries(Object.entries(part).filter(([, value]) => value !== undefined))
