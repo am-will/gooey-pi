@@ -104,6 +104,8 @@ export class RpcRuntime {
   // precedence and duplicates are swallowed.
   private readonly watchdogTimings: CompactionWatchdogTimings
   private compactionEpisode: 'none' | 'real' | 'synthetic' = 'none'
+  // OMP ends carry no reason, so the end reports the one its start announced.
+  private compactionStartReason: unknown
   private compactionEndFallback: NodeJS.Timeout | null = null
   private compactionPollTimer: NodeJS.Timeout | null = null
   private compactionPollInFlight = false
@@ -491,6 +493,7 @@ export class RpcRuntime {
       this.publishLiveContextUsage(true)
     } else if (value.type === 'compaction_start') {
       this.info.isCompacting = true
+      this.compactionStartReason = value.reason
       this.lastRealCompactionEventAt = Date.now()
       this.clearCompactionEndFallback()
       // A late real start after the watchdog already announced this compaction
@@ -498,6 +501,8 @@ export class RpcRuntime {
       if (this.compactionEpisode === 'synthetic') return
       this.compactionEpisode = 'real'
     } else if (value.type === 'compaction_end') {
+      if (value.reason === undefined && this.compactionStartReason !== undefined) value.reason = this.compactionStartReason
+      this.compactionStartReason = undefined
       this.continuationPending = value.willRetry === true
       this.info.isCompacting = false
       this.lastRealCompactionEventAt = Date.now()

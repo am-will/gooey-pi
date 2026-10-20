@@ -464,10 +464,12 @@ describe('OMP RPC command translation', () => {
 })
 
 describe('OMP RPC event normalization', () => {
-  it('normalizes auto_compaction events to compaction events', async () => {
+  it('normalizes auto_compaction events to compaction events and stamps the start reason on the end', async () => {
     const fake = fakeOmpAgent({ promptScript: `
-    send({ type: 'auto_compaction_start', reason: 'threshold' })
-    send({ type: 'auto_compaction_end', reason: 'threshold', aborted: false, willRetry: false })
+    send({ type: 'auto_compaction_start', reason: 'threshold', action: 'shake' })
+    send({ type: 'auto_compaction_end', action: 'shake', aborted: false, willRetry: false, skipped: false })
+    send({ type: 'auto_compaction_start', reason: 'idle', action: 'context-full' })
+    send({ type: 'auto_compaction_end', action: 'context-full', aborted: false, willRetry: false, skipped: true })
     send({ type: 'agent_end', isTerminal: true })` })
     const manager = ompManager(fake.executable)
     const events: Array<Record<string, unknown>> = []
@@ -476,9 +478,13 @@ describe('OMP RPC event normalization', () => {
 
     await manager.command(runtime.runtimeId, { type: 'prompt', message: 'continue' })
 
-    await waitUntil(() => events.some((event) => event.type === 'compaction_end'))
-    const start = events.find((event) => event.type === 'compaction_start')
-    expect(start).toMatchObject({ reason: 'threshold' })
+    await waitUntil(() => events.filter((event) => event.type === 'compaction_end').length === 2)
+    expect(events.filter((event) => event.type === 'compaction_start')).toMatchObject([{ reason: 'threshold' }, { reason: 'idle' }])
+    // OMP ends carry no reason; each end reports the reason its start announced.
+    expect(events.filter((event) => event.type === 'compaction_end')).toMatchObject([
+      { reason: 'threshold', completed: true },
+      { reason: 'idle', errorSeverity: 'warning' },
+    ])
     expect(events.some((event) => String(event.type).startsWith('auto_compaction'))).toBe(false)
     expect(manager.list()[0]).toMatchObject({ isStreaming: false, isCompacting: false })
   })
