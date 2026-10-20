@@ -25,16 +25,17 @@ afterEach(async () => {
 })
 
 describe('agent RPC exit details', () => {
-  const writeExitingAgent = (body: string): { cwd: string; executable: string } => {
+  const writeAgent = (name: string, source: string): { cwd: string; executable: string } => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-exit-'))
     dirs.push(cwd)
-    const executable = join(cwd, 'exit-agent.cjs')
-    writeFileSync(executable, `#!/usr/bin/env node
-${body}
-`)
+    const executable = join(cwd, name)
+    writeFileSync(executable, source)
     chmodSync(executable, 0o755)
     return { cwd, executable }
   }
+  const writeExitingAgent = (body: string) => writeAgent('exit-agent.cjs', `#!/usr/bin/env node
+${body}
+`)
 
   it('includes a sanitized stderr tail when the agent exits before any frame', async () => {
     const fake = writeExitingAgent(`process.stderr.write('Error: Tool "session_list" from extension "pi-session-search" conflicts with extension "omp-work-collaboration"')
