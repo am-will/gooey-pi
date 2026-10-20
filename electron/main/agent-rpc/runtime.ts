@@ -10,6 +10,7 @@ import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAsse
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
+import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, reportsCompactionOutcome, settledCompactionEnd, type CompactAnswer, type ManualCompaction } from './manual-compaction'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
@@ -92,6 +93,7 @@ export class RpcRuntime {
   private watchdogDisposed = false
   private lastActivityAt = Date.now()
   private lastRealCompactionEventAt = 0
+  private manualCompaction: ManualCompaction | null = null
   private readonly chunks: RpcChunkAssembler
 
   constructor(
@@ -213,8 +215,8 @@ export class RpcRuntime {
       await this.transport.enqueue(`${JSON.stringify(command)}\n`).done
       return { type: 'response', command: 'extension_ui_response', success: true }
     }
-    const timeout = command.type === 'compact' ? 10 * 60_000 : 60_000
-    const response = await this.request(command, timeout)
+    if (command.type === 'compact') return this.compact(command)
+    const response = await this.request(command, 60_000)
     if (command.type === 'get_state') this.updateFromState(response.data)
     if (response.success === true && ['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
       await this.refreshState()
@@ -228,6 +230,43 @@ export class RpcRuntime {
       void this.refreshState().then(() => this.refreshContextUsage()).catch(() => undefined)
     }
     return response
+  }
+
+  /**
+   * Runs a manual compaction and publishes its lifecycle from the answer.
+   * OMP answers a compact command without streaming any compaction event, and
+   * handles commands one at a time, so the watchdog's polls wait behind it
+   * too. An end a harness streams without its outcome waits for the answer,
+   * which completes it; with no end at all, the answer stands in for the
+   * whole lifecycle. Every harness fails the command when there is nothing
+   * to compact yet; that refusal answers as a skipped compaction instead of
+   * a failed request.
+   */
+  private async compact(command: RpcObject): Promise<RpcObject> {
+    const compaction: ManualCompaction = {}
+    this.manualCompaction = compaction
+    try {
+      const response = await this.request(command, 10 * 60_000)
+      this.settleManualCompaction(compaction, command, { result: response.data })
+      return response
+    } catch (error) {
+      const detail = errorMessage(error)
+      const refusal = isCompactRefusal(this.adapter, compaction.end, detail)
+      this.settleManualCompaction(compaction, command, { error: detail, refusal })
+      if (!refusal) throw error
+      return { type: 'response', command: 'compact', success: true, data: { skipped: true, message: detail } }
+    }
+  }
+
+  private settleManualCompaction(compaction: ManualCompaction, command: RpcObject, answer: CompactAnswer): void {
+    if (this.manualCompaction === compaction) this.manualCompaction = null
+    // An end that reported its outcome went out as it arrived.
+    if (compaction.end && reportsCompactionOutcome(compaction.end)) return
+    // A runtime that exited or is stopping synthesizes no more lifecycle, but
+    // still publishes an end its harness streamed.
+    if (this.watchdogDisposed && !compaction.end) return
+    if (!compaction.end && this.compactionEpisode === 'none') this.handleEvent(manualCompactionStart(command))
+    this.handleEvent(settledCompactionEnd(compaction.end, command, answer))
   }
 
   stop(): Promise<boolean> {
@@ -446,6 +485,14 @@ export class RpcRuntime {
 
   /** Runs one normalized event through the streaming, compaction and session-action state, then forwards it. */
   private handleEvent(value: RpcObject): void {
+    // A compact command's own end waits for its answer (see compact) unless
+    // it already reports its outcome. OMP ends carry no reason; the start
+    // they close names it.
+    if (value.type === 'compaction_end' && this.manualCompaction && !this.manualCompaction.end
+      && isManualCompactionReason(value.reason ?? this.compactionStartReason)) {
+      this.manualCompaction.end = value
+      if (!reportsCompactionOutcome(value)) return
+    }
     const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)
@@ -457,9 +504,11 @@ export class RpcRuntime {
       this.retryPending = false
       this.info.isStreaming = true
       this.info.isCompacting = false
-      if (this.compactionEpisode !== 'none') {
+      if (this.compactionEpisode !== 'none' && !this.manualCompaction) {
         // The compaction's end event never arrived (or was lost); close the
-        // renderer's running row before the new turn opens.
+        // renderer's running row before the new turn opens. A compact
+        // command's answer closes the row itself, even when a steer parked
+        // during the compaction started its run first.
         this.compactionEpisode = 'none'
         this.clearCompactionEndFallback()
         this.emit({ type: 'compaction_end', synthetic: true, aborted: false, willRetry: true })
