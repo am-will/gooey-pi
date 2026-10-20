@@ -21,6 +21,7 @@ import {
   assertSupportedNpm,
   assertSupportedNode,
   assertSupportedToolchain,
+  packagingPlan,
   parseToolchainMetadata,
   readNpmOutput,
   readNpmVersion,
@@ -244,8 +245,6 @@ describe('release preflight', () => {
     expect(() => assertRequestedArchitecture({ ...artifacts, zip: 'release/mac/x64/Prime Work-1.0.0-x64.zip' }, 'arm64')).toThrow(/declares architecture x64/)
     expect(() => assertRequestedArchitecture(artifacts, 'universal')).toThrow(/must be arm64 or x64/)
     expect(() => assertRequestedArchitecture(artifacts, '')).toThrow(/must be arm64 or x64/)
-    // package.mjs forwards the authoritative arch into mac post-package verification.
-    expect(readFileSync('scripts/release/package.mjs', 'utf8')).toContain("'--arch', arch, '--release-directory'")
 
     const entitlement = 'com.apple.security.device.audio-input'
     expect(() => assertBooleanEntitlement(`<key>${entitlement}</key><true/>`, entitlement, 'fixture')).not.toThrow()
@@ -617,9 +616,49 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
   test('fails closed without Windows Authenticode credentials', () => {
     expect(() => validateWindowsReleaseCredentials({})).toThrow(/WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD/)
     expect(() => validateWindowsReleaseCredentials({ WIN_CSC_LINK: 'certificate', WIN_CSC_KEY_PASSWORD: 'password' })).not.toThrow()
-    const packaging = readFileSync('scripts/release/package.mjs', 'utf8')
-    expect(packaging).toContain("builderArgs.push('--config.forceCodeSigning=true')")
-    expect(packaging).toContain("'--mode', isPublic ? 'public' : 'qa'")
+  })
+
+  const builderOutput = (platform: string) => ['--publish', 'never', `--config.directories.output=release/${platform}/arm64`]
+  test.each([
+    { mode: 'public', platform: 'mac', builderArgs: ['--mac', '--arm64', ...builderOutput('mac')] },
+    { mode: 'public', platform: 'linux', builderArgs: ['--linux', '--arm64', ...builderOutput('linux')] },
+    { mode: 'public', platform: 'win', builderArgs: ['--win', '--arm64', ...builderOutput('win'), '--config.forceCodeSigning=true'] },
+    { mode: 'qa', platform: 'mac', builderArgs: ['--mac', '--arm64', ...builderOutput('mac'), '--config.mac.identity=null', '--config.mac.notarize=false'] },
+    { mode: 'qa', platform: 'linux', builderArgs: ['--linux', '--arm64', ...builderOutput('linux')] },
+    // Unsigned Windows QA builds skip the Store-only AppX target.
+    { mode: 'qa', platform: 'win', builderArgs: ['--win', 'nsis', 'zip', '--arm64', ...builderOutput('win')] },
+  ])('plans $mode $platform packaging with mode-specific signing and verification', ({ mode, platform, builderArgs }) => {
+    const outputDirectory = `/repo/release/${platform}/arm64`
+    const plan = packagingPlan({ mode, platform, arch: 'arm64', skipVerify: false, outputDirectory })
+    expect(plan.preVerify).toEqual({ command: 'npm', args: ['run', platform === 'mac' ? 'release:verify' : 'release:verify:package'] })
+    expect(plan.builder.command).toBe('electron-builder')
+    expect(plan.builder.args).toEqual(builderArgs)
+    expect(plan.builder.args.includes('--config.forceCodeSigning=true')).toBe(mode === 'public' && platform === 'win')
+    expect(plan.builder.args.includes('--config.mac.identity=null')).toBe(mode === 'qa' && platform === 'mac')
+    // Only QA disables keychain identity discovery; public builds must find the signing identity.
+    expect(plan.builder.env).toEqual(mode === 'qa' ? { CSC_IDENTITY_AUTO_DISCOVERY: 'false' } : {})
+    if (platform === 'mac') {
+      // Public mac verification needs the Team ID to check the signature; every other credential is stripped.
+      expect(plan.verify).toEqual({
+        command: 'node',
+        args: ['scripts/release/verify-package.mjs', '--mode', mode, '--arch', 'arm64', '--release-directory', outputDirectory],
+        keepCredentials: ['RELEASE_SIGNING_TEAM_ID'],
+      })
+    } else {
+      expect(plan.verify).toEqual({
+        command: 'node',
+        args: ['scripts/release/verify-cross-platform-package.mjs', '--platform', platform, '--arch', 'arm64', '--mode', mode],
+        keepCredentials: [],
+      })
+    }
+  })
+
+  test('plans only a bundle build before packaging when verification is skipped and rejects unknown modes', () => {
+    for (const platform of ['mac', 'linux', 'win']) {
+      expect(packagingPlan({ mode: 'public', platform, arch: 'x64', skipVerify: true, outputDirectory: '/repo/release' }).preVerify).toEqual({ command: 'npm', args: ['run', 'build:bundle'] })
+    }
+    expect(packagingPlan({ mode: 'qa', platform: 'linux', arch: 'x64', skipVerify: true, outputDirectory: '/repo/release' }).builder.args).toContain('--x64')
+    expect(() => packagingPlan({ mode: 'release', platform: 'win', arch: 'x64', skipVerify: true, outputDirectory: '/repo/release' })).toThrow('Packaging mode must be public or qa')
   })
 
   test('removes release credentials from untrusted verification commands', () => {
@@ -1774,9 +1813,8 @@ describe('cross-platform packaging repair', () => {
     expect(builder.shell).toBe(false)
     expect(builder.args[0]).toMatch(/electron-builder[\\/]cli\.js$/)
     expect(builder.args.at(-1)).toBe('install-app-deps')
-    const packageScript = readFileSync('scripts/release/package.mjs', 'utf8')
-    expect(packageScript).toContain("run('electron-builder', builderArgs, builderEnv)")
-    expect(packageScript).not.toContain("['exec', '--', 'electron-builder'")
+    // package.mjs spawns electron-builder through this resolver, never through `npm exec`.
+    expect(packagingPlan({ mode: 'public', platform: 'win', arch: 'x64', skipVerify: true, outputDirectory: 'C:/release/win/x64' }).builder.command).toBe('electron-builder')
     const npmViaLifecycle = resolveCommandInvocation('npm', ['run', 'release:verify'], 'win32', { npm_execpath: 'C:/npm/npm-cli.js' })
     expect(npmViaLifecycle).toEqual({ file: process.execPath, args: ['C:/npm/npm-cli.js', 'run', 'release:verify'], shell: false })
     expect(() => resolveCommandInvocation('npm', ['ci'], 'win32', { npm_execpath: 'C:/npm/npm.cmd' })).toThrow(/JavaScript npm CLI/)

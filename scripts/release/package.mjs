@@ -2,7 +2,7 @@
 import { copyFileSync, readdirSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import { assertSupportedToolchain, runCommand, validateReleaseCredentials, validateWindowsReleaseCredentials, withoutReleaseCredentials } from './lib.mjs'
+import { assertSupportedToolchain, packagingPlan, runCommand, validateReleaseCredentials, validateWindowsReleaseCredentials, withoutReleaseCredentials } from './lib.mjs'
 
 // Strict parsing rejects typos such as --dryrun, which would otherwise start a
 // real build that first deletes the previous release output.
@@ -65,35 +65,17 @@ try {
   if (process.platform !== platformHosts[platform]) throw new Error(`${platform} packaging must run natively on ${platformHosts[platform]}`)
   if (isPublic && platform === 'mac') validateReleaseCredentials(process.env)
   if (isPublic && platform === 'win') validateWindowsReleaseCredentials(process.env)
-  const verifyScript = skipVerify ? 'build:bundle' : platform === 'mac' ? 'release:verify' : 'release:verify:package'
-  run('npm', ['run', verifyScript], withoutReleaseCredentials(process.env))
-  if (!dryRun) rmSync(resolve('release', platform, arch), { recursive: true, force: true })
-
-  // Unsigned Windows builds can only yield a Store-only AppX (publisher CN=ms)
-  // that Windows refuses to install, so QA builds only the NSIS installer and
-  // ZIP. A target list after --win replaces build.win.target, whereas
-  // --config.win.target would be merged into it and change nothing.
-  const targets = isQa && platform === 'win' ? ['nsis', 'zip'] : []
-  const builderArgs = [`--${platform}`, ...targets, `--${arch}`, '--publish', 'never', `--config.directories.output=release/${platform}/${arch}`]
-  if (isPublic && platform === 'win') builderArgs.push('--config.forceCodeSigning=true')
-  const builderEnv = isQa ? { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' } : process.env
-  if (isQa && platform === 'mac') builderArgs.push('--config.mac.identity=null', '--config.mac.notarize=false')
-  run('electron-builder', builderArgs, builderEnv)
+  const outputDirectory = resolve('release', platform, arch)
+  const plan = packagingPlan({ mode: isPublic ? 'public' : 'qa', platform, arch, skipVerify, outputDirectory })
+  run(plan.preVerify.command, plan.preVerify.args, withoutReleaseCredentials(process.env))
+  if (!dryRun) rmSync(outputDirectory, { recursive: true, force: true })
+  run(plan.builder.command, plan.builder.args, { ...process.env, ...plan.builder.env })
   if (isPublic && platform === 'win' && !dryRun) {
-    const outputDirectory = resolve('release', platform, arch)
     const appx = readdirSync(outputDirectory).find((name) => name.endsWith('.appx'))
     if (!appx) throw new Error('Windows AppX/MSIX package was not produced')
     copyFileSync(resolve(outputDirectory, appx), resolve(outputDirectory, appx.replace(/\.appx$/, '.msix')))
   }
-  if (platform === 'mac') {
-    run(
-      'node',
-      ['scripts/release/verify-package.mjs', '--mode', isPublic ? 'public' : 'qa', '--arch', arch, '--release-directory', resolve('release', platform, arch)],
-      withoutReleaseCredentials(process.env, ['RELEASE_SIGNING_TEAM_ID']),
-    )
-  } else {
-    run('node', ['scripts/release/verify-cross-platform-package.mjs', '--platform', platform, '--arch', arch, '--mode', isPublic ? 'public' : 'qa'], withoutReleaseCredentials(process.env))
-  }
+  run(plan.verify.command, plan.verify.args, withoutReleaseCredentials(process.env, plan.verify.keepCredentials))
   if (dryRun) console.log('\nDRY RUN — nothing executed.')
   else console.log(`\n${isPublic ? 'Distribution' : 'Local QA'} ${platform}/${arch} package pipeline passed.`)
 } catch (error) {

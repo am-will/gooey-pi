@@ -215,3 +215,40 @@ export function validateReleaseCredentials(env = process.env, options = {}) {
 export function validateWindowsReleaseCredentials(env = process.env) {
   requireNonEmpty(env, ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD'], 'Windows Authenticode signing')
 }
+
+/**
+ * The package.mjs pipeline as data: the npm script that gates the build, the
+ * electron-builder invocation for the release mode, and the post-package
+ * verifier. Pure so the signing decisions can be tested without packaging;
+ * package.mjs runs each command and owns the host and credential checks.
+ */
+export function packagingPlan({ mode, platform, arch, skipVerify, outputDirectory }) {
+  if (mode !== 'public' && mode !== 'qa') throw new Error('Packaging mode must be public or qa')
+  const isPublic = mode === 'public'
+  // Unsigned Windows builds can only yield a Store-only AppX (publisher CN=ms)
+  // that Windows refuses to install, so QA builds only the NSIS installer and
+  // ZIP. A target list after --win replaces build.win.target, whereas
+  // --config.win.target would be merged into it and change nothing.
+  const targets = !isPublic && platform === 'win' ? ['nsis', 'zip'] : []
+  return {
+    preVerify: { command: 'npm', args: ['run', skipVerify ? 'build:bundle' : platform === 'mac' ? 'release:verify' : 'release:verify:package'] },
+    builder: {
+      command: 'electron-builder',
+      args: [
+        `--${platform}`,
+        ...targets,
+        `--${arch}`,
+        '--publish',
+        'never',
+        `--config.directories.output=release/${platform}/${arch}`,
+        ...(isPublic && platform === 'win' ? ['--config.forceCodeSigning=true'] : []),
+        ...(!isPublic && platform === 'mac' ? ['--config.mac.identity=null', '--config.mac.notarize=false'] : []),
+      ],
+      env: isPublic ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
+    },
+    verify:
+      platform === 'mac'
+        ? { command: 'node', args: ['scripts/release/verify-package.mjs', '--mode', mode, '--arch', arch, '--release-directory', outputDirectory], keepCredentials: ['RELEASE_SIGNING_TEAM_ID'] }
+        : { command: 'node', args: ['scripts/release/verify-cross-platform-package.mjs', '--platform', platform, '--arch', arch, '--mode', mode], keepCredentials: [] },
+  }
+}
