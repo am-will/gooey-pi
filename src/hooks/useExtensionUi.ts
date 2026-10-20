@@ -145,6 +145,7 @@ export function useExtensionUi({
 
   const startTimer = useCallback((pending: PendingExtensionUi, delay: number): PendingExtensionUi => {
     const { runtimeId, request } = pending
+    window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
     timerByRuntimeRef.current.set(runtimeId, window.setTimeout(() => {
       const current = pendingByRuntimeRef.current.get(runtimeId)
       if (current?.request.id === request.id) expirePending(current)
