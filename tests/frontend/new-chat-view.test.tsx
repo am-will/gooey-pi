@@ -13,6 +13,7 @@ const project: ProjectRecord = {
   id: 'project', harness: 'prime', name: 'Project', path: '/project', folders: ['/project'], primaryFolder: '/project',
   pinned: false, createdAt: '2026-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z', sessionCount: 0,
 }
+const inferred: ProjectRecord = { ...project, id: 'inferred', inferred: true, readOnly: true }
 const started: SessionRecord = {
   id: 'started', harness: 'prime', filePath: '/sessions/started.jsonl', projectPath: '/project', title: 'Build the sidebar',
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'running', depth: 0, unread: false,
@@ -67,6 +68,7 @@ function installBridge(projects: ProjectRecord[]) {
       listFiles: vi.fn(async () => ({ entries: [], skipped: 0, truncated: false })),
       listCheckouts: vi.fn(async () => ({ strategy: 'worktree' as const, activePath: '/project', checkouts: [] })),
       touch: vi.fn(async () => true),
+      grantInferred: vi.fn(async () => ({ ...project, id: 'granted' })),
     },
     sessions: {
       list: vi.fn(async () => catalog),
@@ -167,6 +169,18 @@ describe('new chat view in App', () => {
 
     expect(container.querySelector('.conversation-pane .transcript')).toBe(transcript)
     expect(container.querySelector('.conversation-pane textarea')).toBe(textarea)
+    expect(transcript.textContent).toContain('Build the sidebar')
+  })
+
+  it('keeps the transcript mounted when the first prompt grants an inferred project', async () => {
+    const harness = installBridge([inferred])
+    const { transcript } = await sendFirstPrompt('Build the sidebar')
+    await waitFor(() => harness.bridge.projects.grantInferred.mock.calls.length > 0)
+
+    await act(async () => { harness.startRuntime() })
+    await waitFor(() => container.querySelector('.session-row-wrap.is-selected'))
+
+    expect(container.querySelector('.conversation-pane .transcript')).toBe(transcript)
     expect(transcript.textContent).toContain('Build the sidebar')
   })
 })
