@@ -170,6 +170,16 @@ describe('turn errors', () => {
     }
   })
 
+  it('still reports an error or exit that follows a neutral system row', () => {
+    const fallback = { type: 'retry_fallback_applied', from: 'anthropic/claude-opus', to: 'anthropic/claude-sonnet', role: 'fallback' }
+    const marker: TranscriptMessage = { id: 'steer-read-user-1', role: 'system', kind: 'steer-read-marker', parts: [{ type: 'text', text: 'Steer read here' }] }
+    const exitText = 'The agent stopped unexpectedly (exit code 1). Send the message again to restart it.'
+
+    expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, fallback, { type: 'error', error: 'later failure' }])).at(-1)).toEqual(['system', ['later failure']])
+    expect(texts(replayPrimeEvents([], [fallback, { type: 'runtime_exit', code: 1 }])).at(-1)).toEqual(['system', [exitText]])
+    expect(texts(replayPrimeEvents([marker], [{ type: 'transport_error', error: 'pipe closed' }])).at(-1)).toEqual(['system', ['pipe closed']])
+  })
+
   it('keeps the fallback when an extension or the transport fails after the turn', () => {
     for (const type of ['extension_error', 'transport_error']) {
       expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, { type: 'agent_end' }, { type, error: 'later failure' }])))
