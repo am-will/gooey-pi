@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager, PI_RPC_ADAPTER } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, PI_RPC_ADAPTER, UnsupportedRpcCommandError } from '../../electron/main/agent-rpc'
 import type { ProviderCatalog } from '../../electron/main/agent-rpc'
 import type { PrimeModelDescriptor } from '../../src/types/api'
 import { waitUntil } from '../helpers/wait'
@@ -260,6 +260,7 @@ describe('pi RPC command translation', () => {
       .rejects.toThrow('RPC command clone is not supported by the Pi harness')
     await expect(manager.command(runtime.runtimeId, { type: 'list_heartbeats' }))
       .rejects.toThrow('RPC command list_heartbeats is not supported by the Pi harness')
+    await expect(manager.command(runtime.runtimeId, { type: 'list_heartbeats' })).rejects.toBeInstanceOf(UnsupportedRpcCommandError)
     expect(events.some((event) => event.type === 'fake_unknown_command')).toBe(false)
   })
 

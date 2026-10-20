@@ -100,28 +100,49 @@ const stripStreamingBehavior = (command: RpcObject): RpcObject => {
   return rest
 }
 
+/** Thrown for a renderer command the harness cannot run; callers may fall back to another path. */
+export class UnsupportedRpcCommandError extends Error {
+  constructor(readonly command: string, harnessLabel: string) {
+    super(`RPC command ${command} is not supported by the ${harnessLabel} harness`)
+    this.name = 'UnsupportedRpcCommandError'
+  }
+}
+
+/** A command translator that refuses the `unsupported` commands and passes every other command through. */
+function rejectCommands(unsupported: ReadonlySet<string>, harnessLabel: string): (command: RpcObject) => RpcObject {
+  return (command) => {
+    const type = String(command.type)
+    if (unsupported.has(type)) throw new UnsupportedRpcCommandError(type, harnessLabel)
+    return command
+  }
+}
+
+/** Prime argv; GooeyPi's capability extensions are injected only when the build can load them. */
+function primeStartArgs(input: HarnessStartArgsInput, loadExtensions: boolean): string[] {
+  const args = ['--mode', 'rpc', '--cwd', input.cwd]
+  if (input.sessionPath) args.push('--resume', input.sessionPath)
+  if (input.modelId !== undefined) {
+    if (unsafeArgValue(input.modelId)) throw new TypeError('Invalid model')
+    if (input.providerId) args.push('--provider', input.providerId)
+    args.push('--model', input.modelId)
+  }
+  if (input.thinking) args.push('--thinking', input.thinking)
+  for (const skillPath of [input.environment.PRIME_WORK_SCHEDULE_SKILL_PATH, input.environment.PRIME_WORK_BROWSER_SKILL_PATH, input.environment.GOOEYPI_COMPUTER_USE_SKILL_PATH]) {
+    if (skillPath && !unsafeArgValue(skillPath)) args.push('--skill', skillPath)
+  }
+  if (!loadExtensions) return args
+  for (const injection of extensionInjections('prime')) {
+    const extensionPath = input.environment[injection.environmentVariable]
+    if (extensionPath && !unsafeArgValue(extensionPath)) args.push('--extension', extensionPath)
+  }
+  return args
+}
+
 export const PRIME_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
   agentName: HARNESSES.prime.agentName,
   chunkedFrames: false,
-  buildStartArgs: (input) => {
-    const args = ['--mode', 'rpc', '--cwd', input.cwd]
-    if (input.sessionPath) args.push('--resume', input.sessionPath)
-    if (input.modelId !== undefined) {
-      if (unsafeArgValue(input.modelId)) throw new TypeError('Invalid model')
-      if (input.providerId) args.push('--provider', input.providerId)
-      args.push('--model', input.modelId)
-    }
-    if (input.thinking) args.push('--thinking', input.thinking)
-    for (const skillPath of [input.environment.PRIME_WORK_SCHEDULE_SKILL_PATH, input.environment.PRIME_WORK_BROWSER_SKILL_PATH, input.environment.GOOEYPI_COMPUTER_USE_SKILL_PATH]) {
-      if (skillPath && !unsafeArgValue(skillPath)) args.push('--skill', skillPath)
-    }
-    for (const injection of extensionInjections('prime')) {
-      const extensionPath = input.environment[injection.environmentVariable]
-      if (extensionPath && !unsafeArgValue(extensionPath)) args.push('--extension', extensionPath)
-    }
-    return args
-  },
+  buildStartArgs: (input) => primeStartArgs(input, true),
   translateCommand: (command) => command,
   normalizeEvent: (event) => event,
   buildServiceTierCommand: (serviceTier) => ({ type: 'set_service_tier', serviceTier }),
@@ -133,6 +154,12 @@ const OMP_UNSUPPORTED_COMMANDS = new Set([
   'list_heartbeats', 'get_heartbeat', 'agent_messages_status', 'agent_messages_pause', 'agent_messages_resume',
   'agent_messages_clear',
 ])
+
+const rejectOmpCommands = rejectCommands(OMP_UNSUPPORTED_COMMANDS, 'OMP')
+// pi keeps Prime's vocabulary (fork/get_fork_messages pass through
+// untranslated) but lacks the same Prime-only daemon/heartbeat family OMP
+// rejects, clone included.
+const rejectPiCommands = rejectCommands(OMP_UNSUPPORTED_COMMANDS, 'Pi')
 
 const OMP_APPROVAL_MODES = new Set(['always-ask', 'write', 'yolo'])
 
@@ -166,11 +193,10 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
     }
     return args
   },
-  translateCommand: (command) => {
-    const type = String(command.type)
-    if (OMP_UNSUPPORTED_COMMANDS.has(type)) throw new Error(`RPC command ${type} is not supported by the OMP harness`)
-    if (type === 'fork') return { ...command, type: 'branch' }
-    if (type === 'get_fork_messages') return { ...command, type: 'get_branch_messages' }
+  translateCommand: (raw) => {
+    const command = rejectOmpCommands(raw)
+    if (command.type === 'fork') return { ...command, type: 'branch' }
+    if (command.type === 'get_fork_messages') return { ...command, type: 'get_branch_messages' }
     return stripStreamingBehavior(command)
   },
   normalizeEvent: (event) => {
@@ -231,14 +257,7 @@ export const PI_RPC_ADAPTER: HarnessRpcAdapter = {
     }
     return args
   },
-  translateCommand: (command) => {
-    const type = String(command.type)
-    // pi keeps Prime's vocabulary (fork/get_fork_messages pass through
-    // untranslated) but lacks the same Prime-only daemon/heartbeat family OMP
-    // rejects, clone included.
-    if (OMP_UNSUPPORTED_COMMANDS.has(type)) throw new Error(`RPC command ${type} is not supported by the Pi harness`)
-    return stripStreamingBehavior(command)
-  },
+  translateCommand: (command) => stripStreamingBehavior(rejectPiCommands(command)),
   normalizeEvent: (event) => event,
   // Pi has no native tier command. Its prompt RPC invokes the bundled private
   // slash command, whose provider hook applies service_tier to supported models.

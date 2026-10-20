@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager, OMP_RPC_ADAPTER } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, UnsupportedRpcCommandError } from '../../electron/main/agent-rpc'
 import type { ProviderCatalog } from '../../electron/main/agent-rpc'
 import {
   RPC_CHUNK_ASSEMBLY_INACTIVITY_MS,
@@ -444,6 +444,7 @@ describe('OMP RPC command translation', () => {
       .rejects.toThrow('RPC command send_message is not supported by the OMP harness')
     await expect(manager.command(runtime.runtimeId, { type: 'clone' }))
       .rejects.toThrow('RPC command clone is not supported by the OMP harness')
+    await expect(manager.command(runtime.runtimeId, { type: 'clone' })).rejects.toBeInstanceOf(UnsupportedRpcCommandError)
   })
 
   it('maps set_service_tier onto set_fast_mode', async () => {
