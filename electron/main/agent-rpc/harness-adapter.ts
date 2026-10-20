@@ -56,6 +56,13 @@ export interface HarnessRpcAdapter {
    * update and refreshes get_state when a run ends. Absent means true.
    */
   readonly sessionActionEvents?: boolean
+  /**
+   * The errors the harness fails a compact command with when there is
+   * nothing to compact yet: the session is too short, or already ends in a
+   * compaction. Pi, OMP and Rust Prime tell such a refusal from a failure
+   * nowhere else.
+   */
+  readonly compactRefusal: RegExp
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
   translateCommand(command: RpcObject): RpcObject
@@ -152,10 +159,14 @@ function primeStartArgs(input: HarnessStartArgsInput, loadExtensions: boolean): 
   return args
 }
 
+/** TypeScript and Rust Prime refuse a compact command with the same two errors. */
+const PRIME_COMPACT_REFUSAL = /^(?:Already compacted$|Session is too short to compact\b)/
+
 export const PRIME_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
   agentName: HARNESSES.prime.agentName,
   chunkedFrames: false,
+  compactRefusal: PRIME_COMPACT_REFUSAL,
   buildStartArgs: (input) => primeStartArgs(input, true),
   translateCommand: (command) => command,
   normalizeEvent: (event) => event,
@@ -227,6 +238,7 @@ export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   implementation: 'rust',
   chunkedFrames: false,
   sessionActionEvents: false,
+  compactRefusal: PRIME_COMPACT_REFUSAL,
   buildStartArgs: (input) => primeStartArgs(input, false),
   translateCommand: rejectCommands(PRIME_RUST_UNSUPPORTED_COMMANDS, RUST_PRIME_AGENT_NAME),
   normalizeEvent: normalizeRustPrimeEvent,
@@ -280,6 +292,8 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
   agentName: HARNESSES.omp.agentName,
   negotiateProtocolVersion: 2,
   chunkedFrames: true,
+  // OMP's ManualCompactionNoOpError messages.
+  compactRefusal: /^(?:Already compacted|Nothing to compact \(session too small(?: or already rolled over)?\))$/,
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc', '--cwd', input.cwd]
     if (input.sessionPath) args.push('--resume', input.sessionPath)
@@ -357,6 +371,7 @@ export const PI_RPC_ADAPTER: HarnessRpcAdapter = {
   // pi has no --cwd flag: the session bucket derives from the child process
   // working directory, which the runtime sets to the authorized cwd.
   spawnsInCwd: true,
+  compactRefusal: /^(?:Already compacted|Nothing to compact \(session too small\))$/,
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc']
     // pi's --resume is an interactive selector; an exact session file rides --session.

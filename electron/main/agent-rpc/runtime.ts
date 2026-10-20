@@ -10,7 +10,7 @@ import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAsse
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
-import { manualCompactionStart, settledCompactionEnd, type CompactAnswer } from './manual-compaction'
+import { isCompactRefusal, manualCompactionStart, settledCompactionEnd, type CompactAnswer } from './manual-compaction'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
@@ -239,7 +239,9 @@ export class RpcRuntime {
    * OMP answers a compact command without streaming any compaction event, and
    * handles commands one at a time, so the watchdog's polls wait behind it
    * too. The end a harness does stream waits for the answer, which completes
-   * it; without one, the answer stands in for the whole lifecycle.
+   * it; without one, the answer stands in for the whole lifecycle. Every
+   * harness fails the command when there is nothing to compact yet; that
+   * refusal answers as a skipped compaction instead of a failed request.
    */
   private async compact(command: RpcObject): Promise<RpcObject> {
     const compaction: { end?: RpcObject } = {}
@@ -249,8 +251,11 @@ export class RpcRuntime {
       this.settleManualCompaction(compaction, command, { result: response.data })
       return response
     } catch (error) {
-      this.settleManualCompaction(compaction, command, { error: errorMessage(error) })
-      throw error
+      const detail = errorMessage(error)
+      const refusal = isCompactRefusal(this.adapter, compaction.end, detail)
+      this.settleManualCompaction(compaction, command, { error: detail, refusal })
+      if (!refusal) throw error
+      return { type: 'response', command: 'compact', success: true, data: { skipped: true, message: detail } }
     }
   }
 

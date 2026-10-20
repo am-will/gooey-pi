@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
+import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
+import { isCompactRefusal } from '../../electron/main/agent-rpc/manual-compaction'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
 import type { RpcObject } from '../../electron/main/agent-rpc/types'
 import { waitUntil } from '../helpers/wait'
@@ -51,6 +52,7 @@ async function startRuntime(compactScript: string, adapter: HarnessRpcAdapter, e
 const compactionEvents = (events: RpcObject[]): RpcObject[] => events.filter((event) => event.type === 'compaction_start' || event.type === 'compaction_end')
 
 const RESULT = { summary: 'The story so far', firstKeptEntryId: 'kept-1', tokensBefore: 148 }
+const PRIME_TOO_SHORT = 'Session is too short to compact — try again once it grows'
 
 describe('manual compaction lifecycle', () => {
   it('publishes the compaction a compact command answered with when the harness streamed none', async () => {
@@ -124,6 +126,49 @@ describe('manual compaction lifecycle', () => {
     expect(compactionEvents(events).at(-1)).toEqual({ type: 'compaction_end', reason: 'manual', aborted: true, willRetry: false })
   })
 
+  it('answers a refusal because there is nothing to compact yet as a skipped compaction', async () => {
+    // Pi 1.3 streams the refusal as a failed end, then fails the command.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'manual' })
+      send({ type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false, errorMessage: 'Compaction failed: Nothing to compact (session too small)' })
+      send({ id: command.id, type: 'response', command: 'compact', success: false, error: 'Nothing to compact (session too small)' })`, PI_RPC_ADAPTER, events)
+
+    await expect(runtime.command({ type: 'compact' })).resolves.toEqual({
+      type: 'response', command: 'compact', success: true, data: { skipped: true, message: 'Nothing to compact (session too small)' },
+    })
+
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'manual' },
+      { type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false, errorSeverity: 'warning', errorMessage: 'Nothing to compact (session too small)' },
+    ])
+  })
+
+  it('skips a refused compaction whatever its harness streamed for it', async () => {
+    const omp: RpcObject[] = []
+    const ompRuntime = await startRuntime(`send({ id: command.id, type: 'response', command: 'compact', success: false, error: 'Already compacted' })`, OMP_RPC_ADAPTER, omp)
+    await expect(ompRuntime.command({ type: 'compact' })).resolves.toMatchObject({ success: true, data: { skipped: true } })
+    expect(compactionEvents(omp).at(-1)).toMatchObject({ synthetic: true, errorSeverity: 'warning', errorMessage: 'Already compacted' })
+
+    const rust: RpcObject[] = []
+    const rustRuntime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'requested' })
+      send({ type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false })
+      send({ id: command.id, type: 'response', command: 'compact', success: false, error: ${JSON.stringify(PRIME_TOO_SHORT)} })`, PRIME_RUST_RPC_ADAPTER, rust)
+    await expect(rustRuntime.command({ type: 'compact' })).resolves.toMatchObject({ success: true, data: { skipped: true } })
+    expect(compactionEvents(rust).at(-1)).toEqual({ type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false, errorSeverity: 'warning', errorMessage: PRIME_TOO_SHORT })
+  })
+
+  it('trusts a streamed end that marks the refusal itself', async () => {
+    // TypeScript Prime reports a skip as a warning on its end event.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false, errorSeverity: 'warning', errorMessage: 'Nothing new since the last summary' })
+      send({ id: command.id, type: 'response', command: 'compact', success: false, error: 'Nothing new since the last summary' })`, PRIME_RPC_ADAPTER, events)
+
+    await expect(runtime.command({ type: 'compact' })).resolves.toMatchObject({ success: true, data: { skipped: true, message: 'Nothing new since the last summary' } })
+  })
+
   it('closes a running compaction the watchdog announced with the answered result', async () => {
     const events: RpcObject[] = []
     const runtime = await startRuntime(`setTimeout(() => ok(${JSON.stringify(RESULT)}), 50)`, OMP_RPC_ADAPTER, events)
@@ -137,5 +182,33 @@ describe('manual compaction lifecycle', () => {
       { type: 'compaction_start', synthetic: true },
       expect.objectContaining({ type: 'compaction_end', result: RESULT }),
     ])
+  })
+})
+
+describe('compact refusals', () => {
+  // The errors each harness fails a compact command with, as the installed
+  // CLIs (Pi 1.3.0, OMP 18.12.3, Prime 0.10.0 and the bundled 0.7) answer.
+  const cases: Array<[string, HarnessRpcAdapter, string[], string[]]> = [
+    ['Pi', PI_RPC_ADAPTER,
+      ['Nothing to compact (session too small)', 'Already compacted'],
+      ['Compaction cancelled', 'Compaction failed: Nothing to compact (session too small)', 'No model selected']],
+    ['OMP', OMP_RPC_ADAPTER,
+      ['Nothing to compact (session too small)', 'Nothing to compact (session too small or already rolled over)', 'Already compacted'],
+      ['Compaction already in progress', 'No configured compaction method can run manually.', 'Compaction cancelled']],
+    ['Rust Prime', PRIME_RUST_RPC_ADAPTER,
+      [PRIME_TOO_SHORT, 'Already compacted'],
+      ['Compaction failed: Summarization failed', 'Session is too short']],
+    ['TypeScript Prime', PRIME_RPC_ADAPTER,
+      [PRIME_TOO_SHORT, 'Already compacted'],
+      ['Compaction failed: Summarization failed', 'Already compacted twice']],
+  ]
+
+  it.each(cases)('recognizes %s refusals by their error alone', (_harness, adapter, refusals, failures) => {
+    for (const error of refusals) expect(isCompactRefusal(adapter, undefined, error), error).toBe(true)
+    for (const error of failures) expect(isCompactRefusal(adapter, undefined, error), error).toBe(false)
+  })
+
+  it('never takes a cancelled compaction for a refusal', () => {
+    expect(isCompactRefusal(PI_RPC_ADAPTER, { type: 'compaction_end', aborted: true, errorSeverity: 'warning' }, 'Already compacted')).toBe(false)
   })
 })
