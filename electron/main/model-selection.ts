@@ -48,6 +48,20 @@ export function rankedModelMatches(query: string, models: readonly PrimeModelDes
     .map(({ model }) => model)
 }
 
+const MODEL_LISTING_LIMIT = 100
+
+/** The bounded model list payload shared by the voice and agent-collaboration `models` tools. */
+export function modelListing(query: string, available: readonly PrimeModelDescriptor[]) {
+  const matches = query ? rankedModelMatches(query, available) : available
+  const models = matches.slice(0, MODEL_LISTING_LIMIT).map((model) => ({
+    key: model.key,
+    name: model.name,
+    provider: model.provider,
+    reasoning_levels: model.availableThinkingLevels,
+  }))
+  return { models, matched: matches.length, returned: models.length, truncated: matches.length > models.length }
+}
+
 export function resolveModel(query: string, models: readonly PrimeModelDescriptor[]): PrimeModelDescriptor {
   const match = rankedModelMatches(query, models)[0]
   if (!match) throw new Error(`No available model from a visible provider matched “${query}”`)
