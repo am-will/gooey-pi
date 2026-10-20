@@ -1,6 +1,6 @@
 import { isIPv6 } from 'node:net'
 import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export type JsonObject = Record<string, unknown>
 
@@ -48,7 +48,8 @@ export function rejectUnknownKeys(value: JsonObject, allowed: readonly string[],
 
 export function isPathWithin(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate))
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  // Compare the first segment, not a prefix: a child named `..cache` is inside the root.
+  return rel === '' || !(rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
 }
 
 export async function requireExistingDirectory(value: unknown, label = 'path'): Promise<string> {

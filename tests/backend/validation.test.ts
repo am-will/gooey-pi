@@ -136,6 +136,13 @@ describe('isPathWithin', () => {
     expect(isPathWithin('/tmp/root', '/tmp/root/../escape')).toBe(false)
     expect(isPathWithin('/tmp/root', '/tmp/rootbeer')).toBe(false)
     expect(isPathWithin('/tmp/root', '/')).toBe(false)
+    expect(isPathWithin('/tmp/root', '/tmp/root/..')).toBe(false)
+  })
+
+  it('accepts children whose names merely start with two dots', () => {
+    expect(isPathWithin('/tmp/root', '/tmp/root/..cache/x')).toBe(true)
+    expect(isPathWithin('/tmp/root', '/tmp/root/..env')).toBe(true)
+    expect(isPathWithin('/tmp/root', '/tmp/root/..cache/../../x')).toBe(false)
   })
 
   it('normalizes traversal inside the candidate before comparing', () => {
