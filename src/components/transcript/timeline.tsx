@@ -42,7 +42,7 @@ export type ToolKind = 'question' | 'terminal' | 'web' | 'git' | 'file' | 'mcp'
 
 export function classifyTool(name: string): ToolKind {
   if (/ask[_\s.-]?user|ask\s+(?:a\s+)?question|ui\.select|request[_\s.-]?input/i.test(name)) return 'question'
-  if (/bash|shell|terminal|command|exec|process|python/i.test(name)) return 'terminal'
+  if (/bash|shell|terminal|command|exec|process|python|\beval\b/i.test(name)) return 'terminal'
   if (/github|\bgit\b|commit|branch|pull[_\s-]?request/i.test(name)) return 'git'
   if (/browser|web[_\s.-]?search|search[_\s.-]?web|fetch|https?|url|globe/i.test(name)) return 'web'
   if (/read|write|edit|file|path|directory|patch/i.test(name)) return 'file'

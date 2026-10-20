@@ -66,6 +66,7 @@ describe('transcript rendering', () => {
 
   it.each([
     ['a Prime ipython cell', 'ipython', { code: 'import os\nprint(os.getcwd())' }, 'import os print(os.getcwd())'],
+    ['an OMP eval cell', 'eval', { language: 'py', code: 'x = 1\nprint(x)' }, 'x = 1 print(x)'],
     ['a bash command', 'bash', { command: 'npm test -- --run' }, 'npm test -- --run'],
   ])('presents %s as a terminal tool previewing its source', (_description, name, args, preview) => {
     const html = render([{
