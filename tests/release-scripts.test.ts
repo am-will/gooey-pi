@@ -1764,6 +1764,8 @@ describe('vendored supply-chain pins', () => {
 })
 
 describe('vendor patch verification', () => {
+  const vendorPatchNames = () => readdirSync('vendor/patches').filter((name) => name.endsWith('.patch'))
+
   test('reproduces the reviewed archives when the user Git config enables core.autocrlf', () => {
     const directory = mkdtempSync(join(tmpdir(), 'gooeypi-autocrlf-'))
     const gitConfig = join(directory, 'gitconfig')
@@ -1774,16 +1776,14 @@ describe('vendor patch verification', () => {
         env: { ...process.env, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1' },
       })
       expect(result.status, result.stderr).toBe(0)
-      expect(result.stdout).toContain('content verified')
+      for (const patch of vendorPatchNames()) expect(result.stdout).toContain(`${patch.replace(/\.patch$/, '.tgz')}: content verified`)
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
   }, 60_000)
 
   test('checks the vendor patches out without line ending conversion', () => {
-    const patches = readdirSync('vendor/patches')
-      .filter((name) => name.endsWith('.patch'))
-      .map((name) => `vendor/patches/${name}`)
+    const patches = vendorPatchNames().map((name) => `vendor/patches/${name}`)
     expect(patches.length).toBeGreaterThan(0)
     for (const patch of patches) {
       const result = spawnSync('git', ['check-attr', 'text', '--', patch], { encoding: 'utf8' })
