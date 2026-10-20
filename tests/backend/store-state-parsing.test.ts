@@ -212,6 +212,18 @@ describe('persisted settings parsing', () => {
     expect(settings.piDisabledModels).toEqual(['openai/gpt-5'])
   })
 
+  it('keeps disabled-provider lists up to the provider catalog cap for every harness', () => {
+    const ids = Array.from({ length: 257 }, (_, index) => `p${index}`)
+    const { settings } = loadState({
+      version: 4,
+      settings: { disabledProviders: ids.slice(0, 129), ompDisabledProviders: ids, piDisabledProviders: ids },
+    })
+    expect(settings.disabledProviders).toEqual(ids.slice(0, 129))
+    expect(settings.ompDisabledProviders).toEqual(ids.slice(0, 256))
+    expect(settings.piDisabledProviders).toEqual(ids.slice(0, 256))
+    expect(loadState({ version: 4, settings: { disabledProviders: ids } }).settings.disabledProviders).toEqual(ids.slice(0, 256))
+  })
+
   it('keeps valid per-harness model preferences and clears malformed entries', () => {
     const { settings } = loadState({
       version: 4,

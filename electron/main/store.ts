@@ -5,6 +5,7 @@ import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { renameWithWindowsRetry } from './lib/durable-write'
+import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
 import { isRecord } from './validation'
 
@@ -276,17 +277,11 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
     browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,
     computerUseEnabled: typeof value.computerUseEnabled === 'boolean' ? value.computerUseEnabled : defaults.computerUseEnabled,
-    disabledProviders: Array.isArray(value.disabledProviders)
-      ? [...new Set(value.disabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 128)
-      : defaults.disabledProviders,
+    disabledProviders: parseDisabledProviders(value.disabledProviders, defaults.disabledProviders),
     disabledModels: parseDisabledModels(value.disabledModels, defaults.disabledModels),
-    ompDisabledProviders: Array.isArray(value.ompDisabledProviders)
-      ? [...new Set(value.ompDisabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 256)
-      : defaults.ompDisabledProviders,
+    ompDisabledProviders: parseDisabledProviders(value.ompDisabledProviders, defaults.ompDisabledProviders),
     ompDisabledModels: parseDisabledModels(value.ompDisabledModels, defaults.ompDisabledModels),
-    piDisabledProviders: Array.isArray(value.piDisabledProviders)
-      ? [...new Set(value.piDisabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 256)
-      : defaults.piDisabledProviders,
+    piDisabledProviders: parseDisabledProviders(value.piDisabledProviders, defaults.piDisabledProviders),
     piDisabledModels: parseDisabledModels(value.piDisabledModels, defaults.piDisabledModels),
     lastSelectedModels,
     activeHarness,
@@ -306,6 +301,13 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     voiceRealtimeModel: boundedString(value.voiceRealtimeModel, 128) ? value.voiceRealtimeModel : defaults.voiceRealtimeModel,
     voiceRealtimeVoice: boundedString(value.voiceRealtimeVoice, 64) ? value.voiceRealtimeVoice : defaults.voiceRealtimeVoice,
   }
+}
+
+function parseDisabledProviders(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback
+  return [...new Set(value.filter((item): item is string => (
+    typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)
+  )))].slice(0, MAX_CATALOG_PROVIDERS)
 }
 
 function parseDisabledModels(value: unknown, fallback: string[]): string[] {
