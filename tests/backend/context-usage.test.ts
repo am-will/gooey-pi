@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { LiveContextUsageTracker, withLiveContextUsage } from '../../electron/main/agent-rpc/context-usage'
+import { ContextUsageProjection, LiveContextUsageTracker, withLiveContextUsage } from '../../electron/main/agent-rpc/context-usage'
+
+const usage = (tokens: number) => ({ tokens, contextWindow: 100_000, percent: tokens / 1_000 })
+const assistantEnd = (output: number) => ({ type: 'message_end', message: { role: 'assistant', usage: { output } } })
 
 describe('live context usage tracking', () => {
   it('uses reported output usage and falls back to streaming character estimates', () => {
@@ -76,5 +79,39 @@ describe('live context usage projection', () => {
   it('preserves unknown post-compaction usage', () => {
     const unknown = { tokens: null, contextWindow: 100_000, percent: null } as const
     expect(withLiveContextUsage(unknown, 1_000, 0)).toBe(unknown)
+  })
+})
+
+describe('context usage projection', () => {
+  it('keeps output live until a snapshot that includes it arrives', () => {
+    const projection = new ContextUsageProjection()
+    expect(projection.current()).toBeUndefined()
+    projection.applySnapshot(usage(40_000))
+    expect(projection.handleEvent({ type: 'message_start', message: { role: 'user', content: 'go' } })).toBe(true)
+    expect(projection.generation).toBe(1)
+
+    expect(projection.handleEvent(assistantEnd(200))).toBe(true)
+    expect(projection.current()?.tokens).toBe(40_200)
+    // A fast stats answer that predates persistence keeps the output live.
+    projection.applySnapshot(usage(40_000), projection.activityTokens)
+    expect(projection.current()?.tokens).toBe(40_200)
+    // A snapshot that grew by at least the output already counts it.
+    projection.applySnapshot(usage(40_300), projection.activityTokens)
+    expect(projection.current()?.tokens).toBe(40_300)
+  })
+
+  it('bakes live output at a run boundary and forgets everything on reset', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_000))
+    projection.handleEvent(assistantEnd(500))
+    projection.bake()
+    expect(projection.current()?.tokens).toBe(40_500)
+    projection.applySnapshot(usage(40_400), projection.activityTokens)
+    expect(projection.current()?.tokens).toBe(40_400)
+
+    projection.reset()
+    expect(projection.current()).toBeUndefined()
+    expect(projection.activityTokens).toBe(0)
+    expect(projection.generation).toBe(1)
   })
 })
