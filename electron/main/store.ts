@@ -474,6 +474,7 @@ export class JsonStateStore {
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
     let sourcePath = filePath
     let sourceKind: 'current' | 'legacy' = 'current'
+    let stateRead = false
     try {
       let size: number
       try {
@@ -499,6 +500,7 @@ export class JsonStateStore {
         throw new StateCompatibilityError(`Desktop state file at ${sourcePath} is ${size} bytes, which exceeds the ${MAX_STATE_FILE_BYTES}-byte safe parse limit. It was left unchanged; use the GooeyPi version that created it, or move it aside only after making a backup.`)
       }
       const rawState = readFileSync(sourcePath)
+      stateRead = true
       const serializedState: unknown = JSON.parse(rawState.toString('utf8'))
       if (this.platform === 'win32' && sourceKind === 'legacy') {
         const tombstone = parseWindowsLegacyTombstone(serializedState)
@@ -537,20 +539,37 @@ export class JsonStateStore {
         }
         return
       }
+      if (!stateRead && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        // A stat or read failure is not evidence of corruption, so the file is never quarantined for it.
+        this.scheduleInitializationOperation(
+          () => Promise.reject(error),
+          `GooeyPi could not read desktop state at ${sourcePath}; the file was left unchanged`,
+        )
+        return
+      }
       let recoveryPath: string | undefined
       let preservationFailure: unknown
       try {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          console.error(`GooeyPi desktop state was reset and backed up: ${error instanceof Error ? error.message : String(error)}`)
           recoveryPath = `${sourcePath}.corrupt-${Date.now()}`
           renameSync(sourcePath, recoveryPath)
+          console.error(`GooeyPi desktop state was reset and backed up to ${recoveryPath}: ${error instanceof Error ? error.message : String(error)}`)
         }
       } catch (failure) {
         preservationFailure = failure
         recoveryPath = undefined
       }
-      if (this.platform === 'win32' && legacyFilePath) this.scheduleWindowsRecoveryInitialization(sourceKind, recoveryPath, preservationFailure)
-      else this.scheduleInitialization(true, legacyFilePath !== undefined, 'GooeyPi desktop state could not be rewritten after the reset')
+      if (this.platform === 'win32' && legacyFilePath) {
+        this.scheduleWindowsRecoveryInitialization(sourceKind, recoveryPath, preservationFailure)
+      } else if (preservationFailure) {
+        // Never persist defaults over state that could not be backed up first.
+        this.scheduleInitializationOperation(
+          () => Promise.reject(preservationFailure),
+          `GooeyPi could not preserve unreadable desktop state at ${sourcePath} before reset`,
+        )
+      } else {
+        this.scheduleInitialization(true, legacyFilePath !== undefined, 'GooeyPi desktop state could not be rewritten after the reset')
+      }
     }
   }
 

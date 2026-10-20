@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,6 +39,14 @@ const realFileSystem: JsonStateStoreFileSystem = {
   open: (path, flags, mode) => open(path, flags, mode),
   rename,
   unlink,
+}
+
+function recordingFileSystem(events: string[]): JsonStateStoreFileSystem {
+  return {
+    open: async (path, flags, mode) => { events.push(`open:${flags}`); return open(path, flags, mode) },
+    rename: async (from, to) => { events.push('rename'); await rename(from, to) },
+    unlink: async (path) => { events.push('unlink'); await unlink(path) },
+  }
 }
 
 describe('JsonStateStore', () => {
@@ -314,12 +322,7 @@ describe('JsonStateStore', () => {
     const path = join(dir, 'state.json')
     writeValidState(path)
     const events: string[] = []
-    const fileSystem: JsonStateStoreFileSystem = {
-      open: async (openedPath, flags, mode) => { events.push(`open:${flags}`); return open(openedPath, flags, mode) },
-      rename: async (from, to) => { events.push('rename'); await rename(from, to) },
-      unlink: async (target) => { events.push('unlink'); await unlink(target) },
-    }
-    const store = new JsonStateStore(path, fileSystem)
+    const store = new JsonStateStore(path, recordingFileSystem(events))
     await store.ready()
     const before = readFileSync(path)
 
@@ -932,10 +935,63 @@ describe('JsonStateStore', () => {
     expect(readdirSync(dir).some((name) => name.startsWith('state.json.corrupt-'))).toBe(true)
     expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['after-recovery'])
   })
+
+  for (const withLegacy of [false, true]) {
+    it(`fails readiness and leaves state it cannot read in place${withLegacy ? ' during migration' : ''}`, async () => {
+      const dir = makeDirectory()
+      const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+      const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+      // stat succeeds and the read throws EISDIR on every platform, including as root.
+      mkdirSync(path)
+      const events: string[] = []
+      const store = new JsonStateStore(path, recordingFileSystem(events), withLegacy ? legacyPath : undefined, 'linux')
+
+      const readiness = store.ready()
+      if (withLegacy) {
+        await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+        await expect(readiness).rejects.toThrow(/could not read desktop state.*left unchanged/)
+      } else {
+        await expect(readiness).rejects.toMatchObject({ code: 'EISDIR' })
+      }
+      await expect(store.update((state) => { state.archivedSessions.push('lost') })).rejects.toThrow()
+      expect(events).toEqual([])
+      expect(statSync(path).isDirectory()).toBe(true)
+      expect(readdirSync(dir).filter((name) => name.includes('.corrupt-'))).toEqual([])
+    })
+
+    it(`fails readiness instead of resetting when corrupt state cannot be backed up${withLegacy ? ' during migration' : ''}`, async () => {
+      const dir = makeDirectory()
+      const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+      const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+      const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+      writeFileSync(path, '{broken')
+      if (withLegacy) writeFileSync(legacyPath, legacyRaw)
+      // A directory at the backup name makes the quarantine rename fail.
+      mkdirSync(`${path}.corrupt-1700000000000`)
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+      const events: string[] = []
+      let store: JsonStateStore
+      try {
+        store = new JsonStateStore(path, recordingFileSystem(events), withLegacy ? legacyPath : undefined, 'linux')
+      } finally {
+        now.mockRestore()
+      }
+
+      const readiness = store.ready()
+      if (withLegacy) {
+        await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+        await expect(readiness).rejects.toThrow(/could not preserve unreadable desktop state/)
+      } else {
+        await expect(readiness).rejects.toThrow(/corrupt-1700000000000/)
+      }
+      expect(events).toEqual([])
+      expect(readFileSync(path, 'utf8')).toBe('{broken')
+      if (withLegacy) expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
+    })
+  }
   it('archives and restores session visibility metadata without touching the transcript', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-session-')); dirs.push(dir)
     const sessionRoot = join(dir, 'sessions')
-    const { mkdirSync } = await import('node:fs')
     mkdirSync(sessionRoot)
     const transcript = join(sessionRoot, 'session.jsonl')
     writeFileSync(transcript, '{"type":"session"}\n')
