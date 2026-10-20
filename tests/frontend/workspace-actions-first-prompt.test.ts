@@ -76,17 +76,23 @@ function fixture({ selectedSession }: { selectedSession?: SessionRecord } = {}) 
   })
   const setToast = vi.fn()
   const reportError = vi.fn()
+  const runtimeIdRef = { current: null as string | null }
+  const runtimeOwnerRef = { current: null as { runtimeId: string; generation: number } | null }
+  // Mirrors useWorkspaceRuntime: attachment is ignored for a replaced workspace.
+  const attachRuntime = (next: RuntimeInfo | undefined, generation: number) => {
+    if (workspaceRef.current.generation !== generation) return
+    currentRuntime = next ?? null
+    runtimeIdRef.current = next?.runtimeId ?? null
+    runtimeOwnerRef.current = next ? { runtimeId: next.runtimeId, generation } : null
+  }
   const workspace = {
     get runtime() { return currentRuntime },
     workspaceRef,
-    runtimeIdRef: { current: null as string | null },
-    runtimeOwnerRef: { current: null as { runtimeId: string; generation: number } | null },
+    runtimeIdRef,
+    runtimeOwnerRef,
     runtimeSessionsRef: { current: new Map<string, string>() },
     prepareForPrompt: () => true,
-    // Mirrors useWorkspaceRuntime: attachment is ignored for a replaced workspace.
-    attachRuntime: (next: RuntimeInfo | undefined, generation: number) => {
-      if (workspaceRef.current.generation === generation) currentRuntime = next ?? null
-    },
+    attachRuntime,
     setRuntime,
     setMessages: (next: TranscriptMessage[] | ((current: TranscriptMessage[]) => TranscriptMessage[])) => {
       messages = typeof next === 'function' ? next(messages) : next
@@ -154,8 +160,23 @@ function fixture({ selectedSession }: { selectedSession?: SessionRecord } = {}) 
         cwd: project.primaryFolder,
         sessionFile: otherSession.filePath,
       }
+      attachRuntime(undefined, workspaceRef.current.generation)
+    },
+    /** The agent_end event: the attached runtime goes idle. */
+    finishTurn() {
+      if (currentRuntime) currentRuntime = { ...currentRuntime, isStreaming: false }
     },
   }
+}
+
+/** Runs a new chat's first turn while its workspace stays selected, so the started runtime attaches. */
+async function startNewChat(state: ReturnType<typeof fixture>) {
+  const sending = state.actions.sendPrompt('Build the sidebar')
+  await vi.waitFor(() => expect(state.agentStart).toHaveBeenCalledOnce())
+  state.start.resolve(startedRuntime)
+  await sending
+  expect(state.runtime()?.runtimeId).toBe('started-runtime')
+  state.finishTurn()
 }
 
 describe('first prompt delivery across a workspace switch', () => {
@@ -257,6 +278,41 @@ describe('first prompt delivery across a workspace switch', () => {
     await flushing
 
     expect(state.agentStart).not.toHaveBeenCalled()
+    expect(state.removeQueuedPrompt).not.toHaveBeenCalled()
+    expect(state.markQueuedPromptFlushFailed).not.toHaveBeenCalled()
+    expect(state.setToast).not.toHaveBeenCalled()
+  })
+
+  it('refuses a follow-up in a started new chat instead of starting a fresh session after the user switches away', async () => {
+    const state = fixture()
+    await startNewChat(state)
+    const runtimes = deferred<RuntimeInfo[]>()
+    state.agentList.mockImplementation(() => runtimes.promise)
+
+    const sending = state.actions.sendPrompt('Add tests too')
+    await vi.waitFor(() => expect(state.agentList).toHaveBeenCalledTimes(2))
+    state.switchWorkspace()
+    runtimes.resolve([startedRuntime])
+
+    await expect(sending).rejects.toThrow('Another session was opened before it was sent.')
+    expect(state.agentStart).toHaveBeenCalledOnce()
+    expect(state.command).not.toHaveBeenCalledWith('started-runtime', expect.objectContaining({ message: 'Add tests too' }))
+  })
+
+  it('leaves a queued message in a started new chat when the user switches away before it flushes', async () => {
+    const state = fixture()
+    await startNewChat(state)
+    const runtimes = deferred<RuntimeInfo[]>()
+    state.agentList.mockImplementation(() => runtimes.promise)
+
+    const flushing = state.actions.sendPrompt('Queued follow-up', [], 'queue', 'queued-1')
+    await vi.waitFor(() => expect(state.agentList).toHaveBeenCalledTimes(2))
+    state.switchWorkspace()
+    runtimes.resolve([startedRuntime])
+    await flushing
+
+    expect(state.agentStart).toHaveBeenCalledOnce()
+    expect(state.command).not.toHaveBeenCalledWith('started-runtime', expect.objectContaining({ message: 'Queued follow-up' }))
     expect(state.removeQueuedPrompt).not.toHaveBeenCalled()
     expect(state.markQueuedPromptFlushFailed).not.toHaveBeenCalled()
     expect(state.setToast).not.toHaveBeenCalled()

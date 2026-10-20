@@ -341,6 +341,10 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       const admitted = workspace.workspaceRef.current
       const generation = admitted.generation
       const isCurrent = () => workspace.workspaceRef.current.generation === generation
+      // A new chat keeps no session file after its first prompt starts a
+      // runtime, so its own runtime is what ties it to a conversation.
+      const admittedOwner = workspace.runtimeOwnerRef.current
+      const admittedRuntimeId = admittedOwner?.generation === generation ? admittedOwner.runtimeId : undefined
       let startedPrompt = false
       let queuedPromptId: string | undefined
       const sentAt = Date.now()
@@ -382,12 +386,12 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           demoTimerRef.current.push(window.setTimeout(() => workspace.setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, streaming: false, completedAt: Date.now(), parts: [...item.parts, { type: 'toolResult', name: 'Inspect project', text: 'Project context loaded' }, { type: 'text', text: 'I’ve reviewed the project context and prepared the workspace. Connect the desktop bridge to run this request with Prime Agent.' }] } : item)), 1_250))
           return
         }
-        // A new chat has no saved session to return to, so a switch before
-        // its runtime starts still delivers it to the admitted project. An
-        // existing session's message stays queued, or is refused back to its
-        // sender, for a retry in that session.
+        // A new chat that has not started a runtime has no conversation to
+        // return to, so a switch before its runtime starts still delivers it
+        // to the admitted project. Any other message stays queued, or is
+        // refused back to its sender, for a retry in its own conversation.
         const stillDeliverable = () => {
-          if (isCurrent() || !admitted.sessionFile) return true
+          if (isCurrent() || (!admitted.sessionFile && !admittedRuntimeId)) return true
           if (queuedFlushPromptId) return false
           throw new Error('Another session was opened before it was sent.')
         }
