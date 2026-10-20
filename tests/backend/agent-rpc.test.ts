@@ -447,6 +447,100 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     }
   })
 
+  it('never over-counts context usage across a Prime tool loop with assistant message starts', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-tool-loop-context-'))
+    dirs.push(cwd)
+    const executable = join(cwd, 'tool-loop-context-agent.cjs')
+    // Prime counts a response's output once it is persisted. Odd turns
+    // persist it a step after message_end, so that refresh answers stale,
+    // and every third stats answer is delivered after later events.
+    writeFileSync(executable, `#!/usr/bin/env node
+const readline = require('node:readline')
+const OUTPUT = 3000
+const TOOL_RESULT = 800
+let contextTokens = 40000
+let statsRequests = 0
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+const real = (tokens) => send({ type: 'fake_real_context', tokens })
+const steps = [() => {
+  send({ type: 'agent_start' })
+  send({ type: 'message_start', message: { role: 'user', content: 'go' } })
+  contextTokens = 40100
+  real(contextTokens)
+  send({ type: 'message_end', message: { role: 'user', content: 'go' } })
+}]
+for (let turn = 0; turn < 20; turn += 1) {
+  const stale = turn % 2 === 1
+  steps.push(
+    () => send({ type: 'message_start', message: { role: 'assistant' } }),
+    () => {
+      real(contextTokens + OUTPUT / 2)
+      send({ type: 'message_update', message: { role: 'assistant', usage: { output: OUTPUT / 2 } }, assistantMessageEvent: { type: 'text_delta', delta: 'working' } })
+    },
+    () => {
+      if (!stale) contextTokens += OUTPUT
+      real(stale ? contextTokens + OUTPUT : contextTokens)
+      send({ type: 'message_end', message: { role: 'assistant', usage: { output: OUTPUT } } })
+    },
+    () => {
+      contextTokens += (stale ? OUTPUT : 0) + TOOL_RESULT
+      real(contextTokens)
+      send({ type: 'tool_execution_end', toolCallId: 'read-' + turn, toolName: 'Read', result: 'ok' })
+      send({ type: 'message_end', message: { role: 'toolResult', content: 'ok' } })
+      send({ type: 'turn_end' })
+    },
+  )
+}
+steps.push(() => send({ type: 'agent_end' }))
+const next = () => { const step = steps.shift(); if (!step) return; step(); setTimeout(next, 15) }
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line)
+  if (command.type === 'get_state') {
+    send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'tool-loop-context', isStreaming: false } })
+  } else if (command.type === 'get_session_stats') {
+    statsRequests += 1
+    const data = { contextUsage: { tokens: contextTokens, contextWindow: 200000, percent: contextTokens / 2000 } }
+    const respond = () => send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data })
+    if (statsRequests % 3 === 0) setTimeout(respond, 40)
+    else respond()
+  } else if (command.type === 'prompt') {
+    send({ id: command.id, type: 'response', command: 'prompt', success: true })
+    next()
+  } else if (command.type === 'abort') {
+    send({ id: command.id, type: 'response', command: 'abort', success: true })
+  }
+})
+`)
+    chmodSync(executable, 0o755)
+    const events: Array<Record<string, unknown>> = []
+    const runtime = new RpcRuntime(process.execPath, [executable], cwd, ({ event }) => events.push(event), () => undefined)
+    try {
+      await runtime.handshake()
+      await runtime.command({ type: 'prompt', message: 'go' })
+      await waitUntil(() => events.some((event) => event.type === 'agent_end'), 10_000)
+      const settled = 40_100 + 20 * (3_000 + 800)
+      await waitUntil(() => runtime.snapshot().contextUsage?.tokens === settled)
+      expect(events.filter((event) => event.type === 'context_usage').at(-1)?.contextUsage).toEqual({
+        tokens: settled,
+        contextWindow: 200_000,
+        percent: settled / 2_000,
+      })
+
+      let real: number | undefined
+      let checked = 0
+      for (const event of events) {
+        if (event.type === 'fake_real_context') real = Number(event.tokens)
+        else if (event.type === 'context_usage' && real !== undefined) {
+          expect((event.contextUsage as { tokens: number }).tokens).toBeLessThanOrEqual(real)
+          checked += 1
+        }
+      }
+      expect(checked).toBeGreaterThan(20)
+    } finally {
+      await runtime.stop()
+    }
+  })
+
   it('runs a trailing authoritative refresh when agent_end lands during an in-flight refresh', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-trailing-context-'))
     dirs.push(cwd)

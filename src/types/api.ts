@@ -137,7 +137,7 @@ export interface BrowserAnnotation {
   createdAt: number
 }
 
-export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'requested'
+export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'requested' | 'idle' | 'incomplete'
 export type PrimeCompactionStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type PrimeCompactionOutcome = 'failed' | 'cancelled' | 'skipped'
 
@@ -153,6 +153,7 @@ export type MessagePart =
       partId?: string
       status: PrimeCompactionStatus
       reason?: PrimeCompactionReason
+      action?: string
       outcome?: PrimeCompactionOutcome
       tokensBefore?: number
       firstKeptEntryId?: string
