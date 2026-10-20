@@ -1201,6 +1201,107 @@ describe('Rust Prime runtimes', () => {
   })
 })
 
+/**
+ * A Prime Agent that, like the Rust build, reports its steering queue only in
+ * get_state: it never emits session_action_update, reports an active turn
+ * only while its scripted run is going, and delivers a queued steer as a user
+ * message_start at the next turn boundary.
+ */
+function fakeQueueingPrime(turnMs = 300): { cwd: string; executable: string } {
+  const cwd = mkdtempSync(join(tmpdir(), 'prime-work-queueing-rpc-'))
+  dirs.push(cwd)
+  const executable = join(cwd, 'fake-queueing-prime.cjs')
+  writeFileSync(executable, `#!/usr/bin/env node
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+let streaming = false
+const steering = []
+const actions = () => ({ queuedCount: steering.length, steering: [...steering], followUps: [], ...(streaming ? { active: { kind: 'turn', phase: 'running' } } : {}) })
+const deliver = (text) => {
+  const message = { role: 'user', content: [{ type: 'text', text }] }
+  send({ type: 'message_start', message })
+  send({ type: 'message_end', message })
+}
+const answer = (text) => {
+  send({ type: 'message_start', message: { role: 'assistant', content: [] } })
+  send({ type: 'message_update', message: { role: 'assistant' }, assistantMessageEvent: { type: 'text_delta', delta: text } })
+  send({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop' } })
+  send({ type: 'turn_end' })
+}
+const run = (prompt) => {
+  streaming = true
+  send({ type: 'agent_start' })
+  send({ type: 'turn_start' })
+  deliver(prompt)
+  setTimeout(() => {
+    answer('first answer')
+    while (steering.length) {
+      send({ type: 'turn_start' })
+      deliver(steering.shift())
+      answer('steer answer')
+    }
+    streaming = false
+    send({ type: 'agent_end', messages: [] })
+  }, ${turnMs})
+}
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line)
+  const ok = (data) => send({ id: command.id, type: 'response', command: command.type, success: true, ...(data ? { data } : {}) })
+  if (command.type === 'get_state') ok({ sessionId: 'queueing', isStreaming: streaming, isCompacting: false, sessionActions: actions() })
+  else if (command.type === 'get_session_stats') ok({ contextUsage: { tokens: 1, contextWindow: 100, percent: 1 } })
+  else if (command.type === 'prompt') { ok(); run(command.message) }
+  else if (command.type === 'steer') { steering.push(command.message); ok() }
+  else if (command.type === 'abort') ok()
+  else send({ id: command.id, type: 'response', command: command.type, success: false, error: 'Unknown command: ' + command.type })
+})
+`)
+  chmodSync(executable, 0o755)
+  return { cwd, executable }
+}
+
+describe('session actions without harness session_action_update events', () => {
+  const running = { kind: 'turn', phase: 'running' }
+  const queueingManager = (executable: string, adapter: HarnessRpcAdapter, events: RpcObject[]): AgentRpcManager => {
+    const manager = new AgentRpcManager(executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), adapter)
+    managers.push(manager)
+    manager.setEventSink(({ event }) => events.push(event))
+    return manager
+  }
+
+  it('drops the finished turn from the snapshot so a new session replaces the idle runtime', async () => {
+    const fake = fakeQueueingPrime()
+    const events: RpcObject[] = []
+    const manager = queueingManager(fake.executable, PRIME_RUST_RPC_ADAPTER, events)
+    const first = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(first.runtimeId, { type: 'prompt', message: 'hello' })
+    await waitUntil(() => manager.list()[0]?.sessionActions?.active !== undefined)
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+    await waitUntil(() => manager.list()[0]?.sessionActions?.active === undefined, 2_000)
+
+    expect(manager.list()[0]).toMatchObject({ isStreaming: false, sessionActions: { queuedCount: 0, steering: [], followUps: [] } })
+    // One synthetic update per change: the running turn, then its end.
+    expect(events.filter((event) => event.type === 'session_action_update')).toEqual([
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [], active: running } },
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [] } },
+    ])
+    const second = await manager.start({ cwd: fake.cwd })
+    expect(manager.list().map((runtime) => runtime.runtimeId)).toEqual([second.runtimeId])
+  })
+
+  it('leaves session actions to the harness events on TypeScript Prime', async () => {
+    const fake = fakeQueueingPrime(100)
+    const events: RpcObject[] = []
+    const manager = queueingManager(fake.executable, PRIME_RPC_ADAPTER, events)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'hello' })
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+    await new Promise((resolveWait) => setTimeout(resolveWait, 200))
+
+    expect(events.some((event) => event.type === 'session_action_update')).toBe(false)
+  })
+})
+
 describe('framed RPC transport stdio failure', () => {
   interface FakeRpcChild extends EventEmitter {
     stdout: PassThrough

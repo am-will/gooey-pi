@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import type { PrimeContextUsage, PrimeEventEnvelope, PrimeModelDescriptor, PrimeServiceTier, RuntimeInfo } from '../../../src/types/api'
-import { emptySessionActionSnapshot, parseSessionActionSnapshot } from '../../../src/lib/session-actions'
+import type { PrimeContextUsage, PrimeEventEnvelope, PrimeModelDescriptor, PrimeServiceTier, RuntimeInfo, SessionActionSnapshot } from '../../../src/types/api'
+import { emptySessionActionSnapshot, parseSessionActionSnapshot, sameSessionActions } from '../../../src/lib/session-actions'
 import { killProcessTree, prepareExecutableSpawn, safeChildEnvironment, waitForProcessExit } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
@@ -147,8 +147,7 @@ export class RpcRuntime {
         throw new Error(`${this.adapter.agentName} does not support RPC protocol v${this.adapter.negotiateProtocolVersion} (${reason}). Update the ${this.adapter.agentName} CLI and try again.`)
       }
     }
-    const response = await this.request({ type: 'get_state' }, 60_000)
-    this.updateFromState(response.data)
+    await this.refreshState()
     const contextDeadline = new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 250)
       timer.unref()
@@ -209,19 +208,15 @@ export class RpcRuntime {
     const response = await this.request(command, timeout)
     if (command.type === 'get_state') this.updateFromState(response.data)
     if (response.success === true && ['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
-      const state = await this.request({ type: 'get_state' }, 60_000)
-      this.updateFromState(state.data)
+      await this.refreshState()
       void this.refreshContextUsage()
     } else if (response.success === true && command.type === 'prompt') {
       // get_state discovers the new session file promptly. Its mid-stream
       // context snapshot does not include the active assistant message, so a
       // usage refresh waits for message/tool boundaries below.
-      void this.request({ type: 'get_state' }, 60_000).then((state) => this.updateFromState(state.data)).catch(() => undefined)
+      void this.refreshState().catch(() => undefined)
     } else if (response.success === true && ['new_session', 'switch_session', 'clone', 'fork', 'branch'].includes(String(command.type))) {
-      void this.request({ type: 'get_state' }, 60_000).then((state) => {
-        this.updateFromState(state.data)
-        return this.refreshContextUsage()
-      }).catch(() => undefined)
+      void this.refreshState().then(() => this.refreshContextUsage()).catch(() => undefined)
     }
     return response
   }
@@ -464,6 +459,9 @@ export class RpcRuntime {
         this.emit({ type: 'compaction_end', synthetic: true, aborted: false, willRetry: true })
       }
     } else if (value.type === 'agent_end') {
+      // Without session action events, only get_state reports that the
+      // finished run no longer holds an active turn.
+      if (this.adapter.sessionActionEvents === false) void this.refreshState().catch(() => undefined)
       // retryPending is cleared only by agent_start or auto_retry_end, never
       // by agent_end: a failed run's agent_end is followed by auto_retry_start
       // when the agent will continue the turn after backoff.
@@ -645,7 +643,7 @@ export class RpcRuntime {
       this.applyAuthoritativeContextUsage(reading.contextUsage)
     }
     const sessionActions = parseSessionActionSnapshot(raw.sessionActions) ?? reading.sessionActions ?? null
-    if (sessionActions) this.info.sessionActions = sessionActions
+    if (sessionActions) this.applyStateSessionActions(sessionActions)
     if (isRecord(raw.model)) {
       this.info.model = {
         provider: typeof raw.model.provider === 'string' ? raw.model.provider : undefined,
@@ -653,6 +651,18 @@ export class RpcRuntime {
         name: typeof raw.model.name === 'string' ? raw.model.name : undefined,
       }
     } else if (raw.model === null) this.info.model = null
+  }
+
+  private async refreshState(): Promise<void> {
+    const state = await this.request({ type: 'get_state' }, 60_000)
+    this.updateFromState(state.data)
+  }
+
+  /** A harness without session action events reports its queue only in get_state, so each change found there is forwarded as a synthetic update. */
+  private applyStateSessionActions(actions: SessionActionSnapshot): void {
+    const changed = !sameSessionActions(this.info.sessionActions, actions)
+    this.info.sessionActions = actions
+    if (changed && this.adapter.sessionActionEvents === false) this.emit({ type: 'session_action_update', actions, synthetic: true })
   }
 
   private emit(event: RpcObject): void { this.eventForwarder.emit(event) }

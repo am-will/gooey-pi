@@ -49,6 +49,12 @@ export interface HarnessRpcAdapter {
   readonly spawnsInCwd?: boolean
   /** Set on an alternative adapter for the same harness; 'rust' marks Rust Prime Agent. */
   readonly variant?: 'rust'
+  /**
+   * False when the harness never emits session_action_update: the runtime
+   * then forwards each queue change it reads from get_state as a synthetic
+   * update and refreshes get_state when a run ends. Absent means true.
+   */
+  readonly sessionActionEvents?: boolean
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
   translateCommand(command: RpcObject): RpcObject
@@ -172,12 +178,15 @@ const PRIME_RUST_UNSUPPORTED_COMMANDS = new Set([
  * unknown option, so GooeyPi's TypeScript capability extensions are never
  * passed. Its in-process RPC has no service tier: set_service_tier is an
  * unknown command and get_state reports none, so fast mode is unavailable.
+ * It never emits session_action_update; its queue is visible only in
+ * get_state.
  */
 export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
   agentName: HARNESSES.prime.agentName,
   variant: 'rust',
   chunkedFrames: false,
+  sessionActionEvents: false,
   buildStartArgs: (input) => primeStartArgs(input, false),
   translateCommand: rejectCommands(PRIME_RUST_UNSUPPORTED_COMMANDS, RUST_PRIME_AGENT_NAME),
   normalizeEvent: (event) => event,
