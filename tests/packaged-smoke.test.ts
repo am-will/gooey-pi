@@ -111,7 +111,10 @@ describe('packaged smoke launch', () => {
     chmodSync(executable, 0o755)
   }
 
-  const markerArgument = 'for argument in "$@"; do case "$argument" in --packaged-smoke=*) marker="${argument#--packaged-smoke=}";; esac; done'
+  const launchArguments =
+    'for argument in "$@"; do case "$argument" in --packaged-smoke=*) marker="${argument#--packaged-smoke=}";; --user-data-dir=*) userData="${argument#--user-data-dir=}";; esac; done'
+  const mirrorScheduleSkill = `mkdir -p "$(dirname "$userData/${launcher.MIRRORED_SCHEDULE_SKILL}")"\n: > "$userData/${launcher.MIRRORED_SCHEDULE_SKILL}"`
+  const reportReadiness = `printf '{"event":"${PACKAGED_SMOKE_READY_EVENT}","url":"${PACKAGED_RENDERER_URL}","version":"9.9.9"}' > "$marker"`
 
   beforeAll(() => {
     sandbox = mkdtempSync(join(tmpdir(), 'gooeypi-smoke-test-'))
@@ -135,7 +138,7 @@ describe('packaged smoke launch', () => {
   const temporaryWorkspaces = (): string[] => readdirSync(tmpdir()).filter((name) => name.startsWith('gooeypi-packaged-smoke-'))
 
   it('accepts an application that reports readiness and leaves no temporary state', async () => {
-    writeFakeApplication(`${markerArgument}\nprintf '{"event":"${PACKAGED_SMOKE_READY_EVENT}","url":"${PACKAGED_RENDERER_URL}","version":"9.9.9"}' > "$marker"`)
+    writeFakeApplication(`${launchArguments}\n${mirrorScheduleSkill}\n${reportReadiness}`)
     const before = temporaryWorkspaces()
 
     await expect(launcher.smokePackagedApp('linux', 'x64')).resolves.toEqual({ event: PACKAGED_SMOKE_READY_EVENT, url: PACKAGED_RENDERER_URL, version: '9.9.9' })
@@ -154,9 +157,15 @@ describe('packaged smoke launch', () => {
   })
 
   it('fails when a started application never reports readiness', async () => {
-    writeFakeApplication(`${markerArgument}\nexit 0`)
+    writeFakeApplication(`${launchArguments}\nexit 0`)
 
     await expect(launcher.smokePackagedApp('linux', 'x64')).rejects.toThrow('exited without reporting renderer readiness')
+  })
+
+  it('fails when a ready application left its schedule skill only in the bundle', async () => {
+    writeFakeApplication(`${launchArguments}\n${reportReadiness}`)
+
+    await expect(launcher.smokePackagedApp('linux', 'x64')).rejects.toThrow('did not mirror its bundled schedule skill')
   })
 
   it('kills a hung application at its deadline instead of waiting for it', async () => {
