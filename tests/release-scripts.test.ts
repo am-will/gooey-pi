@@ -53,6 +53,7 @@ import {
 import { parseDraftAssetNames, staleDraftReleaseAssets } from '../scripts/release/prune-draft-release-assets.mjs'
 import { assertBundleSizeBudgets, assertPackageSizeBudgets, BUNDLE_SIZE_BUDGETS, collectBundleSizeMetrics, collectPackageSizeMetrics, PACKAGE_SIZE_BUDGETS } from '../scripts/release/size-budgets.mjs'
 import { assertReleaseTag } from '../scripts/release/validate-release-tag.mjs'
+import { run as runVendorPatchCommand } from '../scripts/release/verify-vendor-patches.mjs'
 // after-pack.cjs is CommonJS; the interop layer exposes module.exports properties as named exports.
 import { executablePath } from '../scripts/release/after-pack.cjs'
 import { assertFuseWire, ELECTRON_FUSE_CONFIG } from '../scripts/release/fuses.cjs'
@@ -1687,6 +1688,23 @@ describe('cross-platform packaging repair', () => {
     expect(npmViaLifecycle).toEqual({ file: process.execPath, args: ['C:/npm/npm-cli.js', 'run', 'release:verify'], shell: false })
     expect(() => resolveCommandInvocation('npm', ['ci'], 'win32', { npm_execpath: 'C:/npm/npm.cmd' })).toThrow(/JavaScript npm CLI/)
     expect(resolveCommandInvocation('npm', ['ci'], 'darwin', {})).toEqual({ file: 'npm', args: ['ci'], shell: false })
+  })
+
+  test('spawns vendor patch commands through the Windows-safe resolver', () => {
+    const calls: Array<{ file: string; args: string[]; cwd: string; shell: boolean }> = []
+    const spawn = (file: string, args: string[], options: { cwd: string; shell: boolean }) => {
+      calls.push({ file, args, cwd: options.cwd, shell: options.shell })
+      return { status: 0, stdout: ' packed \n', stderr: '' }
+    }
+    // npm on Windows is a .cmd shim, so it must run as `node <npm-cli.js>`, never as bare `npm`.
+    expect(runVendorPatchCommand('npm', ['pack', 'package'], 'C:/repo', { platform: 'win32', env: { npm_execpath: 'C:/npm/npm-cli.js' }, spawn: spawn as never })).toBe('packed')
+    runVendorPatchCommand('git', ['apply', 'fix.patch'], 'C:/work', { platform: 'win32', env: {}, spawn: spawn as never })
+    expect(calls).toEqual([
+      { file: process.execPath, args: ['C:/npm/npm-cli.js', 'pack', 'package'], cwd: 'C:/repo', shell: false },
+      { file: 'git', args: ['apply', 'fix.patch'], cwd: 'C:/work', shell: false },
+    ])
+    const failing = () => ({ status: 1, stdout: '', stderr: 'patch does not apply\n' })
+    expect(() => runVendorPatchCommand('git', ['apply', 'fix.patch'], 'C:/work', { spawn: failing as never })).toThrow('git apply fix.patch failed: patch does not apply')
   })
 
   test('installs Electron before rebuilding native app dependencies', () => {
