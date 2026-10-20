@@ -259,8 +259,10 @@ export class RpcRuntime {
 
   private settleManualCompaction(compaction: ManualCompaction, command: RpcObject, answer: CompactAnswer): void {
     if (this.manualCompaction === compaction) this.manualCompaction = null
-    // A runtime that exited or is stopping publishes no more lifecycle.
-    if (this.watchdogDisposed) return
+    // A runtime that exited or is stopping synthesizes no more lifecycle, but
+    // still publishes an end its harness streamed, such as the aborted end a
+    // stop's abort produces.
+    if (this.watchdogDisposed && !compaction.end) return
     if (!compaction.end && this.compactionEpisode === 'none') this.handleEvent(manualCompactionStart(command))
     this.handleEvent(settledCompactionEnd(compaction.end, command, answer))
   }

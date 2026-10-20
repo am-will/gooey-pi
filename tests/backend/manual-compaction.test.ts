@@ -18,19 +18,22 @@ afterEach(async () => {
 
 /**
  * A harness whose compact command runs `compactScript` (with `command` and
- * `send` in scope); every other command answers the way the runtime's
- * handshake and refreshes expect.
+ * `send` in scope) and whose abort runs `abortScript` (with the compact
+ * command as `compacting`); every other command answers the way the
+ * runtime's handshake and refreshes expect.
  */
-function fakeCompactingAgent(compactScript: string): { cwd: string; executable: string } {
+function fakeCompactingAgent(compactScript: string, abortScript: string): { cwd: string; executable: string } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-manual-compaction-'))
   dirs.push(cwd)
   const executable = join(cwd, 'fake-compacting-agent.cjs')
   writeFileSync(executable, `#!/usr/bin/env node
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+let compacting
 require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
   const command = JSON.parse(line)
   const ok = (data) => send({ id: command.id, type: 'response', command: command.type, success: true, ...(data ? { data } : {}) })
-  if (command.type === 'compact') { ${compactScript} }
+  if (command.type === 'compact') { compacting = command; ${compactScript} }
+  else if (command.type === 'abort') { ${abortScript} }
   else if (command.type === 'negotiate_protocol') ok({ protocolVersion: command.protocolVersion })
   else if (command.type === 'get_state') ok({ sessionId: 'compacting', isStreaming: false, isCompacting: false })
   else if (command.type === 'get_session_stats') ok({ contextUsage: { tokens: 1000, contextWindow: 100000, percent: 1 } })
@@ -41,8 +44,8 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   return { cwd, executable }
 }
 
-async function startRuntime(compactScript: string, adapter: HarnessRpcAdapter, events: RpcObject[]): Promise<RpcRuntime> {
-  const fake = fakeCompactingAgent(compactScript)
+async function startRuntime(compactScript: string, adapter: HarnessRpcAdapter, events: RpcObject[], abortScript = 'ok()'): Promise<RpcRuntime> {
+  const fake = fakeCompactingAgent(compactScript, abortScript)
   const runtime = new RpcRuntime(fake.executable, [], fake.cwd, ({ event }) => events.push(event), () => undefined, {}, {}, adapter)
   runtimes.push(runtime)
   await runtime.handshake()
@@ -207,6 +210,26 @@ describe('manual compaction lifecycle', () => {
       { type: 'compaction_end', reason: 'requested', result: RESULT, aborted: false, willRetry: false },
     ])
     expect(events.some((event) => event.type === 'agent_start')).toBe(true)
+  })
+
+  it('forwards the end a harness streamed for a compaction its runtime stopped', async () => {
+    // Pi cancels a running compaction on abort, streams an aborted end, then
+    // fails the compact command.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`send({ type: 'compaction_start', reason: 'manual' })`, PI_RPC_ADAPTER, events, `
+      send({ type: 'compaction_end', reason: 'manual', aborted: true, willRetry: false })
+      send({ id: compacting.id, type: 'response', command: 'compact', success: false, error: 'Compaction cancelled' })
+      ok()`)
+    const answered = expect(runtime.command({ type: 'compact' })).rejects.toThrow('Compaction cancelled')
+    await waitUntil(() => events.some((event) => event.type === 'compaction_start'))
+
+    await runtime.stop()
+
+    await answered
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'manual' },
+      { type: 'compaction_end', reason: 'manual', aborted: true, willRetry: false },
+    ])
   })
 
   it('closes a running compaction the watchdog announced with the answered result', async () => {
