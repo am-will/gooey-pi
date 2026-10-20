@@ -100,6 +100,7 @@ describe('OMP transcript system entries', () => {
       ['aa000003', 'assistant'],
     ])
     expect(transcript[1]).toMatchObject({
+      kind: 'notice',
       timestamp: '2026-08-08T02:14:00.000Z',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }],
     })
@@ -116,6 +117,7 @@ describe('OMP transcript system entries', () => {
     expect(transcript.map((message) => message.role)).toEqual(['user', 'system', 'user'])
     expect(transcript[1]).toMatchObject({
       id: 'aa000002',
+      kind: 'notice',
       timestamp: '2026-08-08T02:14:00.000Z',
       parts: [{ type: 'text', text: 'The abandoned branch explored an alternative fix.' }],
     })

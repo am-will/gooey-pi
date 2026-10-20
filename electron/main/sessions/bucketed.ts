@@ -4,6 +4,7 @@ import { basename, join, relative, sep } from 'node:path'
 import { mapLimit } from '../lib/async'
 import { isPathWithin, isRecord } from '../validation'
 import { fallbackModelFromRecord, fallbackNoticeText } from '../../../src/lib/events/model-fallback'
+import type { TranscriptMessage } from '../../../src/types/api'
 import type { SessionCatalogEntry, SessionCatalogIo } from './catalog'
 import {
   ingestMessageActivity,
@@ -191,28 +192,23 @@ export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
       || Boolean(fallbackModelFromRecord(entry)),
     renderEntry: (entry, safeId) => {
       const fallback = fallbackModelFromRecord(entry)
-      if (fallback) {
-        const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
-        return {
-          id: safeId,
-          role: 'system',
-          timestamp,
-          startedAt: timestamp,
-          completedAt: timestamp,
-          parts: [{ type: 'text', text: boundedString(fallbackNoticeText(fallback.label), MAX_PART_TEXT_CHARS) }],
-        }
-      }
+      if (fallback) return noticeRow(entry, safeId, fallbackNoticeText(fallback.label))
       if (entry.type !== 'branch_summary') return undefined
-      const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
-      const text = typeof entry.summary === 'string' ? entry.summary : textFromContent(entry.content, MAX_PART_TEXT_CHARS)
-      return {
-        id: safeId,
-        role: 'system',
-        timestamp,
-        startedAt: timestamp,
-        completedAt: timestamp,
-        parts: [{ type: 'text', text: boundedString(text, MAX_PART_TEXT_CHARS) }],
-      }
+      return noticeRow(entry, safeId, typeof entry.summary === 'string' ? entry.summary : textFromContent(entry.content, MAX_PART_TEXT_CHARS))
     },
   })
+}
+
+/** Fallbacks and branch summaries are neutral notices: they never render as failures. */
+function noticeRow(entry: JsonRecord, safeId: string, text: string): TranscriptMessage {
+  const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
+  return {
+    id: safeId,
+    role: 'system',
+    kind: 'notice',
+    timestamp,
+    startedAt: timestamp,
+    completedAt: timestamp,
+    parts: [{ type: 'text', text: boundedString(text, MAX_PART_TEXT_CHARS) }],
+  }
 }
