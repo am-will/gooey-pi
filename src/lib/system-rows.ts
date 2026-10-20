@@ -1,10 +1,15 @@
 import type { TranscriptMessage } from '@/types/api'
 
+// Keyed by the union, so a new kind fails to compile until it is classified here.
+const NEUTRAL_KINDS: Record<NonNullable<TranscriptMessage['kind']>, boolean> = {
+  'steer-read-marker': true,
+  notice: true,
+}
+
 /**
- * A role 'system' row is neutral when it carries a kind (a notice or a
- * steer-read marker). Without one it reports how a run went: an error, or a
- * compaction row.
+ * A role 'system' row reports how a run went (an error, or a compaction row)
+ * unless its kind is a neutral one: a steer-read marker or a notice.
  */
 export function isSystemReport(message: TranscriptMessage | undefined): boolean {
-  return message?.role === 'system' && message.kind === undefined
+  return message?.role === 'system' && !(message.kind && NEUTRAL_KINDS[message.kind])
 }
