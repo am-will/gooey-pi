@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  firstAccepted,
   isPathWithin,
   requireExistingPath,
   requireGitPath,
@@ -271,5 +272,46 @@ describe('stripAnsi', () => {
   it('removes two-byte escapes and only the introducer of an unterminated OSC', () => {
     expect(stripAnsi('a\u001bMb\u001bDc')).toBe('abc')
     expect(stripAnsi('\u001b]unterminated')).toBe('unterminated')
+  })
+})
+
+describe('firstAccepted', () => {
+  it('returns the first success and never calls later attempts', async () => {
+    const calls: string[] = []
+    const later = vi.fn(() => 'later')
+    const result = await firstAccepted([
+      () => { calls.push('first'); throw new Error('first rejected') },
+      async () => { calls.push('second'); return 'second' },
+      later,
+    ])
+    expect(result).toBe('second')
+    expect(calls).toEqual(['first', 'second'])
+    expect(later).not.toHaveBeenCalled()
+  })
+
+  it('runs attempts strictly in order, awaiting each before the next', async () => {
+    const calls: string[] = []
+    await expect(firstAccepted([
+      async () => { await new Promise((resolve) => setTimeout(resolve, 5)); calls.push('slow'); throw new Error('slow') },
+      () => { calls.push('fast'); return 'fast' },
+    ])).resolves.toBe('fast')
+    expect(calls).toEqual(['slow', 'fast'])
+  })
+
+  it('rethrows the first error, not the last, when every attempt fails', async () => {
+    const primary = new TypeError('outside the Prime session directory')
+    await expect(firstAccepted([
+      () => { throw primary },
+      async () => { throw new Error('outside the OMP session directory') },
+      () => Promise.reject(new Error('outside the Pi session directory')),
+    ])).rejects.toBe(primary)
+  })
+
+  it('treats a synchronous throw as a rejection and keeps trying', async () => {
+    await expect(firstAccepted([() => { throw new Error('sync') }, () => 'fallback'])).resolves.toBe('fallback')
+  })
+
+  it('rejects an empty attempt list', async () => {
+    await expect(firstAccepted([])).rejects.toThrow(/at least one attempt/)
   })
 })

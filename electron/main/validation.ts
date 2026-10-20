@@ -124,6 +124,24 @@ export function requireGitPath(value: unknown, label = 'path'): string {
   return input
 }
 
+/**
+ * Runs attempts in order and returns the first success. If every attempt fails, rethrows the FIRST
+ * attempt's error, so callers keep the primary domain's rejection shape and text. Each attempt is
+ * invoked inside the try, so a synchronous throw counts as a rejection too.
+ */
+export async function firstAccepted<T>(attempts: ReadonlyArray<() => T | Promise<T>>): Promise<T> {
+  if (attempts.length === 0) throw new Error('firstAccepted requires at least one attempt')
+  let first: { error: unknown } | undefined
+  for (const attempt of attempts) {
+    try {
+      return await attempt()
+    } catch (error) {
+      first ??= { error }
+    }
+  }
+  throw first!.error
+}
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
