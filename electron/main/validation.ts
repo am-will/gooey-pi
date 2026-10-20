@@ -128,7 +128,12 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * Removes OSC strings (`ESC ] ... BEL` or `ESC ] ... ESC \`, e.g. hyperlinks and titles), CSI sequences
+ * and two-byte escapes. Branch order matters: OSC and CSI must be tried before the two-byte form,
+ * whose `[@-_]` range also matches `]` and `[` and would otherwise leave the payload behind.
+ */
 export function stripAnsi(input: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the ANSI escape introducer is a control character by definition
-  return input.replace(/\u001B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+  return input.replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g, '')
 }

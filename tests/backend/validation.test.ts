@@ -10,6 +10,7 @@ import {
   requireSelfHostedVoiceUrl,
   requireString,
   requireWebUrl,
+  stripAnsi,
 } from '../../electron/main/validation'
 
 const dirs: string[] = []
@@ -247,5 +248,28 @@ describe('requireSelfHostedVoiceUrl', () => {
 
   it('normalizes the accepted URL', () => {
     expect(requireSelfHostedVoiceUrl('http://192.168.124.8:8000')).toBe('http://192.168.124.8:8000/')
+  })
+})
+
+describe('stripAnsi', () => {
+  it('removes CSI sequences completely, including their parameters', () => {
+    expect(stripAnsi('\u001b[31mred\u001b[0m plain')).toBe('red plain')
+    expect(stripAnsi('\u001b[1;32mbold green\u001b[39;49m')).toBe('bold green')
+    expect(stripAnsi('\u001b[?25lhidden cursor\u001b[2K')).toBe('hidden cursor')
+  })
+
+  it('removes OSC 8 hyperlinks terminated by BEL or ST, keeping the link text', () => {
+    expect(stripAnsi('see \u001b]8;;https://example.com/docs\u0007the docs\u001b]8;;\u0007 now')).toBe('see the docs now')
+    expect(stripAnsi('\u001b]8;id=1;https://example.com\u001b\\link\u001b]8;;\u001b\\')).toBe('link')
+  })
+
+  it('removes OSC title sequences', () => {
+    expect(stripAnsi('\u001b]0;window title\u0007output')).toBe('output')
+    expect(stripAnsi('\u001b]2;tab title\u001b\\output')).toBe('output')
+  })
+
+  it('removes two-byte escapes and only the introducer of an unterminated OSC', () => {
+    expect(stripAnsi('a\u001bMb\u001bDc')).toBe('abc')
+    expect(stripAnsi('\u001b]unterminated')).toBe('unterminated')
   })
 })
