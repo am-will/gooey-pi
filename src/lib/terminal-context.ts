@@ -19,6 +19,46 @@ export function boundTerminalText(value: string, maxChars: number): BoundedTermi
   return { text: normalized.slice(-maxChars), truncated: true }
 }
 
+/** The slice of xterm's `IBuffer` that `readTerminalBufferTail` reads, typed structurally. */
+export interface TerminalBufferLike {
+  readonly length: number
+  getLine(index: number): { readonly isWrapped: boolean; translateToString(trimRight?: boolean): string } | undefined
+}
+
+/**
+ * Reads the newest `maxChars` of a terminal buffer, joining wrapped rows into logical lines and
+ * dropping empty ones. The result always equals bounding a full top-to-bottom read, but the walk
+ * runs bottom-up and stops once a tail of whole logical lines is already truncated: normalization
+ * works line by line apart from trimming the very end, so the full read's normalized text ends
+ * with that tail's normalized text.
+ */
+export function readTerminalBufferTail(buffer: TerminalBufferLike, maxChars = TERMINAL_CONTEXT_MAX_CHARS): BoundedTerminalText {
+  const newestFirst: string[] = []
+  let pending = ''
+  // Upper bound (plus one) on the tail's normalized length, counted from the newest non-blank line;
+  // only once it passes maxChars can the tail be truncated, so it gates the exact check below.
+  let size = 0
+  let checkAbove = maxChars + 1
+  for (let index = buffer.length - 1; index >= 0; index -= 1) {
+    const line = buffer.getLine(index)
+    if (!line) continue
+    pending = line.translateToString(true) + pending
+    if (line.isWrapped) continue // keep prepending until the logical line's first row
+    if (!pending) continue
+    newestFirst.push(pending)
+    const visible = pending.replace(/[ \t]+$/, '')
+    if (size > 0 || visible.trim()) size += visible.length + 1
+    pending = ''
+    if (maxChars > 0 && size > checkAbove) {
+      const tail = boundTerminalText([...newestFirst].reverse().join('\n'), maxChars)
+      if (tail.truncated) return tail
+      checkAbove = size * 2 // exotic whitespace made the bound loose; recheck after it doubles
+    }
+  }
+  if (pending) newestFirst.push(pending) // top rows were continuations of a scrolled-out line
+  return boundTerminalText(newestFirst.reverse().join('\n'), maxChars)
+}
+
 const escapeBoundary = (value: string) => value
   .replaceAll(TERMINAL_CONTEXT_BEGIN, '[terminal context boundary omitted]')
   .replaceAll(TERMINAL_CONTEXT_END, '[terminal context boundary omitted]')
