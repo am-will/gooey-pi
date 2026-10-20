@@ -104,6 +104,22 @@ export function withLiveContextUsage(
 }
 
 /**
+ * A new provider request and compaction re-base the live overlay. Prime and
+ * pi snapshots count the latest response's output, which the growth check in
+ * applySnapshot detects; OMP snapshots count only the prompt that produced
+ * it, so that check never passes during a tool loop. Re-basing at each
+ * request keeps the overlay to the response in flight instead of piling up
+ * every earlier one, at the cost of briefly omitting the previous response
+ * until a snapshot counts it. Compaction rewrites the history any earlier
+ * output belonged to.
+ */
+function rebasesLiveActivity(event: RpcObject): boolean {
+  return event.type === 'compaction_start'
+    || event.type === 'compaction_end'
+    || (event.type === 'message_start' && assistantMessage(event) !== null)
+}
+
+/**
  * Projects the agent's latest authoritative context-usage snapshot forward
  * with the output streamed since it was captured. The generation advances
  * whenever earlier snapshots stop describing the session, so stats requested
@@ -126,8 +142,14 @@ export class ContextUsageProjection {
     if (update.reset) {
       this.snapshotActivityTokens = 0
       this.snapshotGeneration += 1
+      return true
     }
-    return update.changed || update.reset
+    if (!rebasesLiveActivity(event)) return update.changed
+    const rebased = this.snapshotActivityTokens !== this.live.tokens
+    this.snapshotActivityTokens = this.live.tokens
+    // Stats requested before a compaction ended describe the history it replaced.
+    if (event.type === 'compaction_end') this.snapshotGeneration += 1
+    return update.changed || rebased
   }
 
   /** Adopts an authoritative snapshot; activityTokens is the live activity when its refresh was requested. */

@@ -3,6 +3,8 @@ import { ContextUsageProjection, LiveContextUsageTracker, withLiveContextUsage }
 
 const usage = (tokens: number) => ({ tokens, contextWindow: 100_000, percent: tokens / 1_000 })
 const assistantEnd = (output: number) => ({ type: 'message_end', message: { role: 'assistant', usage: { output } } })
+const assistantStart = { type: 'message_start', message: { role: 'assistant' } }
+const userStart = { type: 'message_start', message: { role: 'user', content: 'go' } }
 
 describe('live context usage tracking', () => {
   it('uses reported output usage and falls back to streaming character estimates', () => {
@@ -87,7 +89,7 @@ describe('context usage projection', () => {
     const projection = new ContextUsageProjection()
     expect(projection.current()).toBeUndefined()
     projection.applySnapshot(usage(40_000))
-    expect(projection.handleEvent({ type: 'message_start', message: { role: 'user', content: 'go' } })).toBe(true)
+    expect(projection.handleEvent(userStart)).toBe(true)
     expect(projection.generation).toBe(1)
 
     expect(projection.handleEvent(assistantEnd(200))).toBe(true)
@@ -113,5 +115,48 @@ describe('context usage projection', () => {
     expect(projection.current()).toBeUndefined()
     expect(projection.activityTokens).toBe(0)
     expect(projection.generation).toBe(1)
+  })
+
+  it('projects only the response in flight when snapshots omit the latest output', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(20_000))
+    projection.handleEvent(userStart)
+    // Prompt-only snapshots (OMP) count a response's output only once the next prompt replays it.
+    let prompt = 20_000
+    for (let turn = 0; turn < 15; turn += 1) {
+      projection.handleEvent(assistantStart)
+      projection.handleEvent(assistantEnd(3_000))
+      projection.applySnapshot(usage(prompt), projection.activityTokens)
+      expect(projection.current()?.tokens).toBe(prompt + 3_000)
+      projection.applySnapshot(usage(prompt + 800), projection.activityTokens)
+      expect(projection.current()?.tokens).toBe(prompt + 800 + 3_000)
+      prompt += 600 + 800
+    }
+  })
+
+  it('leaves snapshots that already count completed output untouched at the next request', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_000))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantEnd(500))
+    projection.applySnapshot(usage(40_500), projection.activityTokens)
+    expect(projection.handleEvent(assistantStart)).toBe(false)
+    expect(projection.current()?.tokens).toBe(40_500)
+  })
+
+  it('drops live output at compaction and invalidates stats requested before it ends', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(150_000))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantEnd(3_000))
+    expect(projection.current()?.tokens).toBe(153_000)
+
+    expect(projection.handleEvent({ type: 'compaction_start', reason: 'threshold' })).toBe(true)
+    expect(projection.current()?.tokens).toBe(150_000)
+    const generation = projection.generation
+    projection.handleEvent({ type: 'compaction_end', aborted: false, willRetry: false })
+    expect(projection.generation).toBe(generation + 1)
+    projection.applySnapshot(usage(40_000))
+    expect(projection.current()?.tokens).toBe(40_000)
   })
 })

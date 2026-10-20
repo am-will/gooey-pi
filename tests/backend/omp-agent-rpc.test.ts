@@ -534,6 +534,94 @@ describe('OMP RPC event normalization', () => {
   })
 })
 
+/** A prompt script that runs each JavaScript step on its own tick, so stats requests interleave with events as they do live. */
+function steppedPromptScript(steps: string[]): string {
+  return `streaming = true
+    const steps = [${steps.map((step) => `() => { ${step} }`).join(',\n')}]
+    const next = () => { const step = steps.shift(); if (!step) return; step(); setTimeout(next, 15) }
+    next()`
+}
+
+describe('OMP context usage', () => {
+  // OMP reports the prompt that produced the latest response plus an estimate
+  // of the messages after it: a response's own output (usage.output, which
+  // includes reasoning) only enters the figure once the next prompt replays it.
+  const OUTPUT = 3_000
+  const REPLAYED = 600
+  const TOOL_RESULT = 800
+  const userTurn = `send({ type: 'agent_start' })
+    send({ type: 'message_start', message: { role: 'user', content: 'go' } })
+    send({ type: 'message_end', message: { role: 'user', content: 'go' } })`
+  const contextTokens = (manager: AgentRpcManager) => manager.list()[0]?.contextUsage?.tokens
+
+  it('stays within one response of the real context across a long tool loop', async () => {
+    const steps = [`contextTokens = 20000
+      ${userTurn}
+      send({ type: 'fake_real_context', tokens: 20000 })`]
+    for (let turn = 0; turn < 15; turn += 1) {
+      const prompt = 20_000 + turn * (REPLAYED + TOOL_RESULT)
+      steps.push(
+        `send({ type: 'message_start', message: { role: 'assistant' } })`,
+        `send({ type: 'message_update', message: { role: 'assistant', usage: { output: ${OUTPUT / 2} } }, assistantMessageEvent: { type: 'thinking_delta', delta: 'thinking' } })`,
+        `contextTokens = ${prompt}
+          send({ type: 'fake_real_context', tokens: ${prompt + REPLAYED} })
+          send({ type: 'message_end', message: { role: 'assistant', usage: { output: ${OUTPUT} } } })`,
+        `contextTokens = ${prompt + TOOL_RESULT}
+          send({ type: 'fake_real_context', tokens: ${prompt + REPLAYED + TOOL_RESULT} })
+          send({ type: 'tool_execution_end', toolCallId: 'read-${turn}', toolName: 'read', result: 'ok' })
+          send({ type: 'message_end', message: { role: 'toolResult', content: 'ok' } })
+          send({ type: 'turn_end' })`,
+      )
+    }
+    steps.push(`streaming = false
+      send({ type: 'agent_end', isTerminal: true })`)
+    const fake = fakeOmpAgent({ promptScript: steppedPromptScript(steps) })
+    const manager = ompManager(fake.executable)
+    const events: Array<Record<string, unknown>> = []
+    manager.setEventSink(({ event }) => events.push(event))
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'go' })
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+    // The terminal refresh settles on OMP's own figure.
+    await waitUntil(() => contextTokens(manager) === 20_000 + 14 * (REPLAYED + TOOL_RESULT) + TOOL_RESULT)
+
+    let real: number | undefined
+    let checked = 0
+    for (const event of events) {
+      if (event.type === 'fake_real_context') real = Number(event.tokens)
+      else if (event.type === 'context_usage' && real !== undefined) {
+        expect((event.contextUsage as { tokens: number }).tokens).toBeLessThanOrEqual(real + OUTPUT)
+        checked += 1
+      }
+    }
+    expect(checked).toBeGreaterThan(15)
+  })
+
+  it('reports the post-compaction figure without leftover live output', async () => {
+    const fake = fakeOmpAgent({ promptScript: steppedPromptScript([
+      `contextTokens = 150000
+        ${userTurn}`,
+      `send({ type: 'message_start', message: { role: 'assistant' } })`,
+      `send({ type: 'message_end', message: { role: 'assistant', usage: { output: ${OUTPUT} } } })`,
+      `send({ type: 'auto_compaction_start', reason: 'threshold', action: 'context-full' })`,
+      `contextTokens = 40000
+        send({ type: 'auto_compaction_end', action: 'context-full', aborted: false, willRetry: false, result: { summary: 'Earlier work.', tokensBefore: 153000, firstKeptEntryId: 'kept-1' } })`,
+    ]) })
+    const manager = ompManager(fake.executable)
+    const events: Array<Record<string, unknown>> = []
+    manager.setEventSink(({ event }) => events.push(event))
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'go' })
+    await waitUntil(() => events.some((event) => event.type === 'compaction_end'))
+    // Before compacting, the response's output was projected on top of OMP's figure.
+    expect(events.some((event) => event.type === 'context_usage' && (event.contextUsage as { tokens: number }).tokens === 150_000 + OUTPUT)).toBe(true)
+    await waitUntil(() => contextTokens(manager) === 40_000)
+    expect(events.filter((event) => event.type === 'context_usage').at(-1)?.contextUsage).toEqual({ tokens: 40_000, contextWindow: 200_000, percent: 20 })
+  })
+})
+
 describe('OMP RPC chunked frames', () => {
   it('reassembles an oversized event from base64 rpc_chunk frames', async () => {
     const fake = fakeOmpAgent({ promptScript: `
