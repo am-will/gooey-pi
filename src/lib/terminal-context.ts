@@ -1,4 +1,5 @@
-import type { TerminalPromptContext } from '@/types/api'
+// The main process imports this module too, so it uses relative imports only (no `@/` aliases).
+import type { TerminalPromptContext } from '../types/api'
 
 export const TERMINAL_CONTEXT_BEGIN = '===== BEGIN TERMINAL SELECTION CONTEXT ====='
 export const TERMINAL_CONTEXT_END = '===== END TERMINAL SELECTION CONTEXT ====='
