@@ -218,4 +218,35 @@ describe('new chat selection', () => {
     await act(async () => { app.emit({ type: 'agent_end' }) })
     expect(sessions.find((session) => session.id === 'started')).toMatchObject({ status: 'complete', unread: true })
   })
+
+  it('leaves a second new chat empty when the user opened it before the first prompt was delivered', async () => {
+    const app = renderApp()
+    act(() => { workspace.activateWorkspace(project) })
+
+    await app.send('Build the sidebar')
+    act(() => { workspace.activateWorkspace(project) })
+    const second = workspace.workspaceGeneration
+    await app.startRuntime()
+
+    expect(workspace.workspaceGeneration).toBe(second)
+    expect(workspace.activeSessionId).toBeUndefined()
+    expect(workspace.workspaceRef.current.session).toBeUndefined()
+
+    await act(async () => { app.emit({ type: 'agent_end' }) })
+    expect(sessions.find((session) => session.id === 'started')).toMatchObject({ status: 'complete', unread: true })
+  })
+
+  it('asks for attention when the user leaves a new chat after it adopted its session', async () => {
+    const app = renderApp()
+    act(() => { workspace.activateWorkspace(project) })
+
+    await app.send('Build the sidebar')
+    await app.startRuntime()
+    expect(workspace.activeSessionId).toBe('started')
+    await act(async () => { await app.actions.selectSession(existing) })
+    expect(workspace.activeSessionId).toBe('existing')
+
+    await act(async () => { app.emit({ type: 'agent_end' }) })
+    expect(sessions.find((session) => session.id === 'started')).toMatchObject({ status: 'complete', unread: true })
+  })
 })
