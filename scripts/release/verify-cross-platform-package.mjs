@@ -43,15 +43,17 @@ export function packagedExecutablePath(unpackedDirectory, target) {
   return path
 }
 
-export function expectedArtifactExtensions(target) {
-  return target === 'linux' ? ['.AppImage', '.deb', '.rpm', '.pacman'] : ['.exe', '.zip', '.appx']
+/** Unsigned (QA) Windows builds skip the Store-only AppX; see package.mjs. */
+export function expectedArtifactExtensions(target, mode = 'public') {
+  if (target === 'linux') return ['.AppImage', '.deb', '.rpm', '.pacman']
+  return mode === 'qa' ? ['.exe', '.zip'] : ['.exe', '.zip', '.appx']
 }
 
-function assertExpectedArtifacts(outputDirectory, target) {
+function assertExpectedArtifacts(outputDirectory, target, mode) {
   const files = readdirSync(outputDirectory, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
-  for (const extension of expectedArtifactExtensions(target)) {
+  for (const extension of expectedArtifactExtensions(target, mode)) {
     const matches = files.filter((name) => name.endsWith(extension))
     if (matches.length !== 1) throw new Error(`Expected exactly one ${extension} artifact, found ${matches.length}`)
   }
@@ -155,7 +157,7 @@ export function assertUnpackedNativeLayout(directory, target, architecture) {
 export function verifyPackage(target, architecture, { unpackedOnly = false, mode = 'qa' } = {}) {
   const outputDirectory = resolve('release', target, architecture)
   if (!existsSync(outputDirectory)) throw new Error(`Release directory does not exist: ${outputDirectory}`)
-  const artifacts = unpackedOnly ? [] : assertExpectedArtifacts(outputDirectory, target)
+  const artifacts = unpackedOnly ? [] : assertExpectedArtifacts(outputDirectory, target, mode)
   const app = findUnpackedDirectory(outputDirectory, target)
   const resources = join(app, 'resources')
   const asar = join(resources, 'app.asar')

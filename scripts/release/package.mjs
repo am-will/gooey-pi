@@ -49,12 +49,17 @@ try {
   run('npm', ['run', verifyScript], withoutReleaseCredentials(process.env))
   if (!dryRun) rmSync(resolve('release', platform, arch), { recursive: true, force: true })
 
-  const builderArgs = [`--${platform}`, `--${arch}`, '--publish', 'never', `--config.directories.output=release/${platform}/${arch}`]
+  // Unsigned Windows builds can only yield a Store-only AppX (publisher CN=ms)
+  // that Windows refuses to install, so QA builds only the NSIS installer and
+  // ZIP. A target list after --win replaces build.win.target, whereas
+  // --config.win.target would be merged into it and change nothing.
+  const targets = isQa && platform === 'win' ? ['nsis', 'zip'] : []
+  const builderArgs = [`--${platform}`, ...targets, `--${arch}`, '--publish', 'never', `--config.directories.output=release/${platform}/${arch}`]
   if (isPublic && platform === 'win') builderArgs.push('--config.forceCodeSigning=true')
   const builderEnv = isQa ? { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' } : process.env
   if (isQa && platform === 'mac') builderArgs.push('--config.mac.identity=null', '--config.mac.notarize=false')
   run('electron-builder', builderArgs, builderEnv)
-  if (platform === 'win' && !dryRun) {
+  if (isPublic && platform === 'win' && !dryRun) {
     const outputDirectory = resolve('release', platform, arch)
     const appx = readdirSync(outputDirectory).find((name) => name.endsWith('.appx'))
     if (!appx) throw new Error('Windows AppX/MSIX package was not produced')

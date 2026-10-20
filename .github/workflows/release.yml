@@ -339,17 +339,28 @@ jobs:
         with:
           pattern: gooeypi-public-*
           path: downloaded-release-artifacts
+      # Unsigned beta Windows builds publish only the NSIS installer and ZIP: the
+      # MSIX needs a signature to install. Signed mode wins when both are enabled,
+      # matching the package-windows build steps.
       - name: Select release assets and generate SHA-256 checksums
         run: |
           platforms='mac,linux'
           if [ "$RELEASE_WINDOWS_ENABLED" = 'true' ]; then platforms="$platforms,win"; fi
-          node scripts/release/prepare-github-release.mjs --input downloaded-release-artifacts --output release-assets --tag "$RELEASE_TAG" --platforms "$platforms"
+          flags=''
+          if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then flags='--windows-unsigned'; fi
+          node scripts/release/prepare-github-release.mjs --input downloaded-release-artifacts --output release-assets --tag "$RELEASE_TAG" --platforms "$platforms" $flags
       - name: Attest release assets
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: release-assets/*
+      # A resumed draft keeps the notes it already has, so an unsigned Windows
+      # label must be added to such a draft by hand.
       - name: Publish GitHub Release
         run: |
+          notes='Every installer and archive is covered by SHA256SUMS.txt and GitHub build-provenance attestations.'
+          if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then
+            notes="$notes Windows packages in this release are unsigned beta builds and will trigger SmartScreen warnings."
+          fi
           existing=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
           if [ "$existing" = 'false' ]; then
             echo "Release $RELEASE_TAG is already published and will not be replaced."
@@ -370,7 +381,7 @@ jobs:
               --verify-tag \
               --fail-on-no-commits \
               --generate-notes \
-              --notes "Every installer and archive is covered by SHA256SUMS.txt and GitHub build-provenance attestations." \
+              --notes "$notes" \
               --title "GooeyPi ${RELEASE_TAG#v}" \
               --latest
           fi

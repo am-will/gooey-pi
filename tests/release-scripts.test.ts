@@ -815,6 +815,14 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(workflow).toContain('--verify-tag')
     expect(workflow).toContain('--fail-on-no-commits')
     expect(workflow).toContain('--generate-notes')
+    // Unsigned beta Windows releases publish no MSIX and say so in the notes;
+    // signed mode wins when both Windows inputs are enabled.
+    const unsignedOnly = `if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then`
+    expect(workflow).toContain(`${unsignedOnly} flags='--windows-unsigned'; fi`)
+    expect(workflow).toContain('--platforms "$platforms" $flags')
+    const publish = workflow.slice(workflow.indexOf('- name: Publish GitHub Release'))
+    expect(publish).toContain(`${unsignedOnly}\n            notes="$notes Windows packages in this release are unsigned beta builds and will trigger SmartScreen warnings."`)
+    expect(workflow).toMatch(/gh release create "\$RELEASE_TAG" release-assets\/\*[\s\S]*?--notes "\$notes"/)
     // always() keeps the aggregate job from being skipped; the first step
     // fails explicitly when a prerequisite failed or was cancelled.
     expect(workflow).toMatch(/release-packages:\n {4}needs: \[validate, production-audit, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: always\(\)\n {4}runs-on: ubuntu-22\.04/)
@@ -912,6 +920,59 @@ describe('GitHub Release publication', () => {
     ])
     expect(() => parseReleasePlatforms('mac,mac')).toThrow(/duplicates/)
     expect(() => parseReleasePlatforms('mac,android')).toThrow(/Unsupported/)
+    expect(expectedGitHubReleaseAssets('0.2.0', ['win'])).toEqual(['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.msix', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml'])
+    // Unsigned beta Windows builds cannot install as an MSIX, so they never publish one.
+    expect(expectedGitHubReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).toEqual(['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml'])
+    expect(expectedDownloadedReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).not.toContain('GooeyPi-0.2.0-win-x64.appx')
+    expect(() => releaseAssetNames('0.2.0', ['mac', 'linux'], { windowsUnsigned: true })).toThrow(/require the win release platform/)
+  })
+
+  test('publishes only the NSIS installer and ZIP for unsigned Windows betas', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-github-release-unsigned-'))
+    const projectDirectory = join(directory, 'project')
+    const inputDirectory = join(directory, 'downloaded')
+    mkdirSync(projectDirectory, { recursive: true })
+    mkdirSync(join(inputDirectory, 'gooeypi-public-windows'), { recursive: true })
+    writeFileSync(join(projectDirectory, 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    writeFileSync(join(projectDirectory, 'package-lock.json'), JSON.stringify({ version: '0.2.0', packages: { '': { version: '0.2.0' } } }))
+    // A stray Store-only package in the downloaded artifacts must not be published.
+    for (const name of ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.zip', 'GooeyPi-0.2.0-win-x64.appx', 'GooeyPi-0.2.0-win-x64.msix']) {
+      writeFileSync(join(inputDirectory, 'gooeypi-public-windows', name), `asset ${name}`)
+    }
+    writeFileSync(
+      join(inputDirectory, 'gooeypi-public-windows', 'latest.yml'),
+      'version: 0.2.0\nfiles:\n  - url: GooeyPi-0.2.0-win-x64.exe\n    sha512: exe-digest\n    size: 42\npath: GooeyPi-0.2.0-win-x64.exe\nsha512: exe-digest\n',
+    )
+    const expected = ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml']
+    try {
+      const outputDirectory = join(directory, 'release-assets')
+      const result = await prepareGitHubRelease({ inputDirectory, outputDirectory, projectDirectory, platforms: ['win'], windowsUnsigned: true, tag: 'v0.2.0' })
+      expect(result.assets).toEqual(expected)
+      expect(readdirSync(outputDirectory).sort()).toEqual([...expected, 'SHA256SUMS.txt'].sort())
+      expect(readFileSync(join(outputDirectory, 'SHA256SUMS.txt'), 'utf8')).not.toMatch(/\.(?:msix|appx)$/m)
+
+      // The CLI threads --windows-unsigned through, and rejects it without the win platform.
+      const script = join(process.cwd(), 'scripts/release/prepare-github-release.mjs')
+      const cli = (output: string, platforms: string) =>
+        spawnSync(process.execPath, [script, '--input', inputDirectory, '--output', join(directory, output), '--tag', 'v0.2.0', '--platforms', platforms, '--windows-unsigned'], {
+          cwd: projectDirectory,
+          encoding: 'utf8',
+        })
+      const published = cli('cli-assets', 'win')
+      expect(published.status, published.stderr).toBe(0)
+      expect(readdirSync(join(directory, 'cli-assets')).sort()).toEqual([...expected, 'SHA256SUMS.txt'].sort())
+      const misused = cli('misused-assets', 'mac,linux')
+      expect(misused.status).toBe(1)
+      expect(misused.stderr).toMatch(/require the win release platform/)
+
+      // A signed release still requires the MSIX.
+      rmSync(join(inputDirectory, 'gooeypi-public-windows', 'GooeyPi-0.2.0-win-x64.appx'))
+      await expect(prepareGitHubRelease({ inputDirectory, outputDirectory: join(directory, 'signed'), projectDirectory, platforms: ['win'], tag: 'v0.2.0' })).rejects.toThrow(
+        /missing GooeyPi-0\.2\.0-win-x64\.msix$/,
+      )
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test('keeps every release asset name in exact correspondence with electron-builder artifacts', () => {
@@ -1249,6 +1310,9 @@ describe('post-package verification helpers', () => {
   test('verifies and uploads every configured Linux installer format', () => {
     expect(expectedArtifactExtensions('linux')).toEqual(['.AppImage', '.deb', '.rpm', '.pacman'])
     expect(expectedArtifactExtensions('win')).toEqual(['.exe', '.zip', '.appx'])
+    // Unsigned QA builds skip the Store-only AppX that Windows refuses to install.
+    expect(expectedArtifactExtensions('win', 'qa')).toEqual(['.exe', '.zip'])
+    expect(expectedArtifactExtensions('linux', 'qa')).toEqual(['.AppImage', '.deb', '.rpm', '.pacman'])
     const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     expect(ciWorkflow).toContain('release/linux/**/*.pacman')
