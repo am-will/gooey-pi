@@ -169,6 +169,27 @@ describe('manual compaction lifecycle', () => {
     await expect(runtime.command({ type: 'compact' })).resolves.toMatchObject({ success: true, data: { skipped: true, message: 'Nothing new since the last summary' } })
   })
 
+  it('forwards at once the end of an automatic compaction the compact command interrupted', async () => {
+    // Pi aborts a running threshold compaction before it starts the manual one.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_end', reason: 'threshold', aborted: true, willRetry: false })
+      send({ type: 'compaction_start', reason: 'manual' })
+      send({ type: 'compaction_end', reason: 'manual', result: ${JSON.stringify(RESULT)}, aborted: false, willRetry: false })
+      ok(${JSON.stringify(RESULT)})`, PI_RPC_ADAPTER, events)
+    const frames = runtime as unknown as { handleFrame(frame: RpcObject): void }
+    frames.handleFrame({ type: 'compaction_start', reason: 'threshold' })
+
+    await runtime.command({ type: 'compact' })
+
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'threshold' },
+      { type: 'compaction_end', reason: 'threshold', aborted: true, willRetry: false },
+      { type: 'compaction_start', reason: 'manual' },
+      { type: 'compaction_end', reason: 'manual', result: RESULT, aborted: false, willRetry: false },
+    ])
+  })
+
   it('closes a running compaction the watchdog announced with the answered result', async () => {
     const events: RpcObject[] = []
     const runtime = await startRuntime(`setTimeout(() => ok(${JSON.stringify(RESULT)}), 50)`, OMP_RPC_ADAPTER, events)

@@ -10,7 +10,7 @@ import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAsse
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
-import { isCompactRefusal, manualCompactionStart, settledCompactionEnd, type CompactAnswer } from './manual-compaction'
+import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, settledCompactionEnd, type CompactAnswer } from './manual-compaction'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
@@ -483,7 +483,9 @@ export class RpcRuntime {
 
   /** Runs one normalized event through the streaming, compaction and session-action state, then forwards it. */
   private handleEvent(value: RpcObject): void {
-    if (value.type === 'compaction_end' && this.manualCompaction && !this.manualCompaction.end) {
+    // OMP ends carry no reason; the start they close names it.
+    if (value.type === 'compaction_end' && this.manualCompaction && !this.manualCompaction.end
+      && isManualCompactionReason(value.reason ?? this.compactionStartReason)) {
       this.manualCompaction.end = value
       return
     }

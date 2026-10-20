@@ -19,6 +19,16 @@ export function isCompactRefusal(adapter: Pick<HarnessRpcAdapter, 'compactRefusa
   return streamed?.errorSeverity === 'warning' || adapter.compactRefusal.test(error)
 }
 
+/**
+ * Whether a compaction with this reason can be the one a compact command
+ * runs. An automatic compaction names its trigger (threshold, overflow,
+ * idle, incomplete); Pi and TypeScript Prime call a manual one manual, Rust
+ * Prime calls it requested.
+ */
+export function isManualCompactionReason(reason: unknown): boolean {
+  return reason === undefined || reason === 'manual' || reason === 'requested'
+}
+
 /** The start of a manual compaction the harness did not announce itself. */
 export function manualCompactionStart(command: RpcObject): RpcObject {
   return { type: 'compaction_start', reason: 'manual', ...customInstructions(command), synthetic: true }
