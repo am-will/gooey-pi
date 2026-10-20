@@ -245,6 +245,8 @@ export function useExtensionUi({
           questions,
           total,
           complete: questions.length >= total,
+          // Only a harness-timed questionnaire's timer reads this. GooeyPi's
+          // own timeout runs from ownedTimeout.
           timeout: request.timeout ?? ASK_USER_TIMEOUT_MS,
         },
         requests,
