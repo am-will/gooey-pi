@@ -124,6 +124,18 @@ describe('mirrorBundledSkill', () => {
     expect(readdirSync(root)).toEqual(['prime-work-schedules'])
   })
 
+  it('removes staging copies a launch killed mid-copy left behind, and only its own', async () => {
+    const source = bundledSkill()
+    const root = mirrorRoot()
+    write(join(root, 'prime-work-schedules.4242.interrupted.tmp', 'SKILL.md'), 'partial copy')
+    write(join(root, 'other-skill.4242.interrupted.tmp', 'SKILL.md'), 'partial copy')
+
+    const mirrored = await mirrorBundledSkill(source, root)
+
+    expect(readFileSync(join(mirrored, 'SKILL.md'), 'utf8')).toBe('# Scheduled tasks\n')
+    expect(readdirSync(root).sort()).toEqual(['other-skill.4242.interrupted.tmp', 'prime-work-schedules'])
+  })
+
   it('falls back to the bundled skill when the mirror root cannot be created', async () => {
     const source = bundledSkill()
     const blocked = join(temp(), 'userData')
