@@ -429,6 +429,15 @@ describe('Prime npm migration bridge', () => {
     await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: layout.prefix }, home)).resolves.toBe('unmigrated')
   })
 
+  it('needs the Rust payload as well as the receipt to call a bridge migrated', async () => {
+    const layout = npmLayout(bridgeManifest)
+    layout.writeReceipt('0.10.0')
+
+    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: layout.prefix })).resolves.toBe('unmigrated')
+    layout.writePayload()
+    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: layout.prefix })).resolves.toBe('migrated')
+  })
+
   it('treats a bridge without a usable version as un-migrated', async () => {
     const layout = npmLayout({ version: '../0.10.0', primeAgentRustBridge: true })
 
