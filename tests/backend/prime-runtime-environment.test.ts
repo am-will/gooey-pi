@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import type { CapabilityScope } from '../../electron/main/lib/capability-bridge'
 import { primeRuntimeEnvironment, type PrimeRuntimeEnvironmentDependencies } from '../../electron/main/prime-runtime-environment'
 
@@ -67,6 +68,28 @@ describe('Prime runtime environment', () => {
       GOOEYPI_COMPUTER_USE_SKILL_PATH: undefined,
     })
     expect(deps.browserBridge.environmentFor).not.toHaveBeenCalled()
+  })
+
+  it('gives Rust Prime only the capabilities it can load', () => {
+    const deps = dependencies(allEnabled)
+    const scope = { cwd: '/work', sessionPath: '/sessions/a.jsonl', interactive: true }
+
+    const environment = primeRuntimeEnvironment({ ...scope, variant: 'rust' }, deps)
+
+    expect(environment).toEqual({
+      ...SCHEDULE_ENVIRONMENT,
+      PRIME_WORK_ASK_USER_EXTENSION_PATH: undefined,
+      GOOEYPI_MANAGES_ASK_USER: '1',
+      GOOEYPI_CUA_DRIVER_PATH: '/opt/cua/cua-driver',
+      GOOEYPI_COMPUTER_USE_SKILL_PATH: COMPUTER_USE_SKILL,
+    })
+    // No claim is minted, so no broker token can reach the Rust kernel.
+    expect(deps.browserBridge.environmentFor).not.toHaveBeenCalled()
+    expect(deps.collaborationBridge.environmentFor).not.toHaveBeenCalled()
+    expect(deps.scheduleBridge.environmentFor).toHaveBeenCalledWith(scope)
+    expect(PRIME_RUST_RPC_ADAPTER.buildStartArgs({ cwd: '/work', environment })).toEqual([
+      '--mode', 'rpc', '--cwd', '/work', '--skill', SCHEDULE_ENVIRONMENT.PRIME_WORK_SCHEDULE_SKILL_PATH, '--skill', COMPUTER_USE_SKILL,
+    ])
   })
 
   it('withholds computer use while the driver is not installed', () => {
