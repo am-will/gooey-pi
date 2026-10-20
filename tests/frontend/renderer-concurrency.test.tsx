@@ -895,6 +895,44 @@ describe('extension UI runtime ownership', () => {
     }
   })
 
+  it('closes a questionnaire the harness cancels and turns away its late questions', async () => {
+    const command = vi.fn().mockResolvedValue({})
+    const bridge = { agent: { command } } as unknown as PrimeWorkApi
+    const runtimeSessionsRef = { current: new Map<string, string>([['runtime', session.filePath]]) }
+    let state!: ReturnType<typeof useExtensionUi>
+    function ExtensionProbe() {
+      state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+      return <Probe />
+    }
+
+    await act(async () => { root.render(<ExtensionProbe />) })
+    await act(async () => {
+      state.showExtensionUi('runtime', {
+        type: 'extension_ui_request', id: 'question-1', method: 'select', title: 'First question',
+        options: ['__prime_ask_user__group-1:0:2', 'A', 'B'],
+      })
+      state.showExtensionUi('runtime', { type: 'extension_ui_request', id: 'cancel-0', method: 'cancel', targetId: 'unrelated' })
+    })
+    expect(state.extensionUi?.request.id).toBe('group-1')
+
+    await act(async () => {
+      state.showExtensionUi('runtime', { type: 'extension_ui_request', id: 'cancel-1', method: 'cancel', targetId: 'question-1' })
+    })
+    expect(state.extensionUi).toBeNull()
+    expect(state.hasOpenRequestForSession(session.filePath)).toBe(false)
+
+    await act(async () => {
+      state.showExtensionUi('runtime', {
+        type: 'extension_ui_request', id: 'question-2', method: 'select', title: 'Second question',
+        options: ['__prime_ask_user__group-1:1:2', 'C', 'D'],
+      })
+    })
+    expect(state.extensionUi).toBeNull()
+    expect(command).toHaveBeenCalledWith('runtime', {
+      type: 'extension_ui_response', id: 'question-2', cancelled: true,
+    })
+  })
+
   it('expires a harness-timed dialog on its own deadline even while its runtime is hidden', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {

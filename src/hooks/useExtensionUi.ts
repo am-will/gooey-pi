@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ExtensionUiResponse } from '@/components/ExtensionUiModal'
-import { ASK_USER_TIMEOUT_MS, parseExtensionUiRequest, type ExtensionUiRequest } from '@/lib/extension-ui'
+import { ASK_USER_TIMEOUT_MS, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest } from '@/lib/extension-ui'
 import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
 interface UseExtensionUiOptions {
@@ -190,6 +190,15 @@ export function useExtensionUi({
   }, [syncTimer])
 
   const showExtensionUi = useCallback((runtimeId: string, rawEvent: Record<string, unknown>) => {
+    const cancelledId = parseExtensionUiCancel(rawEvent)
+    if (cancelledId) {
+      // The harness has already settled the cancelled request, so answering it
+      // again is a no-op. Expiring the whole questionnaire also releases its
+      // other questions and turns away any that arrive later.
+      const pending = pendingByRuntimeRef.current.get(runtimeId)
+      if (pending && requestIds(pending).includes(cancelledId)) expirePending(pending)
+      return
+    }
     const request = parseExtensionUiRequest(rawEvent)
     if (!request || !bridge) return
 
@@ -248,7 +257,7 @@ export function useExtensionUi({
       clearExtensionUi(runtimeId)
     }
     presentPending({ runtimeId, request })
-  }, [bridge, cancelPending, clearExtensionUi, presentPending])
+  }, [bridge, cancelPending, clearExtensionUi, expirePending, presentPending])
 
   const hasOpenRequestForSession = useCallback((filePath: string): boolean => {
     for (const runtimeId of pendingByRuntimeRef.current.keys()) {
