@@ -309,6 +309,33 @@ describe('JsonStateStore', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['succeeded'])
   })
 
+  it('rejects an update that would exceed the load limit before touching the file system', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeValidState(path)
+    const events: string[] = []
+    const fileSystem: JsonStateStoreFileSystem = {
+      open: async (openedPath, flags, mode) => { events.push(`open:${flags}`); return open(openedPath, flags, mode) },
+      rename: async (from, to) => { events.push('rename'); await rename(from, to) },
+      unlink: async (target) => { events.push('unlink'); await unlink(target) },
+    }
+    const store = new JsonStateStore(path, fileSystem)
+    await store.ready()
+    const before = readFileSync(path)
+
+    await expect(store.update((state) => { state.archivedSessions.push('x'.repeat(65 * 1024 * 1024)) })).rejects.toThrow(/exceed/)
+    // Under the limit in UTF-16 code units, over it in UTF-8 bytes.
+    await expect(store.update((state) => { state.archivedSessions.push('é'.repeat(33 * 1024 * 1024)) })).rejects.toThrow(/exceed/)
+
+    expect(events).toEqual([])
+    expect(store.snapshot().archivedSessions).toEqual([])
+    expect(readFileSync(path).equals(before)).toBe(true)
+    expect(new JsonStateStore(path).snapshot().archivedSessions).toEqual([])
+
+    await store.update((state) => { state.archivedSessions.push('small') })
+    expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['small'])
+  }, 60_000)
+
   it('creates private state files and directories', async () => {
     const dir = makeDirectory()
     const stateDirectory = join(dir, 'nested')

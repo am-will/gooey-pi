@@ -949,11 +949,17 @@ export class JsonStateStore {
   }
 
   private async persist(state: DesktopState, requireDirectorySync = false): Promise<void> {
+    // The write cap matches the read cap so a saved file is always loadable on the next launch.
+    const serialized = `${JSON.stringify(state, null, 2)}\n`
+    const bytes = Buffer.byteLength(serialized, 'utf8')
+    if (bytes > MAX_STATE_FILE_BYTES) {
+      throw new Error(`Desktop state would be ${bytes} bytes, exceeding the ${MAX_STATE_FILE_BYTES}-byte safe size limit; the change was not saved`)
+    }
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
     try {
       const file = await this.fileSystem.open(temp, 'w', 0o600)
       try {
-        await file.writeFile(`${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8' })
+        await file.writeFile(serialized, { encoding: 'utf8' })
         await file.sync()
       } finally {
         await file.close()
