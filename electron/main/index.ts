@@ -765,7 +765,6 @@ async function bootstrap(): Promise<void> {
   })
   const browserProfile = session.fromPartition(BROWSER_PARTITION)
   browserProfile.on('will-download', (event, item, owner) => downloads?.handle(event, item, owner, settings.get().browserAskForDownloads))
-  // Prime imports this Python skill, so packaged builds hand it a writable mirror outside the signed bundle.
   const scheduleSkillPath = app.isPackaged
     ? await mirrorBundledSkill(join(process.resourcesPath, 'skills', 'prime-work-schedules'), join(userDataPath, 'bundled-skills'))
     : join(app.getAppPath(), 'assets', 'skills', 'prime-work-schedules')
