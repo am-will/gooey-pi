@@ -4,9 +4,11 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:
 import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { resolveCommandInvocation } from './lib.mjs'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const VENDOR = join(ROOT, 'vendor')
+const EMPTY_CONFIG_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null'
 const PACKAGES = [
   {
     base: 'prime-agent-0.7.0.tgz',
@@ -27,7 +29,8 @@ function sha256(path) {
 }
 
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: false })
+  const invocation = resolveCommandInvocation(command, args)
+  const result = spawnSync(invocation.file, invocation.args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: invocation.shell })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim()}`)
   return result.stdout.trim()
@@ -58,6 +61,11 @@ for (const spec of PACKAGES) {
   const outputPath = join(VENDOR, spec.output)
   const patchPath = join(VENDOR, spec.patch)
   if (sha256(basePath) !== spec.baseSha256) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
+  // Checkouts made before .gitattributes marked the patches -text can still hold CRLF copies.
+  // This also rejects a patch that legitimately carries CR bytes; narrow the check if one ever must.
+  if (readFileSync(patchPath).includes(0x0d)) {
+    throw new Error(`Vendor patch has CRLF line endings from a converted checkout: vendor/${spec.patch}. Delete vendor/patches/*.patch and run git checkout -- vendor/patches`)
+  }
 
   const work = mkdtempSync(join(tmpdir(), 'gooeypi-vendor-patch-'))
   try {
@@ -66,7 +74,9 @@ for (const spec of PACKAGES) {
     mkdirSync(rebuilt)
     mkdirSync(reviewed)
     run('tar', ['-xzf', basePath, '-C', work], ROOT)
-    run('git', ['apply', patchPath], work)
+    // A user or system core.autocrlf, or a user gitattributes file (including the default
+    // ~/.config/git/attributes), would otherwise rewrite the patched files' line endings.
+    run('git', ['-c', 'core.autocrlf=false', '-c', `core.attributesFile=${EMPTY_CONFIG_PATH}`, 'apply', patchPath], work)
     run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
     assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
 
