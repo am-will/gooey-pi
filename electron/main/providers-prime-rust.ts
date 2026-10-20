@@ -1,5 +1,5 @@
 import { PRIME_THINKING_LEVELS, type PrimeModelDescriptor, type PrimeProviderDescriptor } from '../../src/types/api'
-import { RUST_PRIME_AGENT_NAME } from '../../src/lib/prime-compat'
+import { RUST_PRIME_AGENT_NAME, primeCapabilityAvailable } from '../../src/lib/prime-compat'
 import type { CliModelCatalogOptions, ValidatedModelEntry } from './model-catalog-cli'
 import { RpcModelCatalogService, thinkingLevelsFromMap } from './model-catalog-rpc'
 import type { ExecutableSource } from './process-utils'
@@ -60,7 +60,8 @@ export class RustPrimeModelCatalogService extends RpcModelCatalogService {
   protected describeModel(entry: ValidatedModelEntry, thinkingLevelMap: Record<string, unknown> | undefined): PrimeModelDescriptor {
     return {
       ...entry.descriptor,
-      fastModeSupported: false,
+      // The shared capability table does not offer fast mode on Rust Prime.
+      fastModeSupported: primeCapabilityAvailable('rust', 'fastMode') && entry.descriptor.fastModeSupported,
       availableThinkingLevels: thinkingLevelsFromMap(entry.reasoning || wiresThinkingLevel(thinkingLevelMap), thinkingLevelMap),
     }
   }
