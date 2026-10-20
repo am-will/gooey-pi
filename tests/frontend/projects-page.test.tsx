@@ -45,4 +45,13 @@ describe('Projects page copy', () => {
     act(() => remove?.click())
     expect(document.body.textContent).toContain(`Remove “gooey-pi” from ${productName}? The folder and saved ${shortName} sessions will not be deleted.`)
   })
+
+  it('words the remove dialog from the project it removes when the harness switches', () => {
+    renderPage('pi', [project('pi')])
+    const remove = container.querySelector<HTMLButtonElement>('button[aria-label="Remove gooey-pi"]')
+    act(() => remove?.click())
+
+    renderPage('omp', [project('pi')])
+    expect(document.body.textContent).toContain('Remove “gooey-pi” from Pi Work? The folder and saved Pi sessions will not be deleted.')
+  })
 })
