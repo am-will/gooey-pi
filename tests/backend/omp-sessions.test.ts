@@ -1,9 +1,9 @@
-import { appendFileSync, closeSync, createReadStream, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { SessionService } from '../../electron/main/sessions'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SessionService, type SessionWatchFactory } from '../../electron/main/sessions'
 import { METADATA_VERIFY_TAIL_BYTES } from '../../electron/main/sessions/metadata'
 import {
   createOmpSessionMetadataReader,
@@ -293,6 +293,45 @@ describe('OMP session service harness identity', () => {
       expect(events).toEqual([{ harness: 'omp' }])
     } finally {
       unsubscribe()
+    }
+  })
+})
+
+describe('OMP session watcher startup', () => {
+  it('announces a session OMP wrote before the watcher could attach to its new session root', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-omp-sessions-')); dirs.push(dir)
+    const root = join(dir, 'sessions')
+    const project = join(dir, 'project'); mkdirSync(project)
+    const watched: string[] = []
+    // Like fs.watch, watching a directory that does not exist yet throws.
+    const watchDirectory: SessionWatchFactory = (path) => {
+      if (!existsSync(path)) throw Object.assign(new Error(`ENOENT: no such file or directory, watch '${path}'`), { code: 'ENOENT' })
+      watched.push(path)
+      const watcher = { close: () => undefined, on: () => watcher }
+      return watcher
+    }
+    const store = new JsonStateStore(join(dir, 'state.json'))
+    const service = new SessionService(store, null, undefined, { ...ompSessionServiceOptions(root), watchDirectory })
+    const events: Array<{ filePath?: string; harness?: string }> = []
+    const unsubscribe = service.onDidChange((event) => events.push(event))
+    try {
+      expect(watched).toEqual([])
+      // A fresh HOME has no OMP session root when GooeyPi subscribes. OMP
+      // creates the root and the project's bucket when its runtime starts and
+      // writes the session file with its first reply, all inside one retry.
+      const file = join(root, '-project-', NAME_A)
+      mkdirSync(join(root, '-project-'), { recursive: true })
+      writeOmpSession(file, { cwd: project, entries: [ompEntry('message', 'aa11bb22', null, { message: { role: 'assistant', content: 'answer' } })] })
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(watched).toContain(root)
+      await vi.advanceTimersByTimeAsync(120)
+      await vi.waitFor(() => expect(events).toContainEqual({ harness: 'omp' }))
+      expect((await service.list()).map((record) => record.filePath)).toEqual([realpathSync(file)])
+    } finally {
+      unsubscribe()
+      vi.useRealTimers()
     }
   })
 })

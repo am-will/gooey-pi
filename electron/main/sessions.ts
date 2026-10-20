@@ -358,6 +358,10 @@ export class SessionService {
     this.watcherRetry = setTimeout(() => {
       this.watcherRetry = null
       this.startWatcher()
+      // Nothing reported what was written while the root was unwatched: a
+      // harness can create its session root and write a session within one
+      // retry interval, so the catalog rescans once the watcher attaches.
+      if (this.sessionWatcher) this.queueSessionChange(null)
     }, 1_000)
     this.watcherRetry.unref()
   }
