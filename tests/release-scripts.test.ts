@@ -1763,6 +1763,24 @@ describe('vendored supply-chain pins', () => {
   })
 })
 
+describe('vendor patch verification', () => {
+  test('reproduces the reviewed archives when the user Git config enables core.autocrlf', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-autocrlf-'))
+    const gitConfig = join(directory, 'gitconfig')
+    writeFileSync(gitConfig, '[core]\n\tautocrlf = true\n')
+    try {
+      const result = spawnSync(process.execPath, ['scripts/release/verify-vendor-patches.mjs'], {
+        encoding: 'utf8',
+        env: { ...process.env, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1' },
+      })
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('content verified')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 60_000)
+})
+
 const AUDIT_EXCEPTION_REASON = 'no patched release exists upstream yet'
 const auditReport = (advisories: Array<{ package: string; advisory: string; severity: string }>) => ({
   vulnerabilities: Object.fromEntries(
