@@ -12,10 +12,13 @@ const git = (cwd: string, ...args: string[]) => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
   if (result.status !== 0) throw new Error(result.stderr)
 }
-const repository = (prefix = 'prime-work-git-') => {
-  const cwd = mkdtempSync(join(tmpdir(), prefix)); dirs.push(cwd)
+const initRepository = (cwd: string) => {
   git(cwd, 'init', '-q'); git(cwd, 'config', 'user.name', 'Prime Work Test'); git(cwd, 'config', 'user.email', 'test@example.com')
   writeFileSync(join(cwd, 'file.txt'), 'base\n'); git(cwd, 'add', 'file.txt'); git(cwd, 'commit', '-qm', 'base')
+}
+const repository = (prefix = 'prime-work-git-') => {
+  const cwd = mkdtempSync(join(tmpdir(), prefix)); dirs.push(cwd)
+  initRepository(cwd)
   return cwd
 }
 
