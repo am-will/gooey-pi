@@ -1331,6 +1331,23 @@ describe('post-package verification helpers', () => {
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/*.pacman')
   })
 
+  test('keeps a Chromium locale for every language the app can display', () => {
+    // electron-builder deletes every Chromium locale outside electronLanguages,
+    // and Chromium then reports en-US to the renderer, so 'Follow system' could
+    // never resolve to a language whose locale was stripped. The match below is
+    // electron-builder's own cleanup rule.
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+    const normalize = (locale: string) => locale.trim().toLowerCase().replaceAll('_', '-')
+    const kept = (packageJson.build.electronLanguages as string[]).map(normalize)
+    // The explicit locale preferences the settings validator accepts.
+    for (const locale of ['en', 'zh-CN'].map(normalize)) {
+      expect(
+        kept.some((wanted) => wanted === locale || locale.startsWith(`${wanted}-`) || wanted.startsWith(`${locale}-`)),
+        locale,
+      ).toBe(true)
+    }
+  })
+
   test('fails closed when Windows Authenticode verification is not valid', () => {
     const signerEnvironment = { GOOEYPI_WINDOWS_CERT_SUBJECT: 'CN=Example Ltd' }
     const calls: Array<{ file: string; args: string[]; path: string | undefined }> = []

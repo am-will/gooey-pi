@@ -231,7 +231,8 @@
       }
     ],
     "electronLanguages": [
-      "en-US"
+      "en-US",
+      "zh-CN"
     ],
     "appx": {
       "applicationId": "GooeyPi",
