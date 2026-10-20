@@ -393,7 +393,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         const stillDeliverable = () => {
           if (isCurrent() || (!admitted.sessionFile && !admittedRuntimeId)) return true
           if (queuedFlushPromptId) return false
-          throw new Error('Another session was opened before it was sent.')
+          throw new Error('The workspace changed before it was sent.')
         }
         const granted = await grantProject(admitted.project)
         if (!stillDeliverable()) return

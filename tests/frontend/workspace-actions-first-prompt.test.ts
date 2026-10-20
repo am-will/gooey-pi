@@ -261,10 +261,10 @@ describe('first prompt delivery across a workspace switch', () => {
     state.switchWorkspace()
     runtimes.resolve([])
 
-    await expect(sending).rejects.toThrow('Another session was opened before it was sent.')
+    await expect(sending).rejects.toThrow('The workspace changed before it was sent.')
     expect(state.agentStart).not.toHaveBeenCalled()
     expect(state.command).not.toHaveBeenCalled()
-    expect(state.setToast).toHaveBeenCalledWith('Your message for “Existing work” was not delivered. Request failed: Another session was opened before it was sent.')
+    expect(state.setToast).toHaveBeenCalledWith('Your message for “Existing work” was not delivered. Request failed: The workspace changed before it was sent.')
   })
 
   it('leaves a queued message in its session when the user switches away before it flushes', async () => {
@@ -295,11 +295,11 @@ describe('first prompt delivery across a workspace switch', () => {
     state.switchWorkspace()
     runtimes.resolve([startedRuntime])
 
-    await expect(sending).rejects.toThrow('Another session was opened before it was sent.')
+    await expect(sending).rejects.toThrow('The workspace changed before it was sent.')
     expect(state.agentStart).toHaveBeenCalledOnce()
     expect(state.command).not.toHaveBeenCalledWith('started-runtime', expect.objectContaining({ message: 'Add tests too' }))
     // The toast names the started session, not a title derived from the follow-up.
-    expect(state.setToast).toHaveBeenCalledWith('Your message for “Build the sidebar” was not delivered. Request failed: Another session was opened before it was sent.')
+    expect(state.setToast).toHaveBeenCalledWith('Your message for “Build the sidebar” was not delivered. Request failed: The workspace changed before it was sent.')
   })
 
   it('leaves a queued message in a started new chat when the user switches away before it flushes', async () => {
