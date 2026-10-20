@@ -68,7 +68,8 @@ for (const spec of PACKAGES) {
     mkdirSync(rebuilt)
     mkdirSync(reviewed)
     run('tar', ['-xzf', basePath, '-C', work], ROOT)
-    run('git', ['apply', patchPath], work)
+    // A user or system core.autocrlf would otherwise rewrite the patched files' line endings.
+    run('git', ['-c', 'core.autocrlf=false', 'apply', patchPath], work)
     run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
     assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
 
