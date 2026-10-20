@@ -288,11 +288,11 @@ export const ActivityMessage = memo(function ActivityMessage({ message, harness 
   const parts = sourceParts.flatMap((part, index) =>
     part.type === 'toolResult' && sourceParts[index - 1]?.type !== 'toolCall' ? [{ type: 'toolCall' as const, id: `${message.id}-${index}`, name: part.name ?? 'Tool' }, part] : [part],
   )
-  return (
-    <article className="message message--activity">
-      <WorkTimeline parts={parts} showReasoning showTools />
-    </article>
-  )
+  const timeline = <WorkTimeline parts={parts} showReasoning showTools />
+  // An article cannot take the note role, so a notice renders as a div, like the steer-read marker.
+  return message.kind === 'notice'
+    ? <div className="message message--activity" role="note">{timeline}</div>
+    : <article className="message message--activity">{timeline}</article>
 })
 
 export const AgentMessage = memo(function AgentMessage({ message }: { message: TranscriptMessage }) {
