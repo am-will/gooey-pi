@@ -185,6 +185,38 @@ describe('session change IPC', () => {
   })
 })
 
+describe('harness status IPC', () => {
+  it('signals a main-process harness refresh to still-trusted authorized renderers until disposal', () => {
+    const services = {
+      meta: {},
+      sessions: { ...serviceStub(), onDidChange: vi.fn(() => vi.fn()) },
+      schedules: serviceStub(),
+      browser: { ...serviceStub(), onDidChange: vi.fn(() => vi.fn()), onPointer: vi.fn(() => vi.fn()), onActivity: vi.fn(() => vi.fn()) },
+      terminals: serviceStub(),
+      omp: harnessStub(),
+      pi: harnessStub(),
+    }
+    const expectedUrl = 'prime-work://app/'
+    const renderer = (id: number, url: string) => ({ id, getURL: () => url, mainFrame: { url }, isDestroyed: () => false, send: vi.fn() })
+    const trusted = renderer(1, expectedUrl)
+    const navigated = renderer(2, 'https://example.com/')
+    const unauthorized = renderer(3, expectedUrl)
+
+    const registration = registerIpc(services as never, expectedUrl)
+    registration.authorize(trusted as never)
+    registration.authorize(navigated as never)
+    registration.notifyHarnessesChanged()
+
+    expect(trusted.send).toHaveBeenCalledExactlyOnceWith('app:harnesses-changed')
+    expect(navigated.send).not.toHaveBeenCalled()
+    expect(unauthorized.send).not.toHaveBeenCalled()
+
+    registration.dispose()
+    registration.notifyHarnessesChanged()
+    expect(trusted.send).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('shell-facing app handlers', () => {
   const expectedUrl = 'prime-work://app/'
   const dirs: string[] = []

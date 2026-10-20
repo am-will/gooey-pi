@@ -96,6 +96,12 @@ export interface IpcRegistration {
   revoke(webContentsId: number): void
   dispose(): void
   /**
+   * Signals that the main process re-detected the harnesses on its own (a
+   * Prime start recovery). The renderer then reloads harness status the way
+   * Settings' Refresh does.
+   */
+  notifyHarnessesChanged(): void
+  /**
    * Resolves on the renderer bootstrap's first `app:get-meta` invoke, which
    * only reaches its handler once `verify` has admitted an authorized sender on
    * the trusted main frame. Nothing else observes it, so no verification work
@@ -468,6 +474,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
     revoke(webContentsId) { authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
+    notifyHarnessesChanged() { broadcast('app:harnesses-changed') },
     dispose() {
       if (closed) return
       closed = true
