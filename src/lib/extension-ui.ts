@@ -88,3 +88,11 @@ export function parseExtensionUiRequest(raw: Record<string, unknown>): Extension
   }
   return undefined
 }
+
+// OMP closes a dialog it has already settled, after an abort or its own
+// timeout, with { type: 'extension_ui_request', method: 'cancel', targetId }.
+// Returns the id of the cancelled request.
+export function parseExtensionUiCancel(raw: Record<string, unknown>): string | undefined {
+  if (raw.type !== 'extension_ui_request' || raw.method !== 'cancel') return undefined
+  return stringValue(raw.targetId, 200)
+}
