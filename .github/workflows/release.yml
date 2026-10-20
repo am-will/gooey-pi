@@ -39,6 +39,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     # Every downstream job checks out this commit SHA instead of the tag, so a
     # tag moved mid-run cannot make two jobs build different commits.
     outputs:
@@ -69,6 +70,7 @@ jobs:
     name: Production dependency audit
     needs: validate
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -85,6 +87,7 @@ jobs:
   quality:
     needs: validate
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -101,6 +104,7 @@ jobs:
   hermetic-e2e:
     needs: validate
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -138,6 +142,7 @@ jobs:
           - arch: x64
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -204,6 +209,7 @@ jobs:
             runner: ubuntu-22.04
             unpacked_dir: linux-unpacked
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -254,6 +260,7 @@ jobs:
     if: (github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))
     needs: [validate, production-audit, quality, hermetic-e2e]
     runs-on: windows-2022
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -311,6 +318,7 @@ jobs:
     # the job-level condition. Windows may legitimately be skipped.
     if: always()
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     permissions:
       contents: write
       id-token: write

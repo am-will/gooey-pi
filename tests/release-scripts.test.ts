@@ -911,6 +911,21 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(security).toContain('when neither is configured, public Windows packaging fails closed')
   })
 
+  test('bounds every workflow job with a job-level timeout', () => {
+    // GitHub's default is 360 minutes, so a hung notarization, hdiutil, smoke, or audit step would bill for hours.
+    for (const path of ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/audit.yml']) {
+      const workflow = load(readFileSync(path, 'utf8')) as { jobs: Record<string, { 'timeout-minutes'?: unknown }> }
+      const jobs = Object.entries(workflow.jobs)
+      expect(jobs.length, path).toBeGreaterThan(0)
+      for (const [name, job] of jobs) {
+        const timeout = job['timeout-minutes']
+        expect(Number.isInteger(timeout), `${path} ${name} timeout-minutes`).toBe(true)
+        expect(timeout as number, `${path} ${name} timeout-minutes`).toBeGreaterThan(0)
+        expect(timeout as number, `${path} ${name} timeout-minutes`).toBeLessThanOrEqual(90)
+      }
+    }
+  })
+
   test('ships both mac architectures as separate builds from native-arch runners', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     // Two matrix legs, each on a runner whose native architecture matches the
