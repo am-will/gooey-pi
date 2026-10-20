@@ -62,6 +62,7 @@ for (const spec of PACKAGES) {
   const patchPath = join(VENDOR, spec.patch)
   if (sha256(basePath) !== spec.baseSha256) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
   // Checkouts made before .gitattributes marked the patches -text can still hold CRLF copies.
+  // This also rejects a patch that legitimately carries CR bytes; narrow the check if one ever must.
   if (readFileSync(patchPath).includes(0x0d)) {
     throw new Error(`Vendor patch has CRLF line endings from a converted checkout: vendor/${spec.patch}. Delete vendor/patches/*.patch and run git checkout -- vendor/patches`)
   }
