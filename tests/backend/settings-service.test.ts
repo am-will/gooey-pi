@@ -200,4 +200,13 @@ describe('SettingsService.update', () => {
     expect(onDidUpdate).toHaveBeenCalledWith(before, next)
     expect(next.keepRunningInBackground).toBe(true)
   })
+
+  it('reverts the saved patch when a lifecycle integration rejects it', async () => {
+    const onDidUpdate = vi.fn(() => { throw new Error('macOS needs your approval') })
+    const service = makeService(undefined, onDidUpdate)
+
+    await expect(service.update({ launchAtLogin: true })).rejects.toThrow(/approval/)
+    expect(onDidUpdate).toHaveBeenCalledOnce()
+    expect(service.get().launchAtLogin).toBe(false)
+  })
 })

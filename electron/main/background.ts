@@ -40,7 +40,12 @@ export class MacBackgroundController {
   start(): void {
     if (!this.isMac()) return
     const settings = this.options.getSettings()
-    this.syncLoginItem(settings.launchAtLogin)
+    try {
+      this.syncLoginItem(settings.launchAtLogin)
+    } catch (error) {
+      // A refused login item must not block the tray or background presentation at startup.
+      console.error(`GooeyPi could not update its login item: ${error instanceof Error ? error.message : String(error)}`)
+    }
     if (this.options.startInBackground) {
       this.backgrounded = true
       this.ensureTray()
@@ -91,17 +96,20 @@ export class MacBackgroundController {
     if (!this.options.getSettings().keepRunningInBackground) this.destroyTray()
   }
 
+  /** Applies lifecycle settings; throws when macOS does not honor a launch-at-login change. */
   applySettings(previous: AppSettings, next: AppSettings): void {
     if (!this.isMac()) return
-    if (previous.launchAtLogin !== next.launchAtLogin) this.syncLoginItem(next.launchAtLogin)
-    if (previous.keepRunningInBackground === next.keepRunningInBackground) return
-    if (next.keepRunningInBackground) {
-      this.ensureTray()
-    } else if (this.backgrounded) {
-      this.open()
-    } else {
-      this.destroyTray()
+    if (previous.keepRunningInBackground !== next.keepRunningInBackground) {
+      if (next.keepRunningInBackground) {
+        this.ensureTray()
+      } else if (this.backgrounded) {
+        this.open()
+      } else {
+        this.destroyTray()
+      }
     }
+    // Last, so a refused login item never skips the tray change in the same patch.
+    if (previous.launchAtLogin !== next.launchAtLogin) this.syncLoginItem(next.launchAtLogin)
   }
 
   dispose(): void {
@@ -131,14 +139,16 @@ export class MacBackgroundController {
     app.setActivationPolicy('accessory')
   }
 
+  /** Registers or removes the login item and verifies macOS applied it, throwing a user-facing error otherwise. */
   private syncLoginItem(openAtLogin: boolean): void {
     if (!this.packaged) return
-    try {
-      if (app.getLoginItemSettings().openAtLogin === openAtLogin) return
-      app.setLoginItemSettings({ openAtLogin })
-    } catch (error) {
-      console.error(`GooeyPi could not update its login item: ${error instanceof Error ? error.message : String(error)}`)
-    }
+    if (app.getLoginItemSettings().openAtLogin === openAtLogin) return
+    app.setLoginItemSettings({ openAtLogin })
+    const actual = app.getLoginItemSettings()
+    if (actual.openAtLogin === openAtLogin) return
+    throw new Error(openAtLogin && actual.status === 'requires-approval'
+      ? 'macOS needs your approval to open GooeyPi at login. Allow GooeyPi in System Settings > General > Login Items, then try again.'
+      : `macOS did not ${openAtLogin ? 'add' : 'remove'} GooeyPi's login item.`)
   }
 
   private destroyTray(): void {

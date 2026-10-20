@@ -1,5 +1,6 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, PROJECT_SORT_MODES, type AppSettings, type ProjectSortMode } from '../../src/types/api'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import type { JsonStateStore } from './store'
@@ -153,7 +154,17 @@ export class SettingsService {
       Object.assign(state.settings, next)
       return state.settings
     })
-    await this.onDidUpdate(previous!, next)
+    try {
+      await this.onDidUpdate(previous!, next)
+    } catch (error) {
+      // Revert the saved patch so it matches what the renderer reverts to; keys a newer write changed are kept.
+      await this.store.update((state) => {
+        for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
+          if (isDeepStrictEqual(state.settings[key], next[key])) Object.assign(state.settings, { [key]: previous![key] })
+        }
+      })
+      throw error
+    }
     return next
   }
 
