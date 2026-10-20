@@ -205,6 +205,25 @@ describe('HarnessDiscoveryService', () => {
     })
   })
 
+  it.each([
+    ['Pi', 'process.stdout.write("1.3.0\\n")', '1.3.0'],
+    ['OMP', 'process.stdout.write("omp/18.12.3\\n")', '18.12.3'],
+    ['Rust Prime', 'process.stdout.write("0.10.0\\n")', '0.10.0'],
+    ['TypeScript Prime', 'process.stderr.write("0.7.0-gooeypi.1\\n")', '0.7.0-gooeypi.1'],
+    ['a v-prefixed build', 'process.stdout.write("v2.0.0\\n")', '2.0.0'],
+    ['a build without a version', 'process.stdout.write("development build\\n")', null],
+  ])('reports the bare version %s prints', async (_label, body, version) => {
+    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-probe-'))
+    const executable = join(dir, 'harness')
+    writeFileSync(executable, `#!/usr/bin/env node\n${body}\n`)
+    chmodSync(executable, 0o755)
+    try {
+      await expect(probeHarnessExecutable(executable)).resolves.toEqual({ runnable: true, version })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('keeps the meaningful last stderr line in a probe failure', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'gooeypi-probe-'))
     const executable = join(dir, 'pi')
