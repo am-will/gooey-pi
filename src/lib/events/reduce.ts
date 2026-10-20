@@ -344,11 +344,11 @@ export function replayPrimeEvents(
       if (!fallback) continue
       const text = fallbackNoticeText(fallback.label, fallback.from)
       const last = next.at(-1)
-      if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
+      if (last?.kind === 'notice' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
       const timestamp = Date.now()
       finalizeStreaming(timestamp, false)
       copyTranscript()
-      next.push({ id: nextTranscriptId('fallback'), role: 'system', timestamp, parts: [withPartId({ type: 'text', text })] })
+      next.push({ id: nextTranscriptId('fallback'), role: 'system', kind: 'notice', timestamp, parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {

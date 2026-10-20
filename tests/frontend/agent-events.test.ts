@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { AGENT_EVENT_QUEUE_LIMIT, admitAgentEvent, contextUsageFromEvent, sessionUsageFromEvent, type PendingAgentEvent } from '../../src/app/agent-events'
 import { applyPrimeEvent, replayPrimeEvents } from '../../src/lib/events'
 import { contextDialLabel, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
+import type { TranscriptMessage } from '../../src/types/api'
 
 describe('context usage events', () => {
   it('accepts bounded authoritative usage and preserves post-compaction unknowns', () => {
@@ -96,6 +97,7 @@ describe('provider fallback events', () => {
     expect(messages[0]?.parts).toEqual([{ type: 'text', text: 'before', partId: expect.any(String) }])
     expect(messages[1]).toMatchObject({
       role: 'system',
+      kind: 'notice',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback (original: anthropic/claude-opus)' }],
     })
     expect(messages[2]?.parts).toEqual([{ type: 'text', text: 'after', partId: expect.any(String) }])
@@ -120,8 +122,19 @@ describe('provider fallback events', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({
       role: 'system',
+      kind: 'notice',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback (original: anthropic/claude-opus)' }],
     })
+  })
+
+  it('deduplicates a replayed fallback against the persisted notice it lands on', () => {
+    const persisted: TranscriptMessage = {
+      id: 'aa000002', role: 'system', kind: 'notice', timestamp: '2026-08-08T02:14:00.000Z',
+      parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }],
+    }
+    const messages = replayPrimeEvents([persisted], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
+
+    expect(messages).toEqual([persisted])
   })
 
   it('ignores unrelated model events without finalizing streaming', () => {
