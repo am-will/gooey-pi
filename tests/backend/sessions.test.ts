@@ -867,6 +867,46 @@ describe('SessionService live changes', () => {
     }
   })
 
+  it('watches the most recently modified buckets when more exist than the watcher bound', async () => {
+    const watchBound = 512
+    const { root, project, service } = setup(undefined, {
+      recursiveWatch: true,
+      watchDirectory: () => {
+        const watcher = { close: () => undefined, on: () => watcher }
+        return watcher
+      },
+    })
+    const old = new Date('2020-01-01T00:00:00.000Z')
+    const buckets = Array.from({ length: watchBound }, (_, index) => `bucket-${String(index).padStart(3, '0')}`)
+    for (const name of buckets) {
+      mkdirSync(join(root, name))
+      utimesSync(join(root, name), old, old)
+    }
+    // Alphabetically last, but the only recently active bucket.
+    mkdirSync(join(root, 'zzz-bucket'))
+    const watcherHarness = service as unknown as { bucketWatchers: Map<string, unknown> }
+    const unsubscribe = service.onDidChange(() => undefined)
+
+    try {
+      await waitUntil(() => watcherHarness.bucketWatchers.has('zzz-bucket') && watcherHarness.bucketWatchers.size === watchBound, 4_000)
+      // Equal mtimes fall back to name order, so the last old bucket is dropped.
+      expect(watcherHarness.bucketWatchers.has('bucket-511')).toBe(false)
+
+      // A session created in a dormant bucket gets a watcher on the next forced
+      // list, without waiting for a root watch event.
+      writeSession(join(root, 'bucket-511', 'fresh.jsonl'), project, 'fresh')
+      const now = new Date()
+      utimesSync(join(root, 'bucket-511'), now, now)
+      await service.list(undefined, false, true)
+      await waitUntil(() => watcherHarness.bucketWatchers.has('bucket-511'), 4_000)
+      expect(watcherHarness.bucketWatchers.has('zzz-bucket')).toBe(true)
+      expect(watcherHarness.bucketWatchers.has('bucket-510')).toBe(false)
+      expect(watcherHarness.bucketWatchers.size).toBe(watchBound)
+    } finally {
+      unsubscribe()
+    }
+  })
+
   it('emits refreshes during continuous JSONL writes instead of waiting for the stream to stop', async () => {
     const { root, project, service } = setup()
     const file = join(root, 'streaming.jsonl')

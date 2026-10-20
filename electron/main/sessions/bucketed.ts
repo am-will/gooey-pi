@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
-import { mapLimit } from '../lib/async'
+import { comparePaths, mapLimit } from '../lib/async'
 import { isPathWithin, isRecord } from '../validation'
 import { fallbackModelFromRecord, fallbackNoticeText } from '../../../src/lib/events/model-fallback'
 import type { TranscriptMessage } from '../../../src/types/api'
@@ -57,6 +57,8 @@ export function createBucketedCatalogIo(): SessionCatalogIo {
     async readDirectory(root: string): Promise<readonly SessionCatalogEntry[]> {
       const buckets = (await readdir(root, { withFileTypes: true }))
         .filter((bucket) => bucket.isDirectory() && !bucket.name.startsWith('.'))
+        // Readdir order is filesystem-defined; sort so truncation is deterministic.
+        .sort((left, right) => comparePaths(left.name, right.name))
         .slice(0, MAX_BUCKET_DIRECTORIES)
       const perBucket = await mapLimit(buckets, MAX_BUCKET_CONCURRENCY, async (bucket): Promise<SessionCatalogEntry[] | null> => {
         try {

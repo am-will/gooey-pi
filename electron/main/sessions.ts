@@ -1,12 +1,12 @@
 import { watch, type Dirent, type Stats } from 'node:fs'
-import { readdir, realpath, stat } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { HarnessId, PrimeImplementation, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { RUST_PRIME_AGENT_NAME } from '../../src/lib/prime-compat'
 import { queueDaemonFollowUp } from './agent-daemon'
-import { comparePaths, createAdmissionQueue, createSingleFlight, type AdmissionQueue } from './lib/async'
+import { comparePaths, createAdmissionQueue, createSingleFlight, mapLimit, type AdmissionQueue } from './lib/async'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
 import { SessionMetadataCatalog, type SessionCatalogIo, type SessionNameTimestamp } from './sessions/catalog'
 import { createSessionMetadataReader, type JsonRecord, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
@@ -212,7 +212,11 @@ export class SessionService {
     // A caller reconciling a just-created session cannot rely on fs.watch:
     // recursive delivery varies by platform and an event may still be queued.
     // Force advances the scan revision while retaining metadata-level caches.
-    if (force) this.catalog.invalidateLiveCatalog()
+    if (force) {
+      this.catalog.invalidateLiveCatalog()
+      // A session created in a dormant bucket can enter the bounded watcher set.
+      if (this.recursiveWatch && this.sessionWatcher) this.refreshBucketWatchers(this.sessionWatcher)
+    }
     let sessions = await this.catalog.all()
     if (this.nativeArchive.enabled()) {
       if (force) this.nativeArchive.catalog.invalidateLiveCatalog()
@@ -443,12 +447,14 @@ export class SessionService {
     } catch { return }
     if (this.sessionWatcher !== rootWatcher || !this.changeListeners.size) return
 
-    const bucketNames = entries
+    const candidates = entries
       .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()
         && entry.name.length > 0 && entry.name.length <= 255 && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
-      .sort()
-      .slice(0, MAX_SESSION_WATCH_DIRECTORIES)
+    const bucketNames = candidates.length <= MAX_SESSION_WATCH_DIRECTORIES
+      ? candidates.sort()
+      : await this.mostRecentlyModifiedBuckets(root, candidates)
+    if (this.sessionWatcher !== rootWatcher || !this.changeListeners.size) return
     const wanted = new Set(bucketNames)
     for (const [name, watcher] of this.bucketWatchers) {
       if (wanted.has(name)) continue
@@ -476,6 +482,24 @@ export class SessionService {
         })
       } catch { /* The root watcher will report replacements and retry discovery. */ }
     }
+  }
+
+  /**
+   * More buckets exist than can be watched: prefer the most recently modified
+   * ones (creating or renaming a session file bumps its bucket's mtime), with a
+   * name tie-break so the selection is deterministic.
+   */
+  private async mostRecentlyModifiedBuckets(root: string, names: readonly string[]): Promise<string[]> {
+    const buckets = await mapLimit(names, 16, async (name) => {
+      try {
+        const info = await lstat(join(root, name))
+        return info.isDirectory() ? { name, mtimeMs: info.mtimeMs } : null
+      } catch { return null }
+    })
+    return buckets
+      .sort((left, right) => right.mtimeMs - left.mtimeMs || comparePaths(left.name, right.name))
+      .slice(0, MAX_SESSION_WATCH_DIRECTORIES)
+      .map((bucket) => bucket.name)
   }
 
   private closeBucketWatchers(): void {
