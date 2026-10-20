@@ -1,8 +1,9 @@
 import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
 import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
+import { interceptedCommandName } from '@/lib/slash-commands'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
-import type { BrowserAnnotation, SessionRecord, SkillRecord, TerminalPromptContext } from '@/types/api'
+import type { BrowserAnnotation, HarnessId, SessionRecord, SkillRecord, TerminalPromptContext } from '@/types/api'
 
 export interface ComposerPromptContext {
   sessions: readonly SessionRecord[]
@@ -13,8 +14,22 @@ export interface ComposerPromptContext {
   terminalContext?: TerminalPromptContext
 }
 
-/** Appends the model-only routing and attachment blocks to the user's visible prompt. */
-export function composePrompt(prompt: string, { sessions, sessionReferenceIds, skills, annotations, terminalContext }: ComposerPromptContext): string {
+export type ComposedPrompt = { prompt: string } | { error: string }
+
+/**
+ * Appends the model-only routing and attachment blocks to the user's visible
+ * prompt. Commands GooeyPi intercepts never reach the model as a prompt, so
+ * they are recognized on the raw draft and refused when context would ride
+ * along: for /compact it would otherwise become the custom instructions.
+ */
+export function composePrompt(prompt: string, harness: HarnessId, context: ComposerPromptContext): ComposedPrompt {
+  const composed = appendContext(prompt, context)
+  const command = interceptedCommandName(prompt, harness)
+  if (command && composed !== prompt) return { error: `${command} does not accept attachments or @ mentions. Remove them and try again.` }
+  return { prompt: composed }
+}
+
+function appendContext(prompt: string, { sessions, sessionReferenceIds, skills, annotations, terminalContext }: ComposerPromptContext): string {
   // Recognized @ mentions carry explicit routing semantics; annotations then
   // ride along inside the prompt as their own delimited plain-text block.
   const referencedSessions = findSessionMentions(prompt, sessions, sessionReferenceIds)

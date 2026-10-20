@@ -295,7 +295,9 @@ export const Composer = memo(function Composer({
       return
     }
     const submittedImages = currentImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
-    const promptWithContext = composePrompt(prompt, { sessions, sessionReferenceIds, skills: enabledSkills, annotations: currentAnnotations, terminalContext: currentTerminalContext })
+    const composed = composePrompt(prompt, harness, { sessions, sessionReferenceIds, skills: enabledSkills, annotations: currentAnnotations, terminalContext: currentTerminalContext })
+    if ('error' in composed) { setAttachmentError(composed.error); return }
+    const promptWithContext = composed.prompt
     const frame = `${JSON.stringify({ type: intent === 'steer' ? 'steer' : 'follow_up', message: promptWithContext, ...(submittedImages.length ? { images: submittedImages } : {}), id: '00000000-0000-0000-0000-000000000000' })}\n`
     if (new TextEncoder().encode(frame).byteLength > MAX_IMAGE_PROMPT_BYTES) {
       setAttachmentError('This message and its attachments are too large to send. Shorten the message or remove an attachment.')
