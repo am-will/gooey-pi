@@ -143,6 +143,7 @@ function fixture({ selectedSession }: { selectedSession?: SessionRecord } = {}) 
     agentList,
     command,
     stop,
+    sessionsList,
     setRuntime,
     setToast,
     settings,
@@ -319,6 +320,21 @@ describe('first prompt delivery across a workspace switch', () => {
     expect(state.removeQueuedPrompt).not.toHaveBeenCalled()
     expect(state.markQueuedPromptFlushFailed).not.toHaveBeenCalled()
     expect(state.setToast).not.toHaveBeenCalled()
+  })
+
+  it('still sends the prompt to the started runtime when indexing its session fails', async () => {
+    const state = fixture()
+    state.sessionsList.mockRejectedValue(new Error('catalog unavailable'))
+
+    const sending = state.actions.sendPrompt('Build the sidebar')
+    await vi.waitFor(() => expect(state.agentStart).toHaveBeenCalledOnce())
+    state.start.resolve(startedRuntime)
+    await sending
+
+    expect(state.stop).not.toHaveBeenCalled()
+    expect(state.command).toHaveBeenCalledWith('started-runtime', { type: 'prompt', message: 'Build the sidebar', streamingBehavior: 'followUp' })
+    expect(state.runtime()).toEqual({ ...startedRuntime, isStreaming: true })
+    expect(state.sessions().map((item) => item.id)).toEqual(['existing', 'other'])
   })
 
   it('attaches the started runtime and shows the prompt while its workspace stays selected', async () => {
