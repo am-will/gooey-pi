@@ -131,7 +131,7 @@ export class RpcRuntime {
     private readonly chunkAssemblyTiming: RpcChunkAssemblyTiming = DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING,
   ) {
     this.watchdogTimings = { ...DEFAULT_COMPACTION_WATCHDOG_TIMINGS, ...watchdogTimings }
-    this.info = { runtimeId: this.runtimeId, harness: this.adapter.id, cwd, isStreaming: false, isCompacting: false, sessionActions: emptySessionActionSnapshot() }
+    this.info = { runtimeId: this.runtimeId, harness: this.adapter.id, cwd, isStreaming: false, isCompacting: false, sessionActions: emptySessionActionSnapshot(), ...(this.adapter.buildServiceTierCommand ? {} : { fastModeAvailable: false }) }
     this.eventForwarder = new AgentEventForwarder(this.runtimeId, onEvent)
     // Every harness child is spawned with the authorized cwd as its working
     // directory. Adapters that declare spawnsInCwd (pi has no --cwd flag and
@@ -186,7 +186,7 @@ export class RpcRuntime {
 
   applyCapabilities(model: PrimeModelDescriptor | undefined): void {
     this.info.availableThinkingLevels = model?.availableThinkingLevels ?? ['off']
-    this.info.fastModeSupported = model?.fastModeSupported ?? false
+    this.info.fastModeSupported = Boolean(this.adapter.buildServiceTierCommand) && (model?.fastModeSupported ?? false)
     this.info.imageInputSupported = model ? model.input.includes('image') : undefined
     if (!this.info.fastModeSupported) {
       this.requestedServiceTier = 'default'

@@ -166,7 +166,8 @@ const PRIME_RUST_UNSUPPORTED_COMMANDS = new Set([
  * Rust Prime Agent (the 0.9.9 betas and 0.10+) keeps the TypeScript RPC
  * envelope, vocabulary and --skill flag, but exits on --extension as an
  * unknown option, so GooeyPi's TypeScript capability extensions are never
- * passed. It also has no service-tier command.
+ * passed. Its in-process RPC has no service tier: set_service_tier is an
+ * unknown command and get_state reports none, so fast mode is unavailable.
  */
 export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
@@ -176,7 +177,7 @@ export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   buildStartArgs: (input) => primeStartArgs(input, false),
   translateCommand: rejectCommands(PRIME_RUST_UNSUPPORTED_COMMANDS, RUST_PRIME_AGENT_NAME),
   normalizeEvent: (event) => event,
-  readState: PRIME_RPC_ADAPTER.readState,
+  readState: () => ({}),
 }
 
 /** The adapter for the discovered Prime build; an unclassified Prime keeps the TypeScript argv. */

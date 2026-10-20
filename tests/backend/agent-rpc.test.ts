@@ -1154,6 +1154,27 @@ describe('Rust Prime runtimes', () => {
     expect(fake.commands().map((command) => command.type)).not.toContain('manage_heartbeat')
     expect(fake.commands().map((command) => command.type)).not.toContain('extension_ui_response')
   })
+
+  it('reports fast mode as unavailable and never sends a service tier', async () => {
+    const fake = fakeRustPrime()
+    const fastModel = {
+      key: 'openai-codex/gpt-5.4', provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT-5.4', reasoning: true,
+      input: ['text'], contextWindow: 1_000, maxTokens: 100, availableThinkingLevels: ['off', 'high'], fastModeSupported: true, available: true,
+    }
+    const providers = { capabilities: async () => fastModel, requireAvailableModel: async () => fastModel } as unknown as PrimeProviderService
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, providers, () => new Set(), PRIME_RUST_RPC_ADAPTER)
+    managers.push(manager)
+
+    const runtime = await manager.start({ cwd: fake.cwd, fast: true })
+
+    expect(runtime).toMatchObject({ fastModeSupported: false, fastModeAvailable: false, serviceTier: 'default' })
+    await manager.command(runtime.runtimeId, { type: 'set_model', provider: 'openai-codex', modelId: 'gpt-5.4' })
+    await manager.command(runtime.runtimeId, { type: 'cycle_model' })
+    await expect(manager.command(runtime.runtimeId, { type: 'set_service_tier', serviceTier: 'priority' }))
+      .rejects.toThrow('Service tier is not supported by the Prime Agent harness')
+    expect(manager.list()[0]).toMatchObject({ fastModeSupported: false, fastModeAvailable: false })
+    expect(fake.commands().map((command) => command.type)).not.toContain('set_service_tier')
+  })
 })
 
 describe('framed RPC transport stdio failure', () => {
