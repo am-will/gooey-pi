@@ -181,6 +181,8 @@ function AgentActivityPart({ part }: { part: Extract<MessagePart, { type: 'agent
 function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction' }>['reason']): string {
   if (reason === 'threshold') return 'automatic threshold'
   if (reason === 'overflow') return 'overflow recovery'
+  if (reason === 'incomplete') return 'incomplete response recovery'
+  if (reason === 'idle') return 'idle maintenance'
   if (reason === 'requested') return 'requested'
   if (reason === 'manual') return 'manual'
   return 'context'

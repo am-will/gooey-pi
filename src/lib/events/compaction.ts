@@ -7,7 +7,9 @@ import { record, string } from './parse'
 type CompactionPart = Extract<MessagePart, { type: 'compaction' }>
 
 function compactionReason(value: unknown): CompactionPart['reason'] {
-  return value === 'manual' || value === 'threshold' || value === 'overflow' || value === 'requested' ? value : undefined
+  return value === 'manual' || value === 'threshold' || value === 'overflow' || value === 'requested' || value === 'idle' || value === 'incomplete'
+    ? value
+    : undefined
 }
 
 function compactionOutcome(value: unknown): CompactionPart['outcome'] {

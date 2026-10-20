@@ -372,6 +372,15 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('Prime message')
   })
 
+  it('labels OMP idle and incomplete-response compactions', () => {
+    const html = render([
+      { id: 'idle', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'idle' }] },
+      { id: 'incomplete', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'incomplete' }] },
+    ])
+    expect(html).toContain('idle maintenance')
+    expect(html).toContain('incomplete response recovery')
+  })
+
   it('renders standalone informational output as a collapsed tool row', () => {
     const html = render([{
       id: 'ipython-state',

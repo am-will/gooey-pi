@@ -331,6 +331,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       if (customType === 'compaction_outcome') {
         const outcome = details?.outcome === 'cancelled' ? 'cancelled' : details?.outcome === 'skipped' ? 'skipped' : 'failed'
         const reason = details?.reason === 'manual' || details?.reason === 'threshold' || details?.reason === 'overflow' || details?.reason === 'requested'
+          || details?.reason === 'idle' || details?.reason === 'incomplete'
           ? details.reason
           : undefined
         const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined

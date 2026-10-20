@@ -112,6 +112,15 @@ describe('agent transport events', () => {
     expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'failed', outcome: 'skipped' })
   })
 
+  it('keeps OMP idle and incomplete compaction reasons', () => {
+    for (const reason of ['idle', 'incomplete']) {
+      const started = applyPrimeEvent([], { type: 'compaction_start', reason })
+      expect(started.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'running', reason })
+      const finished = applyPrimeEvent([], { type: 'compaction_end', reason, aborted: false, willRetry: false, completed: true })
+      expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'done', reason })
+    }
+  })
+
   it('keeps the running row reason and instructions when the end omits them', () => {
     const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'manual', customInstructions: 'Keep the API notes.' })
     const finished = applyPrimeEvent(started, {
