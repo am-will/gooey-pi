@@ -27,6 +27,7 @@ import { useAppUpdates } from '@/hooks/useAppUpdates'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import { useBrowserAnnotations } from '@/hooks/useBrowserAnnotations'
 import { useExtensionUi } from '@/hooks/useExtensionUi'
+import { useHarnessRefresh } from '@/hooks/useHarnessRefresh'
 import { INSPECTOR_DEFAULT, INSPECTOR_MIN, TERMINAL_DEFAULT, TERMINAL_MIN, usePanelLayout } from '@/hooks/usePanelLayout'
 import { usePluginSkills } from '@/hooks/usePluginSkills'
 import { useProviderCatalog } from '@/hooks/useProviderCatalog'
@@ -260,13 +261,9 @@ export default function App() {
     () => meta ? HARNESS_IDS.filter((harness) => Boolean(meta.harnesses[harness].path)) : [],
     [meta],
   )
-  const refreshDetectedHarnesses = useCallback(async () => {
-    const result = await settingsState.reconcileExternalSettings(refreshHarnesses)
-    if (!result) return
-    if (result.settings.activeHarness === activeHarness && result.meta.harnesses[activeHarness].path) {
-      await provider.refresh(true)
-    }
-  }, [activeHarness, provider.refresh, refreshHarnesses, settingsState.reconcileExternalSettings])
+  const refreshDetectedHarnesses = useHarnessRefresh({
+    activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh,
+  })
   useEffect(() => {
     if (detectedHarnesses.length) setNoHarnessPromptDismissed(false)
   }, [detectedHarnesses.length])
