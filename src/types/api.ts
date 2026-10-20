@@ -351,7 +351,6 @@ export interface ExtensionInstallInput {
 
 export interface ProjectFileEntry { path: string; type: 'file' | 'directory' }
 export interface ProjectFileListing { entries: ProjectFileEntry[]; skipped: number; truncated: boolean }
-/** Entries listed per project folder before a Files panel listing stops and reports `truncated`. */
 export const PROJECT_FILE_LISTING_LIMIT = 25_000
 
 export interface GitWorktree {

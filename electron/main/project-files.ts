@@ -20,6 +20,8 @@ const IGNORED_LISTING_DIRECTORIES = new Set([
  * Lists files and directories under an already-authorized root for the Files
  * panel. The walk is breadth-first so the entry budget only cuts the deepest
  * levels: one large early folder cannot starve root files or later siblings.
+ * The budget applies per root (one project folder), and `truncated` reports
+ * whether it hid any listable entry.
  */
 export async function listProjectFiles(root: string, maxEntries = PROJECT_FILE_LISTING_LIMIT): Promise<ProjectFileListing> {
   const entries: ProjectFileEntry[] = []
