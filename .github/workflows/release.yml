@@ -32,6 +32,9 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
   # A bare dispatch tag name would let actions/checkout prefer a same-named branch.
   RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  # Signed mode wins when both Windows modes are enabled. RELEASE_WINDOWS_ENABLED
+  # is the OR of the two env flags (signed or unsigned), unlike
+  # vars.RELEASE_WINDOWS_ENABLED, which enables signed builds only.
   RELEASE_WINDOWS_SIGNED_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_ENABLED == 'true') }}
   RELEASE_WINDOWS_UNSIGNED_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_windows_unsigned) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true') }}
   RELEASE_WINDOWS_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))) }}
@@ -257,6 +260,8 @@ jobs:
           if-no-files-found: error
 
   package-windows:
+    # Job-level conditions cannot read env, so this repeats env.RELEASE_WINDOWS_ENABLED:
+    # the OR of RELEASE_WINDOWS_SIGNED_ENABLED and RELEASE_WINDOWS_UNSIGNED_ENABLED.
     if: (github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))
     needs: [validate, production-audit, quality, hermetic-e2e]
     runs-on: windows-2022
@@ -280,7 +285,7 @@ jobs:
       - run: npm run release:preflight:toolchain
       # Signed builds remain fail-closed and require the configured Authenticode identity.
       - name: Build, Authenticode-sign, and verify Windows packages
-        if: (github.event_name == 'workflow_dispatch' && inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_ENABLED == 'true')
+        if: env.RELEASE_WINDOWS_SIGNED_ENABLED == 'true'
         run: node scripts/release/package.mjs --public --platform win --skip-verify
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
@@ -288,7 +293,7 @@ jobs:
           GOOEYPI_WINDOWS_CERT_SUBJECT: ${{ vars.GOOEYPI_WINDOWS_CERT_SUBJECT }}
           GOOEYPI_WINDOWS_CERT_THUMBPRINT: ${{ vars.GOOEYPI_WINDOWS_CERT_THUMBPRINT }}
       - name: Build unsigned Windows packages for beta distribution
-        if: (github.event_name == 'workflow_dispatch' && inputs.include_windows_unsigned && !inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true' && vars.RELEASE_WINDOWS_ENABLED != 'true')
+        if: env.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true' && env.RELEASE_WINDOWS_SIGNED_ENABLED != 'true'
         run: node scripts/release/package.mjs --qa --platform win --skip-verify
       # Artifacts are only publishable once the packaged executable itself boots.
       - name: Launch the packaged application
