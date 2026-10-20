@@ -1,6 +1,7 @@
 import { PawPrint, RefreshCw, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PetAvatar } from '@/components/PetAvatar'
+import { GOOEYPI_MASCOT_SRC } from '@/lib/assets'
 import type { PetDefinition, PrimeWorkApi } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 import { SettingsToggle } from './SettingsToggle'
@@ -58,7 +59,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
               onClick={() => { void onUpdate({ petId: pet.id, petEnabled: true }) }}
             >
               <span className="pet-choice__art">
-                {pet.id === 'gooey-pi' ? <img src="/gooeypi-mascot.png" alt="" /> : pet.kind === 'orb' ? <PetAvatar pet={pet} pets={pets} size={48} reduceMotion={settings.reduceMotion} /> : <PawPrint size={24} />}
+                {pet.id === 'gooey-pi' ? <img src={GOOEYPI_MASCOT_SRC} alt="" /> : pet.kind === 'orb' ? <PetAvatar pet={pet} pets={pets} size={48} reduceMotion={settings.reduceMotion} /> : <PawPrint size={24} />}
               </span>
               <span><strong>{pet.displayName}</strong><small>{pet.source === 'built-in' ? 'Built into GooeyPi' : 'Codex pet'}</small></span>
             </button>

@@ -1,6 +1,7 @@
 import { ChevronDown, X } from 'lucide-react'
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
+import { GOOEYPI_MASCOT_SRC } from '@/lib/assets'
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   label: string
@@ -213,7 +214,7 @@ export function PiMark({ size = 24 }: { size?: number }) {
 export function GooeyPiMark({ size = 24 }: { size?: number }) {
   return (
     <span className="gooeypi-mark" style={{ width: size, height: size }} role="img" aria-label="GooeyPi">
-      <img src="/gooeypi-mascot.png" alt="" aria-hidden="true" />
+      <img src={GOOEYPI_MASCOT_SRC} alt="" aria-hidden="true" />
     </span>
   )
 }
