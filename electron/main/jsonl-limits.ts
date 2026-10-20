@@ -18,7 +18,8 @@
  *   reassembly). Larger than the write tier because responses embed tool output.
  * - RPC_WRITE_FRAME_LIMIT_BYTES (2 MiB): frames GooeyPi writes to a harness
  *   RPC child's stdin (commands, prompts, and base64 image payloads), checked
- *   by the agent-rpc command schema and transport.
+ *   by the agent-rpc command schema and transport. Defined in
+ *   `src/lib/rpc-frame.ts` so the renderer's send pre-check shares the value.
  * - DAEMON_FRAME_LIMIT_BYTES (1 MiB): control frames on the Prime Agent
  *   daemon socket; these are small protocol envelopes.
  *
@@ -32,5 +33,5 @@ export const SESSION_FILE_RECORD_LIMIT_BYTES = 64 * 1024 * 1024
 export const SESSION_FILE_MAX_BYTES = 256 * 1024 * 1024
 export const SESSION_FILE_MAX_RECORDS = 200_000
 export const RPC_READ_FRAME_LIMIT_BYTES = 16 * 1024 * 1024
-export const RPC_WRITE_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+export { RPC_WRITE_FRAME_LIMIT_BYTES } from '../../src/lib/rpc-frame'
 export const DAEMON_FRAME_LIMIT_BYTES = 1024 * 1024
