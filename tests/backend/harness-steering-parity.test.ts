@@ -45,4 +45,19 @@ describe.each(adapters)('%s steering protocol parity', (_name, adapter) => {
     expect(parseSessionActionSnapshot(queued.actions)).toEqual(queued.actions)
     expect(parseSessionActionSnapshot(pickedUp.actions)).toEqual(pickedUp.actions)
   })
+
+  it('lets the renderer settle a steer before the user message that delivers it', () => {
+    const running = { kind: 'turn', phase: 'running' } as const
+    const state = {
+      runtimeId: 'runtime', harness: adapter.id, cwd: '/project', isStreaming: true,
+      sessionActions: { queuedCount: 1, steering: ['change direction'], followUps: [], active: running },
+    }
+    const delivered = { type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'change direction' }] } }
+
+    // A harness that reports its own queue changes needs nothing extra; for
+    // one that does not, the adapter puts the pickup ahead of the message.
+    expect(adapter.normalizeEvent(delivered, state)).toEqual(adapter.sessionActionEvents === false
+      ? [{ type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [], active: running } }, delivered]
+      : delivered)
+  })
 })
