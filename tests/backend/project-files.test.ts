@@ -61,4 +61,13 @@ describe('listProjectFiles', () => {
       truncated: false,
     })
   })
+
+  it('does not flag truncation when an ignored folder is reached after the budget is spent', async () => {
+    const root = projectRoot()
+    mkdirSync(join(root, 'a'))
+    mkdirSync(join(root, 'node_modules'))
+    writeFileSync(join(root, 'node_modules', 'dependency.js'), 'generated')
+
+    expect(await listProjectFiles(root, 1)).toEqual({ entries: [{ path: 'a', type: 'directory' }], skipped: 0, truncated: false })
+  })
 })
