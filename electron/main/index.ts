@@ -685,24 +685,9 @@ async function bootstrap(): Promise<void> {
   piManager.setDisabledModelsProvider(piDisabledModels)
   piManager.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
   piAgents = piManager
-  sessions.bindRuntimeHooks({
-    get: (path) => agents?.getForSession(path),
-    all: () => agents?.list() ?? [],
-    stop: async (path) => { await agents?.stopForSession(path) },
-    rename: async (path, title) => agents?.renameForSession(path, title) ?? false,
-  })
-  ompSessions.bindRuntimeHooks({
-    get: (path) => ompAgents?.getForSession(path),
-    all: () => ompAgents?.list() ?? [],
-    stop: async (path) => { await ompAgents?.stopForSession(path) },
-    rename: async (path, title) => ompAgents?.renameForSession(path, title) ?? false,
-  })
-  piSessions.bindRuntimeHooks({
-    get: (path) => piAgents?.getForSession(path),
-    all: () => piAgents?.list() ?? [],
-    stop: async (path) => { await piAgents?.stopForSession(path) },
-    rename: async (path, title) => piAgents?.renameForSession(path, title) ?? false,
-  })
+  sessions.bindRuntimeManager(agents)
+  ompSessions.bindRuntimeManager(ompManager)
+  piSessions.bindRuntimeManager(piManager)
   terminals = new TerminalService(
     authorizeEitherCwd,
     () => stateStore.getSettings().terminalShell,

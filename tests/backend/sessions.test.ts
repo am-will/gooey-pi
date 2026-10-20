@@ -1261,6 +1261,26 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect((await service.list())[0]?.archived).toBe(false)
   })
 
+  it('binds the runtime hooks to a runtime manager', async () => {
+    const { root, project, service } = setup()
+    const file = join(root, 'managed.jsonl')
+    writeSession(file, project, 'managed')
+    const safePath = await service.requireSessionPath(file)
+    const manager = {
+      getForSession: vi.fn(() => undefined),
+      list: vi.fn(() => [{ sessionFile: safePath, isStreaming: true }]),
+      stopForSession: vi.fn(async () => undefined),
+      renameForSession: vi.fn(async () => true),
+    }
+    service.bindRuntimeManager(manager)
+
+    expect((await service.list())[0]?.status).toBe('running')
+    await expect(service.rename(file, 'Managed title')).resolves.toBe(true)
+    expect(manager.renameForSession).toHaveBeenCalledWith(safePath, 'Managed title')
+    await service.archive(file)
+    expect(manager.stopForSession).toHaveBeenCalledWith(safePath)
+  })
+
   it('calls renameFile only when the runtime hook returns false and the CLI path is null', async () => {
     const renameFile = vi.fn(() => true)
     const { root, project, service } = setup(undefined, { renameFile })

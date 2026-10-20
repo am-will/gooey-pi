@@ -17,6 +17,14 @@ interface RuntimeSessionState { isStreaming: boolean; isCompacting?: boolean }
 
 interface RuntimeSessionSnapshot extends RuntimeSessionState { sessionFile?: string }
 
+/** The part of a harness's runtime manager that its session service reads and drives. */
+export interface SessionRuntimeManager {
+  getForSession(filePath: string): RuntimeSessionState | undefined
+  list(): readonly RuntimeSessionSnapshot[]
+  stopForSession(filePath: string): Promise<void>
+  renameForSession(filePath: string, title: string): Promise<boolean>
+}
+
 const MAX_SESSION_FILES = 5_000
 const MAX_SESSION_WATCH_DIRECTORIES = 512
 const MAX_CONCURRENT_TRANSCRIPT_READS = 2
@@ -145,6 +153,15 @@ export class SessionService {
     this.listRuntimeSessions = hooks.all ?? null
     this.stopRuntimeForSession = hooks.stop
     this.renameRuntimeSession = hooks.rename
+  }
+
+  bindRuntimeManager(manager: SessionRuntimeManager): void {
+    this.bindRuntimeHooks({
+      get: (filePath) => manager.getForSession(filePath),
+      all: () => manager.list(),
+      stop: (filePath) => manager.stopForSession(filePath),
+      rename: (filePath, title) => manager.renameForSession(filePath, title),
+    })
   }
 
   onDidChange(listener: (event: SessionChangeEvent) => void): () => void {
