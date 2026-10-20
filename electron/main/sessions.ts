@@ -258,12 +258,16 @@ export class SessionService {
   async read(filePath: unknown): Promise<TranscriptMessage[]> {
     const requested = requireString(filePath, 'filePath', { min: 1, max: 4096 })
     const safePath = await this.requireSessionPath(requested)
+    // Coalesce only callers that saw the same file revision and runtime phase:
+    // a caller arriving after an append or after agent_end must not inherit an
+    // older read's bytes or streaming flag.
+    const info = await stat(safePath)
+    const runtime = this.runtimeForSession(safePath)
+    const streaming = runtime?.isStreaming === true || runtime?.isCompacting === true
+    const key = `${safePath}\0${info.dev}:${info.ino}\0${info.size}\0${info.mtimeMs}\0${streaming ? 1 : 0}`
     // Coalesced callers share one immutable result; the IPC boundary clones it
     // for the renderer, so a pre-IPC structuredClone would be a second copy.
-    return this.transcriptReads.run(safePath, () => this.transcriptAdmission.run(async () => {
-      const runtime = this.runtimeForSession(safePath)
-      return this.transcriptReader(safePath, runtime?.isStreaming === true || runtime?.isCompacting === true)
-    }))
+    return this.transcriptReads.run(key, () => this.transcriptAdmission.run(() => this.transcriptReader(safePath, streaming)))
   }
 
   async followUp(filePath: unknown, message: unknown, intent: unknown = 'queue'): Promise<boolean> {

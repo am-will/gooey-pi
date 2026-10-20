@@ -917,6 +917,52 @@ describe('SessionService transcript read admission', () => {
     expect(results[3]).not.toBe(results[0])
     expect(results[0][0]?.parts).toEqual([{ type: 'text', text: 'original' }])
   })
+
+  it('does not hand a caller arriving after an append the in-flight pre-append read', async () => {
+    let releaseReads: (() => void) | undefined
+    const gate = new Promise<void>((resolveGate) => { releaseReads = resolveGate })
+    const transcriptReader = vi.fn(async (filePath: string) => {
+      await gate
+      return [{ id: filePath, role: 'user' as const, parts: [{ type: 'text' as const, text: readFileSync(filePath, 'utf8') }] }]
+    })
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'appended.jsonl')
+    writeSession(file, project, 'appended')
+
+    const before = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(1))
+    appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'late', parentId: 'appended-message', message: { role: 'user', content: 'late' } })}\n`)
+    const after = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(2))
+
+    releaseReads?.()
+    const [first, second] = await Promise.all([before, after])
+    expect(first).not.toBe(second)
+  })
+
+  it('does not coalesce reads across a runtime streaming-phase change', async () => {
+    let releaseReads: (() => void) | undefined
+    const gate = new Promise<void>((resolveGate) => { releaseReads = resolveGate })
+    const transcriptReader = vi.fn(async () => {
+      await gate
+      return []
+    })
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'phase.jsonl')
+    writeSession(file, project, 'phase')
+    const safePath = await service.requireSessionPath(file)
+    const phases = [{ isStreaming: true }, { isStreaming: false }]
+    service.bindRuntimeHooks({ get: () => phases.shift(), stop: async () => undefined, rename: async () => false })
+
+    const streaming = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(1))
+    const settled = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(2))
+    releaseReads?.()
+    await Promise.all([streaming, settled])
+
+    expect(transcriptReader.mock.calls).toEqual([[safePath, true], [safePath, false]])
+  })
 })
 
 describe('SessionService session path authorization', () => {
