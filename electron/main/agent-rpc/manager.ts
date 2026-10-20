@@ -5,7 +5,7 @@ import { resolveExecutable, type ExecutableSource } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
 import { isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
 import { isThinkingLevel, validateRpcCommand } from './command-schema'
-import { PRIME_RPC_ADAPTER, type HarnessRpcAdapter } from './harness-adapter'
+import { PRIME_RPC_ADAPTER, type HarnessRpcAdapter, type StartRecovery } from './harness-adapter'
 import { RpcRuntime } from './runtime'
 import type { RpcObject } from './types'
 import type { WorkspaceUseLease, WorkspaceUseOwner } from '../repository-use-gate'
@@ -18,12 +18,6 @@ export interface ProviderCatalog {
   requireAvailableModel(rawKey: unknown, disabledProviders?: ReadonlySet<string>, disabledModels?: ReadonlySet<string>): Promise<PrimeModelDescriptor>
   capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined>
 }
-
-/**
- * Called once when a start fails, with the adapter that start used. True
- * means the cause was repaired and the start is worth one more attempt.
- */
-export type StartRecovery = (error: unknown, adapter: HarnessRpcAdapter) => Promise<boolean>
 
 /** What a runtime environment provider knows about the start it is minting capabilities for. */
 export interface RuntimeEnvironmentScope {

@@ -5,7 +5,6 @@ import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
 import { boundedErrorDetail } from './limits'
-import type { StartRecovery } from './manager'
 import type { RpcObject } from './types'
 
 /** Normalized start inputs the manager resolves before the harness turns them into argv. */
@@ -233,6 +232,12 @@ export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   normalizeEvent: normalizeRustPrimeEvent,
   readState: () => ({}),
 }
+
+/**
+ * Called once when a start fails, with the adapter that start used. True
+ * means the cause was repaired and the start is worth one more attempt.
+ */
+export type StartRecovery = (error: unknown, adapter: HarnessRpcAdapter) => Promise<boolean>
 
 /** The adapter for the discovered Prime build; an unclassified Prime keeps the TypeScript argv. */
 export function primeRpcAdapter(implementation: PrimeImplementation | undefined): HarnessRpcAdapter {
