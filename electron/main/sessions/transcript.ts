@@ -72,9 +72,17 @@ function roleOf(message: JsonRecord): TranscriptMessage['role'] {
   switch (message.role) {
     case 'user': return 'user'
     case 'assistant': return 'assistant'
-    case 'system': return 'system'
     default: return 'tool'
   }
+}
+
+/**
+ * Pi 1.3 persists its model-facing system prompt and tool loadout as `system`
+ * messages, at session start and whenever the loadout changes. Like Pi's own
+ * views, the transcript renders none of them, whatever the dialect admits.
+ */
+function isSystemPromptSnapshot(entry: JsonRecord): boolean {
+  return entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'system'
 }
 
 function boundedArgs(value: unknown): unknown {
@@ -210,7 +218,8 @@ function boundedTranscript(transcript: TranscriptMessage[]): TranscriptMessage[]
  * `isRenderable` selects which records enter the retained graph (and can be
  * selected as the active leaf); `renderEntry` renders retained record types the
  * shared walk does not handle itself (anything other than `message`,
- * `compaction`, and `custom_message`).
+ * `compaction`, and `custom_message`). The walk skips system prompt snapshots
+ * before asking the dialect.
  */
 export interface TranscriptDialect {
   isRenderable(entry: JsonRecord): boolean
@@ -253,7 +262,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       if (oldestEdge === undefined) break
       parentEdges.delete(oldestEdge)
     }
-    if (!dialect.isRenderable(entry)) continue
+    if (isSystemPromptSnapshot(entry) || !dialect.isRenderable(entry)) continue
     const existing = entries.get(entry.id)
     if (existing) {
       graphBytes -= existing.bytes
@@ -324,6 +333,9 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       failedTurn = undefined
     }
     if (entry.type === 'compaction') {
+      // Pi, OMP and both Prime builds persist no trigger with a completed
+      // compaction, so the row names no reason; only a Prime
+      // compaction_outcome row below records one.
       const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
       const tokensBefore = typeof entry.tokensBefore === 'number' && Number.isFinite(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined
       const summary = typeof entry.summary === 'string' ? boundedString(entry.summary, MAX_PART_TEXT_CHARS) : undefined

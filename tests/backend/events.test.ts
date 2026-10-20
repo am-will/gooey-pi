@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyPrimeEvent, createPrimeEventBuffer, replayPrimeEvents, resetTranscriptIdsForTests } from '../../src/lib/events'
+import { keepLiveCompactionReasons } from '../../src/lib/events/compaction'
 import type { TranscriptMessage } from '../../src/types/api'
 
 const streamingMessage = (): TranscriptMessage => ({
@@ -228,5 +229,17 @@ describe('agent transport events', () => {
     const result = replayed.replay(loaded)
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('persisted-compaction')
+  })
+
+  it('gives a reloaded compaction only the reason of the same live pass', () => {
+    const live: TranscriptMessage[] = [{ id: 'compaction-1', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'manual', firstKeptEntryId: 'kept-2', tokensBefore: 188 }] }]
+    const earlier: TranscriptMessage = { id: 'compact-1', role: 'system', parts: [{ type: 'compaction', status: 'done', firstKeptEntryId: 'kept-1', tokensBefore: 99 }] }
+    const same: TranscriptMessage = { id: 'compact-2', role: 'system', parts: [{ type: 'compaction', status: 'done', firstKeptEntryId: 'kept-2', tokensBefore: 188 }] }
+
+    const reloaded = keepLiveCompactionReasons(live, [earlier, same])
+    expect(reloaded[0]).toBe(earlier)
+    expect(reloaded[1]).toEqual({ ...same, parts: [{ ...same.parts[0], reason: 'manual' }] })
+    const unrelated = [earlier]
+    expect(keepLiveCompactionReasons(live, unrelated)).toBe(unrelated)
   })
 })

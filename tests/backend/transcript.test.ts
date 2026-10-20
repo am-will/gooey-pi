@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readSessionMetadata } from '../../electron/main/sessions/metadata'
-import { readTranscript } from '../../electron/main/sessions/transcript'
+import { createTranscriptReader, readTranscript } from '../../electron/main/sessions/transcript'
 import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { configureGooeyPiAgentMessageSigning, encodeGooeyPiAgentMessage, loadOrCreateGooeyPiAgentMessageKey, parseGooeyPiAgentMessage } from '../../electron/main/collaboration/message-envelope'
 
@@ -239,6 +239,7 @@ describe('provider errors that end a turn', () => {
       { type: 'model_change', id: 'model-1', provider: 'anthropic', modelId: 'claude-opus-5-5' },
       { type: 'service_tier_change', id: 'tier-1', serviceTier: 'default' },
       { type: 'custom_message', id: 'digest-1', customType: 'harness_digest', content: '[harness-digest]', display: false },
+      ['system-1', { role: 'system', content: '', sections: { tools: '<tools>\n- bash\n</tools>' } }],
       ['user-2', user('try another model')],
     ])
     expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user'])
@@ -254,6 +255,25 @@ describe('provider errors that end a turn', () => {
     expect(shape(await readTranscript(compacted, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'compact-1:system', 'assistant-2:assistant'])
     expect(shape(await readTranscript(aborted, false))).toEqual(['user-1:user', 'assistant-1:assistant'])
     expect(shape(await readTranscript(backoff, true))).toEqual(['user-1:user', 'assistant-1:assistant'])
+  })
+})
+
+describe('records no dialect renders', () => {
+  it('keeps system prompt snapshots out even when a dialect admits every message record', async () => {
+    const file = makeSessionFile()
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', version: 3, id: 'session-1', cwd: '/project' }),
+      JSON.stringify({ type: 'message', id: 'system-1', parentId: null, message: { role: 'system', content: '', sections: { tools: '<tools>\n- bash\n</tools>' } } }),
+      JSON.stringify({ type: 'message', id: 'user-1', parentId: 'system-1', message: { role: 'user', content: 'hello' } }),
+      JSON.stringify({ type: 'message', id: 'assistant-1', parentId: 'user-1', message: { role: 'assistant', content: 'first part' } }),
+      JSON.stringify({ type: 'message', id: 'system-2', parentId: 'assistant-1', message: { role: 'system', content: '', sections: { tools: '<tools>\n- read\n</tools>' } } }),
+      JSON.stringify({ type: 'message', id: 'assistant-2', parentId: 'system-2', message: { role: 'assistant', content: 'second part' } }),
+      '',
+    ].join('\n'))
+
+    const transcript = await createTranscriptReader({ isRenderable: (entry) => entry.type === 'message' })(file, false)
+    expect(transcript.map((message) => `${message.id}:${message.role}`)).toEqual(['user-1:user', 'assistant-1:assistant'])
+    expect(transcript[1].parts).toEqual([{ type: 'text', text: 'first part' }, { type: 'text', text: 'second part' }])
   })
 })
 

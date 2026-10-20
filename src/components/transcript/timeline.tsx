@@ -16,7 +16,7 @@ import {
   TerminalSquare,
   Wrench,
 } from 'lucide-react'
-import type { MessagePart, TranscriptMessage } from '@/types/api'
+import type { MessagePart, PrimeCompactionReason, TranscriptMessage } from '@/types/api'
 import { writeClipboardText } from '@/lib/clipboard'
 import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { boundText } from '@/lib/render-bounds'
@@ -183,14 +183,14 @@ function AgentActivityPart({ part }: { part: Extract<MessagePart, { type: 'agent
 type CompactionPartValue = Extract<MessagePart, { type: 'compaction' }>
 type CompactionTone = CompactionPartValue['status'] | 'skipped'
 
-function compactionReasonLabel(reason: CompactionPartValue['reason']): string {
-  if (reason === 'threshold') return 'automatic threshold'
-  if (reason === 'overflow') return 'overflow recovery'
-  if (reason === 'incomplete') return 'incomplete response recovery'
-  if (reason === 'idle') return 'idle maintenance'
-  if (reason === 'requested') return 'requested'
-  if (reason === 'manual') return 'manual'
-  return 'context'
+// Keyed by the type, so adding a reason there fails to compile until it has a label here.
+const COMPACTION_REASON_LABELS: Record<PrimeCompactionReason, string> = {
+  manual: 'manual',
+  threshold: 'automatic threshold',
+  overflow: 'overflow recovery',
+  requested: 'requested',
+  idle: 'idle maintenance',
+  incomplete: 'incomplete response recovery',
 }
 
 /** A compaction that ended without running because it was skipped is benign: it reads as a notice, never as a failure. */
@@ -220,11 +220,13 @@ function CompactionPart({ part }: { part: CompactionPartValue }) {
         : <><CircleAlert size={12} /> {tone === 'cancelled' ? 'cancelled' : 'needs attention'}</>
   const details = part.error || part.summary
   const tokenLabel = part.tokensBefore === undefined ? '' : `${part.tokensBefore.toLocaleString()} tokens before`
+  // No harness records the trigger with a completed compaction in its session file, so a reloaded row may name none.
+  const reasonLabel = part.reason ? COMPACTION_REASON_LABELS[part.reason] : undefined
   return <div className={`activity-line activity-line--compaction is-${tone}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
       <span className="activity-line__icon">{tone === 'running' ? <LoaderCircle className="spin" size={13} /> : tone === 'done' ? <Layers3 size={13} /> : tone === 'skipped' ? <Info size={13} /> : <CircleAlert size={13} />}</span>
       <span className="activity-line__kind">{compactionLabel(part, tone)}</span>
-      <span className="activity-compaction__reason">{compactionReasonLabel(part.reason)}</span>
+      {reasonLabel ? <span className="activity-compaction__reason">{reasonLabel}</span> : null}
       {tokenLabel ? <span className="activity-compaction__tokens">{tokenLabel}</span> : null}
       <span className="activity-tool__state">{state}</span>
       {canExpand ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}

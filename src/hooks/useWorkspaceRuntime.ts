@@ -16,6 +16,7 @@ import { reconcileTranscripts } from '@/app/transcript-reconcile'
 import type { WorkspaceSnapshot } from '@/app/workspace'
 import { createPrimeEventBuffer, createSteerAcceptedEvent, createSteerPickupEvent, replayPrimeEvents } from '@/lib/events'
 import type { PrimeEventBuffer } from '@/lib/events'
+import { keepLiveCompactionReasons } from '@/lib/events/compaction'
 import { previewMatchesPrompt } from '@/lib/session-actions'
 import { findRuntimeForWorkspace, workspaceCwd } from '@/lib/workspace'
 import type { HarnessId, MessagePart, PrimeWorkApi, ProjectRecord, PromptDeliveryIntent, QueuedPrompt, RuntimeInfo, SessionActionSnapshot, SessionRecord, TranscriptMessage } from '@/types/api'
@@ -262,16 +263,17 @@ export function useWorkspaceRuntime({
           setMessages((messages) => pendingLoad.eventBuffer.replay(messages))
           return
         }
+        const persisted = (messages: TranscriptMessage[]) => keepLiveCompactionReasons(messages, pendingLoad.eventBuffer.replay(value))
         // Post-turn reconciliation reads restore disk authority, but unchanged
         // messages keep their identity so memoized rows do not re-render.
         if (pendingLoad.reconciliation) {
-          setMessages((messages) => reconcileTranscripts(messages, pendingLoad.eventBuffer.replay(value)))
+          setMessages((messages) => reconcileTranscripts(messages, persisted(messages)))
           return
         }
         // Background reads (initial and external-sync) merge into the live
         // list so an optimistic message sent while the read was in flight is
         // not replaced away by older on-disk state.
-        setMessages((messages) => reconcileTranscriptMessages(messages, pendingLoad.eventBuffer.replay(value)))
+        setMessages((messages) => reconcileTranscriptMessages(messages, persisted(messages)))
       },
       onError: (error) => {
         setMessages((messages) => pendingLoad.eventBuffer.replay(messages))

@@ -405,6 +405,14 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('skipped')
   })
 
+  it('names no reason for a compaction whose trigger is unknown', () => {
+    // No harness session file records what triggered a completed compaction.
+    const html = render([{ id: 'reloaded', role: 'system', parts: [{ type: 'compaction', status: 'done', tokensBefore: 188 }] }])
+    expect(html).toContain('Context compacted')
+    expect(html).toContain('188 tokens before')
+    expect(html).not.toContain('activity-compaction__reason')
+  })
+
   it('labels OMP idle and incomplete-response compactions', () => {
     const html = render([
       { id: 'idle', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'idle' }] },
@@ -412,6 +420,17 @@ describe('transcript rendering', () => {
     ])
     expect(html).toContain('idle maintenance')
     expect(html).toContain('incomplete response recovery')
+  })
+
+  it('labels manual, threshold and requested compactions', () => {
+    const html = render([
+      { id: 'manual', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'manual' }] },
+      { id: 'threshold', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'threshold' }] },
+      { id: 'requested', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'requested' }] },
+    ])
+    expect(html).toContain('<span class="activity-compaction__reason">manual</span>')
+    expect(html).toContain('<span class="activity-compaction__reason">automatic threshold</span>')
+    expect(html).toContain('<span class="activity-compaction__reason">requested</span>')
   })
 
   it('renders standalone informational output as a collapsed tool row', () => {
