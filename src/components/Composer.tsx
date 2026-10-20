@@ -24,7 +24,7 @@ import type {
 } from '@/types/api'
 import { composePrompt } from '@/lib/composer-prompt'
 import { findSessionMentions } from '@/lib/session-mentions'
-import { clearComposerDraft, readComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
+import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
 import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
@@ -329,7 +329,7 @@ export const Composer = memo(function Composer({
         }
       } else if (draftKey) {
         // The user switched away mid-send; the next composer for this draft restores it.
-        saveComposerDraft(draftKey, { text: submittedValue, model, effort, fast })
+        restoreComposerDraft(draftKey, { text: submittedValue, model, effort, fast })
       }
     } finally {
       submittingRef.current = false

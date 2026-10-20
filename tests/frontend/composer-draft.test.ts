@@ -5,6 +5,7 @@ import {
   clearComposerDraft,
   composerDraftStorageKey,
   readComposerDraft,
+  restoreComposerDraft,
   saveComposerDraft,
   takeComposerDraft,
 } from '../../src/lib/composer-draft'
@@ -31,6 +32,16 @@ describe('composer draft storage', () => {
     clearComposerDraft('project:new')
     expect(readComposerDraft('project:new')).toBeNull()
     expect(readComposerDraft('project:session')).toEqual({ text: 'other' })
+  })
+
+  it('restores a failed draft only into an empty scope, ignoring another scope\'s crash snapshot', () => {
+    saveComposerDraft('project:other', { text: 'typed elsewhere' })
+    restoreComposerDraft('project:session', { text: 'failed send', model: 'openai:gpt-5.2' })
+    expect(readComposerDraft('project:session')).toEqual({ text: 'failed send', model: 'openai:gpt-5.2' })
+
+    saveComposerDraft('project:session', { text: 'typed since' })
+    restoreComposerDraft('project:session', { text: 'failed send' })
+    expect(readComposerDraft('project:session')?.text).toBe('typed since')
   })
 
   it('falls back to the crash snapshot when a scoped draft is missing', () => {

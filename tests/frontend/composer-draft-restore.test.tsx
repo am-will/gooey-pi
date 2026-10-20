@@ -77,6 +77,24 @@ describe('Composer draft restoration after unmount', () => {
     expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Keep this prompt')
   })
 
+  it('keeps a newer draft typed after returning when the earlier send fails', async () => {
+    let rejectSend!: (error: unknown) => void
+    renderComposer(() => new Promise<void>((_resolve, reject) => { rejectSend = reject }))
+    await submitDraft('Earlier prompt')
+
+    await act(async () => root.render(<div />))
+    renderComposer(vi.fn(async () => undefined))
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, 'Newer draft')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { rejectSend(new Error('not delivered')) })
+
+    expect(readComposerDraft(DRAFT_KEY)?.text).toBe('Newer draft')
+    expect(textarea.value).toBe('Newer draft')
+  })
+
   it('keeps the draft cleared when the send succeeds after the composer unmounted', async () => {
     let resolveSend!: () => void
     renderComposer(() => new Promise<void>((resolve) => { resolveSend = resolve }))
