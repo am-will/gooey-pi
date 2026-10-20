@@ -103,6 +103,8 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
   private cachedExecutable: string | null = null
   private catalogRefresh: { executable: string; promise: Promise<PrimeModelCatalog> } | null = null
   private cachedVersion: { executable: string; value: string } | null = null
+  /** Bumped by invalidate(); a refresh that began under an older generation never fills the cache. */
+  private generation = 0
 
   constructor(private readonly executable: ExecutableSource, options: CliModelCatalogOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CATALOG_TIMEOUT_MS
@@ -136,7 +138,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     // Single-flight: concurrent callers share one CLI run instead of spawning
     // duplicate subprocesses; the in-flight promise is cleared in finally.
     if (!this.catalogRefresh || this.catalogRefresh.executable !== executable) {
-      const promise = this.refreshCatalog(executable).finally(() => {
+      const promise = this.refreshCatalog(executable, this.generation).finally(() => {
         if (this.catalogRefresh?.promise === promise) this.catalogRefresh = null
       })
       this.catalogRefresh = { executable, promise }
@@ -173,6 +175,32 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     return (await this.catalog()).models.find((model) => model.provider === provider && model.id === modelId)
   }
 
+  /**
+   * Makes the next read run the CLI again, for example after its credentials
+   * changed. A refresh already in flight still answers its own callers but no
+   * longer fills the cache. The last loaded catalog stays the fallback for a
+   * refresh that fails.
+   */
+  invalidate(): void {
+    this.generation += 1
+    this.cachedAt = 0
+    this.catalogRefresh = null
+  }
+
+  /** Provider rows for the providers a refresh returned models for; by default each one's credentials belong to the CLI. */
+  protected providerDescriptors(providerIds: readonly string[]): PrimeProviderDescriptor[] {
+    return providerIds.map((id) => ({
+      id,
+      name: id.slice(0, 200),
+      authMethod: 'external',
+      configured: true,
+      authLabel: this.credentialsLabel,
+      modelCount: 0,
+      availableModelCount: 0,
+      enabled: true,
+    }))
+  }
+
   /** Reads `models` off an untrusted catalog container, rejecting any other shape. */
   protected requireModelEntries(container: unknown): unknown[] {
     if (typeof container !== 'object' || container === null || Array.isArray(container) || !Array.isArray((container as Record<string, unknown>).models)) {
@@ -181,7 +209,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     return (container as Record<string, unknown>).models as unknown[]
   }
 
-  private async refreshCatalog(executable: string): Promise<PrimeModelCatalog> {
+  private async refreshCatalog(executable: string, generation: number): Promise<PrimeModelCatalog> {
     const [rawModels, version] = await Promise.all([
       this.fetchModelEntries(executable),
       this.resolveVersion(executable),
@@ -198,17 +226,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
       validModels.push(model)
     }
 
-    const providerIds = [...new Set(validModels.map((model) => model.provider))]
-    const relation = limitCatalogRelations(validModels, providerIds.map((id): PrimeProviderDescriptor => ({
-      id,
-      name: id.slice(0, 200),
-      authMethod: 'external',
-      configured: true,
-      authLabel: this.credentialsLabel,
-      modelCount: 0,
-      availableModelCount: 0,
-      enabled: true,
-    })))
+    const relation = limitCatalogRelations(validModels, this.providerDescriptors([...new Set(validModels.map((model) => model.provider))]))
 
     const warnings = [
       ...catalogLimitWarnings(this.harnessLabel, relation, { uniqueModels: true }),
@@ -224,7 +242,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
       providers: relation.providers,
       warning: warnings.length ? warnings.join(' ') : undefined,
     }
-    if (this.cachedExecutable === executable) {
+    if (this.cachedExecutable === executable && this.generation === generation) {
       this.cachedCatalog = catalog
       this.cachedAt = Date.now()
     }
