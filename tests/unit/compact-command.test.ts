@@ -14,6 +14,13 @@ describe('parseCompactCommand', () => {
     expect(parseCompactCommand('/compact   keep current plan and tests  ')).toEqual({ customInstructions: 'keep current plan and tests' })
   })
 
+  it('accepts newline and tab separated instructions', () => {
+    expect(parseCompactCommand('/compact\nfocus on auth')).toEqual({ customInstructions: 'focus on auth' })
+    expect(parseCompactCommand('/compact\n\nkeep the plan\nand the tests\n')).toEqual({ customInstructions: 'keep the plan\nand the tests' })
+    expect(parseCompactCommand('/compact\tfocus on auth')).toEqual({ customInstructions: 'focus on auth' })
+    expect(parseCompactCommand('/compact\n')).toEqual({})
+  })
+
   it('returns undefined for non-compact prompts or prefix matches', () => {
     expect(parseCompactCommand('/compacting')).toBeUndefined()
     expect(parseCompactCommand('please /compact')).toBeUndefined()

@@ -142,6 +142,16 @@ describe('/compact dispatch', () => {
     expect(fixtureState.command).toHaveBeenCalledWith('idle-runtime', { type: 'compact', customInstructions: 'focus on auth' })
   })
 
+  it('compacts with instructions typed on the next line instead of sending a prompt', async () => {
+    const fixtureState = fixture({ runtime: runtime() })
+
+    await fixtureState.actions.sendPrompt('/compact\nkeep the plan')
+
+    expect(fixtureState.command).toHaveBeenCalledOnce()
+    expect(fixtureState.command).toHaveBeenCalledWith('idle-runtime', { type: 'compact', customInstructions: 'keep the plan' })
+    expect(fixtureState.messages().filter((message) => message.role === 'user')).toHaveLength(0)
+  })
+
   it('queues compact for an owned streaming runtime', async () => {
     const fixtureState = fixture({ runtime: runtime('streaming-runtime', true), ownsStreaming: true })
 

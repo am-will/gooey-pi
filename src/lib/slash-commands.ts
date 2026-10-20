@@ -3,14 +3,11 @@ import type { HarnessId } from '@/types/api'
 
 export type McpCommand = { type: 'open' } | { type: 'authenticate'; server?: string }
 
+/** Any whitespace, including a Shift+Enter newline, separates /compact from its instructions. */
 export function parseCompactCommand(prompt: string): { customInstructions?: string } | undefined {
-  const trimmed = prompt.trim()
-  if (trimmed === '/compact') return {}
-  if (trimmed.startsWith('/compact ')) {
-    const customInstructions = trimmed.slice(9).trim()
-    return customInstructions ? { customInstructions } : {}
-  }
-  return undefined
+  const match = /^\/compact(?:\s+([\s\S]*))?$/.exec(prompt.trim())
+  if (!match) return undefined
+  return match[1] ? { customInstructions: match[1] } : {}
 }
 
 export function parseMcpCommand(prompt: string, harness: HarnessId): McpCommand | undefined {
