@@ -372,6 +372,14 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('Prime message')
   })
 
+  it('names no reason for a compaction whose trigger is unknown', () => {
+    // No harness session file records what triggered a completed compaction.
+    const html = render([{ id: 'reloaded', role: 'system', parts: [{ type: 'compaction', status: 'done', tokensBefore: 188 }] }])
+    expect(html).toContain('Context compacted')
+    expect(html).toContain('188 tokens before')
+    expect(html).not.toContain('activity-compaction__reason')
+  })
+
   it('labels OMP idle and incomplete-response compactions', () => {
     const html = render([
       { id: 'idle', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'idle' }] },

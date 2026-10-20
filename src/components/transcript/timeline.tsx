@@ -178,14 +178,15 @@ function AgentActivityPart({ part }: { part: Extract<MessagePart, { type: 'agent
   </div>
 }
 
-function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction' }>['reason']): string {
+/** Undefined when the trigger is unknown: no harness records it with a completed compaction in its session file. */
+function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction' }>['reason']): string | undefined {
   if (reason === 'threshold') return 'automatic threshold'
   if (reason === 'overflow') return 'overflow recovery'
   if (reason === 'incomplete') return 'incomplete response recovery'
   if (reason === 'idle') return 'idle maintenance'
   if (reason === 'requested') return 'requested'
   if (reason === 'manual') return 'manual'
-  return 'context'
+  return undefined
 }
 
 function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compaction' }> }) {
@@ -203,11 +204,12 @@ function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compacti
       : <><CircleAlert size={12} /> {part.status === 'cancelled' ? 'cancelled' : 'needs attention'}</>
   const details = part.error || part.summary
   const tokenLabel = part.tokensBefore === undefined ? '' : `${part.tokensBefore.toLocaleString()} tokens before`
+  const reasonLabel = compactionReasonLabel(part.reason)
   return <div className={`activity-line activity-line--compaction is-${part.status}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
       <span className="activity-line__icon">{part.status === 'running' ? <LoaderCircle className="spin" size={13} /> : part.status === 'done' ? <Layers3 size={13} /> : <CircleAlert size={13} />}</span>
       <span className="activity-line__kind">{label}</span>
-      <span className="activity-compaction__reason">{compactionReasonLabel(part.reason)}</span>
+      {reasonLabel ? <span className="activity-compaction__reason">{reasonLabel}</span> : null}
       {tokenLabel ? <span className="activity-compaction__tokens">{tokenLabel}</span> : null}
       <span className="activity-tool__state">{state}</span>
       {canExpand ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}

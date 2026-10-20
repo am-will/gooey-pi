@@ -333,6 +333,9 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       failedTurn = undefined
     }
     if (entry.type === 'compaction') {
+      // Pi, OMP and both Prime builds persist no trigger with a completed
+      // compaction, so the row names no reason; only a Prime
+      // compaction_outcome row below records one.
       const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
       const tokensBefore = typeof entry.tokensBefore === 'number' && Number.isFinite(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined
       const summary = typeof entry.summary === 'string' ? boundedString(entry.summary, MAX_PART_TEXT_CHARS) : undefined
