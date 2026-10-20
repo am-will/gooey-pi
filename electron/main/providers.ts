@@ -70,6 +70,13 @@ function modelRegistryAuthStorage(authStorage: AuthStorage): AuthStorage {
   } as unknown as AuthStorage
 }
 
+/** The distinct provider ids a catalog may list: well formed, and never an MCP credential. */
+function listableProviderIds(providerIds: Iterable<string>): string[] {
+  return [...new Set(providerIds)].filter((id) => safeProviderId(id) && !isMcpAuthProvider(id))
+}
+
+type ProviderAuthStatus = ReturnType<ModelRegistry['getProviderAuthStatus']>
+
 function boundedInteger(value: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0
 }
@@ -163,28 +170,16 @@ export class PrimeProviderService {
     let executableDiscoveryWarning: string | undefined
     try { executableModels = await this.registry.getExecutableModels() }
     catch { executableDiscoveryWarning = 'Executable model discovery failed; availability may be incomplete.' }
-    const oauthProviders = new Map(this.registry.authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]))
+    const oauthProviders = this.oauthProviderNames()
     const eligibleModels = snapshot.models.filter((model) => safeProviderId(model.provider) && safeModelId(model.id))
-    const providerIds = new Set([...eligibleModels.map((model) => model.provider), ...oauthProviders.keys()])
-    const validProviderIds = [...providerIds].filter((id) => safeProviderId(id) && !isMcpAuthProvider(id))
+    const validProviderIds = listableProviderIds([...eligibleModels.map((model) => model.provider), ...oauthProviders.keys()])
     const authStatuses = new Map(validProviderIds.map((id) => [id, this.registry.getProviderAuthStatus(id)]))
     const configuredProviders = new Set([...authStatuses].filter(([, status]) => status.configured).map(([id]) => id))
     const { keys: available, fallbackProviders } = resolveAvailableModelKeys(eligibleModels, executableModels, configuredProviders)
-    const relation = limitCatalogRelations(eligibleModels.map((model) => toModelDescriptor(model, available)), validProviderIds.map((id): PrimeProviderDescriptor => {
-      const authStatus = authStatuses.get(id) ?? this.registry.getProviderAuthStatus(id)
-      const authMethod: ProviderAuthMethod = oauthProviders.has(id) ? 'oauth' : EXTERNAL_AUTH_PROVIDERS.has(id) ? 'external' : 'api_key'
-      return {
-        id,
-        name: (oauthProviders.get(id) ?? this.registry.getProviderDisplayName(id)).slice(0, 200),
-        authMethod,
-        configured: authStatus.configured,
-        authSource: authStatus.source as ProviderAuthSource | undefined,
-        authLabel: authStatus.label?.slice(0, 200),
-        modelCount: 0,
-        availableModelCount: 0,
-        enabled: true,
-      }
-    }))
+    const relation = limitCatalogRelations(
+      eligibleModels.map((model) => toModelDescriptor(model, available)),
+      validProviderIds.map((id) => this.providerDescriptor(id, authStatuses.get(id) ?? this.registry.getProviderAuthStatus(id), oauthProviders)),
+    )
 
     const warnings = [
       ...catalogLimitWarnings('Prime Agent', relation, { uniqueModels: true }),
@@ -207,6 +202,27 @@ export class PrimeProviderService {
     }
     this.cachedAt = Date.now()
     return this.cachedCatalog
+  }
+
+  /** Display names of the providers that sign in through an OAuth flow. */
+  private oauthProviderNames(): Map<string, string> {
+    return new Map(this.registry.authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]))
+  }
+
+  /** One provider row, as GooeyPi's Prime auth store sees the provider. */
+  private providerDescriptor(id: string, authStatus: ProviderAuthStatus, oauthProviders: ReadonlyMap<string, string>): PrimeProviderDescriptor {
+    const authMethod: ProviderAuthMethod = oauthProviders.has(id) ? 'oauth' : EXTERNAL_AUTH_PROVIDERS.has(id) ? 'external' : 'api_key'
+    return {
+      id,
+      name: (oauthProviders.get(id) ?? this.registry.getProviderDisplayName(id)).slice(0, 200),
+      authMethod,
+      configured: authStatus.configured,
+      authSource: authStatus.source as ProviderAuthSource | undefined,
+      authLabel: authStatus.label?.slice(0, 200),
+      modelCount: 0,
+      availableModelCount: 0,
+      enabled: true,
+    }
   }
 
   async requireAvailableModel(rawKey: unknown, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelDescriptor> {
