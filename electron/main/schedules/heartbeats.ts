@@ -81,23 +81,24 @@ export class HeartbeatService {
       const updated = isRecord(response.data) && response.data.heartbeat !== undefined
         ? normalizeHeartbeat(response.data.heartbeat, runtime.runtimeId)
         : null
-      if (actionValue === 'stop') {
-        // A stop is a deletion, not a stale status update. Returning null makes
-        // every caller drop the row immediately; the follow-up catalog read is
-        // the authoritative orphan check.
-        if ((await this.list()).some((candidate) => candidate.id === id)) throw new Error('Heartbeat stop did not remove the job')
-        return null
-      }
+      if (actionValue === 'stop') return this.confirmStopped(id)
       if (updated) return updated
       return { ...heartbeat, status: actionValue === 'pause' ? 'paused' : 'active' }
     }
     if (actionValue === 'stop' && primeAgentPath) {
       const result = await runProcess(primeAgentPath, ['schedule', 'cancel', heartbeat.id], { timeoutMs: 30_000, maxBytes: 1024 * 1024 })
-      if (result.code === 0 && !result.timedOut && !result.outputExceeded) {
-        if ((await this.list()).some((candidate) => candidate.id === id)) throw new Error('Heartbeat stop did not remove the job')
-        return null
-      }
+      if (result.code === 0 && !result.timedOut && !result.outputExceeded) return this.confirmStopped(id)
     }
     throw new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
+  }
+
+  /**
+   * A stop is a deletion, not a stale status update. Returning null makes
+   * every caller drop the row immediately; the follow-up catalog read is the
+   * authoritative orphan check.
+   */
+  private async confirmStopped(id: string): Promise<null> {
+    if ((await this.list()).some((candidate) => candidate.id === id)) throw new Error('Heartbeat stop did not remove the job')
+    return null
   }
 }
