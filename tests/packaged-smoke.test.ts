@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -208,7 +209,19 @@ describe('packaged smoke launch', () => {
     expect(Date.now() - started).toBeLessThan(5_000)
     // The helper shared the application's process group, so it was killed rather than left running.
     const pid = Number(readFileSync(helperPid, 'utf8'))
-    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow())
+    const running = () => {
+      try {
+        process.kill(pid, 0)
+      } catch {
+        return false
+      }
+      // A killed orphan stays a zombie until its new parent reaps it, which a
+      // container init that never calls wait() may not do.
+      const ps = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' })
+      if (ps.error) throw ps.error
+      return !ps.stdout.trim().startsWith('Z')
+    }
+    await vi.waitFor(() => expect(running()).toBe(false))
   }, 15_000)
 
   it('reports a missing packaged executable rather than launching something else', async () => {
