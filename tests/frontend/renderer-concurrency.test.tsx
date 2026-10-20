@@ -852,6 +852,45 @@ describe('extension UI runtime ownership', () => {
     }
   })
 
+  it('pauses the Ask User countdown while the window is hidden', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const command = vi.fn().mockResolvedValue({})
+      const bridge = { agent: { command } } as unknown as PrimeWorkApi
+      const runtimeSessionsRef = { current: new Map<string, string>() }
+      let state!: ReturnType<typeof useExtensionUi>
+      function ExtensionProbe() {
+        state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+        return <Probe />
+      }
+
+      await act(async () => { root.render(<ExtensionProbe />) })
+      await act(async () => {
+        state.showExtensionUi('runtime', {
+          type: 'extension_ui_request', id: 'question-1', method: 'select', title: 'First question',
+          options: ['__prime_ask_user__group-1:0:1', 'A', 'B'],
+        })
+      })
+      await act(async () => { vi.advanceTimersByTime(30_000) })
+      setDocumentVisibility('hidden')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(state.extensionUi?.deadline).toBeUndefined()
+      await act(async () => { vi.advanceTimersByTime(10 * 60_000) })
+      expect(command).not.toHaveBeenCalled()
+
+      setDocumentVisibility('visible')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(state.extensionUi?.deadline).toBe(Date.now() + 90_000)
+      await act(async () => { vi.advanceTimersByTime(90_000); await Promise.resolve() })
+      expect(state.extensionUi).toBeNull()
+      expect(command).toHaveBeenCalledWith('runtime', {
+        type: 'extension_ui_response', id: 'question-1', cancelled: true,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('expires a harness-timed dialog on its own deadline even while its runtime is hidden', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {

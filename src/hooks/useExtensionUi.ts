@@ -154,7 +154,8 @@ export function useExtensionUi({
 
   // A harness timeout runs from arrival, because the harness enforces the same
   // deadline itself. GooeyPi's own Ask User timeout only runs while its dialog
-  // is visible, so a question in a background session waits for the user.
+  // is visible (its runtime is active and the window is not hidden), so a
+  // question in a background session waits for the user.
   const syncTimer = useCallback((runtimeId: string): PendingExtensionUi | null => {
     const pending = pendingByRuntimeRef.current.get(runtimeId)
     if (!pending) return null
@@ -162,7 +163,7 @@ export function useExtensionUi({
     if (!pending.ownedTimeout) {
       const timeout = 'timeout' in pending.request ? pending.request.timeout : undefined
       if (timeout !== undefined && pending.deadline === undefined) next = startTimer(pending, timeout)
-    } else if (activeRuntimeIdRef.current === runtimeId) {
+    } else if (activeRuntimeIdRef.current === runtimeId && document.visibilityState !== 'hidden') {
       if (pending.deadline === undefined) next = startTimer(pending, pending.ownedTimeout.remainingMs)
     } else if (pending.deadline !== undefined) {
       window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
@@ -257,6 +258,11 @@ export function useExtensionUi({
   }, [runtimeSessionsRef])
 
   useEffect(() => { showPendingForActiveRuntime() }, [activeRuntimeId, showPendingForActiveRuntime])
+
+  useEffect(() => {
+    document.addEventListener('visibilitychange', showPendingForActiveRuntime)
+    return () => document.removeEventListener('visibilitychange', showPendingForActiveRuntime)
+  }, [showPendingForActiveRuntime])
 
   useEffect(() => () => {
     for (const timer of timerByRuntimeRef.current.values()) window.clearTimeout(timer)
