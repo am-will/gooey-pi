@@ -4,11 +4,11 @@ import { requestFailureMessage } from '@/app/workspace'
 import { clearComposerDraft } from '@/lib/composer-draft'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
-import { parseMcpAuthenticationCommand } from '@/lib/mcp-policy'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
+import { parseCompactCommand, parseMcpCommand } from '@/lib/slash-commands'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, HarnessId, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -44,8 +44,6 @@ export interface WorkspaceActionsDeps {
   clearSessionAttention(session: SessionRecord): void
   reportError(error: unknown): void
 }
-
-export type McpCommand = { type: 'open' } | { type: 'authenticate'; server?: string }
 
 interface StartedSessionIndexInput {
   bridge: PrimeWorkApi
@@ -98,25 +96,6 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
   }
   await bridge.agent.command(runtimeId, { type: 'set_session_name', name: title }).catch(() => undefined)
   await indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle: title, isCurrent }).catch(() => undefined)
-}
-
-export function parseCompactCommand(prompt: string): { customInstructions?: string } | undefined {
-  const trimmed = prompt.trim()
-  if (trimmed === '/compact') return {}
-  if (trimmed.startsWith('/compact ')) {
-    const customInstructions = trimmed.slice(9).trim()
-    return customInstructions ? { customInstructions } : {}
-  }
-  return undefined
-}
-
-export function parseMcpCommand(prompt: string, harness: HarnessId): McpCommand | undefined {
-  const value = prompt.trim()
-  if (harness === 'prime' && value === '/mcp') return { type: 'open' }
-  const authentication = parseMcpAuthenticationCommand(value, harness)
-  return authentication
-    ? authentication.server ? { type: 'authenticate', server: authentication.server } : { type: 'authenticate' }
-    : undefined
 }
 
 /**

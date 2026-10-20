@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCompactCommand } from '../../src/hooks/useWorkspaceActions'
+import { parseCompactCommand } from '../../src/lib/slash-commands'
 
 describe('parseCompactCommand', () => {
   it('parses bare /compact command', () => {
