@@ -123,6 +123,18 @@ describe('OMP transcript system entries', () => {
     })
   })
 
+  it('renders no row for a branch_summary without text but keeps walking through it', async () => {
+    const file = ompSessionFile([
+      userEntry('aa000001', null, 'before the branch'),
+      JSON.stringify({ type: 'branch_summary', id: 'aa000002', parentId: 'aa000001', timestamp: '2026-08-08T02:14:00.000Z' }),
+      JSON.stringify({ type: 'branch_summary', id: 'aa000003', parentId: 'aa000002', timestamp: '2026-08-08T02:14:01.000Z', summary: ' \n' }),
+      userEntry('aa000004', 'aa000003', 'after the branch'),
+    ])
+
+    const transcript = await readOmpTranscript(file, false)
+    expect(transcript.map((message) => message.id)).toEqual(['aa000001', 'aa000004'])
+  })
+
   it('renders compaction entries and displayed custom messages, skipping undisplayed ones', async () => {
     const file = ompSessionFile([
       userEntry('aa000001', null, 'long conversation'),
