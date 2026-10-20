@@ -32,9 +32,12 @@ const meta = (implementation: PrimeImplementation | undefined): AppMeta => ({
   harnesses: { prime: { path: '/usr/bin/prime-agent', version: '0.10.0', implementation }, omp: { path: null, version: null }, pi: { path: null, version: null } },
 })
 
-/** Browser control as the main process lists it: its availability follows the detected build. */
-function browserControl(implementation: PrimeImplementation | undefined): SkillRecord {
-  const record = { id: 'prime-work-browser', name: 'Browser control', description: 'Drive the browser panel.', kind: 'extension', location: 'system', enabled: true } as const
+/** Prime's Browser record as the main process lists it: its availability follows the detected build. */
+function browserRecord(implementation: PrimeImplementation | undefined): SkillRecord {
+  const record = {
+    id: 'prime-work-browser', name: 'Browser', description: 'Drive the in-app browser for this thread: tabs, navigation, clicks, typing, and screenshots.',
+    kind: 'skill', location: 'system', enabled: true,
+  } as const
   return { ...record, availability: primeCapabilityRecordAvailability(record, implementation) }
 }
 
@@ -63,7 +66,7 @@ function bridgeFor(detected: () => PrimeImplementation | undefined) {
     agent: { list: vi.fn(async () => []), onEvent: vi.fn(unsubscribe) },
     pets: { list: vi.fn(async () => []) },
     providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn(unsubscribe) },
-    plugins: { list: vi.fn(async () => ({ skills: [browserControl(detected())], warnings: [] })) },
+    plugins: { list: vi.fn(async () => ({ skills: [browserRecord(detected())], warnings: [] })) },
     browser: { state: vi.fn(async () => ({ tabs: [] })), onChanged: vi.fn(unsubscribe), onPointer: vi.fn(unsubscribe), onActivity: vi.fn(unsubscribe) },
     heartbeats: { list: vi.fn(async () => [heartbeat]) },
     schedules: { list: vi.fn(async () => []), onChanged: vi.fn(unsubscribe) },
@@ -141,13 +144,13 @@ describe('a start recovery that reclassifies Prime as Rust', () => {
     let implementation: PrimeImplementation = 'typescript'
     const main = await renderApp(() => implementation)
     await navigate('Capabilities')
-    await waitFor(() => container.querySelector('[aria-label="Disable Browser control"]'), 'Browser control is offered')
+    await waitFor(() => container.querySelector('[aria-label="Disable Browser"]'), 'Browser is offered')
     const listed = main.bridge.plugins.list.mock.calls.length
 
     implementation = 'rust'
     await main.signalHarnessesChanged()
 
-    await waitFor(() => container.querySelector('[aria-label="Unavailable Browser control"]'), 'Browser control is labelled unavailable')
+    await waitFor(() => container.querySelector('[aria-label="Unavailable Browser"]'), 'Browser is labelled unavailable')
     expect(main.bridge.app.refreshHarnesses).toHaveBeenCalledOnce()
     expect(main.bridge.plugins.list).toHaveBeenCalledTimes(listed + 1)
     expect(main.bridge.plugins.list).toHaveBeenLastCalledWith('/project', 'prime')
