@@ -39,9 +39,14 @@ export const PRIME_RUST_UNAVAILABLE_CAPABILITIES = Object.freeze([
 
 export type PrimeRustUnavailableCapability = (typeof PRIME_RUST_UNAVAILABLE_CAPABILITIES)[number]['id']
 
-/** An unclassified Prime (undefined) keeps the TypeScript behavior. */
-export function primeCapabilityAvailable(implementation: PrimeImplementation | undefined, capability: PrimeRustUnavailableCapability): boolean {
-  return implementation !== 'rust' || !PRIME_RUST_UNAVAILABLE_CAPABILITIES.some(({ id }) => id === capability)
+/**
+ * Whether this Prime build offers one of the capabilities in the table. The
+ * table lists only what Rust Prime lacks, so the answer turns on the build
+ * alone; the capability argument says which row a call site means. An
+ * unclassified Prime (undefined) keeps the TypeScript behavior.
+ */
+export function primeCapabilityAvailable(implementation: PrimeImplementation | undefined, _capability: PrimeRustUnavailableCapability): boolean {
+  return implementation !== 'rust'
 }
 
 /** One sentence naming the capabilities this Prime build does not offer; undefined when it offers them all. */
