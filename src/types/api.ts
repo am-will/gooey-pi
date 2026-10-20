@@ -153,6 +153,7 @@ export type MessagePart =
       partId?: string
       status: PrimeCompactionStatus
       reason?: PrimeCompactionReason
+      action?: string
       outcome?: PrimeCompactionOutcome
       tokensBefore?: number
       firstKeptEntryId?: string

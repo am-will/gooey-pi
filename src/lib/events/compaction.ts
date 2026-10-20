@@ -32,6 +32,7 @@ function compactionPartFromStart(raw: Record<string, unknown>): CompactionPart {
     type: 'compaction',
     status: 'running',
     reason: compactionReason(raw.reason),
+    action: string(raw.action),
     customInstructions: string(raw.customInstructions),
   }
 }
@@ -48,6 +49,7 @@ function compactionPartFromEnd(raw: Record<string, unknown>): CompactionPart {
     type: 'compaction',
     status,
     reason: compactionReason(raw.reason),
+    action: string(raw.action),
     outcome,
     ...result,
     error: string(raw.errorMessage),
@@ -83,6 +85,8 @@ export function isCompactionEvent(raw: Record<string, unknown>): boolean {
 
 function sameCompactionResult(left: CompactionPart, right: CompactionPart): boolean {
   if (left.reason && right.reason && left.reason !== right.reason) return false
+  // OMP may try several methods for one trigger (shake, then context-full); each pass is its own result.
+  if (left.action && right.action && left.action !== right.action) return false
   if (left.firstKeptEntryId && right.firstKeptEntryId) return left.firstKeptEntryId === right.firstKeptEntryId
   if (left.status !== 'done' && right.status !== 'done') {
     return Boolean(left.reason && right.reason && left.reason === right.reason && (!left.error || !right.error || left.error === right.error))
