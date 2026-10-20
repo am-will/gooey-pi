@@ -10,6 +10,26 @@ export function comparePaths(left: string, right: string): number {
 }
 
 /**
+ * Resolves after `ms` on an unref'd timer, so a pending wait never keeps the process alive.
+ * When `signal` aborts first, the timer is cleared and the promise rejects with `signal.reason`.
+ */
+export function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolveDelay, rejectDelay) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      rejectDelay(signal?.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolveDelay()
+    }, ms)
+    timer.unref?.()
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
  * Maps values with bounded concurrency. `null` results are filtered out;
  * results arrive in completion order, matching the previous worker pools.
  */

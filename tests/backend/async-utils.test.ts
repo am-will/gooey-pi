@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { comparePaths, createAdmissionQueue, createKeyedMutex, createSingleFlight, mapLimit } from '../../electron/main/lib/async'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { comparePaths, createAdmissionQueue, createKeyedMutex, createSingleFlight, delay, mapLimit } from '../../electron/main/lib/async'
 
 const tick = () => new Promise<void>((resolveTick) => setTimeout(resolveTick, 0))
 
@@ -8,6 +8,63 @@ describe('comparePaths', () => {
     expect(comparePaths('/a', '/b')).toBe(-1)
     expect(comparePaths('/b', '/a')).toBe(1)
     expect(comparePaths('/a', '/a')).toBe(0)
+  })
+})
+
+describe('delay', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('resolves only after the requested time', async () => {
+    vi.useFakeTimers()
+    let settled = false
+    const waiting = delay(100).then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(99)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await waiting
+    expect(settled).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not keep the process alive while waiting', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const waiting = delay(1)
+    const timer = setTimeoutSpy.mock.results[0]?.value as NodeJS.Timeout
+    expect(timer.hasRef()).toBe(false)
+    await waiting
+  })
+
+  it('resolves with a signal that never aborts and detaches its abort listener', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener')
+    const waiting = delay(50, controller.signal)
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(waiting).resolves.toBeUndefined()
+    expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function))
+    controller.abort(new Error('too late'))
+  })
+
+  it('rejects with the abort reason and clears the timer when aborted mid-wait', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    const waiting = delay(10_000, controller.signal)
+    expect(vi.getTimerCount()).toBe(1)
+    const reason = new Error('cancelled')
+    controller.abort(reason)
+    await expect(waiting).rejects.toBe(reason)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('rejects immediately without scheduling a timer when the signal is already aborted', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(delay(10_000, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
