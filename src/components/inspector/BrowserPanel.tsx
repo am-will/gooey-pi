@@ -47,6 +47,8 @@ function normalizeUrl(value: string) {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
 }
 
+const ANNOTATION_LIMIT_NOTICE = `You can attach at most ${MAX_BROWSER_ANNOTATIONS} annotations. Remove one from the composer attachment to add more.`
+
 interface BrowserPanelProps {
   navigationRequest?: { id: number; url: string }
   onNavigationRequestHandled?(id: number): void
@@ -313,7 +315,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       return
     }
     if (annotationsRef.current.atCapacity) {
-      showNotice(`Prime keeps at most ${MAX_BROWSER_ANNOTATIONS} annotations. Remove one from the composer attachment to add more.`)
+      showNotice(ANNOTATION_LIMIT_NOTICE)
       return
     }
     setNotice('')
@@ -332,7 +334,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       /* webview not ready */
     }
     if (!annotationsRef.current.add({ comment: annotationText, element: pendingElement, pageUrl, pageTitle })) {
-      showNotice(`Prime keeps at most ${MAX_BROWSER_ANNOTATIONS} annotations. Remove one from the composer attachment to add more.`)
+      showNotice(ANNOTATION_LIMIT_NOTICE)
       return
     }
     setPendingElement(null)
