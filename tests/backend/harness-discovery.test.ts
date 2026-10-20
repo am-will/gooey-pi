@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { HarnessDiscoveryService, detectedHarnesses, probeHarnessExecutable, reconcileActiveHarness, type HarnessProbeFailure } from '../../electron/main/harness-discovery'
+import { dirname, join } from 'node:path'
+import { HarnessDiscoveryService, detectedHarnesses, probeHarnessExecutable, probePrimeImplementation, reconcileActiveHarness, type HarnessProbeFailure } from '../../electron/main/harness-discovery'
 import { defaultSettings, type DesktopState } from '../../electron/main/store'
 import { HARNESSES, type HarnessDescriptor } from '../../electron/main/harness'
 import { findHarnessExecutable } from '../../electron/main/process-utils'
+import type { PrimeImplementation } from '../../src/types/api'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -216,5 +217,87 @@ describe('HarnessDiscoveryService', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('Prime implementation discovery', () => {
+  const probeDirs: string[] = []
+  afterEach(() => { for (const dir of probeDirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+  const discoverEverything = (version: string | null, probePrimeImplementation = vi.fn(async (): Promise<PrimeImplementation> => 'rust')) => ({
+    probePrimeImplementation,
+    discovery: new HarnessDiscoveryService(
+      () => ({ omp: '', prime: '', pi: '' }),
+      {
+        findExecutable: async (descriptor, _configured, accept) => {
+          const candidate = `/bin/${descriptor.id}`
+          return await accept?.(candidate) ? candidate : null
+        },
+        probeExecutable: async () => ({ runnable: true, version }),
+        probePrimeImplementation,
+      },
+    ),
+  })
+
+  it.each([
+    ['0.10.0', 'rust'],
+    ['0.7.0-gooeypi.1', 'typescript'],
+  ] as const)('classifies Prime %s from its version without a feature probe', async (version, implementation) => {
+    const { discovery, probePrimeImplementation: probe } = discoverEverything(version)
+
+    const statuses = await discovery.refresh()
+
+    expect(statuses.prime).toEqual({ path: '/bin/prime', version, implementation })
+    expect(discovery.primeImplementation()).toBe(implementation)
+    expect(probe).not.toHaveBeenCalled()
+    // Implementation is a Prime-only field.
+    expect(statuses.omp).toEqual({ path: '/bin/omp', version })
+    expect(statuses.pi).toEqual({ path: '/bin/pi', version })
+  })
+
+  it.each([null, 'garbage'])('runs the feature probe when the Prime version is %j', async (version) => {
+    const { discovery, probePrimeImplementation: probe } = discoverEverything(version, vi.fn(async (): Promise<PrimeImplementation> => 'typescript'))
+
+    await expect(discovery.refresh()).resolves.toMatchObject({ prime: { path: '/bin/prime', implementation: 'typescript' } })
+    expect(probe).toHaveBeenCalledExactlyOnceWith('/bin/prime')
+  })
+
+  it('reports no implementation while Prime is undiscovered', async () => {
+    const discovery = new HarnessDiscoveryService(() => ({ omp: '', prime: '', pi: '' }), { findExecutable: async () => null })
+
+    await discovery.refresh()
+
+    expect(discovery.primeImplementation()).toBeUndefined()
+  })
+
+  const writeProbeTarget = (body: string): { executable: string; argvPath: string } => {
+    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-prime-impl-'))
+    probeDirs.push(dir)
+    const executable = join(dir, 'prime-agent')
+    const argvPath = join(dir, 'argv.json')
+    writeFileSync(executable, `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)))
+${body}
+`)
+    chmodSync(executable, 0o755)
+    return { executable, argvPath }
+  }
+
+  it.each([
+    ['typescript', 'accepts --extension', "process.stdout.write('0.9.8\\n')"],
+    ['rust', 'rejects --extension', "process.stderr.write('Error: Unknown option: --extension\\n'); process.exit(1)"],
+    ['rust', 'answers inconclusively (output overflow)', "process.stdout.write('x'.repeat(64 * 1024))"],
+  ] as const)('probes %s when the executable %s, without creating the extension path', async (implementation, _label, body) => {
+    const target = writeProbeTarget(body)
+
+    await expect(probePrimeImplementation(target.executable)).resolves.toBe(implementation)
+
+    const argv = JSON.parse(readFileSync(target.argvPath, 'utf8')) as string[]
+    expect(argv).toEqual(['--extension', expect.stringMatching(/never-created\.ts$/), '--version'])
+    expect(existsSync(dirname(argv[1]))).toBe(false)
+  })
+
+  it('treats an executable that cannot start as Rust', async () => {
+    await expect(probePrimeImplementation(join(tmpdir(), 'gooeypi-missing-prime-agent'))).resolves.toBe('rust')
   })
 })
