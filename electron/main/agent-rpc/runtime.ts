@@ -499,9 +499,11 @@ export class RpcRuntime {
       this.retryPending = false
       this.info.isStreaming = true
       this.info.isCompacting = false
-      if (this.compactionEpisode !== 'none') {
+      if (this.compactionEpisode !== 'none' && !this.manualCompaction) {
         // The compaction's end event never arrived (or was lost); close the
-        // renderer's running row before the new turn opens.
+        // renderer's running row before the new turn opens. A compact
+        // command's answer closes the row itself, even when a steer parked
+        // during the compaction started its run first.
         this.compactionEpisode = 'none'
         this.clearCompactionEndFallback()
         this.emit({ type: 'compaction_end', synthetic: true, aborted: false, willRetry: true })

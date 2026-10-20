@@ -190,6 +190,25 @@ describe('manual compaction lifecycle', () => {
     ])
   })
 
+  it('closes a compaction with its own end when a run starts before the command answers', async () => {
+    // Rust Prime kicks its queue pump before it writes the end and the answer,
+    // so a steer parked during the compaction can start its run in between.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'requested' })
+      send({ type: 'compaction_end', reason: 'requested', result: ${JSON.stringify(RESULT)}, aborted: false, willRetry: false })
+      send({ type: 'agent_start' })
+      ok(${JSON.stringify(RESULT)})`, PRIME_RUST_RPC_ADAPTER, events)
+
+    await runtime.command({ type: 'compact' })
+
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'requested' },
+      { type: 'compaction_end', reason: 'requested', result: RESULT, aborted: false, willRetry: false },
+    ])
+    expect(events.some((event) => event.type === 'agent_start')).toBe(true)
+  })
+
   it('closes a running compaction the watchdog announced with the answered result', async () => {
     const events: RpcObject[] = []
     const runtime = await startRuntime(`setTimeout(() => ok(${JSON.stringify(RESULT)}), 50)`, OMP_RPC_ADAPTER, events)
