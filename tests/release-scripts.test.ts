@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { FuseState, FuseV1Options, FuseVersion, flipFuses, getCurrentFuseWire } from '@electron/fuses'
 import { describe, expect, test } from 'vitest'
 import {
   bootstrapNpm,
@@ -54,6 +55,7 @@ import { assertBundleSizeBudgets, assertPackageSizeBudgets, BUNDLE_SIZE_BUDGETS,
 import { assertReleaseTag } from '../scripts/release/validate-release-tag.mjs'
 // after-pack.cjs is CommonJS; the interop layer exposes module.exports properties as named exports.
 import { executablePath } from '../scripts/release/after-pack.cjs'
+import { assertFuseWire, ELECTRON_FUSE_CONFIG } from '../scripts/release/fuses.cjs'
 import { collectAuditAdvisories, describeAuditEvaluation, evaluateAuditReport, parseAuditExceptions, readAuditExceptions } from '../scripts/release/audit-exceptions.mjs'
 import {
   assertValidAuthenticode,
@@ -1215,7 +1217,47 @@ describe('fuse hardening configuration', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
     expect(packageJson.build.afterPack).toBe('scripts/release/after-pack.cjs')
     expect(() => readFileSync('scripts/afterPack.cjs', 'utf8')).toThrow()
-    expect(readFileSync(packageJson.build.afterPack, 'utf8')).toContain('FuseV1Options.OnlyLoadAppFromAsar')
+    // after-pack flips the same shared fuse map both package verifiers read back.
+    expect(readFileSync(packageJson.build.afterPack, 'utf8')).toContain('...ELECTRON_FUSE_CONFIG')
+  })
+
+  test('pins every hardened fuse value independently of the shared config', () => {
+    expect(ELECTRON_FUSE_CONFIG).toEqual({
+      [FuseV1Options.RunAsNode]: false,
+      [FuseV1Options.EnableCookieEncryption]: true,
+      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+      [FuseV1Options.EnableNodeCliInspectArguments]: false,
+      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+      [FuseV1Options.OnlyLoadAppFromAsar]: true,
+      [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
+      [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
+      [FuseV1Options.WasmTrapHandlers]: true,
+    })
+  })
+
+  test('rejects a fuse wire that differs from the hardened config', () => {
+    const wire = Object.fromEntries(Object.entries(ELECTRON_FUSE_CONFIG).map(([option, enabled]) => [option, enabled ? FuseState.ENABLE : FuseState.DISABLE]))
+    expect(() => assertFuseWire(wire)).not.toThrow()
+    expect(() => assertFuseWire({ ...wire, [FuseV1Options.RunAsNode]: FuseState.ENABLE })).toThrow('Electron fuse RunAsNode is ENABLE, expected DISABLE')
+    expect(() => assertFuseWire({ ...wire, [FuseV1Options.OnlyLoadAppFromAsar]: FuseState.DISABLE })).toThrow('Electron fuse OnlyLoadAppFromAsar is DISABLE, expected ENABLE')
+    expect(() => assertFuseWire({ ...wire, [FuseV1Options.EnableNodeCliInspectArguments]: FuseState.REMOVED })).toThrow(/EnableNodeCliInspectArguments is REMOVED/)
+    const { [FuseV1Options.WasmTrapHandlers]: _omitted, ...truncated } = wire
+    expect(() => assertFuseWire(truncated)).toThrow('Electron fuse WasmTrapHandlers is undefined, expected ENABLE')
+  })
+
+  test('accepts the wire after-pack flips into a binary and rejects an unflipped one', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-fuses-'))
+    try {
+      // A minimal stand-in for an Electron binary: @electron/fuses' sentinel,
+      // a V1 header, and a fuse wire with every fuse at Electron's default ENABLE.
+      const binary = join(directory, 'gooeypi')
+      writeFileSync(binary, Buffer.concat([Buffer.from('prefix'), Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX'), Buffer.from([1, 9]), Buffer.alloc(9, FuseState.ENABLE), Buffer.from('suffix')]))
+      await expect(getCurrentFuseWire(binary).then(assertFuseWire)).rejects.toThrow(/RunAsNode is ENABLE/)
+      await flipFuses(binary, { version: FuseVersion.V1, ...ELECTRON_FUSE_CONFIG })
+      await expect(getCurrentFuseWire(binary).then(assertFuseWire)).resolves.toBeUndefined()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
 

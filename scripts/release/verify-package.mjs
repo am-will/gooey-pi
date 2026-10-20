@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPackage } from '@electron/asar'
-import { FuseState, FuseV1Options, getCurrentFuseWire } from '@electron/fuses'
+import { getCurrentFuseWire } from '@electron/fuses'
+import { assertFuseWire } from './fuses.cjs'
 import {
   artifactArchitectures,
   assertAsarLayout,
@@ -46,23 +47,6 @@ function findSingleApp(directory, label) {
   return apps[0]
 }
 
-function assertFuses(wire) {
-  const expected = new Map([
-    [FuseV1Options.RunAsNode, FuseState.DISABLE],
-    [FuseV1Options.EnableCookieEncryption, FuseState.ENABLE],
-    [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE],
-    [FuseV1Options.EnableNodeCliInspectArguments, FuseState.DISABLE],
-    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.ENABLE],
-    [FuseV1Options.OnlyLoadAppFromAsar, FuseState.ENABLE],
-    [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot, FuseState.DISABLE],
-    [FuseV1Options.GrantFileProtocolExtraPrivileges, FuseState.DISABLE],
-    [FuseV1Options.WasmTrapHandlers, FuseState.ENABLE],
-  ])
-  for (const [name, state] of expected) {
-    if (wire[name] !== state) throw new Error(`Electron fuse ${name} is ${wire[name]}, expected ${state}`)
-  }
-}
-
 export function assertBooleanEntitlement(output, key, label) {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const xml = new RegExp(`<key>\\s*${escapedKey}\\s*</key>\\s*<true\\s*/>`, 'i')
@@ -98,7 +82,7 @@ async function verifyApp({ app, artifact, mode, expectedTeam }) {
   const unpacked = join(resources, 'app.asar.unpacked')
   if (!existsSync(unpacked)) throw new Error(`${basename(artifact)} application must contain Resources/app.asar.unpacked`)
   assertUnpackedNativeLayout(unpacked, appArchitectures, (path) => parseArchitectures(run('lipo', ['-archs', path])))
-  assertFuses(await getCurrentFuseWire(executable))
+  assertFuseWire(await getCurrentFuseWire(executable))
 
   if (mode === 'public') {
     run('codesign', ['--verify', '--deep', '--strict', '--verbose=4', app])
