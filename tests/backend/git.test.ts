@@ -125,6 +125,26 @@ describe('GitService', () => {
     expect(readFileSync(join(nested, 'nested.txt'), 'utf8')).toBe('base\n')
   })
 
+  it('lists an untracked nested repository without the porcelain directory marker', async () => {
+    const cwd = repository('prime-work-git-untracked-repo-')
+    const service = new GitService(async () => cwd)
+    untrackedNestedRepository(cwd, 'embed')
+    writeFileSync(join(cwd, 'file.txt'), 'base\nchanged\n')
+    // Even with --untracked-files=all, git reports a nested repository as one record with a trailing '/'.
+    const raw = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], { cwd, encoding: 'utf8' }).stdout
+    expect(raw.split('\0')).toContain('?? embed/')
+
+    const status = await service.status(cwd)
+    expect(status.error).toBeUndefined()
+    expect(status.files).toContainEqual(expect.objectContaining({ path: 'embed', status: '??', staged: false }))
+    await expect(service.diff(cwd, 'embed', false)).resolves.toMatchObject({ path: 'embed', text: '' })
+    expect(await service.restore(cwd, ['file.txt'])).toBe(true)
+    expect(readFileSync(join(cwd, 'file.txt'), 'utf8')).toBe('base\n')
+    // git clean -f never deletes a nested repository, so undoing its entry leaves it in place.
+    expect(await service.restore(cwd, ['embed'])).toBe(true)
+    expect(existsSync(join(cwd, 'embed', 'file.txt'))).toBe(true)
+  })
+
   it('leaves untracked nested repositories out of staging instead of recording a gitlink', async () => {
     const cwd = repository('prime-work-git-stage-nested-')
     const service = new GitService(async () => cwd)
