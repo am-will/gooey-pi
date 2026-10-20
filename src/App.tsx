@@ -262,7 +262,7 @@ export default function App() {
     [meta],
   )
   const refreshDetectedHarnesses = useHarnessRefresh({
-    activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh,
+    bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh, reportError,
   })
   useEffect(() => {
     if (detectedHarnesses.length) setNoHarnessPromptDismissed(false)

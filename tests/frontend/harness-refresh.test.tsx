@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHarnessRefresh } from '../../src/hooks/useHarnessRefresh'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
-import type { AppMeta, AppSettings, HarnessId } from '../../src/types/api'
+import type { AppMeta, AppSettings, HarnessId, PrimeWorkApi } from '../../src/types/api'
 
 const meta = (primePath: string | null): AppMeta => ({
   version: '1', platform: 'linux', homeDir: '/home/you',
@@ -27,18 +27,30 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function renderRefresh(result: { meta: AppMeta; settings: AppSettings }, activeHarness: HarnessId = 'prime') {
-  const refreshHarnesses = vi.fn(async () => result)
+function signalBridge() {
+  let signal: (() => void) | undefined
+  const unsubscribe = vi.fn()
+  const onHarnessesChanged = vi.fn((callback: () => void) => { signal = callback; return unsubscribe })
+  const bridge = { app: { onHarnessesChanged } } as unknown as PrimeWorkApi
+  return { bridge, unsubscribe, onHarnessesChanged, signal: () => act(async () => { signal?.() }) }
+}
+
+async function renderRefresh(
+  result: { meta: AppMeta; settings: AppSettings },
+  activeHarness: HarnessId = 'prime',
+  { bridge = null, refreshHarnesses = vi.fn(async () => result) }: { bridge?: PrimeWorkApi | null; refreshHarnesses?: () => Promise<{ meta: AppMeta; settings: AppSettings }> } = {},
+) {
+  const reportError = vi.fn()
   // Settings' transaction runs the operation it is given; the generic signature does not survive vi.fn.
   const reconcileExternalSettings = vi.fn((operation: () => Promise<unknown>) => operation())
   const refreshProviders = vi.fn(async () => undefined)
   let refresh: (() => Promise<void>) | undefined
   function Probe() {
-    refresh = useHarnessRefresh({ activeHarness, refreshHarnesses, reconcileExternalSettings: reconcileExternalSettings as never, refreshProviders })
+    refresh = useHarnessRefresh({ bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: reconcileExternalSettings as never, refreshProviders, reportError })
     return null
   }
   await act(async () => { root.render(<Probe />) })
-  return { refresh: () => act(async () => { await refresh?.() }), refreshHarnesses, reconcileExternalSettings, refreshProviders }
+  return { refresh: () => act(async () => { await refresh?.() }), refreshHarnesses, reconcileExternalSettings, refreshProviders, reportError }
 }
 
 describe('harness refresh', () => {
@@ -62,5 +74,29 @@ describe('harness refresh', () => {
 
     expect(view.refreshHarnesses).toHaveBeenCalledOnce()
     expect(view.refreshProviders).not.toHaveBeenCalled()
+  })
+
+  it('reruns the same refresh when the main process re-detects the harnesses, until unmount', async () => {
+    const main = signalBridge()
+    const view = await renderRefresh({ meta: meta('/bin/prime-agent'), settings: { ...DEFAULT_SETTINGS, activeHarness: 'prime' } }, 'prime', { bridge: main.bridge })
+    expect(view.refreshHarnesses).not.toHaveBeenCalled()
+
+    await main.signal()
+
+    expect(view.reconcileExternalSettings).toHaveBeenCalledExactlyOnceWith(view.refreshHarnesses)
+    expect(view.refreshProviders).toHaveBeenCalledExactlyOnceWith(true)
+    await act(async () => root.unmount())
+    expect(main.unsubscribe).toHaveBeenCalledOnce()
+    root = createRoot(container)
+  })
+
+  it('reports a refresh the main process asked for that fails', async () => {
+    const main = signalBridge()
+    const failure = new Error('discovery failed')
+    const view = await renderRefresh({ meta: meta(null), settings: DEFAULT_SETTINGS }, 'prime', { bridge: main.bridge, refreshHarnesses: vi.fn(async () => { throw failure }) })
+
+    await main.signal()
+
+    expect(view.reportError).toHaveBeenCalledExactlyOnceWith(failure)
   })
 })
