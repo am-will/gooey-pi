@@ -672,6 +672,48 @@ process.exit(0)
     expect(spawnCount()).toBe(2)
   })
 
+  it('keeps a live-catalog result that finished after a mid-spawn invalidation as the throttle fallback', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-catalog-churn-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const file = join(root, 'churn.jsonl')
+    writeSession(file, project, 'churn')
+    const spawnLog = join(dir, 'spawns.log')
+    writeFileSync(spawnLog, '')
+    const executable = join(dir, 'prime-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.appendFileSync(${JSON.stringify(spawnLog)}, 'spawn\\n')
+const spawn = fs.readFileSync(${JSON.stringify(spawnLog)}, 'utf8').split('\\n').filter(Boolean).length
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ sessions: [{ sessionFile: ${JSON.stringify(file)}, sessionName: 'live-v' + spawn }] }))
+}, 200)
+`)
+    chmodSync(executable, 0o755)
+    const catalog = new SessionMetadataCatalog(
+      () => root,
+      executable,
+      20,
+      async (filePath) => metadata(filePath, project, 'churn'),
+    )
+    const spawnCount = () => readFileSync(spawnLog, 'utf8').split('\n').filter(Boolean).length
+
+    expect((await catalog.all())[0]?.title).toBe('live-v1')
+    const throttleHarness = catalog as unknown as { lastCatalogSpawn: { at: number } }
+    throttleHarness.lastCatalogSpawn.at = Date.now() - 60_000
+    catalog.invalidateLiveCatalog()
+    const busy = catalog.all()
+    // A watcher flush lands while the CLI is still running.
+    await waitUntil(() => spawnCount() === 2)
+    catalog.invalidateLiveCatalog()
+
+    expect((await busy)[0]?.title).toBe('live-v2')
+    // Inside the spawn throttle window the newest finished fetch is served,
+    // not the snapshot from before the churn started.
+    expect((await catalog.all())[0]?.title).toBe('live-v2')
+    expect(spawnCount()).toBe(2)
+  })
+
   it('does not let an in-flight pre-append scan satisfy a post-invalidation refresh', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-scan-race-')); dirs.push(dir)
     const root = join(dir, 'sessions'); mkdirSync(root)

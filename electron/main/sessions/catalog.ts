@@ -539,7 +539,10 @@ export class SessionMetadataCatalog {
           }
         }
       } catch { /* JSONL remains authoritative when the live catalog is unavailable. */ }
-      if (resolveExecutable(this.primeAgentPath) === primeAgentPath && this.catalogRevision === revision) {
+      // Store every completed fetch for the current executable under the revision it
+      // started at: after an invalidation it never counts as fresh (TTL check above),
+      // but it is the newest snapshot the spawn throttle can fall back to.
+      if (resolveExecutable(this.primeAgentPath) === primeAgentPath) {
         this.catalogCache = { executable: primeAgentPath, fetchedAt: Date.now(), revision, sessions }
       }
       return sessions
