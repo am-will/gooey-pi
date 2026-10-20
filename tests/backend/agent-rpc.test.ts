@@ -13,7 +13,7 @@ import { FramedRpcTransport } from '../../electron/main/agent-rpc/transport'
 import type { RpcObject } from '../../electron/main/agent-rpc/types'
 import { PrimeProviderService } from '../../electron/main/providers'
 import { RepositoryUseGate } from '../../electron/main/repository-use-gate'
-import type { RuntimeInfo, SessionActionSnapshot } from '../../src/types/api'
+import type { PrimeImplementation, RuntimeInfo, SessionActionSnapshot } from '../../src/types/api'
 import { waitUntil } from '../helpers/wait'
 
 const dirs: string[] = []
@@ -1112,16 +1112,18 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 
 /**
  * A Rust-style Prime Agent: it exits on --extension like 0.10 does, answers
- * set_service_tier with 'Unknown command', and records every command it
- * receives.
+ * set_service_tier with 'Unknown command', and records the argv of every
+ * spawn and every command it receives.
  */
-function fakeRustPrime(): { cwd: string; executable: string; commands: () => RpcObject[] } {
+function fakeRustPrime(): { cwd: string; executable: string; commands: () => RpcObject[]; spawns: () => string[][] } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rust-rpc-'))
   dirs.push(cwd)
   const executable = join(cwd, 'fake-rust-prime.cjs')
   const log = join(cwd, 'commands.jsonl')
+  const argvLog = join(cwd, 'argv.jsonl')
   writeFileSync(executable, `#!/usr/bin/env node
 const fs = require('node:fs')
+fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv.slice(2)) + '\\n')
 if (process.argv.includes('--extension')) {
   process.stderr.write('Error: Unknown option: --extension\\n')
   process.exit(1)
@@ -1140,14 +1142,72 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
 })
 `)
   chmodSync(executable, 0o755)
-  const commands = (): RpcObject[] => {
-    try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as RpcObject) } catch { return [] }
+  const readJsonLines = <T>(path: string): T[] => {
+    try { return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as T) } catch { return [] }
   }
-  return { cwd, executable, commands }
+  return { cwd, executable, commands: () => readJsonLines<RpcObject>(log), spawns: () => readJsonLines<string[]>(argvLog) }
 }
 
+const extensionEnvironment = { GOOEYPI_COLLABORATION_EXTENSION_PATH: '/app/extensions/omp-work-collaboration.ts' }
+
+describe('agent RPC start recovery', () => {
+  /** A Prime manager whose adapter follows `implementation`, which starts as TypeScript. */
+  function recoveringManager(executable: string) {
+    const state = { implementation: 'typescript' as PrimeImplementation }
+    const manager = new AgentRpcManager(executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), () => primeRpcAdapter(state.implementation))
+    managers.push(manager)
+    const environments: NodeJS.ProcessEnv[] = []
+    manager.setRuntimeEnvironmentProvider((scope) => {
+      const environment = { ...extensionEnvironment, GOOEYPI_TEST_VARIANT: scope.variant ?? 'typescript' }
+      environments.push(environment)
+      return environment
+    })
+    const ended = vi.fn()
+    manager.setRuntimeEndListener(ended)
+    return { manager, state, environments, ended }
+  }
+
+  it('retries a failed start once with the adapter and environment the recovery left behind', async () => {
+    const fake = fakeRustPrime()
+    const { manager, state, environments, ended } = recoveringManager(fake.executable)
+    const recover = vi.fn(async () => { state.implementation = 'rust'; return true })
+    manager.setStartRecovery(recover)
+
+    await expect(manager.start({ cwd: fake.cwd })).resolves.toMatchObject({ harness: 'prime', sessionId: 'rust-session' })
+
+    expect(recover).toHaveBeenCalledOnce()
+    expect(recover.mock.calls[0]).toEqual([expect.objectContaining({ message: expect.stringContaining('Unknown option: --extension') }), PRIME_RPC_ADAPTER])
+    expect(fake.spawns().map((argv) => argv.includes('--extension'))).toEqual([true, false])
+    expect(environments.map((environment) => environment.GOOEYPI_TEST_VARIANT)).toEqual(['typescript', 'rust'])
+    // The failed start released its environment before the retry minted a new one.
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended.mock.calls[0][0]).toBe(environments[0])
+  })
+
+  it('rethrows the original error when the recovery declines', async () => {
+    const fake = fakeRustPrime()
+    const { manager } = recoveringManager(fake.executable)
+    const recover = vi.fn(async () => false)
+    manager.setStartRecovery(recover)
+
+    await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Prime Agent RPC exited (1): Error: Unknown option: --extension')
+    expect(recover).toHaveBeenCalledOnce()
+    expect(fake.spawns()).toHaveLength(1)
+  })
+
+  it('never retries a retried start', async () => {
+    const fake = fakeRustPrime()
+    const { manager } = recoveringManager(fake.executable)
+    const recover = vi.fn(async () => true)
+    manager.setStartRecovery(recover)
+
+    await expect(manager.startUnattended({ cwd: fake.cwd })).rejects.toThrow('Unknown option: --extension')
+    expect(recover).toHaveBeenCalledOnce()
+    expect(fake.spawns()).toHaveLength(2)
+  })
+})
+
 describe('Rust Prime runtimes', () => {
-  const extensionEnvironment = { GOOEYPI_COLLABORATION_EXTENSION_PATH: '/app/extensions/omp-work-collaboration.ts' }
 
   it('starts Rust Prime without --extension once the adapter source reports Rust', async () => {
     const fake = fakeRustPrime()

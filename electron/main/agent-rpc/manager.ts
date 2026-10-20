@@ -19,6 +19,12 @@ export interface ProviderCatalog {
   capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined>
 }
 
+/**
+ * Called once when a start fails, with the adapter that start used. True
+ * means the cause was repaired and the start is worth one more attempt.
+ */
+export type StartRecovery = (error: unknown, adapter: HarnessRpcAdapter) => Promise<boolean>
+
 /** What a runtime environment provider knows about the start it is minting capabilities for. */
 export interface RuntimeEnvironmentScope {
   cwd: string
@@ -41,6 +47,7 @@ export class AgentRpcManager {
   private runtimeStartListener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void = () => undefined
   private runtimeEndListener: (environment: NodeJS.ProcessEnv, info?: RuntimeInfo) => void = () => undefined
   private runtimeAdmission: Promise<void> = Promise.resolve()
+  private recoverStart: StartRecovery = async () => false
   private beginWorkspaceUse: (
     cwd: string,
     owner: WorkspaceUseOwner,
@@ -92,18 +99,35 @@ export class AgentRpcManager {
     this.runtimeEndListener = listener
   }
 
+  setStartRecovery(recover: StartRecovery): void { this.recoverStart = recover }
+
   beginShutdown(): void { this.closed = true }
 
   async start(raw: unknown): Promise<RuntimeInfo> {
-    return this.startWithMode(raw, true)
+    return this.startRecovering(raw, true)
   }
 
   /** Internal scheduler entrypoint: unattended children must never expose UI-blocking tools. */
   async startUnattended(raw: unknown): Promise<RuntimeInfo> {
-    return this.startWithMode(raw, false)
+    return this.startRecovering(raw, false)
   }
 
-  private async startWithMode(raw: unknown, interactive: boolean): Promise<RuntimeInfo> {
+  /**
+   * A failed start, already cleaned up, is attempted once more with a fresh
+   * adapter and environment when the start recovery repaired its cause. The
+   * second attempt is final.
+   */
+  private async startRecovering(raw: unknown, interactive: boolean): Promise<RuntimeInfo> {
+    const adapter = this.adapterForStart()
+    try {
+      return await this.startWithMode(raw, interactive, adapter)
+    } catch (error) {
+      if (!await this.recoverStart(error, adapter).catch(() => false)) throw error
+    }
+    return this.startWithMode(raw, interactive, this.adapterForStart())
+  }
+
+  private async startWithMode(raw: unknown, interactive: boolean, adapter: HarnessRpcAdapter): Promise<RuntimeInfo> {
     this.requireOpen()
     const executable = resolveExecutable(this.executable)
     if (!executable) throw new Error(`${this.adapter.agentName} executable was not found`)
@@ -131,7 +155,6 @@ export class AgentRpcManager {
     if (options.fast !== undefined && typeof options.fast !== 'boolean') throw new TypeError('fast must be a boolean')
     this.requireOpen()
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
-    const adapter = this.adapterForStart()
     const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, variant: adapter.variant })
     let runtime: RpcRuntime | undefined
     let workspaceUse!: WorkspaceUseLease
