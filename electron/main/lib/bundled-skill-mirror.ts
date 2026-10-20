@@ -41,11 +41,16 @@ export async function mirrorBundledSkill(
   targetRoot: string,
   log: (message: string) => void = (message) => console.error(message),
 ): Promise<string> {
-  const target = join(targetRoot, basename(sourceDir))
+  const name = basename(sourceDir)
+  const target = join(targetRoot, name)
   try {
     const digest = await skillDigest(sourceDir)
     if (await skillDigest(target).catch(() => null) === digest) return target
     await mkdir(targetRoot, { recursive: true })
+    // One GooeyPi owns this user data, so any staging copy here is from a launch killed mid-copy.
+    for (const entry of await readdir(targetRoot)) {
+      if (entry.startsWith(`${name}.`) && entry.endsWith('.tmp')) await rm(join(targetRoot, entry), { recursive: true, force: true })
+    }
     const staging = `${target}.${process.pid}.${randomUUID()}.tmp`
     try {
       await cp(sourceDir, staging, { recursive: true, filter: (path) => basename(path) !== BYTECODE_CACHE })
@@ -56,7 +61,7 @@ export async function mirrorBundledSkill(
     }
     return target
   } catch (error) {
-    log(`GooeyPi could not mirror the bundled ${basename(sourceDir)} skill, using the bundled copy: ${errorMessage(error)}`)
+    log(`GooeyPi could not mirror the bundled ${name} skill, using the bundled copy: ${errorMessage(error)}`)
     return sourceDir
   }
 }
