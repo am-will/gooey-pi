@@ -56,11 +56,9 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - run: npm run release:preflight:toolchain
-      - run: npm run typecheck
-      - run: npm run check
-      - run: npm run test:coverage
-      - run: npm run build:bundle
-      - run: npm run release:bundle-size
+      # The same aggregate the release quality job runs, so vendor patch drift
+      # and every other release gate fail on the pull request, not at release time.
+      - run: npm run release:verify:package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage

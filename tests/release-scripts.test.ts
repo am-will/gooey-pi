@@ -926,6 +926,17 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     }
   })
 
+  test('runs the same release quality aggregate on pull requests as at release time', () => {
+    const qualityRuns = (path: string) =>
+      ((load(readFileSync(path, 'utf8')) as { jobs: { quality: { steps: Array<{ run?: string }> } } }).jobs.quality.steps ?? []).flatMap((step) => (step.run ? [step.run] : []))
+    const ci = qualityRuns('.github/workflows/ci.yml')
+    // A hand-copied subset of the aggregate once left out vendor patch verification.
+    expect(ci).toEqual(qualityRuns('.github/workflows/release.yml'))
+    expect(ci).toContain('npm run release:verify:package')
+    const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts as Record<string, string>
+    expect(scripts['release:verify:package']).toContain('npm run vendor:verify-patches')
+  })
+
   test('ships both mac architectures as separate builds from native-arch runners', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     // Two matrix legs, each on a runner whose native architecture matches the
