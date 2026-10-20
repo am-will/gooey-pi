@@ -16,7 +16,7 @@ describe('agent transport events', () => {
     expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'Malformed agent output' }])
   })
 
-  it.each(['error', 'extension_error', 'transport_error'])('names no harness when a %s event carries no message', (type) => {
+  it.each(['error', 'extension_error', 'transport_error'])('names no harness when an event of type %s carries no message', (type) => {
     const messages = applyPrimeEvent([streamingMessage()], { type })
 
     expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'The agent encountered an error.' }])
