@@ -339,11 +339,17 @@ describe('firstAccepted', () => {
 
   it('runs attempts strictly in order, awaiting each before the next', async () => {
     const calls: string[] = []
-    await expect(firstAccepted([
-      async () => { await new Promise((resolve) => setTimeout(resolve, 5)); calls.push('slow'); throw new Error('slow') },
-      () => { calls.push('fast'); return 'fast' },
-    ])).resolves.toBe('fast')
-    expect(calls).toEqual(['slow', 'fast'])
+    let rejectFirst!: (error: Error) => void
+    const result = firstAccepted([
+      () => new Promise<string>((_resolve, reject) => { calls.push('first'); rejectFirst = reject }),
+      () => { calls.push('second'); return 'second' },
+    ])
+    await new Promise((resolveTick) => setImmediate(resolveTick))
+    expect(calls).toEqual(['first'])
+
+    rejectFirst(new Error('first rejected'))
+    await expect(result).resolves.toBe('second')
+    expect(calls).toEqual(['first', 'second'])
   })
 
   it('rethrows the first error, not the last, when every attempt fails', async () => {
