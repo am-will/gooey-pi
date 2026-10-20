@@ -66,6 +66,12 @@ function nextNulField(output: string, cursor: number): { value: string; cursor: 
   return { value: output.slice(cursor, end), cursor: end + 1 }
 }
 
+/** Porcelain marks untracked nested repositories with a trailing '/'; strip that directory marker. */
+function statusRecordPath(record: string): string {
+  const value = record.slice(3)
+  return value.endsWith('/') ? value.slice(0, -1) : value
+}
+
 function parseNumstat(output: string, maxEntries = GIT_STATUS_ENTRY_LIMIT): ParsedNumstat {
   const values = new Map<string, Numstat>()
   let cursor = 0
@@ -133,7 +139,7 @@ function parseStatus(output: string, staged: ParsedNumstat, unstaged: ParsedNums
     if (record.startsWith('## ')) { parseBranch(record, status); continue }
     if (record.length < 4) continue
     const code = record.slice(0, 2)
-    const path = record.slice(3)
+    const path = statusRecordPath(record)
     if (!path) continue
     const renamed = code[0] === 'R' || code[0] === 'C' || code[1] === 'R' || code[1] === 'C'
     if (renamed) cursor = nextNulField(output, cursor).cursor
@@ -321,9 +327,7 @@ function changedPathStatesFromStatus(output: string): Map<string, ChangedPathSta
     const record = field.value
     if (!record || record.startsWith('## ') || record.length < 4) continue
     const code = record.slice(0, 2)
-    const pathValue = record.slice(3)
-    if (!pathValue) continue
-    const path = requireGitPath(pathValue, 'Git status path')
+    const path = requireGitPath(statusRecordPath(record), 'Git status path')
     const restorePaths = [path]
     if (code.includes('R') || code.includes('C')) {
       const previous = nextNulField(output, cursor)
