@@ -933,6 +933,32 @@ describe('extension UI runtime ownership', () => {
     })
   })
 
+  it('closes a confirm or editor dialog the harness cancels', async () => {
+    const command = vi.fn().mockResolvedValue({})
+    const bridge = { agent: { command } } as unknown as PrimeWorkApi
+    const runtimeSessionsRef = { current: new Map<string, string>([['runtime', session.filePath]]) }
+    let state!: ReturnType<typeof useExtensionUi>
+    function ExtensionProbe() {
+      state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+      return <Probe />
+    }
+
+    await act(async () => { root.render(<ExtensionProbe />) })
+    for (const request of [
+      { type: 'extension_ui_request', id: 'confirm-1', method: 'confirm', title: 'Continue?', message: 'Proceed' },
+      { type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit plan', prefill: 'Draft' },
+    ]) {
+      await act(async () => { state.showExtensionUi('runtime', request) })
+      expect(state.extensionUi?.request.id).toBe(request.id)
+
+      await act(async () => {
+        state.showExtensionUi('runtime', { type: 'extension_ui_request', id: `cancel-${request.id}`, method: 'cancel', targetId: request.id })
+      })
+      expect(state.extensionUi).toBeNull()
+      expect(state.hasOpenRequestForSession(session.filePath)).toBe(false)
+    }
+  })
+
   it('expires a harness-timed dialog on its own deadline even while its runtime is hidden', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
