@@ -77,13 +77,12 @@ function roleOf(message: JsonRecord): TranscriptMessage['role'] {
 }
 
 /**
- * A `message` record that belongs to the conversation. Pi 1.3 also persists
- * its model-facing system prompt and tool loadout as `system` messages, at
- * session start and whenever the loadout changes; like Pi's own views, the
- * transcript renders none of them.
+ * Pi 1.3 persists its model-facing system prompt and tool loadout as `system`
+ * messages, at session start and whenever the loadout changes. Like Pi's own
+ * views, the transcript renders none of them, whatever the dialect admits.
  */
-export function isConversationMessage(entry: JsonRecord): boolean {
-  return entry.type === 'message' && !(isRecord(entry.message) && entry.message.role === 'system')
+function isSystemPromptSnapshot(entry: JsonRecord): boolean {
+  return entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'system'
 }
 
 function boundedArgs(value: unknown): unknown {
@@ -219,7 +218,8 @@ function boundedTranscript(transcript: TranscriptMessage[]): TranscriptMessage[]
  * `isRenderable` selects which records enter the retained graph (and can be
  * selected as the active leaf); `renderEntry` renders retained record types the
  * shared walk does not handle itself (anything other than `message`,
- * `compaction`, and `custom_message`).
+ * `compaction`, and `custom_message`). The walk skips system prompt snapshots
+ * before asking the dialect.
  */
 export interface TranscriptDialect {
   isRenderable(entry: JsonRecord): boolean
@@ -227,7 +227,7 @@ export interface TranscriptDialect {
 }
 
 const primeTranscriptDialect: TranscriptDialect = {
-  isRenderable: (entry) => isConversationMessage(entry) || entry.type === 'compaction'
+  isRenderable: (entry) => entry.type === 'message' || entry.type === 'compaction'
     || (entry.type === 'custom_message' && entry.display === true),
 }
 
@@ -262,7 +262,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       if (oldestEdge === undefined) break
       parentEdges.delete(oldestEdge)
     }
-    if (!dialect.isRenderable(entry)) continue
+    if (isSystemPromptSnapshot(entry) || !dialect.isRenderable(entry)) continue
     const existing = entries.get(entry.id)
     if (existing) {
       graphBytes -= existing.bytes
