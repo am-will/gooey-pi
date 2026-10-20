@@ -147,3 +147,11 @@ describe('extension questionnaire countdown', () => {
     }
   })
 })
+
+describe('extension select request', () => {
+  it('asks for a choice without naming a harness', async () => {
+    const select: ExtensionUiRequest = { method: 'select', id: 'pick-1', title: 'Pick a branch', options: ['main', 'dev'] }
+    await act(async () => { root.render(<ExtensionUiModal request={select} onRespond={vi.fn()} />) })
+    expect(document.querySelector('.extension-question .modal-intro')?.textContent).toBe('Choose an option to let the agent continue.')
+  })
+})
