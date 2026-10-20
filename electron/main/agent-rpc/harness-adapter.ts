@@ -5,6 +5,7 @@ import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
 import { boundedErrorDetail } from './limits'
+import type { StartRecovery } from './manager'
 import type { RpcObject } from './types'
 
 /** Normalized start inputs the manager resolves before the harness turns them into argv. */
@@ -236,6 +237,23 @@ export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
 /** The adapter for the discovered Prime build; an unclassified Prime keeps the TypeScript argv. */
 export function primeRpcAdapter(implementation: PrimeImplementation | undefined): HarnessRpcAdapter {
   return implementation === 'rust' ? PRIME_RUST_RPC_ADAPTER : PRIME_RPC_ADAPTER
+}
+
+/** Rust Prime's exit for TypeScript argv, as the runtime's pre-frame stderr tail reports it. */
+const RUST_PRIME_REJECTED_EXTENSION = /\bUnknown option: --extension\b/
+
+/**
+ * Start recovery for the Prime manager. Rust Prime rejecting a TypeScript
+ * start means the install changed under GooeyPi, typically through
+ * `prime-agent update`, or was misclassified. Prime is re-detected once, and
+ * the start is retried only when it now classifies as Rust.
+ */
+export function primeStartRecovery(redetect: () => Promise<PrimeImplementation | undefined>): StartRecovery {
+  return async (error, adapter) => {
+    if (adapter.id !== 'prime' || adapter.variant === 'rust') return false
+    if (!(error instanceof Error) || !RUST_PRIME_REJECTED_EXTENSION.test(error.message)) return false
+    return await redetect() === 'rust'
+  }
 }
 
 const OMP_UNSUPPORTED_COMMANDS = new Set([

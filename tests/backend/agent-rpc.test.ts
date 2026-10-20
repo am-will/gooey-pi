@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter, UnsupportedRpcCommandError, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery, UnsupportedRpcCommandError, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
 import { validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
 import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
@@ -1150,23 +1150,23 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
 
 const extensionEnvironment = { GOOEYPI_COLLABORATION_EXTENSION_PATH: '/app/extensions/omp-work-collaboration.ts' }
 
-describe('agent RPC start recovery', () => {
-  /** A Prime manager whose adapter follows `implementation`, which starts as TypeScript. */
-  function recoveringManager(executable: string) {
-    const state = { implementation: 'typescript' as PrimeImplementation }
-    const manager = new AgentRpcManager(executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), () => primeRpcAdapter(state.implementation))
-    managers.push(manager)
-    const environments: NodeJS.ProcessEnv[] = []
-    manager.setRuntimeEnvironmentProvider((scope) => {
-      const environment = { ...extensionEnvironment, GOOEYPI_TEST_VARIANT: scope.variant ?? 'typescript' }
-      environments.push(environment)
-      return environment
-    })
-    const ended = vi.fn()
-    manager.setRuntimeEndListener(ended)
-    return { manager, state, environments, ended }
-  }
+/** A Prime manager whose adapter follows `state.implementation`, which starts as TypeScript. */
+function recoveringManager(executable: string) {
+  const state = { implementation: 'typescript' as PrimeImplementation }
+  const manager = new AgentRpcManager(executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), () => primeRpcAdapter(state.implementation))
+  managers.push(manager)
+  const environments: NodeJS.ProcessEnv[] = []
+  manager.setRuntimeEnvironmentProvider((scope) => {
+    const environment = { ...extensionEnvironment, GOOEYPI_TEST_VARIANT: scope.variant ?? 'typescript' }
+    environments.push(environment)
+    return environment
+  })
+  const ended = vi.fn()
+  manager.setRuntimeEndListener(ended)
+  return { manager, state, environments, ended }
+}
 
+describe('agent RPC start recovery', () => {
   it('retries a failed start once with the adapter and environment the recovery left behind', async () => {
     const fake = fakeRustPrime()
     const { manager, state, environments, ended } = recoveringManager(fake.executable)
@@ -1204,6 +1204,55 @@ describe('agent RPC start recovery', () => {
     await expect(manager.startUnattended({ cwd: fake.cwd })).rejects.toThrow('Unknown option: --extension')
     expect(recover).toHaveBeenCalledOnce()
     expect(fake.spawns()).toHaveLength(2)
+  })
+})
+
+describe('Prime start recovery', () => {
+  const rejected = new Error('Prime Agent RPC exited (1): Error: Unknown option: --extension')
+
+  it('re-detects Prime once and retries a TypeScript start that Rust Prime rejected', async () => {
+    const fake = fakeRustPrime()
+    const { manager, state } = recoveringManager(fake.executable)
+    const redetect = vi.fn(async () => { state.implementation = 'rust'; return state.implementation })
+    manager.setStartRecovery(primeStartRecovery(redetect))
+
+    await expect(manager.start({ cwd: fake.cwd })).resolves.toMatchObject({ harness: 'prime', sessionId: 'rust-session' })
+    expect(redetect).toHaveBeenCalledOnce()
+    expect(fake.spawns().map((argv) => argv.includes('--extension'))).toEqual([true, false])
+  })
+
+  it('does not re-detect Prime for a start that failed for another reason', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-other-exit-'))
+    dirs.push(cwd)
+    const executable = join(cwd, 'no-models-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+process.stderr.write('Error: No models available. Check your installation or add models to models.json.\\n')
+process.exit(1)
+`)
+    chmodSync(executable, 0o755)
+    const { manager } = recoveringManager(executable)
+    const redetect = vi.fn(async () => 'rust' as const)
+    manager.setStartRecovery(primeStartRecovery(redetect))
+
+    await expect(manager.start({ cwd })).rejects.toThrow('Prime Agent RPC exited (1): Error: No models available')
+    expect(redetect).not.toHaveBeenCalled()
+  })
+
+  it('re-detects only for a rejected TypeScript Prime start', async () => {
+    const redetect = vi.fn(async () => 'rust' as const)
+    const recover = primeStartRecovery(redetect)
+
+    await expect(recover(rejected, PRIME_RUST_RPC_ADAPTER)).resolves.toBe(false)
+    await expect(recover(rejected, OMP_RPC_ADAPTER)).resolves.toBe(false)
+    await expect(recover(rejected.message, PRIME_RPC_ADAPTER)).resolves.toBe(false)
+    expect(redetect).not.toHaveBeenCalled()
+    await expect(recover(rejected, PRIME_RPC_ADAPTER)).resolves.toBe(true)
+    expect(redetect).toHaveBeenCalledOnce()
+  })
+
+  it('declines when Prime still classifies as TypeScript', async () => {
+    await expect(primeStartRecovery(async () => 'typescript')(rejected, PRIME_RPC_ADAPTER)).resolves.toBe(false)
+    await expect(primeStartRecovery(async () => undefined)(rejected, PRIME_RPC_ADAPTER)).resolves.toBe(false)
   })
 })
 
