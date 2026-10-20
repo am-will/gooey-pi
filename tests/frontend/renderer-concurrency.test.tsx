@@ -4,6 +4,7 @@ import { act, type ReactNode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_EVENT_FLUSH_CHUNK, AGENT_EVENT_QUEUE_LIMIT } from '../../src/app/agent-events'
+import { ExtensionUiModal } from '../../src/components/ExtensionUiModal'
 import { useAgentEvents } from '../../src/hooks/useAgentEvents'
 import { useAppSettings } from '../../src/hooks/useAppSettings'
 import { useBootstrap } from '../../src/hooks/useBootstrap'
@@ -821,7 +822,9 @@ describe('extension UI runtime ownership', () => {
       let state!: ReturnType<typeof useExtensionUi>
       function ExtensionProbe({ activeRuntimeId }: { activeRuntimeId: string }) {
         state = useExtensionUi({ bridge, activeRuntimeId, runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
-        return <Probe />
+        return state.extensionUi
+          ? <ExtensionUiModal request={state.extensionUi.request} deadline={state.extensionUi.deadline} onRespond={vi.fn()} />
+          : <Probe />
       }
 
       await act(async () => { root.render(<ExtensionProbe activeRuntimeId="runtime" />) })
@@ -839,6 +842,7 @@ describe('extension UI runtime ownership', () => {
 
       await act(async () => { root.render(<ExtensionProbe activeRuntimeId="runtime" />) })
       expect(state.extensionUi?.deadline).toBe(Date.now() + 60_000)
+      expect(document.querySelector('[role="timer"] strong')?.textContent).toBe('60s')
       await act(async () => { vi.advanceTimersByTime(59_999) })
       expect(command).not.toHaveBeenCalled()
       await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve() })
