@@ -1103,6 +1103,9 @@ describe('GitHub Release publication', () => {
     expect(() => assertReleaseTag('v0.2.0', '0.2.0', '0.1.9')).toThrow(/does not match/)
     expect(() => assertReleaseTag('v0.2.0', '0.2.0', '0.2.0', '0.1.9')).toThrow(/root package version/)
     expect(() => assertReleaseTag('v01.2.3', '01.2.3', '01.2.3')).toThrow(/not a supported semantic version/)
+    // Releases publish as GitHub's latest stable release, so a prerelease would reach every installed client.
+    expect(() => assertReleaseTag('v1.2.0-beta.1', '1.2.0-beta.1', '1.2.0-beta.1')).toThrow(/Prerelease version 1\.2\.0-beta\.1 is not supported/)
+    expect(() => assertReleaseTag('v1.2.0-', '1.2.0-', '1.2.0-')).toThrow(/not a supported semantic version/)
   })
 
   test('selects the exact cross-platform asset set and writes reproducible checksums', async () => {

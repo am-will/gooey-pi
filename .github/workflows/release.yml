@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing semantic version tag to publish (for example, v0.2.0)
+        description: Existing stable semantic version tag to publish (for example, v0.2.0)
         required: true
         type: string
       include_windows:
