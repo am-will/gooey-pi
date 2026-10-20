@@ -1,3 +1,5 @@
 # Vendor patches are applied byte for byte, so checkout must never convert their line endings.
 vendor/patches/*.patch -text
+# Git already detects the vendored archives as binary. Saying so here also overrides a
+# user-level text attribute that would otherwise convert them on checkout.
 vendor/*.tgz binary
