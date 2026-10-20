@@ -1,5 +1,5 @@
 import { watch, type Dirent, type Stats } from 'node:fs'
-import { readdir, realpath } from 'node:fs/promises'
+import { readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { HarnessId, PrimeImplementation, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
@@ -345,9 +345,12 @@ export class SessionService {
   async requireSessionPath(value: unknown): Promise<string> {
     const requested = requireString(value, 'filePath', { min: 1, max: 4096 })
     const path = await realpath(requested)
-    if (await this.nativeArchive.authorizes(path)) return path
-    const root = await realpath(this.sessionRoot)
-    if (!this.isSessionPathAuthorized(root, path)) throw new TypeError('Session path is outside the Prime session directory')
+    if (!(await this.nativeArchive.authorizes(path))) {
+      const root = await realpath(this.sessionRoot)
+      if (!this.isSessionPathAuthorized(root, path)) throw new TypeError('Session path is outside the Prime session directory')
+    }
+    // A FIFO or device named *.jsonl would block the transcript reader's open().
+    if (!(await stat(path)).isFile()) throw new TypeError('Session path is not a regular file')
     return path
   }
 

@@ -72,7 +72,9 @@ export function createTranscriptReader(dialect: TranscriptDialect = primeTranscr
 }
 
 async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: string, isStreaming: boolean): Promise<TranscriptMessage[]> {
-  if ((await stat(filePath)).size > 256 * 1024 * 1024) throw new Error('Session transcript is too large to display')
+  const info = await stat(filePath)
+  if (!info.isFile()) throw new Error('Session transcript is not a regular file')
+  if (info.size > 256 * 1024 * 1024) throw new Error('Session transcript is too large to display')
   return renderTranscriptLines(strictJsonLines(createReadStream(filePath), SESSION_FILE_RECORD_LIMIT_BYTES), isStreaming, dialect)
 }
 

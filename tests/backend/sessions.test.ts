@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -915,6 +916,41 @@ describe('SessionService transcript read admission', () => {
     expect(results[0]).toBe(results[2])
     expect(results[3]).not.toBe(results[0])
     expect(results[0][0]?.parts).toEqual([{ type: 'text', text: 'original' }])
+  })
+})
+
+describe('SessionService session path authorization', () => {
+  it('also rejects non-regular files in the Rust native archive', async () => {
+    const { root, service } = setup(undefined, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const directory = join(archive, 'x.jsonl')
+    mkdirSync(directory)
+    await expect(service.requireSessionPath(directory)).rejects.toThrow('Session path is not a regular file')
+  })
+
+  it('rejects a directory named like a session file before any transcript read', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, service } = setup(undefined, { transcriptReader })
+    const directory = join(root, 'x.jsonl')
+    mkdirSync(directory)
+
+    await expect(service.requireSessionPath(directory)).rejects.toThrow('Session path is not a regular file')
+    await expect(service.read(directory)).rejects.toThrow('Session path is not a regular file')
+    expect(transcriptReader).not.toHaveBeenCalled()
+  })
+
+  // Only the authorization stat runs against the FIFO: opening it would block
+  // a libuv threadpool thread until a writer appears and wedge the worker.
+  it.skipIf(process.platform === 'win32')('rejects a FIFO named like a session file without opening it', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, service } = setup(undefined, { transcriptReader })
+    const fifo = join(root, 'pipe.jsonl')
+    execFileSync('mkfifo', [fifo])
+
+    await expect(service.requireSessionPath(fifo)).rejects.toThrow('Session path is not a regular file')
+    await expect(service.read(fifo)).rejects.toThrow('Session path is not a regular file')
+    expect(transcriptReader).not.toHaveBeenCalled()
   })
 })
 

@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -32,6 +32,14 @@ describe('session file record tolerance', () => {
     const transcript = await readTranscript(file, false)
     expect(transcript).toHaveLength(1)
     expect(transcript[0]).toMatchObject({ id: 'user-1', role: 'user' })
+  })
+
+  it('refuses to stream a path that is not a regular file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-'))
+    dirs.push(dir)
+    const directory = join(dir, 'x.jsonl')
+    mkdirSync(directory)
+    await expect(readTranscript(directory, false)).rejects.toThrow('Session transcript is not a regular file')
   })
 })
 
