@@ -325,6 +325,9 @@ export const Composer = memo(function Composer({
         } else {
           setAttachmentError('Message was not sent. Your draft was restored.')
         }
+      } else if (draftKey) {
+        // The user switched away mid-send; the next composer for this draft restores it.
+        saveComposerDraft(draftKey, { text: submittedValue, model, effort, fast })
       }
     } finally {
       submittingRef.current = false
