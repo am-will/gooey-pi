@@ -752,7 +752,7 @@ export const Composer = memo(function Composer({
             {dictation.state === 'recording' ? (
               <button type="button" className="send-button" aria-label="Transcribe and send message" onClick={() => void finishDictation(true)}><ArrowUp size={17} /></button>
             ) : busy ? (
-              <button type="button" className="send-button send-button--stop" aria-label="Stop Prime" onClick={() => void onStop()}>
+              <button type="button" className="send-button send-button--stop" aria-label={`Stop ${shortName}`} onClick={() => void onStop()}>
                 <Square size={10} fill="currentColor" aria-hidden="true" />
               </button>
             ) : (

@@ -1,5 +1,6 @@
 import { supportsFastMode } from 'prime-agent-ai'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '../../src/types/api'
+import { harnessVersion } from './lib/harness-version'
 import { catalogLimitWarnings, limitCatalogRelations, type ModelCatalogProvider } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
@@ -11,9 +12,9 @@ import { requireString } from './validation'
  * answer) instead of in-process npm modules. Everything here is
  * harness-agnostic: caching, single-flight refresh, invalidation,
  * stale-catalog degradation, untrusted-entry validation, provider derivation,
- * and the version probe. Subclasses supply how raw model entries are fetched,
- * how one entry maps to a descriptor, and how the CLI reports its version,
- * and may replace the default provider rows.
+ * and the version probe. Subclasses supply how raw model entries are fetched
+ * and how one entry maps to a descriptor, and may replace the default
+ * provider rows.
  */
 const CATALOG_TTL_MS = 30_000
 export { MAX_CATALOG_PROVIDERS } from './model-catalog'
@@ -122,8 +123,6 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
   protected abstract fetchModelEntries(executable: string): Promise<unknown[]>
   /** Maps one untrusted raw entry to a descriptor, or null when it is malformed. */
   protected abstract toModelDescriptor(value: unknown): PrimeModelDescriptor | null
-  /** Extracts the version from the `--version` stdout, or null when unrecognized. */
-  protected abstract parseVersion(stdout: string): string | null
   /** Environment for the `--version` probe; undefined inherits the runProcess default. */
   protected versionEnvironment(): NodeJS.ProcessEnv | undefined { return undefined }
 
@@ -265,7 +264,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
         env: this.versionEnvironment(),
       })
       version = result.code === 0 && !result.timedOut && !result.outputExceeded
-        ? this.parseVersion(result.stdout.trim())
+        ? harnessVersion(result.stdout)
         : null
     } catch { /* Retry on the next catalog refresh. */ }
     if (version && this.cachedExecutable === executable) this.cachedVersion = { executable, value: version }

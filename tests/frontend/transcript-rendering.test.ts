@@ -64,6 +64,20 @@ describe('transcript rendering', () => {
     expect(html).toContain('role="status"><span>Working</span>')
   })
 
+  it.each([
+    ['a Prime ipython cell', 'ipython', { code: 'import os\nprint(os.getcwd())' }, 'import os print(os.getcwd())'],
+    ['an OMP eval cell', 'eval', { language: 'py', code: 'x = 1\nprint(x)' }, 'x = 1 print(x)'],
+    ['a bash command', 'bash', { command: 'npm test -- --run' }, 'npm test -- --run'],
+  ])('presents %s as a terminal tool previewing its source', (_description, name, args, preview) => {
+    const html = render([{
+      id: 'active', role: 'assistant', timestamp: 1_000, streaming: true,
+      parts: [{ type: 'toolCall', id: 'tool-1', name, args }],
+    }])
+
+    expect(html).toContain('activity-line--terminal')
+    expect(/<code class="activity-tool__preview">([\s\S]*?)<\/code>/.exec(html)?.[1].replace(/<[^>]+>/g, '')).toBe(preview)
+  })
+
   it.each([[true, 'Working'], [false, 'Thinking']] as const)(
     'uses visible activity when showTools=%s for a completed generic tool',
     (showTools, status) => {

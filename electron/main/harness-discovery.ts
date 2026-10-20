@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { primeImplementationFromVersion } from '../../src/lib/prime-compat'
 import { HARNESS_IDS, type AppSettings, type HarnessId, type HarnessStatus, type PrimeImplementation } from '../../src/types/api'
 import { HARNESSES, type HarnessDescriptor } from './harness'
-import { hasControlCharacter, lastNonEmptyLine, sanitizedDetail } from './lib/process-detail'
+import { harnessVersion } from './lib/harness-version'
+import { lastNonEmptyLine, sanitizedDetail } from './lib/process-detail'
 import { inspectPrimeNpmBridge, PRIME_NPM_BRIDGE_UNMIGRATED_DETAIL } from './prime-npm-bridge'
 import { findHarnessExecutable, processFailureReason, runProcess, type ExecutableCandidateFailure } from './process-utils'
 import type { JsonStateStore } from './store'
@@ -85,9 +86,7 @@ export async function probeHarnessExecutable(executable: string): Promise<Harnes
         },
       }
     }
-    const token = (result.stdout.trim() || result.stderr.trim()).split(/\s+/).at(-1) ?? ''
-    const version = token && token.length <= 128 && !hasControlCharacter(token) ? token : null
-    return { runnable: true, version }
+    return { runnable: true, version: harnessVersion(result.stdout.trim() || result.stderr) }
   } catch (error) {
     return { runnable: false, version: null, failure: spawnFailure(error) }
   }
