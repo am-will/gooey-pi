@@ -175,7 +175,15 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
   },
   normalizeEvent: (event) => {
     if (event.type === 'auto_compaction_start') return { ...event, type: 'compaction_start' }
-    if (event.type === 'auto_compaction_end') return { ...event, type: 'compaction_end' }
+    if (event.type === 'auto_compaction_end') {
+      // OMP flags a benign no-op with skipped, which Prime reports as a
+      // warning, and ends a shake pass that rewrote history in place without
+      // a result, which would otherwise read as a failure.
+      const end = { ...event, type: 'compaction_end' }
+      if (event.skipped === true) return { ...end, errorSeverity: 'warning' }
+      const completedInPlace = !isRecord(event.result) && event.aborted !== true && event.errorMessage === undefined
+      return completedInPlace ? { ...end, completed: true } : end
+    }
     // A non-terminal agent_end is a turn boundary inside a continuing run; it
     // must not finalize streaming rows in the renderer.
     if (event.type === 'agent_end' && event.isTerminal === false) return null

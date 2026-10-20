@@ -483,6 +483,23 @@ describe('OMP RPC event normalization', () => {
     expect(manager.list()[0]).toMatchObject({ isStreaming: false, isCompacting: false })
   })
 
+  it('restates OMP compaction end outcomes in Prime vocabulary', () => {
+    const end = (fields: Record<string, unknown>) => OMP_RPC_ADAPTER.normalizeEvent({ type: 'auto_compaction_end', action: 'shake', aborted: false, willRetry: false, ...fields })
+
+    // A benign no-op is a warning, not a failure.
+    expect(end({ action: 'context-full', skipped: true })).toEqual({ type: 'compaction_end', action: 'context-full', aborted: false, willRetry: false, skipped: true, errorSeverity: 'warning' })
+    expect(end({ skipped: true, errorMessage: 'Auto-shake found nothing eligible to drop' })).toMatchObject({ errorSeverity: 'warning' })
+    // A shake pass that reclaimed context rewrites history in place and carries no result.
+    expect(end({ skipped: false })).toEqual({ type: 'compaction_end', action: 'shake', aborted: false, willRetry: false, skipped: false, completed: true })
+    expect(end({ willRetry: true })).toMatchObject({ completed: true, willRetry: true })
+    // Results, aborts, and errors keep their own meaning.
+    const result = { summary: 'Earlier work.', tokensBefore: 150_000, firstKeptEntryId: 'kept-1' }
+    expect(end({ action: 'context-full', result })).toEqual({ type: 'compaction_end', action: 'context-full', aborted: false, willRetry: false, result })
+    expect(end({ aborted: true })).not.toHaveProperty('completed')
+    expect(end({ skipped: false, errorMessage: 'shake failed' })).not.toHaveProperty('completed')
+    expect(end({ errorMessage: 'shake failed' })).not.toHaveProperty('errorSeverity')
+  })
+
   it('swallows non-terminal agent_end turn boundaries and forwards the terminal one', async () => {
     const fake = fakeOmpAgent({ promptScript: `
     streaming = true
