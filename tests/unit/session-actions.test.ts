@@ -98,6 +98,13 @@ describe('delivered queued prompts', () => {
     expect(consumeDeliveredPrompt(emptySessionActionSnapshot(), 'first prompt')).toBeNull()
   })
 
+  it('matches an image-only prompt only to an empty preview', () => {
+    expect(consumeDeliveredPrompt({ queuedCount: 1, steering: ['queued steer'], followUps: [] }, '')).toBeNull()
+    expect(consumeDeliveredPrompt({ queuedCount: 1, steering: [''], followUps: [] }, 'harness notification')).toBeNull()
+    expect(consumeDeliveredPrompt({ queuedCount: 2, steering: ['queued steer', ''], followUps: [] }, ''))
+      .toMatchObject({ queuedCount: 1, steering: ['queued steer'] })
+  })
+
   it('never drops the queued count below zero', () => {
     expect(consumeDeliveredPrompt({ queuedCount: 0, steering: ['steer'], followUps: [] }, 'steer')?.queuedCount).toBe(0)
   })

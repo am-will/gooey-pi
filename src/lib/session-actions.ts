@@ -59,7 +59,9 @@ export function sameSessionActions(left: SessionActionSnapshot | undefined, righ
 }
 
 function withoutFirstMatch(previews: string[], prompt: string): string[] | null {
-  const index = previews.findIndex((preview) => previewMatchesPrompt(preview, prompt))
+  // An empty text is a prefix of everything, so an image-only prompt and its
+  // empty preview match only each other.
+  const index = previews.findIndex((preview) => preview && prompt ? previewMatchesPrompt(preview, prompt) : preview === prompt)
   return index < 0 ? null : previews.filter((_, candidate) => candidate !== index)
 }
 
