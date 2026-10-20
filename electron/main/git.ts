@@ -1,3 +1,4 @@
+import { lstat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { GitDiff, GitFileChange, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
@@ -362,6 +363,16 @@ async function rejectFilteredPaths(cwd: string, paths: readonly string[], overri
   throw new Error(`Git operation blocked because clean/smudge filters cannot run safely for: ${suffix}. Use a trusted Git client with the required filter (for example Git LFS).`)
 }
 
+/** A real directory with its own `.git` (directory or gitfile) is a separate repository. */
+async function isNestedRepository(repositoryRoot: string, path: string): Promise<boolean> {
+  try {
+    const directory = join(repositoryRoot, path)
+    if (!(await lstat(directory)).isDirectory()) return false
+    await lstat(join(directory, '.git'))
+    return true
+  } catch { return false }
+}
+
 interface RepositoryContext {
   /** Canonical, authorized repository toplevel; every follow-up command runs here. */
   cwd: string
@@ -607,8 +618,20 @@ export class GitService {
     return { path, staged, text: capped.text, truncated: capped.truncated, error }
   }
 
-  async stage(cwd: unknown, paths: unknown): Promise<boolean> {
-    return this.mutate(cwd, paths, ['add'])
+  async stage(cwdValue: unknown, pathsValue: unknown): Promise<boolean> {
+    const requested = this.validPaths(pathsValue)
+    const { cwd, overrides } = await this.withRepositoryGuards(cwdValue, requested)
+    // `git add` records a nested repository as a gitlink (mode 160000) instead of its
+    // files, so Stage all leaves those entries untracked rather than embedding them.
+    const nested = await Promise.all(requested.map((path) => isNestedRepository(cwd, path)))
+    const paths = requested.filter((_, index) => !nested[index])
+    if (!paths.length) {
+      const subject = requested.length === 1 ? `${requested[0]} is a nested Git repository` : 'the selected paths are nested Git repositories'
+      throw new Error(`Git stage refused because ${subject}. Commit inside the nested repository, or add it as a submodule with a Git client.`)
+    }
+    const result = await runGit(cwd, ['add', '--', ...paths], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
+    requireProcessSuccess('Git add', result)
+    return true
   }
 
   async unstage(cwdValue: unknown, pathsValue: unknown): Promise<boolean> {
@@ -685,13 +708,5 @@ export class GitService {
   private validPaths(value: unknown): string[] {
     if (!Array.isArray(value) || value.length < 1 || value.length > 500) throw new TypeError('paths must be a non-empty array of at most 500 paths')
     return value.map((path, index) => requireGitPath(path, `paths[${index}]`))
-  }
-
-  private async mutate(cwdValue: unknown, pathsValue: unknown, command: string[]): Promise<boolean> {
-    const paths = this.validPaths(pathsValue)
-    const { cwd, overrides } = await this.withRepositoryGuards(cwdValue, paths)
-    const result = await runGit(cwd, [...command, '--', ...paths], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
-    requireProcessSuccess(`Git ${command[0]}`, result)
-    return true
   }
 }
