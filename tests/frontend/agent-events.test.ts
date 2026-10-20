@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_EVENT_QUEUE_LIMIT, admitAgentEvent, contextUsageFromEvent, sessionUsageFromEvent, type PendingAgentEvent } from '../../src/app/agent-events'
-import { replayPrimeEvents } from '../../src/lib/events'
+import { applyPrimeEvent, replayPrimeEvents } from '../../src/lib/events'
 import { contextDialLabel, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
 
 describe('context usage events', () => {
@@ -140,5 +140,27 @@ describe('provider fallback events', () => {
       streaming: true,
       parts: [{ type: 'text', text: 'beforeafter', partId: expect.any(String) }],
     })
+  })
+})
+
+describe('turn errors', () => {
+  const failedRun = [{ type: 'agent_start' }, { type: 'agent_end' }, { type: 'error', error: '529 overloaded_error: Overloaded', synthetic: true }]
+  const texts = (messages: ReturnType<typeof replayPrimeEvents>) => messages.map((message) => [message.role, message.parts.flatMap((part) => part.type === 'text' ? [part.text] : [])])
+
+  it('replaces the empty-turn fallback with the error that ended the run', () => {
+    const batched = replayPrimeEvents([], failedRun)
+    const sequential = failedRun.reduce(applyPrimeEvent, [] as ReturnType<typeof replayPrimeEvents>)
+
+    for (const messages of [batched, sequential]) {
+      expect(texts(messages)).toEqual([['assistant', []], ['system', ['529 overloaded_error: Overloaded']]])
+      expect(messages[0]?.streaming).toBe(false)
+    }
+  })
+
+  it('keeps the fallback when an extension or the transport fails after the turn', () => {
+    for (const type of ['extension_error', 'transport_error']) {
+      expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, { type: 'agent_end' }, { type, error: 'later failure' }])))
+        .toEqual([['assistant', ['Completed without a text response.']], ['system', ['later failure']]])
+    }
   })
 })

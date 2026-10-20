@@ -344,6 +344,9 @@ export function replayPrimeEvents(
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {
       const text = string(raw.error) ?? string(raw.message) ?? 'Prime encountered an error.'
       finalizeStreaming(Date.now(), false)
+      // An error right after agent_end says why the run failed, so the turn
+      // must not keep the fallback that reads as a completed empty turn.
+      if (type === 'error' && next.at(-1)?.role === 'assistant') dropTailFallback(next.length - 1)
       if (next.at(-1)?.role === 'system') continue
       copyTranscript()
       next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text })] })
