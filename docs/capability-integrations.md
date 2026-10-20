@@ -58,6 +58,13 @@ hide MCP rows. GooeyPi surfaces up to 2,500 definitions from each settings
 file; if a file exceeds that supported bound, the catalog reports an explicit
 scope-and-path warning and the remaining entries must be managed in Prime.
 
+Rust Prime Agent (the 0.9.9 betas and 0.10+) loads skills, prompts, and
+themes but no TypeScript extensions. On that build, user and project
+extension rows and GooeyPi's own Browser and Ask user entries stay listed
+with `availability.available === false` and say so; Python-backed skills,
+including scheduled tasks, keep working. `docs/harness-discovery.md` describes
+how GooeyPi tells the two builds apart.
+
 ### OMP
 
 OMP has native MCP support. GooeyPi writes only local stdio entries to
