@@ -25,15 +25,15 @@ export interface PrimeRuntimeEnvironmentDependencies {
  * computer-use driver. The Prime adapter turns the *_SKILL_PATH and
  * *_EXTENSION_PATH entries into --skill and --extension argv.
  *
- * Rust Prime (the 'rust' adapter variant) cannot load the browser, ask-user
+ * Rust Prime (the 'rust' implementation) cannot load the browser, ask-user
  * or collaboration extensions, so it gets no claim for them at all: no broker
  * token reaches its kernel, which inherits the whole process environment, and
  * no browser skill points the model at tools that do not exist. Schedules and
  * computer use work there and stay.
  */
 export function primeRuntimeEnvironment(scope: RuntimeEnvironmentScope, dependencies: PrimeRuntimeEnvironmentDependencies): NodeJS.ProcessEnv {
-  const { variant, ...capabilityScope } = scope
-  const offered = (capability: PrimeRustUnavailableCapability) => primeCapabilityAvailable(variant, capability)
+  const { implementation, ...capabilityScope } = scope
+  const offered = (capability: PrimeRustUnavailableCapability) => primeCapabilityAvailable(implementation, capability)
   const { settings } = dependencies
   const cuaDriverPath = settings.computerUseEnabled ? dependencies.cuaDriver.executable() : null
   return {

@@ -74,7 +74,7 @@ describe('Prime runtime environment', () => {
     const deps = dependencies(allEnabled)
     const scope = { cwd: '/work', sessionPath: '/sessions/a.jsonl', interactive: true }
 
-    const environment = primeRuntimeEnvironment({ ...scope, variant: 'rust' }, deps)
+    const environment = primeRuntimeEnvironment({ ...scope, implementation: 'rust' }, deps)
 
     expect(environment).toEqual({
       ...SCHEDULE_ENVIRONMENT,

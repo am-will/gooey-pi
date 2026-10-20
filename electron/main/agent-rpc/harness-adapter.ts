@@ -48,8 +48,8 @@ export interface HarnessRpcAdapter {
    * spawn the child with the authorized cwd as its working directory.
    */
   readonly spawnsInCwd?: boolean
-  /** Set on an alternative adapter for the same harness; 'rust' marks Rust Prime Agent. */
-  readonly variant?: 'rust'
+  /** The Prime build an alternative Prime adapter speaks; absent for TypeScript Prime and the other harnesses. */
+  readonly implementation?: PrimeImplementation
   /**
    * False when the harness never emits session_action_update: the runtime
    * then forwards each queue change it reads from get_state as a synthetic
@@ -224,7 +224,7 @@ function normalizeRustPrimeEvent(event: RpcObject, state: Readonly<RuntimeInfo>)
 export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'prime',
   agentName: HARNESSES.prime.agentName,
-  variant: 'rust',
+  implementation: 'rust',
   chunkedFrames: false,
   sessionActionEvents: false,
   buildStartArgs: (input) => primeStartArgs(input, false),
@@ -255,7 +255,7 @@ const RUST_PRIME_REJECTED_EXTENSION = /\bUnknown option: --extension\b/
  */
 export function primeStartRecovery(redetect: () => Promise<PrimeImplementation | undefined>): StartRecovery {
   return async (error, adapter) => {
-    if (adapter.id !== 'prime' || adapter.variant === 'rust') return false
+    if (adapter.id !== 'prime' || adapter.implementation === 'rust') return false
     if (!(error instanceof Error) || !RUST_PRIME_REJECTED_EXTENSION.test(error.message)) return false
     return await redetect() === 'rust'
   }

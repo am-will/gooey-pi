@@ -1,4 +1,4 @@
-import type { PrimeEventEnvelope, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
+import type { PrimeEventEnvelope, PrimeImplementation, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
 import { resolveExecutable, type ExecutableSource } from '../process-utils'
@@ -25,8 +25,8 @@ export interface RuntimeEnvironmentScope {
   sessionPath?: string
   /** False for scheduler children, which must never expose UI-blocking tools. */
   interactive: boolean
-  /** Variant of the adapter chosen for this start, e.g. 'rust' for Rust Prime. */
-  variant?: HarnessRpcAdapter['variant']
+  /** The Prime build of the adapter chosen for this start; absent for TypeScript Prime and the other harnesses. */
+  implementation?: PrimeImplementation
 }
 
 export class AgentRpcManager {
@@ -48,7 +48,7 @@ export class AgentRpcManager {
     retireIfIdle: () => Promise<boolean>,
   ) => Promise<WorkspaceUseLease> = async () => ({ release: () => undefined })
   private closed = false
-  /** Harness identity (id, agent name), which every adapter variant of the harness shares. */
+  /** Harness identity (id, agent name), which every adapter for the harness shares. */
   private readonly adapter: HarnessRpcAdapter
   /** Resolved once per start; each runtime keeps the adapter it was spawned with. */
   private readonly adapterForStart: () => HarnessRpcAdapter
@@ -149,7 +149,7 @@ export class AgentRpcManager {
     if (options.fast !== undefined && typeof options.fast !== 'boolean') throw new TypeError('fast must be a boolean')
     this.requireOpen()
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
-    const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, variant: adapter.variant })
+    const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, implementation: adapter.implementation })
     let runtime: RpcRuntime | undefined
     let workspaceUse!: WorkspaceUseLease
     workspaceUse = await this.beginWorkspaceUse(

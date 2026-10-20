@@ -1163,7 +1163,7 @@ function recoveringManager(executable: string) {
   managers.push(manager)
   const environments: NodeJS.ProcessEnv[] = []
   manager.setRuntimeEnvironmentProvider((scope) => {
-    const environment = { ...extensionEnvironment, GOOEYPI_TEST_VARIANT: scope.variant ?? 'typescript' }
+    const environment = { ...extensionEnvironment, GOOEYPI_TEST_IMPLEMENTATION: scope.implementation ?? 'typescript' }
     environments.push(environment)
     return environment
   })
@@ -1184,7 +1184,7 @@ describe('agent RPC start recovery', () => {
     expect(recover).toHaveBeenCalledOnce()
     expect(recover.mock.calls[0]).toEqual([expect.objectContaining({ message: expect.stringContaining('Unknown option: --extension') }), PRIME_RPC_ADAPTER])
     expect(fake.spawns().map((argv) => argv.includes('--extension'))).toEqual([true, false])
-    expect(environments.map((environment) => environment.GOOEYPI_TEST_VARIANT)).toEqual(['typescript', 'rust'])
+    expect(environments.map((environment) => environment.GOOEYPI_TEST_IMPLEMENTATION)).toEqual(['typescript', 'rust'])
     // The failed start released its environment before the retry minted a new one.
     expect(ended).toHaveBeenCalledOnce()
     expect(ended.mock.calls[0][0]).toBe(environments[0])
@@ -1269,14 +1269,14 @@ describe('Rust Prime runtimes', () => {
     let implementation: 'typescript' | 'rust' = 'typescript'
     const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), () => primeRpcAdapter(implementation))
     managers.push(manager)
-    const variants: Array<string | undefined> = []
-    manager.setRuntimeEnvironmentProvider((scope) => { variants.push(scope.variant); return extensionEnvironment })
+    const implementations: Array<string | undefined> = []
+    manager.setRuntimeEnvironmentProvider((scope) => { implementations.push(scope.implementation); return extensionEnvironment })
 
     await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Prime Agent RPC exited (1): Error: Unknown option: --extension')
     implementation = 'rust'
     await expect(manager.start({ cwd: fake.cwd })).resolves.toMatchObject({ harness: 'prime', sessionId: 'rust-session' })
 
-    expect(variants).toEqual([undefined, 'rust'])
+    expect(implementations).toEqual([undefined, 'rust'])
   })
 
   it('starts on a 0.10-only model, validated against the catalog Rust Prime itself reports', async () => {
