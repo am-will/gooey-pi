@@ -1,9 +1,9 @@
 name: Dependency audit
 
-# Dependabot cannot parse the pub-*.r2.dev tarball specifiers used for
-# prime-agent, so a scheduled npm audit is the advisory coverage for the
-# production dependency tree (see docs/security.md, "Dependency pinning and
-# supply chain").
+# Dependabot cannot resolve the file:vendor/*.tgz specifiers used for
+# prime-agent and its @earendil-works/pi-* overrides, so a scheduled npm audit
+# is the advisory coverage for the production dependency tree (see
+# docs/security.md, "Dependency pinning and supply chain").
 on:
   schedule:
     - cron: '17 6 * * 1'

@@ -1988,8 +1988,10 @@ describe('vendored supply-chain pins', () => {
     // the vendored Prime Agent tarballs. A regenerated lockfile silently
     // re-anchors them to whatever bytes are present; this pin file makes that
     // a deliberate, reviewed change. To upgrade Prime Agent on purpose:
-    // verify the new tarballs, replace them in vendor/, update the lockfile,
-    // then mirror the new resolved/integrity values here in the same commit.
+    // verify the new base tarballs, replace them in vendor/, regenerate the
+    // vendor/patches diffs and *-gooeypi.N.tgz archives, update the lockfile,
+    // mirror the new resolved/integrity values here, and run
+    // `npm run vendor:verify-patches` before committing them together.
     expect(nonRegistry.length).toBeGreaterThan(0)
     for (const [name, entry] of nonRegistry) {
       const pin = pins[name]
