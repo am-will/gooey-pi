@@ -1788,6 +1788,10 @@ describe('vendor patch verification', () => {
     expectVerifiedUnderUserGit({ config: '[core]\n\tautocrlf = true\n' })
   }, 60_000)
 
+  test('reproduces the reviewed archives when the default user gitattributes file forces CRLF', () => {
+    expectVerifiedUnderUserGit({ attributes: '* text=auto eol=crlf\n' })
+  }, 60_000)
+
   test('checks the vendor patches out without line ending conversion', () => {
     const patches = vendorPatchNames().map((name) => `vendor/patches/${name}`)
     expect(patches.length).toBeGreaterThan(0)
