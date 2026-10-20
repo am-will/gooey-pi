@@ -5,12 +5,14 @@ import { primeImplementationFromVersion } from '../../src/lib/prime-compat'
 import { HARNESS_IDS, type AppSettings, type HarnessId, type HarnessStatus, type PrimeImplementation } from '../../src/types/api'
 import { HARNESSES, type HarnessDescriptor } from './harness'
 import { hasControlCharacter, lastNonEmptyLine, sanitizedDetail } from './lib/process-detail'
+import { inspectPrimeNpmBridge, PRIME_NPM_BRIDGE_UNMIGRATED_DETAIL } from './prime-npm-bridge'
 import { findHarnessExecutable, processFailureReason, runProcess, type ExecutableCandidateFailure } from './process-utils'
 import type { JsonStateStore } from './store'
 
 type RuntimePaths = Record<HarnessId, string>
 type HarnessProblem = NonNullable<HarnessStatus['problem']>
-export type HarnessProbeFailureKind = 'spawn' | 'exit' | 'timeout' | 'overflow'
+/** 'skipped' marks a candidate GooeyPi refused to execute; its detail is the whole reason. */
+export type HarnessProbeFailureKind = 'spawn' | 'exit' | 'timeout' | 'overflow' | 'skipped'
 export interface HarnessProbeFailure {
   kind: HarnessProbeFailureKind
   code?: number
@@ -33,12 +35,18 @@ export interface HarnessDiscoveryOptions {
 }
 
 const PROBE_LIMITS = { timeoutMs: 10_000, maxBytes: 16 * 1024 }
+const UNMIGRATED_PRIME_NPM_BRIDGE: HarnessProbe = {
+  runnable: false,
+  version: null,
+  failure: { kind: 'skipped', detail: PRIME_NPM_BRIDGE_UNMIGRATED_DETAIL },
+}
 
 function processDetail(stdout: string, stderr: string): string {
   return sanitizedDetail(lastNonEmptyLine(stderr) ?? lastNonEmptyLine(stdout) ?? '')
 }
 
 function probeFailureDetail(failure: HarnessProbeFailure): string {
+  if (failure.kind === 'skipped') return failure.detail
   const suffix = failure.detail ? `: ${failure.detail}` : ''
   if (failure.kind === 'exit') return `exited with code ${failure.code ?? 'unknown'}${suffix}`
   if (failure.kind === 'timeout') return `timed out${suffix}`
@@ -164,11 +172,17 @@ export class HarnessDiscoveryService {
       const probes = new Map<string, HarnessProbe>()
       let lastFailure: HarnessProblem | undefined
       let overrideFailure: HarnessProblem | undefined
-      const probe = async (candidate: string) => {
-        const result = await this.probeExecutable(candidate)
+      const probeCandidate = async (candidate: string): Promise<HarnessProbe> => {
+        // Probing an un-migrated npm bridge would run the Rust installer. It is
+        // rejected unexecuted, and a rejected candidate is never published,
+        // so no later CLI call can reach it either.
+        const result = harness === 'prime' && await inspectPrimeNpmBridge(candidate) === 'unmigrated'
+          ? UNMIGRATED_PRIME_NPM_BRIDGE
+          : await this.probeExecutable(candidate)
         probes.set(candidate, result)
-        return result.runnable
+        return result
       }
+      const probe = async (candidate: string) => (await probeCandidate(candidate)).runnable
       const onFailure = (failure: ExecutableCandidateFailure): void => {
         const probeResult = probes.get(failure.path)
         const reported: HarnessProblem = probeResult?.failure
@@ -188,7 +202,7 @@ export class HarnessDiscoveryService {
           : undefined)
         return problem ? { path: null, version: null, problem } : { path: null, version: null }
       }
-      const result = probes.get(path) ?? await this.probeExecutable(path)
+      const result = probes.get(path) ?? await probeCandidate(path)
       if (!result.runnable) return { path: null, version: null, problem: { path, reason: result.failure ? probeFailureDetail(result.failure) : 'could not run' } }
       if (harness !== 'prime') return { path, version: result.version }
       // Published versions classify without another process; only an
