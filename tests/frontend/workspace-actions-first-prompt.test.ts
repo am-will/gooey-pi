@@ -176,6 +176,7 @@ async function startNewChat(state: ReturnType<typeof fixture>) {
   state.start.resolve(startedRuntime)
   await sending
   expect(state.runtime()?.runtimeId).toBe('started-runtime')
+  await vi.waitFor(() => expect(state.sessions().find((item) => item.id === 'started')?.title).toBe('Build the sidebar'))
   state.finishTurn()
 }
 
@@ -297,6 +298,8 @@ describe('first prompt delivery across a workspace switch', () => {
     await expect(sending).rejects.toThrow('Another session was opened before it was sent.')
     expect(state.agentStart).toHaveBeenCalledOnce()
     expect(state.command).not.toHaveBeenCalledWith('started-runtime', expect.objectContaining({ message: 'Add tests too' }))
+    // The toast names the started session, not a title derived from the follow-up.
+    expect(state.setToast).toHaveBeenCalledWith('Your message for “Build the sidebar” was not delivered. Request failed: Another session was opened before it was sent.')
   })
 
   it('leaves a queued message in a started new chat when the user switches away before it flushes', async () => {

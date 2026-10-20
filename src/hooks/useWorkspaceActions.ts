@@ -508,7 +508,8 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         if (!isCurrent()) {
           // The admitting transcript is gone; a row would land in whichever
           // session is visible now, so name the target in a toast instead.
-          setToast(`Your message for “${admitted.session?.title ?? sessionTitleFromPrompt(prompt)}” was not delivered. ${failure}`)
+          const startedSession = admittedRuntimeId ? sessions.find((item) => item.filePath === workspace.runtimeSessionsRef.current.get(admittedRuntimeId)) : undefined
+          setToast(`Your message for “${admitted.session?.title ?? startedSession?.title ?? sessionTitleFromPrompt(prompt)}” was not delivered. ${failure}`)
           throw error
         }
         if (startedPrompt) workspace.setRuntime((current) => current ? { ...current, isStreaming: false } : current)
