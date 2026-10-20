@@ -118,8 +118,14 @@ export class PrimeProviderService {
   private eventSink: (event: ProviderAuthEvent) => void = () => undefined
   private readonly openExternal: (url: string) => Promise<void>
 
-  constructor(options: { authPath?: string; modelsPath?: string; openExternal?: (url: string) => Promise<void> } = {}) {
-    this.authStorage = AuthStorage.create(options.authPath, options.authPath ? { usePrimeCliConfig: false } : undefined)
+  /**
+   * primeCliCredentials (default true) counts the separate Prime CLI login in
+   * ~/.prime/config.json as Prime Inference auth, as TypeScript Prime does at
+   * runtime. Rust Prime only reads auth.json, so for it the CLI key would show
+   * models that fail to start, and a logout would rewrite another tool's file.
+   */
+  constructor(options: { authPath?: string; modelsPath?: string; primeCliCredentials?: boolean; openExternal?: (url: string) => Promise<void> } = {}) {
+    this.authStorage = AuthStorage.create(options.authPath, { usePrimeCliConfig: options.authPath === undefined && options.primeCliCredentials !== false })
     this.registry = ModelRegistry.create(modelRegistryAuthStorage(this.authStorage), options.modelsPath)
     this.openExternal = options.openExternal ?? (async () => undefined)
   }
