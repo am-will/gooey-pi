@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { PrimeContextUsage, PrimeEventEnvelope, PrimeModelDescriptor, PrimeServiceTier, RuntimeInfo, SessionActionSnapshot } from '../../../src/types/api'
-import { emptySessionActionSnapshot, parseSessionActionSnapshot, sameSessionActions } from '../../../src/lib/session-actions'
+import { emptySessionActionSnapshot, parseSessionActionSnapshot, sameSessionActions, withoutActiveAction } from '../../../src/lib/session-actions'
 import { killProcessTree, prepareExecutableSpawn, safeChildEnvironment, waitForProcessExit } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
@@ -37,6 +37,9 @@ const DEFAULT_COMPACTION_WATCHDOG_TIMINGS: CompactionWatchdogTimings = {
   idleWindowMs: 30_000,
 }
 
+/** After agent_end, how often get_state is asked again while it still reports the finished run, and for how long. */
+const RUN_END_REFRESH = { intervalMs: 150, windowMs: 2_000 } as const
+
 interface ContextUsageRefreshRequest {
   generation: number
   sessionId?: string
@@ -71,6 +74,11 @@ export class RpcRuntime {
   // outside info so get_state refreshes (which report isStreaming false
   // during the backoff) cannot clear it.
   private retryPending = false
+  // Set by agent_end on a harness without session action events. Rust Prime
+  // emits agent_end before it clears its streaming flag, so until
+  // agent_start a get_state that still reports the run is stale.
+  private runEndedAt: number | null = null
+  private runEndRefreshTimer: NodeJS.Timeout | null = null
   // Compaction watchdog: some Prime Agent event paths buffer compaction_start
   // until the surrounding RPC command settles, so the desktop would learn
   // about a compaction only after it finished. get_state responses are never
@@ -122,6 +130,7 @@ export class RpcRuntime {
     this.child.once('error', (error) => this.fail(error))
     this.child.once('close', (code, signal) => {
       this.disposeCompactionWatchdog()
+      if (this.runEndRefreshTimer) clearTimeout(this.runEndRefreshTimer)
       this.disposeContextUsage()
       const detail = code !== 0 && code !== null && !this.stopped && !this.receivedFrame ? redactedStderrTail(this.transport.stderrTail()) : ''
       this.fail(new Error(`${this.adapter.agentName} RPC exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`))
@@ -448,6 +457,7 @@ export class RpcRuntime {
       if (actions) this.info.sessionActions = actions
     }
     if (value.type === 'agent_start') {
+      this.runEndedAt = null
       this.continuationPending = false
       this.retryPending = false
       this.info.isStreaming = true
@@ -460,9 +470,6 @@ export class RpcRuntime {
         this.emit({ type: 'compaction_end', synthetic: true, aborted: false, willRetry: true })
       }
     } else if (value.type === 'agent_end') {
-      // Without session action events, only get_state reports that the
-      // finished run no longer holds an active turn.
-      if (this.adapter.sessionActionEvents === false) void this.refreshState().catch(() => undefined)
       // retryPending is cleared only by agent_start or auto_retry_end, never
       // by agent_end: a failed run's agent_end is followed by auto_retry_start
       // when the agent will continue the turn after backoff.
@@ -487,6 +494,7 @@ export class RpcRuntime {
     } else if (value.type === 'auto_retry_start') this.retryPending = true
     else if (value.type === 'auto_retry_end') this.retryPending = false
     this.emit(value)
+    if (value.type === 'agent_end' && this.adapter.sessionActionEvents === false) this.endRunActions()
     if (liveUsageUpdate.changed || liveUsageUpdate.reset) this.publishLiveContextUsage(value.type === 'message_end')
     if (value.type === 'message_end'
       || value.type === 'tool_execution_end'
@@ -615,6 +623,9 @@ export class RpcRuntime {
 
   private updateFromState(raw: unknown): void {
     if (!isRecord(raw)) return
+    const reading = this.adapter.readState(raw)
+    const sessionActions = parseSessionActionSnapshot(raw.sessionActions) ?? reading.sessionActions ?? null
+    const endedRun = this.holdsBackEndedRun(raw.isStreaming === true || sessionActions?.active !== undefined)
     if (typeof raw.sessionId === 'string') {
       if (this.info.sessionId !== undefined && raw.sessionId !== this.info.sessionId) {
         this.liveContextUsage.reset()
@@ -629,10 +640,9 @@ export class RpcRuntime {
     // Canonicalize once at the boundary (cached): every later comparison
     // against catalog and validator paths uses the canonical form.
     if (typeof raw.sessionFile === 'string') this.info.sessionFile = canonicalSessionPath(raw.sessionFile)
-    if (typeof raw.isStreaming === 'boolean') this.info.isStreaming = raw.isStreaming
+    if (typeof raw.isStreaming === 'boolean' && !endedRun) this.info.isStreaming = raw.isStreaming
     if (typeof raw.isCompacting === 'boolean') this.info.isCompacting = raw.isCompacting
     if (typeof raw.thinkingLevel === 'string') this.info.thinkingLevel = raw.thinkingLevel
-    const reading = this.adapter.readState(raw)
     if (reading.serviceTier) {
       this.info.serviceTier = reading.serviceTier
       this.info.fastModeAvailable = true
@@ -643,8 +653,7 @@ export class RpcRuntime {
       // path as the get_session_stats refresh.
       this.applyAuthoritativeContextUsage(reading.contextUsage)
     }
-    const sessionActions = parseSessionActionSnapshot(raw.sessionActions) ?? reading.sessionActions ?? null
-    if (sessionActions) this.applyStateSessionActions(sessionActions)
+    if (sessionActions) this.setSessionActions(endedRun ? withoutActiveAction(sessionActions) : sessionActions)
     if (isRecord(raw.model)) {
       this.info.model = {
         provider: typeof raw.model.provider === 'string' ? raw.model.provider : undefined,
@@ -659,8 +668,33 @@ export class RpcRuntime {
     this.updateFromState(state.data)
   }
 
-  /** A harness without session action events reports its queue only in get_state, so each change found there is forwarded as a synthetic update. */
-  private applyStateSessionActions(actions: SessionActionSnapshot): void {
+  /** Without session action events, agent_end is the harness's only word that a run is over: its turn leaves the snapshot, and get_state reports the queue it left. */
+  private endRunActions(): void {
+    this.runEndedAt = Date.now()
+    const actions = this.info.sessionActions
+    if (actions?.active) this.setSessionActions(withoutActiveAction(actions))
+    void this.refreshState().catch(() => undefined)
+  }
+
+  /**
+   * Whether a get_state reading that reports a run must be held back
+   * because that run already sent agent_end. While the run end is recent,
+   * get_state is asked again shortly, until it agrees or a new run starts.
+   */
+  private holdsBackEndedRun(reportsRun: boolean): boolean {
+    if (!reportsRun || this.runEndedAt === null) return false
+    if (!this.runEndRefreshTimer && Date.now() - this.runEndedAt < RUN_END_REFRESH.windowMs) {
+      this.runEndRefreshTimer = setTimeout(() => {
+        this.runEndRefreshTimer = null
+        void this.refreshState().catch(() => undefined)
+      }, RUN_END_REFRESH.intervalMs)
+      this.runEndRefreshTimer.unref()
+    }
+    return true
+  }
+
+  /** A harness without session action events reports its queue only in get_state and agent_end, so each change found there is forwarded as a synthetic update. */
+  private setSessionActions(actions: SessionActionSnapshot): void {
     const changed = !sameSessionActions(this.info.sessionActions, actions)
     this.info.sessionActions = actions
     if (changed && this.adapter.sessionActionEvents === false) this.emit({ type: 'session_action_update', actions, synthetic: true })

@@ -1147,10 +1147,11 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
 })
 `)
   chmodSync(executable, 0o755)
-  const readJsonLines = <T>(path: string): T[] => {
-    try { return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as T) } catch { return [] }
-  }
   return { cwd, executable, commands: () => readJsonLines<RpcObject>(log), spawns: () => readJsonLines<string[]>(argvLog) }
+}
+
+function readJsonLines<T>(path: string): T[] {
+  try { return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as T) } catch { return [] }
 }
 
 const extensionEnvironment = { GOOEYPI_COLLABORATION_EXTENSION_PATH: '/app/extensions/omp-work-collaboration.ts' }
@@ -1342,17 +1343,21 @@ describe('Rust Prime runtimes', () => {
  * A Prime Agent that, like the Rust build, reports its steering queue only in
  * get_state: it never emits session_action_update, reports an active turn
  * only while its scripted run is going, and delivers a queued steer as a user
- * message_start at the next turn boundary.
+ * message_start at the next turn boundary. Like Rust, it can send agent_end
+ * before it stops reporting the run: the first `staleStateReads` get_state
+ * answers after agent_end still say the run is going.
  */
-function fakeQueueingPrime(turnMs = 300): { cwd: string; executable: string } {
+function fakeQueueingPrime(turnMs = 300, staleStateReads = 0): { cwd: string; executable: string; commands: () => RpcObject[] } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-queueing-rpc-'))
   dirs.push(cwd)
   const executable = join(cwd, 'fake-queueing-prime.cjs')
+  const log = join(cwd, 'commands.jsonl')
   writeFileSync(executable, `#!/usr/bin/env node
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
 let streaming = false
+let staleReads = 0
 const steering = []
-const actions = () => ({ queuedCount: steering.length, steering: [...steering], followUps: [], ...(streaming ? { active: { kind: 'turn', phase: 'running' } } : {}) })
+const actions = (running) => ({ queuedCount: steering.length, steering: [...steering], followUps: [], ...(running ? { active: { kind: 'turn', phase: 'running' } } : {}) })
 const deliver = (text) => {
   const message = { role: 'user', content: [{ type: 'text', text }] }
   send({ type: 'message_start', message })
@@ -1377,13 +1382,19 @@ const run = (prompt) => {
       answer('steer answer')
     }
     streaming = false
+    staleReads = ${staleStateReads}
     send({ type: 'agent_end', messages: [] })
   }, ${turnMs})
 }
 require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
   const command = JSON.parse(line)
+  require('node:fs').appendFileSync(${JSON.stringify(log)}, line + '\\n')
   const ok = (data) => send({ id: command.id, type: 'response', command: command.type, success: true, ...(data ? { data } : {}) })
-  if (command.type === 'get_state') ok({ sessionId: 'queueing', isStreaming: streaming, isCompacting: false, sessionActions: actions() })
+  if (command.type === 'get_state') {
+    const running = streaming || staleReads > 0
+    if (!streaming && staleReads > 0) staleReads -= 1
+    ok({ sessionId: 'queueing', isStreaming: running, isCompacting: false, sessionActions: actions(running) })
+  }
   else if (command.type === 'get_session_stats') ok({ contextUsage: { tokens: 1, contextWindow: 100, percent: 1 } })
   else if (command.type === 'prompt') { ok(); run(command.message) }
   else if (command.type === 'steer') { steering.push(command.message); ok() }
@@ -1392,7 +1403,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
 })
 `)
   chmodSync(executable, 0o755)
-  return { cwd, executable }
+  return { cwd, executable, commands: () => readJsonLines<RpcObject>(log) }
 }
 
 describe('session actions without harness session_action_update events', () => {
@@ -1423,6 +1434,89 @@ describe('session actions without harness session_action_update events', () => {
     ])
     const second = await manager.start({ cwd: fake.cwd })
     expect(manager.list().map((runtime) => runtime.runtimeId)).toEqual([second.runtimeId])
+  })
+
+  const stateReadsAfterPrompt = (fake: { commands: () => RpcObject[] }): number => {
+    const types = fake.commands().map((command) => command.type)
+    return types.slice(types.lastIndexOf('prompt') + 1).filter((type) => type === 'get_state').length
+  }
+  const synthetic = (events: RpcObject[]) => events.filter((event) => event.type === 'session_action_update')
+
+  it('keeps a run ended while get_state still reports it after agent_end', async () => {
+    const fake = fakeQueueingPrime(100, 3)
+    const events: RpcObject[] = []
+    const manager = queueingManager(fake.executable, PRIME_RUST_RPC_ADAPTER, events)
+    const first = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(first.runtimeId, { type: 'prompt', message: 'hello' })
+    // The prompt's own refresh, the refresh at agent_end, then one more read
+    // for each of the three answers that still report the run.
+    await waitUntil(() => stateReadsAfterPrompt(fake) === 5, 1_500)
+    await manager.command(first.runtimeId, { type: 'get_state' })
+
+    expect(manager.list()[0]).toMatchObject({ isStreaming: false, sessionActions: { queuedCount: 0, steering: [], followUps: [] } })
+    expect(manager.list()[0]?.sessionActions?.active).toBeUndefined()
+    expect(stateReadsAfterPrompt(fake)).toBe(6)
+    expect(synthetic(events)).toEqual([
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [], active: running } },
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [] } },
+    ])
+    const second = await manager.start({ cwd: fake.cwd })
+    expect(manager.list().map((runtime) => runtime.runtimeId)).toEqual([second.runtimeId])
+  })
+
+  it('drops the active turn as soon as agent_end arrives', async () => {
+    const fake = fakeQueueingPrime(60_000)
+    const events: RpcObject[] = []
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, ({ event }) => events.push(event), () => undefined, {}, {}, PRIME_RUST_RPC_ADAPTER)
+    try {
+      await runtime.handshake()
+      await runtime.command({ type: 'prompt', message: 'hello' })
+      await waitUntil(() => runtime.snapshot().sessionActions?.active !== undefined)
+      ;(runtime as unknown as { handleFrame(frame: RpcObject): void }).handleFrame({ type: 'agent_end', messages: [] })
+
+      expect(runtime.snapshot().sessionActions).toEqual({ queuedCount: 0, steering: [], followUps: [] })
+      expect(events.slice(-2)).toEqual([
+        { type: 'agent_end', messages: [] },
+        { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [] } },
+      ])
+    } finally {
+      await runtime.stop()
+    }
+  })
+
+  it('believes get_state again once the next run starts', async () => {
+    const fake = fakeQueueingPrime(100, 1_000)
+    const events: RpcObject[] = []
+    const manager = queueingManager(fake.executable, PRIME_RUST_RPC_ADAPTER, events)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'first' })
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'second' })
+
+    await waitUntil(() => manager.list()[0]?.sessionActions?.active !== undefined, 1_000)
+    expect(manager.list()[0]).toMatchObject({ isStreaming: true, sessionActions: { active: running } })
+  })
+
+  it('stops asking get_state soon after agent_end and still never revives the run', async () => {
+    const fake = fakeQueueingPrime(100, 1_000)
+    const events: RpcObject[] = []
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, ({ event }) => events.push(event), () => undefined, {}, { pollIntervalMs: 60_000 }, PRIME_RUST_RPC_ADAPTER)
+    try {
+      await runtime.handshake()
+      await runtime.command({ type: 'prompt', message: 'hello' })
+      await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+      await new Promise((resolveWait) => setTimeout(resolveWait, 2_300))
+      const reads = stateReadsAfterPrompt(fake)
+      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+
+      expect(stateReadsAfterPrompt(fake)).toBe(reads)
+      expect(runtime.snapshot()).toMatchObject({ isStreaming: false, sessionActions: { queuedCount: 0, steering: [], followUps: [] } })
+      expect(runtime.snapshot().sessionActions?.active).toBeUndefined()
+    } finally {
+      await runtime.stop()
+    }
   })
 
   it('settles a delivered steer ahead of the user message that carries it', async () => {
