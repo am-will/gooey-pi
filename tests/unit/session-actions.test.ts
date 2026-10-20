@@ -7,6 +7,7 @@ import {
   parseSessionActionSnapshot,
   previewMatchesPrompt,
   sameSessionActions,
+  withoutActiveAction,
 } from '../../src/lib/session-actions'
 
 describe('session action snapshots', () => {
@@ -105,5 +106,13 @@ describe('delivered queued prompts', () => {
     const command = { kind: 'session_command' as const, phase: 'committing' as const, label: 'compact' }
     expect(consumeDeliveredPrompt({ queuedCount: 1, steering: ['steer'], followUps: [], active: command }, 'steer')?.active).toEqual(command)
     expect(consumeDeliveredPrompt({ queuedCount: 1, steering: ['steer'], followUps: [] }, 'steer')?.active).toEqual(running)
+  })
+})
+
+describe('finished runs', () => {
+  it('drops only the active action and leaves the queue alone', () => {
+    const queued = { queuedCount: 1, steering: [], followUps: ['next'] }
+    expect(withoutActiveAction({ ...queued, active: { kind: 'turn', phase: 'running' } as const })).toEqual(queued)
+    expect(withoutActiveAction(queued)).toEqual(queued)
   })
 })

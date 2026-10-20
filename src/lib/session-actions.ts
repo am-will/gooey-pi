@@ -82,6 +82,12 @@ export function consumeDeliveredPrompt(snapshot: SessionActionSnapshot, prompt: 
   }
 }
 
+/** The snapshot without its active action: the queue a finished run leaves behind. */
+export function withoutActiveAction(snapshot: SessionActionSnapshot): SessionActionSnapshot {
+  const { active: _, ...queue } = snapshot
+  return queue
+}
+
 export function streamingBehaviorForIntent(intent: PromptDeliveryIntent): 'steer' | 'followUp' {
   return intent === 'steer' ? 'steer' : 'followUp'
 }
