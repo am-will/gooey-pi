@@ -367,13 +367,14 @@ jobs:
           node scripts/release/prepare-github-release.mjs --input downloaded-release-artifacts --output release-assets --tag "$RELEASE_TAG" --platforms "$platforms" $flags
       # gh attaches the release to wherever the tag points at publish time, so a
       # tag moved after validate would describe a commit other than the one the
-      # assets and attestations were built from. The peeled ^{} line of an
-      # annotated tag is listed last, so awk END yields the commit either way.
+      # assets and attestations were built from. ls-remote patterns also match
+      # any ref ending in /refs/tags/<tag>, so awk reads only the exact tag ref
+      # and prefers its peeled ^{} commit when the tag is annotated.
       - name: Require the release tag to still point at the validated commit
         env:
           EXPECTED_SHA: ${{ needs.validate.outputs.sha }}
         run: |
-          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" | awk 'END{print $1}')
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" | awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { sha = $1 } $2 == (ref "^{}") { peeled = $1 } END { print (peeled != "" ? peeled : sha) }')
           if [ -z "$tag_sha" ] || [ "$tag_sha" != "$EXPECTED_SHA" ]; then
             echo "Tag $RELEASE_TAG resolves to ${tag_sha:-<missing>}, not the validated commit $EXPECTED_SHA."
             exit 1

@@ -934,6 +934,59 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(workflow).toMatch(/fetch-depth: 0\n[\s\S]*?git merge-base --is-ancestor HEAD refs\/remotes\/origin\/main/)
   })
 
+  test('the publish-time tag check accepts only the exact tag at the validated commit', () => {
+    const parsed = load(readFileSync('.github/workflows/release.yml', 'utf8')) as { jobs: Record<string, { steps: Array<{ name?: string; run?: string }> }> }
+    const script = parsed.jobs['release-packages'].steps.find((step) => step.name === 'Require the release tag to still point at the validated commit')?.run
+    expect(script).toBeDefined()
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-tag-check-'))
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync('git', ['-c', 'user.name=GooeyPi Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', ...args], {
+        cwd,
+        encoding: 'utf8',
+      })
+      if (result.status !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    try {
+      const origin = join(directory, 'origin')
+      const checkout = join(directory, 'checkout')
+      mkdirSync(origin)
+      mkdirSync(checkout)
+      git(origin, 'init', '-q')
+      git(origin, 'commit', '-q', '--allow-empty', '-m', 'validated')
+      const validated = git(origin, 'rev-parse', 'HEAD')
+      git(origin, 'commit', '-q', '--allow-empty', '-m', 'moved')
+      const moved = git(origin, 'rev-parse', 'HEAD')
+      git(checkout, 'init', '-q')
+      git(checkout, 'remote', 'add', 'origin', origin)
+      // GitHub runs `run:` steps with bash -eo pipefail.
+      const check = () =>
+        spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', script as string], {
+          cwd: checkout,
+          encoding: 'utf8',
+          env: { ...process.env, RELEASE_TAG: 'v1.2.3', EXPECTED_SHA: validated },
+        })
+
+      git(origin, 'tag', '-a', 'v1.2.3', '-m', 'release', validated)
+      expect(check().status).toBe(0)
+      git(origin, 'tag', '-f', 'v1.2.3', validated)
+      expect(check().status).toBe(0)
+      // ls-remote also lists refs whose names end in the tag; such a decoy at
+      // the validated commit must not hide that the real tag moved.
+      git(origin, 'update-ref', 'refs/tags/w/refs/tags/v1.2.3', validated)
+      git(origin, 'tag', '-f', '-a', 'v1.2.3', '-m', 'release', moved)
+      const movedResult = check()
+      expect(movedResult.status).toBe(1)
+      expect(movedResult.stdout).toContain(`Tag v1.2.3 resolves to ${moved}, not the validated commit ${validated}.`)
+      git(origin, 'tag', '-d', 'v1.2.3')
+      const missing = check()
+      expect(missing.status).toBe(1)
+      expect(missing.stdout).toContain('Tag v1.2.3 resolves to <missing>')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   test('deletes stale draft assets before publishing a resumed release', () => {
     const workflow = readFileSync('.github/workflows/release.yml', 'utf8')
     expect(workflow).toContain('gh release view "$RELEASE_TAG" --json assets > draft-release.json')
