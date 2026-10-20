@@ -30,6 +30,15 @@ export function parseSessionActionSnapshot(value: unknown): SessionActionSnapsho
   return { queuedCount: Number(raw.queuedCount), steering: steering as string[], followUps: followUps as string[], ...(active ? { active } : {}) }
 }
 
+/**
+ * Whether a queue preview stands for a prompt. Previews are literal for
+ * ordinary prompts and may be compacted for very long ones, so either text
+ * may be a prefix of the other.
+ */
+export function previewMatchesPrompt(preview: string, prompt: string): boolean {
+  return prompt.startsWith(preview) || preview.startsWith(prompt)
+}
+
 export function emptySessionActionSnapshot(): SessionActionSnapshot {
   return { queuedCount: 0, steering: [], followUps: [] }
 }

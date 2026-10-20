@@ -16,6 +16,7 @@ import { reconcileTranscripts } from '@/app/transcript-reconcile'
 import type { WorkspaceSnapshot } from '@/app/workspace'
 import { createPrimeEventBuffer, createSteerAcceptedEvent, createSteerPickupEvent, replayPrimeEvents } from '@/lib/events'
 import type { PrimeEventBuffer } from '@/lib/events'
+import { previewMatchesPrompt } from '@/lib/session-actions'
 import { findRuntimeForWorkspace, workspaceCwd } from '@/lib/workspace'
 import type { HarnessId, MessagePart, PrimeWorkApi, ProjectRecord, PromptDeliveryIntent, QueuedPrompt, RuntimeInfo, SessionActionSnapshot, SessionRecord, TranscriptMessage } from '@/types/api'
 
@@ -470,15 +471,12 @@ export function useWorkspaceRuntime({
     const localSteers = pendingQueuedPromptsRef.current.filter((prompt) => prompt.intent === 'steer')
     if (!localSteers.length) return
 
-    // Session action previews are literal for ordinary prompts and may be
-    // compacted for very long ones. Match in queue order so duplicate steers
-    // are still acknowledged one at a time.
+    // Match in queue order so duplicate steers are still acknowledged one at
+    // a time.
     const unmatchedPreviews = [...snapshot.steering]
     const stillQueued = new Set<string>()
     for (const prompt of localSteers) {
-      const previewIndex = unmatchedPreviews.findIndex((preview) => (
-        preview === prompt.text || prompt.text.startsWith(preview) || preview.startsWith(prompt.text)
-      ))
+      const previewIndex = unmatchedPreviews.findIndex((preview) => previewMatchesPrompt(preview, prompt.text))
       if (previewIndex < 0) continue
       unmatchedPreviews.splice(previewIndex, 1)
       stillQueued.add(prompt.id)

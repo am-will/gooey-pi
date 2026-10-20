@@ -4,6 +4,7 @@ import {
   MAX_QUEUED_ACTIONS,
   emptySessionActionSnapshot,
   parseSessionActionSnapshot,
+  previewMatchesPrompt,
 } from '../../src/lib/session-actions'
 
 describe('session action snapshots', () => {
@@ -51,5 +52,12 @@ describe('session action snapshots', () => {
     const second = emptySessionActionSnapshot()
     first.steering.push('mutated')
     expect(second).toEqual({ queuedCount: 0, steering: [], followUps: [] })
+  })
+
+  it('matches a preview to its prompt literally or by a compacted prefix', () => {
+    expect(previewMatchesPrompt('change direction', 'change direction')).toBe(true)
+    expect(previewMatchesPrompt('a very long steer', 'a very long steer that the scheduler compacted')).toBe(true)
+    expect(previewMatchesPrompt('a long preview with more', 'a long preview')).toBe(true)
+    expect(previewMatchesPrompt('change direction', 'keep going')).toBe(false)
   })
 })
