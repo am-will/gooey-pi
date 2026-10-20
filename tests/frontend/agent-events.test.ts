@@ -164,3 +164,37 @@ describe('turn errors', () => {
     }
   })
 })
+
+describe('tool failures', () => {
+  const start = { type: 'tool_execution_start', toolCallId: 'call_bad1', toolName: 'bash', args: { command: 'ls' } }
+  const end = (isError?: boolean) => ({
+    type: 'tool_execution_end', toolCallId: 'call_bad1', toolName: 'bash',
+    result: { content: [{ type: 'text', text: 'Tool bash not found' }] }, ...(isError === undefined ? {} : { isError }),
+  })
+  const resultMessage = (isError: boolean, toolCallId = 'call_bad1') => ({
+    type: 'message_end',
+    message: { role: 'toolResult', toolCallId, toolName: 'bash', content: [{ type: 'text', text: 'Tool bash not found' }], isError },
+  })
+  const tools = (events: Array<Record<string, unknown>>) => {
+    const run = [{ type: 'agent_start' }, ...events]
+    const shape = (messages: ReturnType<typeof replayPrimeEvents>) => messages.flatMap((message) => message.parts.map((part) => part.type === 'toolResult' ? `result:${part.isError}` : part.type))
+    const batched = shape(replayPrimeEvents([], run))
+    expect(shape(run.reduce(applyPrimeEvent, [] as ReturnType<typeof replayPrimeEvents>))).toEqual(batched)
+    return batched
+  }
+
+  it('marks the tool failed from its toolResult message when tool_execution_end omits isError', () => {
+    expect(tools([start, end(), resultMessage(true)])).toEqual(['toolCall', 'result:true'])
+  })
+
+  it('keeps the flag tool_execution_end reported', () => {
+    expect(tools([start, end(true), resultMessage(true)])).toEqual(['toolCall', 'result:true'])
+    expect(tools([start, end(true), resultMessage(false)])).toEqual(['toolCall', 'result:true'])
+    expect(tools([start, end(false), resultMessage(false)])).toEqual(['toolCall', 'result:false'])
+  })
+
+  it('ignores a toolResult message for a call it never saw', () => {
+    expect(tools([start, end(), resultMessage(true, 'call_other')])).toEqual(['toolCall', 'result:false'])
+    expect(tools([resultMessage(true)])).toEqual([])
+  })
+})

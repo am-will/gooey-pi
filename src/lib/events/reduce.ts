@@ -320,6 +320,16 @@ export function replayPrimeEvents(
       }
       continue
     }
+    if (type === 'message_end') {
+      // Rust Prime leaves isError off tool_execution_end; the toolResult
+      // message that follows it still carries the flag.
+      const message = record(raw.message)
+      if (message?.role !== 'toolResult' || message.isError !== true || lastStreamingAssistant < 0) continue
+      const draft = draftParts(lastStreamingAssistant)
+      const result = draft.firstToolById.get(effectiveToolId(string(message.toolCallId), string(message.toolName) ?? 'Tool'))?.next
+      if (result?.part.type === 'toolResult' && !result.part.isError) result.part = { ...result.part, isError: true }
+      continue
+    }
     if (type === 'custom_message') {
       const part = agentMessagePart(raw)
       if (part) appendNode(draftParts(assistantIndex()), withPartId(part))
