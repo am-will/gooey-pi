@@ -1,8 +1,9 @@
 import { ChevronRight, ExternalLink, Gauge, KeyRound, LogIn, LogOut, RefreshCw, Search, Zap } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
-import type { HarnessId, PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '@/types/api'
+import type { HarnessId, PrimeImplementation, PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '@/types/api'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
+import { RUST_PRIME_AGENT_NAME } from '@/lib/prime-compat'
 import { Modal } from '@/components/ui'
 
 interface ProviderSettingsProps {
@@ -171,12 +172,16 @@ const PROVIDERS_PAGE_INTROS: Record<HarnessId, string> = {
   pi: 'Choose which Pi providers and models appear in GooeyPi. These visibility settings do not change Pi itself; Pi provider authentication is managed by the pi CLI. You may need to log in to or out of providers in the Pi CLI before they appear on this screen.',
   prime: 'Connect accounts, choose which providers and their models appear in GooeyPi, and browse every model Prime Agent supports. You may need to log in to or out of providers in the Prime Agent CLI before they appear on this screen.',
 }
+/** Rust Prime's catalog lists only models it has credentials for, so there is no full catalogue to browse. */
+const RUST_PRIME_PROVIDERS_PAGE_INTRO = `Connect accounts and choose which providers and their models appear in GooeyPi. ${RUST_PRIME_AGENT_NAME} lists only the models your credentials can use, so a provider's models appear once it is connected. You may need to log in to or out of providers in the Prime Agent CLI before they appear on this screen.`
 
 /** The Providers settings page: heading plus the provider/model catalog section. */
-export function ProvidersSettings(props: ProviderSettingsProps) {
+export function ProvidersSettings({ primeImplementation, ...props }: ProviderSettingsProps & { primeImplementation?: PrimeImplementation }) {
+  const harness = props.harness ?? 'prime'
+  const intro = harness === 'prime' && primeImplementation === 'rust' ? RUST_PRIME_PROVIDERS_PAGE_INTRO : PROVIDERS_PAGE_INTROS[harness]
   return (
     <>
-      <header><h1>Providers</h1><p>{PROVIDERS_PAGE_INTROS[props.harness ?? 'prime']}</p></header>
+      <header><h1>Providers</h1><p>{intro}</p></header>
       <ProviderSettings {...props} />
     </>
   )
