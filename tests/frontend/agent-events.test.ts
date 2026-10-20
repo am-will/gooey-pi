@@ -193,6 +193,10 @@ describe('tool failures', () => {
     expect(tools([start, end(false), resultMessage(false)])).toEqual(['toolCall', 'result:false'])
   })
 
+  it('leaves a finished turn alone when a toolResult message arrives after it', () => {
+    expect(tools([start, end(false), { type: 'agent_end' }, resultMessage(true)])).toEqual(['toolCall', 'result:false'])
+  })
+
   it('ignores a toolResult message for a call it never saw', () => {
     expect(tools([start, end(), resultMessage(true, 'call_other')])).toEqual(['toolCall', 'result:false'])
     expect(tools([resultMessage(true)])).toEqual([])
