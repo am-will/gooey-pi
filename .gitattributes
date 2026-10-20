@@ -1,0 +1,3 @@
+# Vendor patches are applied byte for byte, so checkout must never convert their line endings.
+vendor/patches/*.patch -text
+vendor/*.tgz binary
