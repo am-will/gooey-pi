@@ -17,6 +17,7 @@ import {
   boundedString,
   compactText,
   createTranscriptReader,
+  isConversationMessage,
   MAX_PART_TEXT_CHARS,
   textFromContent,
   validTimestamp,
@@ -186,7 +187,7 @@ export function createBucketedMetadataParser(ingestRecord: BucketedRecordIngest)
  */
 export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
   return createTranscriptReader({
-    isRenderable: (entry) => entry.type === 'message' || entry.type === 'compaction' || entry.type === 'branch_summary'
+    isRenderable: (entry) => isConversationMessage(entry) || entry.type === 'compaction' || entry.type === 'branch_summary'
       || (entry.type === 'custom_message' && entry.display === true)
       || Boolean(fallbackModelFromRecord(entry)),
     renderEntry: (entry, safeId) => {

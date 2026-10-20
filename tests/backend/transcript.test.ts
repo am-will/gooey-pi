@@ -239,6 +239,7 @@ describe('provider errors that end a turn', () => {
       { type: 'model_change', id: 'model-1', provider: 'anthropic', modelId: 'claude-opus-5-5' },
       { type: 'service_tier_change', id: 'tier-1', serviceTier: 'default' },
       { type: 'custom_message', id: 'digest-1', customType: 'harness_digest', content: '[harness-digest]', display: false },
+      ['system-1', { role: 'system', content: '', sections: { tools: '<tools>\n- bash\n</tools>' } }],
       ['user-2', user('try another model')],
     ])
     expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user'])

@@ -72,9 +72,18 @@ function roleOf(message: JsonRecord): TranscriptMessage['role'] {
   switch (message.role) {
     case 'user': return 'user'
     case 'assistant': return 'assistant'
-    case 'system': return 'system'
     default: return 'tool'
   }
+}
+
+/**
+ * A `message` record that belongs to the conversation. Pi 1.3 also persists
+ * its model-facing system prompt and tool loadout as `system` messages, at
+ * session start and whenever the loadout changes; like Pi's own views, the
+ * transcript renders none of them.
+ */
+export function isConversationMessage(entry: JsonRecord): boolean {
+  return entry.type === 'message' && !(isRecord(entry.message) && entry.message.role === 'system')
 }
 
 function boundedArgs(value: unknown): unknown {
@@ -218,7 +227,7 @@ export interface TranscriptDialect {
 }
 
 const primeTranscriptDialect: TranscriptDialect = {
-  isRenderable: (entry) => entry.type === 'message' || entry.type === 'compaction'
+  isRenderable: (entry) => isConversationMessage(entry) || entry.type === 'compaction'
     || (entry.type === 'custom_message' && entry.display === true),
 }
 

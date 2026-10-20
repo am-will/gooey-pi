@@ -327,6 +327,37 @@ describe('pi transcript access through the service', () => {
     ])
   })
 
+  it('keeps the system prompt snapshots pi 1.3 persists out of the conversation', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_A)
+    // Pi 1.3 records the model-facing prompt and tool loadout as a system
+    // message at session start and again whenever the loadout changes.
+    const systemPrompt = (sections: Record<string, string>) => ({
+      role: 'system',
+      content: '',
+      sections,
+      toolsAdded: [{ name: 'bash', description: 'Execute bash commands', parameters: { type: 'object' } }],
+      timestamp: 1_792_488_700_914,
+    })
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('model_change', 'c7639f96', null, { provider: 'smoke', modelId: 'smoke-model' }),
+        piEntry('message', 'fdc31537', 'c7639f96', { message: systemPrompt({ preamble: 'You are an expert coding assistant operating inside pi.', tools: '<tools>\n- bash\n</tools>' }) }),
+        piEntry('message', '8a7865c2', 'fdc31537', { message: { role: 'user', content: [{ type: 'text', text: 'run it' }] } }),
+        piEntry('message', '3d5ab38d', '8a7865c2', { message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'ls' } }], stopReason: 'toolUse' } }),
+        piEntry('message', 'c8130729', '3d5ab38d', { message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'bash', content: [{ type: 'text', text: 'README.md' }], isError: false } }),
+        piEntry('message', 'a1b2c3d4', 'c8130729', { message: systemPrompt({ tools: '<tools>\n- bash\n- read\n</tools>' }) }),
+        piEntry('message', '1c3afe7a', 'a1b2c3d4', { message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' } }),
+      ],
+    })
+
+    const transcript = await service.read(file)
+    expect(transcript.map((message) => message.role)).toEqual(['user', 'assistant'])
+    expect(transcript[1].parts.map((part) => part.type)).toEqual(['toolCall', 'toolResult', 'text'])
+  })
+
   it('ignores hostile entries: oversized ids, missing ids, and non-renderable trailing types', async () => {
     const { root, project, service } = setup()
     mkdirSync(join(root, BUCKET))
