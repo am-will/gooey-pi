@@ -4,15 +4,6 @@ import { basename, join, relative, sep } from 'node:path'
 import { errorMessage } from '../validation'
 import { comparePaths } from './async'
 
-/**
- * Prime editable-installs a bundled Python skill from the path GooeyPi hands it
- * and imports it in every kernel, so CPython writes `__pycache__` next to the
- * source. Inside a code-signed app bundle that adds unsealed files and breaks
- * the macOS signature, and the install also follows the bundle wherever the app
- * is moved or mounted. Prime is therefore pointed at a mirror in GooeyPi's
- * writable data directory, refreshed whenever the bundled content changes.
- */
-
 const BYTECODE_CACHE = '__pycache__'
 
 const isBytecodeCache = (path: string): boolean => path.split(sep).includes(BYTECODE_CACHE)
@@ -38,6 +29,12 @@ async function skillDigest(root: string): Promise<string> {
  * An up-to-date mirror is left alone so its bytecode caches survive; otherwise a
  * complete copy is staged beside it and renamed into place. Any failure is
  * logged and the bundled path is returned, so startup never depends on the mirror.
+ *
+ * Prime editable-installs a bundled Python skill from the path GooeyPi hands it
+ * and imports it in every kernel, so CPython writes `__pycache__` next to the
+ * source. Inside a code-signed app bundle that adds unsealed files and breaks
+ * the macOS signature, and the install also follows the bundle wherever the app
+ * is moved or mounted, so packaged builds hand Prime this writable mirror instead.
  */
 export async function mirrorBundledSkill(
   sourceDir: string,
