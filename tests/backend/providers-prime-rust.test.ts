@@ -100,6 +100,17 @@ describe('Rust Prime model catalog service', () => {
     expect((await service.catalog(true)).models.map((model) => model.fastModeSupported)).toEqual([false, false])
   })
 
+  it('turns Rust Prime usage reporting off for its probe only, whatever the user environment says', async () => {
+    vi.stubEnv('PRIME_AGENT_TELEMETRY', '1')
+    const service = new RustPrimeModelCatalogService(fakeRustPrimeAnswering(
+      `{ models: [${JSON.stringify(rustModel('openai', 'probe'))}].map((model) => ({ ...model, id: 'env-' + (process.env.PRIME_AGENT_TELEMETRY ?? 'unset') })) }`,
+    ))
+
+    expect((await service.catalog(true)).models.map((model) => model.id)).toEqual(['env-0'])
+    // GooeyPi's own environment, which user session runtimes inherit, keeps the user's choice.
+    expect(process.env.PRIME_AGENT_TELEMETRY).toBe('1')
+  })
+
   it('builds provider rows through the given builder, including providers without models', async () => {
     const seen: Array<ReadonlySet<string>> = []
     const row = (id: string, configured: boolean): PrimeProviderDescriptor => ({ id, name: id, authMethod: 'api_key', configured, modelCount: 0, availableModelCount: 0, enabled: true })

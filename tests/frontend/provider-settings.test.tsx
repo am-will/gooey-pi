@@ -4,8 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProviderAuthModal } from '../../src/components/ProviderAuthModal'
 import { useProviderCatalog } from '../../src/hooks/useProviderCatalog'
-import { ProviderSettings } from '../../src/pages/settings/ProviderSettings'
-import type { HarnessId, PrimeModelCatalog, PrimeWorkApi, RuntimeInfo } from '../../src/types/api'
+import { ProviderSettings, ProvidersSettings } from '../../src/pages/settings/ProviderSettings'
+import type { HarnessId, PrimeImplementation, PrimeModelCatalog, PrimeWorkApi, RuntimeInfo } from '../../src/types/api'
 
 vi.mock('../../src/components/ui', () => ({
   Modal: ({ title, children, footer }: { title: string; children: ReactNode; footer?: ReactNode }) => <div role="dialog" aria-label={title}>{children}{footer}</div>,
@@ -201,6 +201,23 @@ describe('provider settings behavior and accessibility', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('Provider rejected the callback')
   })
 
+})
+
+describe('Providers page intro', () => {
+  async function intro(primeImplementation: PrimeImplementation | undefined): Promise<string> {
+    await render(<ProvidersSettings harness="prime" primeImplementation={primeImplementation} catalog={catalog} onRefresh={noop} onSaveApiKey={noop} onLogout={noop} onSetEnabled={noop} onSetAllEnabled={noop} onSetAllDisabled={noop} onSetModelEnabled={noop} onStartOAuth={noop} onOpenDocs={() => undefined} />)
+    return container.querySelector('header p')?.textContent ?? ''
+  }
+
+  it('says Rust Prime lists only the models its credentials can use', async () => {
+    const text = await intro('rust')
+    expect(text).toContain('Rust Prime Agent lists only the models your credentials can use')
+    expect(text).not.toContain('browse every model')
+  })
+
+  it.each([['typescript'], [undefined]] as const)('keeps the full-catalogue copy on %s Prime', async (implementation) => {
+    expect(await intro(implementation)).toContain('browse every model Prime Agent supports')
+  })
 })
 
 describe('provider runtime mutations', () => {

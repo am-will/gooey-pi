@@ -42,6 +42,10 @@ export class RustPrimeModelCatalogService extends RpcModelCatalogService {
   protected readonly harnessLabel = 'Prime Agent'
   protected readonly cliName = 'prime-agent'
   protected readonly probeArgs: readonly string[] = ['--mode', 'rpc', '--no-session']
+  // The probe is GooeyPi's own background read, not a session the user
+  // started, so it must not report usage or mark Rust's telemetry notice shown.
+  // User sessions keep Prime's own setting.
+  protected override readonly probeEnvironment = { PRIME_AGENT_TELEMETRY: '0' }
   protected readonly notInstalledWarning = 'Prime Agent is not installed. Install prime-agent to load its model catalog.'
   protected readonly credentialsLabel = `Credentials managed by ${RUST_PRIME_AGENT_NAME}`
 

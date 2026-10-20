@@ -81,6 +81,8 @@ describe('legacy telemetry compatibility contract', () => {
     // It does not detect computed, indirect, or aliased consumers and must not be cited as
     // semantic proof that no telemetry consumer or transport exists.
     expect(references).toStrictEqual([
+      // The Rust Prime model-catalog probe sets PRIME_AGENT_TELEMETRY=0 for that internal process only.
+      { file: 'electron/main/providers-prime-rust.ts', source: "// started, so it must not report usage or mark Rust's telemetry notice shown." },
       { file: 'electron/main/settings-schedules.ts', source: "telemetry: (value) => requireBoolean(value, 'telemetry')," },
       { file: 'electron/main/store.ts', source: 'telemetry: false,' },
       { file: 'electron/main/store.ts', source: "telemetry: typeof value.telemetry === 'boolean' ? value.telemetry : defaults.telemetry," },

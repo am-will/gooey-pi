@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
 import { PRIME_THINKING_LEVELS, type PrimeModelDescriptor, type PrimeThinkingLevel } from '../../src/types/api'
 import { CliModelCatalogService, validateModelEntry, type ValidatedModelEntry } from './model-catalog-cli'
-import { killProcessTree, prepareExecutableSpawn, waitForProcessExit } from './process-utils'
+import { killProcessTree, prepareExecutableSpawn, safeChildEnvironment, waitForProcessExit } from './process-utils'
 
 const PROBE_REQUEST_ID = '1'
 const PROBE_COMMAND = 'get_available_models'
@@ -50,17 +50,17 @@ function parseProbeResponse(line: string): Record<string, unknown> | null {
  * response frame arrives (no ready frame is expected; unrelated JSONL lines
  * are skipped), then terminate the child. The probe is time-bounded,
  * byte-bounded across both pipes (stderr is swallowed but counted), spawned
- * with a fixed argv array, a sanitized environment, and a non-project cwd;
- * every line is untrusted.
+ * with a fixed argv array, a sanitized environment plus the harness's probe
+ * variables, and a non-project cwd; every line is untrusted.
  */
 function runModelProbe(
   executable: string,
   args: readonly string[],
   names: ModelProbeNames,
-  options: { timeoutMs: number; maxOutputBytes: number },
+  options: { timeoutMs: number; maxOutputBytes: number; environment: Readonly<Record<string, string>> },
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const invocation = prepareExecutableSpawn(executable, args)
+    const invocation = prepareExecutableSpawn(executable, args, safeChildEnvironment(options.environment))
     const child = spawn(invocation.file, invocation.args, {
       cwd: tmpdir(),
       env: invocation.env,
@@ -156,6 +156,8 @@ export abstract class RpcModelCatalogService extends CliModelCatalogService {
   protected abstract readonly cliName: string
   /** The probe's argv after the executable. */
   protected abstract readonly probeArgs: readonly string[]
+  /** Variables set on the probe's environment only, never on a session runtime's. */
+  protected readonly probeEnvironment: Readonly<Record<string, string>> = {}
   /** Maps a validated entry and its optional thinking-level map to a descriptor. */
   protected abstract describeModel(entry: ValidatedModelEntry, thinkingLevelMap: Record<string, unknown> | undefined): PrimeModelDescriptor
 
@@ -163,6 +165,7 @@ export abstract class RpcModelCatalogService extends CliModelCatalogService {
     const frame = await runModelProbe(executable, this.probeArgs, { harnessLabel: this.harnessLabel, cliName: this.cliName }, {
       timeoutMs: this.timeoutMs,
       maxOutputBytes: this.maxOutputBytes,
+      environment: this.probeEnvironment,
     })
     if (frame.success !== true) {
       // The error text is untrusted CLI output: strip control characters and

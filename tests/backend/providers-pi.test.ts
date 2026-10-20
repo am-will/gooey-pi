@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ModelCatalogProvider } from '../../electron/main/model-catalog'
 import { PI_NOT_INSTALLED_WARNING, PiModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-pi'
 import type { PrimeModelCatalog } from '../../src/types/api'
@@ -163,6 +163,17 @@ describe('Pi model catalog service', () => {
     expect(await service.capabilities('google', 'gemini-2.5-pro')).toMatchObject({ key: 'google/gemini-2.5-pro' })
     expect(await service.capabilities('google', undefined)).toBeUndefined()
     expect(await service.capabilities(undefined, 'gemini-2.5-pro')).toBeUndefined()
+  })
+
+  it('passes the user environment to its probe without the Rust Prime opt-out', async () => {
+    vi.stubEnv('PRIME_AGENT_TELEMETRY', '1')
+    try {
+      const service = new PiModelCatalogService(fakePi(`
+const model = { ...${JSON.stringify(sampleCatalog.models[0])}, id: 'env-' + (process.env.PRIME_AGENT_TELEMETRY ?? 'unset') }
+process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_available_models', success: true, data: { models: [model] } }) + '\\n')
+`))
+      expect((await service.catalog(true)).models.map((model) => model.id)).toEqual(['env-1'])
+    } finally { vi.unstubAllEnvs() }
   })
 
   it('returns an empty catalog with a clear status when pi is not installed', async () => {

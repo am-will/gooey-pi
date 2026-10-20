@@ -1016,7 +1016,7 @@ async function bootstrap(): Promise<void> {
     meta.harnesses = harnesses
     return { meta: structuredClone(meta), settings: currentSettings }
   }
-  agents.setStartRecovery(primeStartRecovery(async () => { await refreshHarnesses(); return discovery.primeImplementation() }))
+  agents.setStartRecovery(primeStartRecovery(async () => { await refreshHarnesses(); ipc?.notifyHarnessesChanged(); return discovery.primeImplementation() }))
   trustedRendererUrl = resolveRendererUrl()
   ipc = registerIpc({
     meta, refreshHarnesses, projects, checkouts, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,

@@ -1,8 +1,15 @@
-import type { PrimeImplementation, SkillRecord } from '../types/api'
+import type { HarnessId, PrimeImplementation, SkillRecord } from '../types/api'
 
 /** How user-facing copy names the Rust build. */
 export const RUST_PRIME_AGENT_NAME = 'Rust Prime Agent'
 export const RUST_PRIME_EXTENSIONS_DETAIL = `${RUST_PRIME_AGENT_NAME} does not load TypeScript extensions.`
+/**
+ * Rust Prime's in-process RPC has no heartbeat commands: only its background
+ * service pauses or resumes a native heartbeat. GooeyPi still stops one
+ * through the CLI. Native heartbeats are Prime's own, so this is not a row of
+ * the capability table below, whose rows Pi and OMP keep.
+ */
+export const RUST_PRIME_HEARTBEAT_PAUSE_DETAIL = `${RUST_PRIME_AGENT_NAME} pauses and resumes native heartbeats only through its background service, which GooeyPi cannot use yet. Stop still works.`
 
 export const PRIME_IMPLEMENTATION_LABELS: Readonly<Record<PrimeImplementation, string>> = Object.freeze({ typescript: 'TypeScript', rust: 'Rust' })
 
@@ -47,6 +54,15 @@ export type PrimeRustUnavailableCapability = (typeof PRIME_RUST_UNAVAILABLE_CAPA
  */
 export function primeCapabilityAvailable(implementation: PrimeImplementation | undefined, _capability: PrimeRustUnavailableCapability): boolean {
   return implementation !== 'rust'
+}
+
+/**
+ * Whether the harness can run fast mode at all. A catalog row's
+ * fastModeSupported counts only where it can: the renderer may still hold a
+ * TypeScript catalog right after Prime is reclassified as Rust.
+ */
+export function harnessOffersFastMode(harness: HarnessId, primeImplementation: PrimeImplementation | undefined): boolean {
+  return harness !== 'prime' || primeCapabilityAvailable(primeImplementation, 'fastMode')
 }
 
 /** One sentence naming the capabilities this Prime build does not offer; undefined when it offers them all. */

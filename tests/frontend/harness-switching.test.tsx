@@ -765,6 +765,22 @@ describe('harness settings surfaces', () => {
     expect(container.querySelector('h1')?.textContent).toBe('Harness')
   })
 
+  it('passes the detected Prime implementation to the Providers page', async () => {
+    const noop = () => undefined
+    const noopAsync = async () => undefined
+    const rustMeta: AppMeta = { ...meta, harnesses: { ...meta.harnesses, prime: { path: '/usr/local/bin/prime-agent', version: '0.10.0', implementation: 'rust' } } }
+    await act(async () => {
+      root.render(<SettingsPage
+        settings={{ ...DEFAULT_SETTINGS, activeHarness: 'prime' }} meta={rustMeta} providerCatalog={null} voice={null} pets={null} initialSection="providers"
+        onClose={noop} onUpdate={noop} onResetBrowser={noop} onOpenDocs={noop} onRefreshProviders={noopAsync} onRefreshHarnesses={noopAsync}
+        onSaveProviderApiKey={noopAsync} onLogoutProvider={noopAsync} onSetProviderEnabled={noopAsync} onSetAllProvidersEnabled={noopAsync}
+        onSetAllProvidersDisabled={noopAsync} onSetModelEnabled={noopAsync} onStartProviderOAuth={noopAsync}
+      />)
+    })
+    expect(container.querySelector('h1')?.textContent).toBe('Providers')
+    expect(container.querySelector('header p')?.textContent).toContain('Rust Prime Agent lists only the models your credentials can use')
+  })
+
   it('keeps Harness settings universal while leaving only providers harness-specific', async () => {
     const onUpdate = vi.fn()
     const onRefreshHarnesses = vi.fn(async () => undefined)
