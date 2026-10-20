@@ -311,7 +311,10 @@ export class SessionService {
     const selector = this.primeImplementation() === 'rust'
       ? await this.residentWorkerSelector(safePath)
       : (await this.readMetadata(safePath)).id
-    const result = await runProcess(primeAgentPath, ['rename', selector, safeTitle, '--json'], { timeoutMs: 30_000 })
+    // File-derived identifiers must not be interpreted as CLI options.
+    const sessionId = requireId(selector, 'session id')
+    if (sessionId.startsWith('-')) throw new TypeError('session id is invalid')
+    const result = await runProcess(primeAgentPath, ['rename', sessionId, safeTitle, '--json'], { timeoutMs: 30_000 })
     return result.code === 0
   }
 

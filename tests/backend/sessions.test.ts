@@ -1426,6 +1426,30 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     await expect(service.rename(file, 'Prime title')).resolves.toBe(false)
     expect(renameFile).not.toHaveBeenCalled()
   })
+
+  it('never passes an option-shaped session id to the Prime rename CLI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-rename-argv-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const marker = join(dir, 'cli-invoked')
+    const executable = join(dir, 'prime-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+require('node:fs').appendFileSync(${JSON.stringify(marker)}, process.argv.slice(2).join(' ') + '\\n')
+process.exit(0)
+`)
+    chmodSync(executable, 0o755)
+    const headerId = join(root, 'header.jsonl')
+    writeSession(headerId, project, '--evil')
+    const basenameId = join(root, '-x.jsonl')
+    writeFileSync(basenameId, `${JSON.stringify({ type: 'session', cwd: project, timestamp: '2025-01-01T00:00:00.000Z' })}\n`)
+    const service = new SessionService(new JsonStateStore(join(dir, 'state.json')), executable, undefined, {})
+    Object.defineProperty(service, 'sessionRoot', { value: root })
+    service.bindRuntimeHooks({ get: () => undefined, stop: async () => undefined, rename: async () => false })
+
+    await expect(service.rename(headerId, 'Title')).rejects.toThrow(/session id/)
+    await expect(service.rename(basenameId, 'Title')).rejects.toThrow(/session id/)
+    expect(existsSync(marker)).toBe(false)
+  })
 })
 
 describe('SessionService rename on Rust Prime', () => {
