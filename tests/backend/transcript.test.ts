@@ -191,6 +191,50 @@ describe('tool result placement in assembled turns', () => {
   })
 })
 
+describe('provider errors that end a turn', () => {
+  const overloaded = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+  const write = (messages: Array<[id: string, message: Record<string, unknown>] | Record<string, unknown>>): string => {
+    const file = makeSessionFile()
+    let parentId: string | null = null
+    const records = [JSON.stringify({ type: 'session', version: 3, id: 'session-1', cwd: '/project' })]
+    for (const item of messages) {
+      const record: Record<string, unknown> = Array.isArray(item) ? { type: 'message', id: item[0], parentId, message: item[1] } : { ...item, parentId }
+      records.push(JSON.stringify(record))
+      parentId = String(record.id)
+    }
+    writeFileSync(file, `${records.join('\n')}\n`)
+    return file
+  }
+  const user = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] })
+  const failed = (stopReason = 'error', errorMessage = overloaded) => ({ role: 'assistant', content: [], stopReason, errorMessage })
+  const answer = { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop' }
+  const shape = (transcript: Awaited<ReturnType<typeof readTranscript>>) => transcript.map((message) => `${message.id}:${message.role}`)
+
+  it('shows the error of a run that failed at the provider', async () => {
+    const transcript = await readTranscript(write([['user-1', user('retry me')], ['assistant-1', failed()]]), false)
+
+    expect(shape(transcript)).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system'])
+    expect(transcript.at(-1)?.parts).toEqual([{ type: 'text', text: overloaded }])
+  })
+
+  it('keeps an earlier failed turn above the prompt that followed it', async () => {
+    const file = write([['user-1', user('retry me')], ['assistant-1', failed()], ['user-2', user('try again')], ['assistant-2', answer]])
+    expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user', 'assistant-2:assistant'])
+  })
+
+  it('shows nothing for a failure the agent recovered from, an abort, or a run still streaming', async () => {
+    const retried = write([['user-1', user('retry me')], ['assistant-1', failed()], ['assistant-2', answer]])
+    const compacted = write([['user-1', user('too long')], ['assistant-1', failed('error', 'prompt is too long')], { type: 'compaction', id: 'compact-1', summary: 'Summary', firstKeptEntryId: 'user-1', tokensBefore: 1_000 }, ['assistant-2', answer]])
+    const aborted = write([['user-1', user('stop')], ['assistant-1', failed('aborted', 'Request was aborted')]])
+    const backoff = write([['user-1', user('retry me')], ['assistant-1', failed()]])
+
+    expect(shape(await readTranscript(retried, false))).toEqual(['user-1:user', 'assistant-1:assistant'])
+    expect(shape(await readTranscript(compacted, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'compact-1:system', 'assistant-2:assistant'])
+    expect(shape(await readTranscript(aborted, false))).toEqual(['user-1:user', 'assistant-1:assistant'])
+    expect(shape(await readTranscript(backoff, true))).toEqual(['user-1:user', 'assistant-1:assistant'])
+  })
+})
+
 function makeSessionFile(): string {
   const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-'))
   dirs.push(dir)

@@ -130,6 +130,12 @@ function partsFromMessage(message: JsonRecord): MessagePart[] {
   return parts.length ? parts : [{ type: 'text', text: '' }]
 }
 
+/** The system row naming the provider error an assistant message ended with; undefined for any other message. */
+function providerErrorRow(message: JsonRecord, id: string, timestamp: TranscriptMessage['timestamp']): TranscriptMessage | undefined {
+  if (message.stopReason !== 'error' || typeof message.errorMessage !== 'string' || !message.errorMessage.trim()) return undefined
+  return { id: `${id}:error`, role: 'system', timestamp, parts: [{ type: 'text', text: boundedString(message.errorMessage.trim(), MAX_PART_TEXT_CHARS) }] }
+}
+
 function boundedTranscript(transcript: TranscriptMessage[]): TranscriptMessage[] {
   let textBudget = MAX_TRANSCRIPT_TEXT_CHARS
   let toolBudget = MAX_TRANSCRIPT_TOOL_CHARS
@@ -305,8 +311,16 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
     registerToolCalls(activeAssistant.parts.length, added)
     activeAssistant.parts.push(...added)
   }
+  // A provider error ended its turn only when the next record is a user
+  // message or the end of the session. A retry, a compaction or any later
+  // output in between means the agent recovered from it.
+  let failedTurn: TranscriptMessage | undefined
   for (const { id, entry } of branch) {
     const safeId = boundedString(id, 1_024)
+    if (failedTurn) {
+      if (entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'user') transcript.push(failedTurn)
+      failedTurn = undefined
+    }
     if (entry.type === 'compaction') {
       const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
       const tokensBefore = typeof entry.tokensBefore === 'number' && Number.isFinite(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined
@@ -428,6 +442,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
         activeAssistant = { id: safeId, role, timestamp, startedAt: timestamp, completedAt, parts }
         transcript.push(activeAssistant)
       }
+      failedTurn = providerErrorRow(message, safeId, completedAt)
       continue
     }
     const item: TranscriptMessage = { id: safeId, role, timestamp, parts }
@@ -435,6 +450,8 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
     activeAssistant = undefined
   }
   if (isStreaming && activeAssistant) { activeAssistant.streaming = true; activeAssistant.completedAt = undefined }
+  // While the session still streams, the agent may yet retry the failed call.
+  else if (failedTurn) transcript.push(failedTurn)
   return boundedTranscript(transcript)
 }
 
