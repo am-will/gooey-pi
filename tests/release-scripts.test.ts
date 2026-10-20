@@ -1553,42 +1553,29 @@ describe('post-package verification helpers', () => {
 
   test('excludes other platform native build trees and declares zeromq directly', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-    const optimizedAgentExclusions = [
-      '!**/node_modules/prime-agent/docs/**',
-      '!**/node_modules/prime-agent/dist/bundle/**',
-      '!**/node_modules/prime-agent/dist/modes/**',
-      '!**/node_modules/prime-agent/**/*.map',
-      '!**/node_modules/prime-agent/**/*.d.ts',
-      '!**/node_modules/@earendil-works/pi-tui/**',
-      '!**/node_modules/koffi/**',
-    ]
+    // electron-builder appends each platform's `files` to the root `files`, so
+    // the platform lists hold only their platform-specific exclusions.
     expect(packageJson.build.mac.files).toEqual([
-      'out/**/*',
-      'package.json',
-      ...optimizedAgentExclusions,
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.linux-*.node',
       '!**/node_modules/extract-zip/index.win32-*.node',
     ])
     expect(packageJson.build.linux.files).toEqual([
-      'out/**/*',
-      'package.json',
-      ...optimizedAgentExclusions,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
       '!**/node_modules/extract-zip/index.win32-*.node',
     ])
     expect(packageJson.build.win.files).toEqual([
-      'out/**/*',
-      'package.json',
-      ...optimizedAgentExclusions,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
       '!**/node_modules/extract-zip/index.linux-*.node',
     ])
+    for (const platform of ['mac', 'linux', 'win']) {
+      expect(packageJson.build[platform].files.filter((pattern: string) => packageJson.build.files.includes(pattern))).toEqual([])
+    }
     // Pin the app to the zeromq range prime-agent uses so the packaged addon
     // and the agent's runtime expectations cannot drift apart silently.
     const primeAgent = JSON.parse(readFileSync(new URL('../node_modules/prime-agent/package.json', import.meta.url), 'utf8'))
