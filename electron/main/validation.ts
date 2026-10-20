@@ -177,6 +177,11 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** A single-line, length-capped error message for logs and dialogs; `fallback` replaces an empty message. */
+export function boundedErrorMessage(error: unknown, maxLength = 512, fallback = 'Unknown error'): string {
+  return errorMessage(error).replace(/[\r\n\t]+/g, ' ').slice(0, maxLength) || fallback
+}
+
 /**
  * Removes OSC strings (`ESC ] ... BEL` or `ESC ] ... ESC \`, e.g. hyperlinks and titles), CSI sequences
  * and two-byte escapes. Branch order matters: OSC and CSI must be tried before the two-byte form,

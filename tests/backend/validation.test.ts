@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  boundedErrorMessage,
   firstAccepted,
   isBoundedString,
   isModelId,
@@ -469,5 +470,29 @@ describe('isBoundedString', () => {
       expect(isBoundedString(value, 10), String(value)).toBe(false)
       expect(isBoundedString(value, 10, true), String(value)).toBe(false)
     }
+  })
+})
+
+describe('boundedErrorMessage', () => {
+  it('collapses line breaks and tabs into single spaces', () => {
+    expect(boundedErrorMessage(new Error('first line\r\nsecond\tthird\n\nfourth'))).toBe('first line second third fourth')
+  })
+
+  it('caps the message at 512 characters by default and at an explicit maximum', () => {
+    expect(boundedErrorMessage(new Error('x'.repeat(600)))).toHaveLength(512)
+    expect(boundedErrorMessage(new Error('x'.repeat(3_000)), 2_048)).toHaveLength(2_048)
+    expect(boundedErrorMessage(new Error('line one\nline two'), 10)).toBe('line one l')
+  })
+
+  it('stringifies non-Error values', () => {
+    expect(boundedErrorMessage('plain failure')).toBe('plain failure')
+    expect(boundedErrorMessage(42)).toBe('42')
+    expect(boundedErrorMessage(undefined)).toBe('undefined')
+  })
+
+  it('falls back when the message is empty', () => {
+    expect(boundedErrorMessage(new Error(''))).toBe('Unknown error')
+    expect(boundedErrorMessage('')).toBe('Unknown error')
+    expect(boundedErrorMessage(new Error(''), 240, 'Update check failed')).toBe('Update check failed')
   })
 })
