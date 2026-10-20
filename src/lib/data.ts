@@ -196,6 +196,8 @@ export const SAMPLE_SCHEDULES: AutomationScheduleRecord[] = [
 export function formatRelative(value?: string | number): string {
   if (!value) return ''
   const timestamp = typeof value === 'number' ? value : new Date(value).getTime()
+  // Intl.RelativeTimeFormat throws on non-finite values, which would crash the rendering subtree.
+  if (!Number.isFinite(timestamp)) return ''
   const seconds = Math.round((timestamp - Date.now()) / 1000)
   const abs = Math.abs(seconds)
   if (abs < 60) return 'now'
