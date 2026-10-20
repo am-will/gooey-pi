@@ -211,6 +211,28 @@ describe('release preflight', () => {
     expect(imported.stderr).toBe('')
   })
 
+  test('release CLIs reject unknown flags and a flag taken as a missing value', () => {
+    const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'
+    const cli = (script: string, args: string[]) => spawnSync(process.execPath, [`scripts/release/${script}`, ...args], { encoding: 'utf8' })
+    // A --dry-run typo must not start a real build, which begins by deleting the previous release output.
+    const typo = cli('package.mjs', ['--qa', '--platform', platform, '--dryrun'])
+    expect(typo.status).toBe(2)
+    expect(typo.stderr).toContain("Unknown option '--dryrun'")
+    const swallowed = cli('package.mjs', ['--qa', '--platform', '--dry-run'])
+    expect(swallowed.status).toBe(2)
+    expect(swallowed.stderr).toContain("Option '--platform' argument is ambiguous")
+
+    const prepare = cli('prepare-github-release.mjs', ['--input', '--output', 'x'])
+    expect(prepare.status).toBe(1)
+    expect(prepare.stderr).toMatch(/GitHub Release preparation failed: Option '--input' argument is ambiguous/)
+    const prune = cli('prune-draft-release-assets.mjs', ['--assets', 'draft.json', '--expected', 'release-assets', '--dry-run'])
+    expect(prune.status).toBe(1)
+    expect(prune.stderr).toContain("Draft release asset pruning failed: Unknown option '--dry-run'")
+    const verify = cli('verify-package.mjs', ['--mode', 'qa', '--arch'])
+    expect(verify.status).toBe(1)
+    expect(verify.stderr).toContain("Option '--arch <value>' argument missing")
+  })
+
   test('binds the requested target architecture to the produced mac artifacts', async () => {
     const { assertBooleanEntitlement, assertRequestedArchitecture } = await import('../scripts/release/verify-package.mjs')
     const artifacts = { dmg: 'release/mac/arm64/Prime Work-1.0.0-arm64.dmg', zip: 'release/mac/arm64/Prime Work-1.0.0-arm64.zip' }

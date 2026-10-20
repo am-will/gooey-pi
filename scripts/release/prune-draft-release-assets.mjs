@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 
 /**
  * `gh release upload --clobber` replaces same-named assets but never removes
@@ -28,15 +29,10 @@ export function parseDraftAssetNames(source) {
   })
 }
 
-function option(name) {
-  const index = process.argv.indexOf(name)
-  return index === -1 ? undefined : process.argv[index + 1]
-}
-
 if (import.meta.main) {
   try {
-    const assetsFile = option('--assets')
-    const expectedDirectory = option('--expected')
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { assets: { type: 'string' }, expected: { type: 'string' } } })
+    const { assets: assetsFile, expected: expectedDirectory } = values
     if (!assetsFile || !expectedDirectory) throw new Error('Provide --assets <gh json file> and --expected <prepared asset directory>')
     const stale = staleDraftReleaseAssets(parseDraftAssetNames(readFileSync(resolve(assetsFile), 'utf8')), readdirSync(resolve(expectedDirectory)))
     for (const name of stale) console.log(name)

@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 import { listPackage } from '@electron/asar'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { assertFuseWire } from './fuses.cjs'
@@ -183,17 +184,15 @@ export async function verifyPackage(target, architecture, { unpackedOnly = false
 }
 
 if (import.meta.main) {
-  const platformIndex = process.argv.indexOf('--platform')
-  const platform = platformIndex === -1 ? undefined : process.argv[platformIndex + 1]
-  const archIndex = process.argv.indexOf('--arch')
-  const arch = archIndex === -1 ? undefined : process.argv[archIndex + 1]
-  const unpackedOnly = process.argv.includes('--unpacked-only')
-  const modeIndex = process.argv.indexOf('--mode')
-  const mode = modeIndex === -1 ? 'qa' : process.argv[modeIndex + 1]
   try {
-    await verifyPackage(requireOption(platform, 'platform', ['linux', 'win']), requireOption(arch, 'arch', ['arm64', 'x64']), {
-      unpackedOnly,
-      mode: requireOption(mode, 'mode', ['public', 'qa']),
+    const { values } = parseArgs({
+      strict: true,
+      allowPositionals: false,
+      options: { platform: { type: 'string' }, arch: { type: 'string' }, mode: { type: 'string', default: 'qa' }, 'unpacked-only': { type: 'boolean' } },
+    })
+    await verifyPackage(requireOption(values.platform, 'platform', ['linux', 'win']), requireOption(values.arch, 'arch', ['arm64', 'x64']), {
+      unpackedOnly: values['unpacked-only'] === true,
+      mode: requireOption(values.mode, 'mode', ['public', 'qa']),
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

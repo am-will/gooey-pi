@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 import { listPackage } from '@electron/asar'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { assertFuseWire } from './fuses.cjs'
@@ -174,15 +175,13 @@ export async function verifyPackage({ mode, releaseDirectory = resolve('release'
 // Node marks the realpath-resolved entry module, so a symlinked or junctioned
 // checkout still runs the verification instead of silently exiting 0.
 if (import.meta.main) {
-  const modeIndex = process.argv.indexOf('--mode')
-  const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : undefined
-  const releaseDirectoryIndex = process.argv.indexOf('--release-directory')
-  const releaseDirectory = releaseDirectoryIndex >= 0 ? process.argv[releaseDirectoryIndex + 1] : undefined
-  const archIndex = process.argv.indexOf('--arch')
-  // A --arch flag with a missing value must fail closed, not skip the check.
-  const arch = archIndex >= 0 ? (process.argv[archIndex + 1] ?? '') : undefined
-  verifyPackage({ mode, ...(releaseDirectory ? { releaseDirectory } : {}), ...(arch !== undefined ? { arch } : {}) }).catch((error) => {
+  try {
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { mode: { type: 'string' }, 'release-directory': { type: 'string' }, arch: { type: 'string' } } })
+    const { mode, 'release-directory': releaseDirectory, arch } = values
+    // A bare --arch fails at parse time and an empty --arch= reaches the check, so neither skips it.
+    await verifyPackage({ mode, ...(releaseDirectory ? { releaseDirectory } : {}), ...(arch !== undefined ? { arch } : {}) })
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1
-  })
+  }
 }

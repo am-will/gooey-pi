@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 
 const SEMANTIC_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
@@ -24,10 +25,9 @@ export function validateReleaseTag(tag, projectDirectory = process.cwd()) {
 }
 
 if (import.meta.main) {
-  const tagIndex = process.argv.indexOf('--tag')
-  const tag = tagIndex === -1 ? undefined : process.argv[tagIndex + 1]
   try {
-    const release = validateReleaseTag(tag)
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { tag: { type: 'string' } } })
+    const release = validateReleaseTag(values.tag)
     console.log(`Validated release tag ${release.tag} for GooeyPi ${release.version}.`)
   } catch (error) {
     console.error(`Release tag validation failed: ${error instanceof Error ? error.message : String(error)}`)

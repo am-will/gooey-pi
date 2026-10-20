@@ -1,19 +1,39 @@
 #!/usr/bin/env node
 import { copyFileSync, readdirSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 import { assertSupportedToolchain, runCommand, validateReleaseCredentials, validateWindowsReleaseCredentials, withoutReleaseCredentials } from './lib.mjs'
 
-const args = new Set(process.argv.slice(2))
-const isPublic = args.has('--public')
-const isQa = args.has('--qa')
-const dryRun = args.has('--dry-run')
+// Strict parsing rejects typos such as --dryrun, which would otherwise start a
+// real build that first deletes the previous release output.
+function parseOptions() {
+  try {
+    return parseArgs({
+      strict: true,
+      allowPositionals: false,
+      options: {
+        public: { type: 'boolean' },
+        qa: { type: 'boolean' },
+        'dry-run': { type: 'boolean' },
+        'skip-verify': { type: 'boolean' },
+        platform: { type: 'string' },
+        arch: { type: 'string' },
+      },
+    }).values
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(2)
+  }
+}
+const values = parseOptions()
+const isPublic = values.public === true
+const isQa = values.qa === true
+const dryRun = values['dry-run'] === true
 // CI release jobs pass --skip-verify because the CI workflow has already run
 // the identical typecheck/lint/test suite on the same commit; the release job
 // then only builds the bundle, packages, and runs post-package verification.
-const skipVerify = args.has('--skip-verify')
-const platformIndex = process.argv.indexOf('--platform')
-const platform = platformIndex === -1 ? undefined : process.argv[platformIndex + 1]
-const archIndex = process.argv.indexOf('--arch')
+const skipVerify = values['skip-verify'] === true
+const platform = values.platform
 const platformHosts = { mac: 'darwin', linux: 'linux', win: 'win32' }
 const nativeArchitectures = { arm64: 'arm64', x64: 'x64' }
 if (isPublic === isQa) {
@@ -28,7 +48,7 @@ if (!platform || !(platform in platformHosts)) {
 // build machine's architecture, so a malformed flag fails instead of silently
 // packaging the host arch.
 const defaultArch = process.arch === 'arm64' ? 'arm64' : 'x64'
-const arch = archIndex === -1 ? defaultArch : process.argv[archIndex + 1]
+const arch = values.arch ?? defaultArch
 if (!arch || !(arch in nativeArchitectures)) {
   console.error('Choose a supported architecture: --arch arm64 or x64')
   process.exit(2)

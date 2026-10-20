@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 import { findUnpackedDirectory, packagedExecutablePath } from './verify-cross-platform-package.mjs'
 
 /**
@@ -174,13 +175,10 @@ function requireOption(value, label, allowed) {
 }
 
 if (import.meta.main) {
-  const option = (name) => {
-    const index = process.argv.indexOf(name)
-    return index === -1 ? undefined : process.argv[index + 1]
-  }
   try {
-    await smokePackagedApp(requireOption(option('--platform'), 'platform', ['linux', 'win']), requireOption(option('--arch'), 'arch', ['arm64', 'x64']), {
-      diagnosticsPath: option('--diagnostics') ?? '',
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { platform: { type: 'string' }, arch: { type: 'string' }, diagnostics: { type: 'string' } } })
+    await smokePackagedApp(requireOption(values.platform, 'platform', ['linux', 'win']), requireOption(values.arch, 'arch', ['arm64', 'x64']), {
+      diagnosticsPath: values.diagnostics ?? '',
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

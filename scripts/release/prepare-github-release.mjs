@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto'
 import { copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
+import { parseArgs } from 'node:util'
 import { dump, load } from 'js-yaml'
 import { validateReleaseTag } from './validate-release-tag.mjs'
 
@@ -214,18 +215,16 @@ export async function prepareGitHubRelease({ inputDirectory, outputDirectory, ta
   return { ...release, assets: [...names.keys()], checksumFile: 'SHA256SUMS.txt' }
 }
 
-function option(name) {
-  const index = process.argv.indexOf(name)
-  return index === -1 ? undefined : process.argv[index + 1]
-}
-
 if (import.meta.main) {
   try {
-    const inputDirectory = option('--input')
-    const outputDirectory = option('--output')
-    const tag = option('--tag')
-    const platforms = parseReleasePlatforms(option('--platforms'))
-    const windowsUnsigned = process.argv.includes('--windows-unsigned')
+    const { values } = parseArgs({
+      strict: true,
+      allowPositionals: false,
+      options: { input: { type: 'string' }, output: { type: 'string' }, tag: { type: 'string' }, platforms: { type: 'string' }, 'windows-unsigned': { type: 'boolean' } },
+    })
+    const { input: inputDirectory, output: outputDirectory, tag } = values
+    const platforms = parseReleasePlatforms(values.platforms)
+    const windowsUnsigned = values['windows-unsigned'] === true
     if (!inputDirectory || !outputDirectory) throw new Error('Provide --input and --output directories')
     const release = await prepareGitHubRelease({ inputDirectory: resolve(inputDirectory), outputDirectory: resolve(outputDirectory), tag, platforms, windowsUnsigned })
     console.log(`Prepared ${release.assets.length} assets and ${release.checksumFile} for ${release.tag}.`)
