@@ -1,10 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { readOmpTranscript } from '../../electron/main/sessions/omp'
 import { Transcript } from '../../src/components/Transcript'
 import { LiveElapsed } from '../../src/components/transcript/timeline'
 import { replayPrimeEvents } from '../../src/lib/events/reduce'
@@ -398,20 +394,6 @@ describe('transcript rendering', () => {
     const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: `${'a'.repeat(40_000)}NOTICE-TAIL` }] }])
     expect(html).toContain('[Note truncated in the desktop view.]')
     expect(html).not.toContain('NOTICE-TAIL')
-  })
-
-  it('renders a live fallback notice exactly like its persisted counterpart', async () => {
-    const live = replayPrimeEvents([], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
-    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-notice-'))
-    try {
-      const file = join(dir, '2026-08-08T02-12-49-414Z_019fdf24-f686-7000-86fd-e1eaf84626c6.jsonl')
-      writeFileSync(file, `${JSON.stringify({ type: 'model_change', id: 'aa000001', parentId: null, timestamp: '2026-08-08T02:14:00.000Z', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true })}\n`)
-      const persisted = await readOmpTranscript(file, false)
-      expect(render(live)).toContain('activity-line--note')
-      expect(render(live)).toBe(render(persisted))
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
   })
 
   it('renders compaction activity and completion separately from system failures', () => {

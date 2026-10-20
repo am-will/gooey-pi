@@ -1,8 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OMP_TITLE_SLOT_BYTES, readOmpTranscript } from '../../electron/main/sessions/omp'
+import { Transcript } from '../../src/components/Transcript'
+import { replayPrimeEvents } from '../../src/lib/events/reduce'
+import type { TranscriptMessage } from '../../src/types/api'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) })
@@ -104,6 +109,19 @@ describe('OMP transcript system entries', () => {
       timestamp: '2026-08-08T02:14:00.000Z',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }],
     })
+  })
+
+  it('renders a persisted fallback notice exactly like its live counterpart', async () => {
+    const render = (messages: TranscriptMessage[]) => renderToStaticMarkup(createElement(Transcript, {
+      messages, git: { isRepo: false, files: [] }, onOpenChanges: () => undefined, onSuggestion: () => undefined,
+    }))
+    const live = replayPrimeEvents([], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
+    const persisted = await readOmpTranscript(ompSessionFile([
+      JSON.stringify({ type: 'model_change', id: 'aa000001', parentId: null, timestamp: '2026-08-08T02:14:00.000Z', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }),
+    ]), false)
+
+    expect(render(persisted)).toContain('activity-line--note')
+    expect(render(persisted)).toBe(render(live))
   })
 
   it('renders branch_summary entries as readable system messages in branch position', async () => {
