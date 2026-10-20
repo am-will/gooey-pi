@@ -15,7 +15,7 @@ import {
   TerminalSquare,
   Wrench,
 } from 'lucide-react'
-import type { MessagePart, TranscriptMessage } from '@/types/api'
+import type { MessagePart, PrimeCompactionReason, TranscriptMessage } from '@/types/api'
 import { writeClipboardText } from '@/lib/clipboard'
 import { boundText } from '@/lib/render-bounds'
 import { MarkdownText } from '../MarkdownText'
@@ -178,15 +178,14 @@ function AgentActivityPart({ part }: { part: Extract<MessagePart, { type: 'agent
   </div>
 }
 
-/** Undefined when the trigger is unknown: no harness records it with a completed compaction in its session file. */
-function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction' }>['reason']): string | undefined {
-  if (reason === 'threshold') return 'automatic threshold'
-  if (reason === 'overflow') return 'overflow recovery'
-  if (reason === 'incomplete') return 'incomplete response recovery'
-  if (reason === 'idle') return 'idle maintenance'
-  if (reason === 'requested') return 'requested'
-  if (reason === 'manual') return 'manual'
-  return undefined
+// Keyed by the type, so adding a reason there fails to compile until it has a label here.
+const COMPACTION_REASON_LABELS: Record<PrimeCompactionReason, string> = {
+  manual: 'manual',
+  threshold: 'automatic threshold',
+  overflow: 'overflow recovery',
+  requested: 'requested',
+  idle: 'idle maintenance',
+  incomplete: 'incomplete response recovery',
 }
 
 function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compaction' }> }) {
@@ -204,7 +203,8 @@ function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compacti
       : <><CircleAlert size={12} /> {part.status === 'cancelled' ? 'cancelled' : 'needs attention'}</>
   const details = part.error || part.summary
   const tokenLabel = part.tokensBefore === undefined ? '' : `${part.tokensBefore.toLocaleString()} tokens before`
-  const reasonLabel = compactionReasonLabel(part.reason)
+  // No harness records the trigger with a completed compaction in its session file, so a reloaded row may name none.
+  const reasonLabel = part.reason ? COMPACTION_REASON_LABELS[part.reason] : undefined
   return <div className={`activity-line activity-line--compaction is-${part.status}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
       <span className="activity-line__icon">{part.status === 'running' ? <LoaderCircle className="spin" size={13} /> : part.status === 'done' ? <Layers3 size={13} /> : <CircleAlert size={13} />}</span>
