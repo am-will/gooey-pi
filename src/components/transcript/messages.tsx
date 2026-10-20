@@ -8,6 +8,7 @@ import { splitTerminalContextBlock } from '@/lib/terminal-context'
 import { writeClipboardText } from '@/lib/clipboard'
 import { boundText } from '@/lib/render-bounds'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { isSystemReport } from '@/lib/system-rows'
 import { MarkdownText } from '../MarkdownText'
 import { OmpMark, PiMark, PrimeMark } from '../ui'
 import { InlineText } from './syntax'
@@ -276,8 +277,9 @@ export const SteerReadMarker = memo(function SteerReadMarker({ message }: { mess
 
 export const ActivityMessage = memo(function ActivityMessage({ message, harness = 'prime' }: { message: TranscriptMessage; harness?: HarnessId }) {
   const activityLabel = `${HARNESS_SHORT_NAMES[harness]} message`
+  // A report other than a compaction row is an error. A notice keeps its text, which renders as a neutral note.
   const sourceParts: MessagePart[] =
-    message.role === 'system' && !message.parts.some((part) => part.type === 'compaction')
+    isSystemReport(message) && !message.parts.some((part) => part.type === 'compaction')
       ? [
           { type: 'toolCall', id: message.id, name: activityLabel },
           { type: 'toolResult', name: activityLabel, text: messageText(message), isError: true },

@@ -372,6 +372,16 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('message--system')
   })
 
+  it('renders a notice as a neutral activity line that shows its text', () => {
+    const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }])
+    expect(html).toContain('message--activity')
+    expect(html).toContain('activity-line--note')
+    expect(html).toContain('Switched to anthropic/claude-sonnet due to a provider fallback')
+    expect(html).not.toContain('Prime message')
+    expect(html).not.toContain('failed')
+    expect(html).not.toContain('is-error')
+  })
+
   it('renders compaction activity and completion separately from system failures', () => {
     const html = render([{
       id: 'compaction',
