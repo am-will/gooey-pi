@@ -22,10 +22,8 @@ import type {
   TerminalSelectionContext,
   VoiceTranscriptionProvider,
 } from '@/types/api'
-import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
-import { appendCapabilityRouting } from '@/lib/capability-mentions'
-import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
-import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
+import { composePrompt } from '@/lib/composer-prompt'
+import { findSessionMentions } from '@/lib/session-mentions'
 import { clearComposerDraft, readComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
 import { messageActionForKey } from '@/lib/message-shortcuts'
@@ -297,16 +295,7 @@ export const Composer = memo(function Composer({
       return
     }
     const submittedImages = currentImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
-    // Recognized @ mentions carry explicit routing semantics; annotations then
-    // ride along inside the prompt as their own delimited plain-text block.
-    const referencedSessions = findSessionMentions(prompt, sessions, sessionReferenceIds)
-    const sessionTitles = new Set(referencedSessions.map(({ session }) => session.title.trim().toLocaleLowerCase()))
-    const promptWithSessions = appendSessionRouting(prompt, sessions, sessionReferenceIds)
-    // If a session and capability share a display name, the session chosen
-    // from the combined menu wins instead of silently routing both.
-    const promptWithCapabilities = appendCapabilityRouting(promptWithSessions, enabledSkills.filter((skill) => !sessionTitles.has(skill.name.trim().toLocaleLowerCase())))
-    const promptWithAnnotations = appendAnnotationsToPrompt(promptWithCapabilities, currentAnnotations)
-    const promptWithContext = appendTerminalContextToPrompt(promptWithAnnotations, currentTerminalContext)
+    const promptWithContext = composePrompt(prompt, { sessions, sessionReferenceIds, skills: enabledSkills, annotations: currentAnnotations, terminalContext: currentTerminalContext })
     const frame = `${JSON.stringify({ type: intent === 'steer' ? 'steer' : 'follow_up', message: promptWithContext, ...(submittedImages.length ? { images: submittedImages } : {}), id: '00000000-0000-0000-0000-000000000000' })}\n`
     if (new TextEncoder().encode(frame).byteLength > MAX_IMAGE_PROMPT_BYTES) {
       setAttachmentError('This message and its attachments are too large to send. Shorten the message or remove an attachment.')
