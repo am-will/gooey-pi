@@ -160,6 +160,29 @@ describe('agent transport events', () => {
     now.mockRestore()
   })
 
+  it('keeps each OMP compaction method as its own row when they share a reason', () => {
+    // OMP falls back from a shake pass to context-full for one trigger; both ends carry the stamped start reason.
+    const events: Record<string, unknown>[] = [
+      { type: 'compaction_start', reason: 'threshold', action: 'shake' },
+      {
+        type: 'compaction_end', reason: 'threshold', action: 'shake', aborted: false, willRetry: false, skipped: true, errorSeverity: 'warning',
+        errorMessage: 'Auto-shake found nothing eligible to drop; trying the next preferred compaction method.',
+      },
+      { type: 'compaction_start', reason: 'threshold', action: 'context-full' },
+      { type: 'compaction_end', reason: 'threshold', action: 'context-full', aborted: false, willRetry: false, skipped: true, errorSeverity: 'warning' },
+    ]
+    const compactions = (messages: TranscriptMessage[]) => messages.flatMap((message) => message.parts.filter((part) => part.type === 'compaction'))
+
+    const fallback = events.reduce((current, event) => applyPrimeEvent(current, event), [streamingMessage()])
+    expect(compactions(fallback)).toMatchObject([
+      { status: 'failed', outcome: 'skipped', reason: 'threshold', action: 'shake' },
+      { status: 'failed', outcome: 'skipped', reason: 'threshold', action: 'context-full' },
+    ])
+    // The same method skipping again for the same reason still collapses into one row.
+    const repeated = [...events.slice(2), ...events.slice(2)].reduce((current, event) => applyPrimeEvent(current, event), [streamingMessage()])
+    expect(compactions(repeated)).toHaveLength(1)
+  })
+
   it('mints distinct message ids for turns created in the same millisecond', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_074_279_000)
     const events: Record<string, unknown>[] = [
