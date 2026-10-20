@@ -11,7 +11,12 @@ import {
   flattenVisibleTree,
   collectDirectoryIds,
 } from '../../src/components/inspector/FilesPanel'
-import type { GitStatus, ProjectFileEntry, ProjectRecord } from '../../src/types/api'
+import {
+  type GitStatus,
+  PROJECT_FILE_LISTING_LIMIT,
+  type ProjectFileEntry,
+  type ProjectRecord,
+} from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -415,6 +420,71 @@ describe('FilesPanel component', () => {
     })
 
     expect(container.textContent).toContain('2 folders could not be read and were skipped.')
+  })
+
+  it('displays a truncation notice when the listing was capped', async () => {
+    const listFiles = vi.fn(async () => ({
+      entries: [{ path: 'App.tsx', type: 'file' as const }],
+      skipped: 0,
+      truncated: true,
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.file-tree__skipped')?.textContent).toBe(
+      `Large project: the file list stops after ${PROJECT_FILE_LISTING_LIMIT.toLocaleString('en-US')} entries, so some deeper paths are not shown or searchable.`,
+    )
+  })
+
+  it('describes the truncation limit per folder when any project folder was capped', async () => {
+    const multiProject: ProjectRecord = {
+      ...sampleProject,
+      folders: ['/workspace/frontend', '/workspace/backend'],
+    }
+    const listFiles = vi.fn(async (root: string) => ({
+      entries: [{ path: 'index.ts', type: 'file' as const }],
+      skipped: 0,
+      truncated: root.includes('backend'),
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={multiProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.file-tree__skipped')?.textContent).toContain(
+      `stops after ${PROJECT_FILE_LISTING_LIMIT.toLocaleString('en-US')} entries per project folder,`,
+    )
+  })
+
+  it('does not display a truncation notice for a complete listing', async () => {
+    const listFiles = vi.fn(async () => ({
+      entries: sampleEntries,
+      skipped: 0,
+      truncated: false,
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).not.toContain('Large project')
   })
 
   it('handles collapse all and expand all toolbar actions', async () => {

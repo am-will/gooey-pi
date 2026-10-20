@@ -12,7 +12,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { basename } from '@/lib/data'
 import { errorMessage } from '@/lib/errors'
-import type { GitStatus, ProjectFileEntry, ProjectRecord } from '@/types/api'
+import {
+  type GitStatus,
+  PROJECT_FILE_LISTING_LIMIT,
+  type ProjectFileEntry,
+  type ProjectRecord,
+} from '@/types/api'
 import { EmptyState, IconButton } from '../ui'
 
 export interface FileTreeNode {
@@ -225,6 +230,7 @@ export function FilesPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [skipped, setSkipped] = useState(0)
+  const [truncated, setTruncated] = useState(false)
   const [visibleLimit, setVisibleLimit] = useState(1_000)
   const loadToken = useRef(0)
 
@@ -234,6 +240,7 @@ export function FilesPanel({
     setExpandedIds(new Set())
     setError('')
     setSkipped(0)
+    setTruncated(false)
     setVisibleLimit(1_000)
     if (!project || !window.prime) return
     setLoading(true)
@@ -247,6 +254,7 @@ export function FilesPanel({
       )
       if (loadToken.current !== token) return
       setSkipped(groups.reduce((sum, group) => sum + group.listing.skipped, 0))
+      setTruncated(groups.some((group) => group.listing.truncated))
       const builtTree = buildProjectTree(groups, project.primaryFolder)
       setTreeRoots(builtTree)
     } catch (reason) {
@@ -352,6 +360,14 @@ export function FilesPanel({
           <p className="file-tree__skipped">
             {skipped} {skipped === 1 ? 'folder' : 'folders'} could not be read and{' '}
             {skipped === 1 ? 'was' : 'were'} skipped.
+          </p>
+        ) : null}
+        {!loading && !error && truncated ? (
+          <p className="file-tree__skipped">
+            Large project: the file list stops after{' '}
+            {PROJECT_FILE_LISTING_LIMIT.toLocaleString('en-US')} entries
+            {project.folders.length > 1 ? ' per project folder' : ''}, so some deeper paths are not
+            shown or searchable.
           </p>
         ) : null}
 
