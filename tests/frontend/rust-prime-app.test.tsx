@@ -5,8 +5,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
-import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
-import type { AppMeta, PrimeImplementation, PrimeModelCatalog, PrimeWorkApi, ProjectRecord, SkillRecord } from '../../src/types/api'
+import { primeCapabilityRecordAvailability, RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '../../src/lib/prime-compat'
+import type { AppMeta, NativeHeartbeatRecord, PrimeImplementation, PrimeModelCatalog, PrimeWorkApi, ProjectRecord, SkillRecord } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -38,6 +38,11 @@ function browserControl(implementation: PrimeImplementation | undefined): SkillR
   return { ...record, availability: primeCapabilityRecordAvailability(record, implementation) }
 }
 
+const heartbeat: NativeHeartbeatRecord = {
+  id: 'check-ci', source: 'heartbeat', status: 'active', prompt: 'check ci', schedule: '*/5 * * * *',
+  sessionId: 'session-ci', sessionFile: '/sessions/ci.jsonl', activeSessionId: 'active-ci',
+}
+
 const unsubscribe = () => () => undefined
 let container: HTMLDivElement
 let root: Root
@@ -60,7 +65,7 @@ function bridgeFor(detected: () => PrimeImplementation | undefined) {
     providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn(unsubscribe) },
     plugins: { list: vi.fn(async () => ({ skills: [browserControl(detected())], warnings: [] })) },
     browser: { state: vi.fn(async () => ({ tabs: [] })), onChanged: vi.fn(unsubscribe), onPointer: vi.fn(unsubscribe), onActivity: vi.fn(unsubscribe) },
-    heartbeats: { list: vi.fn(async () => []) },
+    heartbeats: { list: vi.fn(async () => [heartbeat]) },
     schedules: { list: vi.fn(async () => []), onChanged: vi.fn(unsubscribe) },
     settings: { get: vi.fn(async () => settings), update: vi.fn(async (patch) => ({ ...settings, ...patch })) },
     git: { status: vi.fn(async () => ({ isRepo: false, files: [] })) },
@@ -146,5 +151,17 @@ describe('a start recovery that reclassifies Prime as Rust', () => {
     expect(main.bridge.app.refreshHarnesses).toHaveBeenCalledOnce()
     expect(main.bridge.plugins.list).toHaveBeenCalledTimes(listed + 1)
     expect(main.bridge.plugins.list).toHaveBeenLastCalledWith('/project', 'prime')
+  })
+})
+
+describe('Scheduled page on Rust Prime', () => {
+  it('gets the detected build, so heartbeat Pause is disabled with the reason', async () => {
+    await renderApp(() => 'rust')
+    await navigate('Scheduled')
+
+    const row = await waitFor(() => [...container.querySelectorAll('.native-heartbeat')].find((item) => item.textContent?.includes('check ci')), 'the heartbeat is listed')
+    const pause = [...row.querySelectorAll('button')].find((button) => button.textContent === 'Pause')
+    expect(pause?.disabled).toBe(true)
+    expect(pause?.title).toBe(RUST_PRIME_HEARTBEAT_PAUSE_DETAIL)
   })
 })
