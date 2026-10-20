@@ -386,6 +386,12 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('is-error')
   })
 
+  it('bounds a long notice like the other activity markdown', () => {
+    const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: `${'a'.repeat(40_000)}NOTICE-TAIL` }] }])
+    expect(html).toContain('[Note truncated in the desktop view.]')
+    expect(html).not.toContain('NOTICE-TAIL')
+  })
+
   it('renders a live fallback notice exactly like its persisted counterpart', async () => {
     const live = replayPrimeEvents([], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
     const dir = mkdtempSync(join(tmpdir(), 'gooeypi-notice-'))
