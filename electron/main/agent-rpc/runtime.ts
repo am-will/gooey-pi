@@ -10,6 +10,7 @@ import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAsse
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
+import { manualCompactionStart, settledCompactionEnd, type CompactAnswer } from './manual-compaction'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
@@ -92,6 +93,9 @@ export class RpcRuntime {
   private watchdogDisposed = false
   private lastActivityAt = Date.now()
   private lastRealCompactionEventAt = 0
+  // The compact command in flight, holding the compaction_end its harness
+  // streamed until the command answers (see compact).
+  private manualCompaction: { end?: RpcObject } | null = null
   private readonly chunks: RpcChunkAssembler
 
   constructor(
@@ -213,8 +217,8 @@ export class RpcRuntime {
       await this.transport.enqueue(`${JSON.stringify(command)}\n`).done
       return { type: 'response', command: 'extension_ui_response', success: true }
     }
-    const timeout = command.type === 'compact' ? 10 * 60_000 : 60_000
-    const response = await this.request(command, timeout)
+    if (command.type === 'compact') return this.compact(command)
+    const response = await this.request(command, 60_000)
     if (command.type === 'get_state') this.updateFromState(response.data)
     if (response.success === true && ['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
       await this.refreshState()
@@ -228,6 +232,35 @@ export class RpcRuntime {
       void this.refreshState().then(() => this.refreshContextUsage()).catch(() => undefined)
     }
     return response
+  }
+
+  /**
+   * Runs a manual compaction and publishes its lifecycle from the answer.
+   * OMP answers a compact command without streaming any compaction event, and
+   * handles commands one at a time, so the watchdog's polls wait behind it
+   * too. The end a harness does stream waits for the answer, which completes
+   * it; without one, the answer stands in for the whole lifecycle.
+   */
+  private async compact(command: RpcObject): Promise<RpcObject> {
+    const compaction: { end?: RpcObject } = {}
+    this.manualCompaction = compaction
+    try {
+      const response = await this.request(command, 10 * 60_000)
+      this.settleManualCompaction(compaction, command, { result: response.data })
+      return response
+    } catch (error) {
+      this.settleManualCompaction(compaction, command, { error: errorMessage(error) })
+      throw error
+    }
+  }
+
+  private settleManualCompaction(compaction: { end?: RpcObject }, command: RpcObject, answer: CompactAnswer): void {
+    if (this.manualCompaction === compaction) this.manualCompaction = null
+    // A runtime that exited or is stopping publishes no more lifecycle.
+    if (this.watchdogDisposed) return
+    if (!compaction.end && 'error' in answer) return
+    if (!compaction.end && this.compactionEpisode === 'none') this.handleEvent(manualCompactionStart(command))
+    this.handleEvent(settledCompactionEnd(compaction.end, command, answer))
   }
 
   stop(): Promise<boolean> {
@@ -446,6 +479,10 @@ export class RpcRuntime {
 
   /** Runs one normalized event through the streaming, compaction and session-action state, then forwards it. */
   private handleEvent(value: RpcObject): void {
+    if (value.type === 'compaction_end' && this.manualCompaction && !this.manualCompaction.end) {
+      this.manualCompaction.end = value
+      return
+    }
     const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)
