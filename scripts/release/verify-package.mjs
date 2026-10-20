@@ -12,11 +12,11 @@ import {
   assertAsarLayout,
   assertExactArchitectures,
   assertPackagedExtensions,
-  assertUnpackedNativeLayout,
+  assertMacUnpackedNativeLayout,
   parseArchitectures,
   parseTeamIdentifier,
   requireReleaseArtifacts,
-} from './lib.mjs'
+} from './package-layout.mjs'
 import { assertPackageSizeBudgets, collectPackageSizeMetrics, describeSizeMetrics } from './size-budgets.mjs'
 
 function run(command, args) {
@@ -81,7 +81,7 @@ async function verifyApp({ app, artifact, mode, expectedTeam }) {
   assertExactArchitectures(appArchitectures, artifactArchitectures(artifact), basename(artifact))
   const unpacked = join(resources, 'app.asar.unpacked')
   if (!existsSync(unpacked)) throw new Error(`${basename(artifact)} application must contain Resources/app.asar.unpacked`)
-  assertUnpackedNativeLayout(unpacked, appArchitectures, (path) => parseArchitectures(run('lipo', ['-archs', path])))
+  assertMacUnpackedNativeLayout(unpacked, appArchitectures, (path) => parseArchitectures(run('lipo', ['-archs', path])))
   assertFuseWire(await getCurrentFuseWire(executable))
 
   if (mode === 'public') {

@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util'
 import { listPackage } from '@electron/asar'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { assertFuseWire } from './fuses.cjs'
-import { assertAsarLayout, assertPackagedExtensions } from './lib.mjs'
+import { assertAsarLayout, assertPackagedExtensions } from './package-layout.mjs'
 
 function requireOption(value, label, allowed) {
   if (!value || !allowed.includes(value)) throw new Error(`${label} must be one of: ${allowed.join(', ')}`)
@@ -138,7 +138,7 @@ export function zeroMqAddonPattern(target, architecture) {
   return new RegExp(`^node_modules/zeromq/build/${nativeRuntimeDirectory(target)}/${architecture}/node/[^/]+-Release/addon\\.node$`)
 }
 
-export function assertUnpackedNativeLayout(directory, target, architecture) {
+export function assertCrossPlatformUnpackedNativeLayout(directory, target, architecture) {
   const files = listFiles(directory)
     .map((path) => relative(directory, path).replaceAll('\\', '/'))
     .sort()
@@ -169,7 +169,7 @@ export async function verifyPackage(target, architecture, { unpackedOnly = false
   if (existsSync(join(resources, 'app'))) throw new Error('Packaged application contains forbidden loose resources/app')
   if (!existsSync(unpacked)) throw new Error('Packaged application must contain resources/app.asar.unpacked')
   assertAsarLayout(listPackage(asar, { isPack: false }))
-  assertUnpackedNativeLayout(unpacked, target, architecture)
+  assertCrossPlatformUnpackedNativeLayout(unpacked, target, architecture)
   const executable = packagedExecutablePath(app, target)
   assertFuseWire(await getCurrentFuseWire(executable))
   if (!unpackedOnly && target === 'win' && mode === 'public') {

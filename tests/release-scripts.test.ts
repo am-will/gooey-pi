@@ -18,28 +18,30 @@ import {
 } from '../scripts/release/bootstrap-npm.mjs'
 import { installAppDependencies } from '../scripts/release/install-app-deps.mjs'
 import {
-  artifactArchitectures,
-  assertArchitectureCoverage,
-  assertAsarLayout,
-  assertExactArchitectures,
-  assertPackagedExtensions,
   assertSupportedNpm,
   assertSupportedNode,
   assertSupportedToolchain,
-  assertUnpackedNativeLayout,
-  expectedUnpackedNativeLayout,
   parseToolchainMetadata,
-  parseArchitectures,
-  parseTeamIdentifier,
   readNpmOutput,
   readNpmVersion,
   readRepositoryToolchain,
-  requireReleaseArtifacts,
   resolveCommandInvocation,
   validateReleaseCredentials,
   validateWindowsReleaseCredentials,
   withoutReleaseCredentials,
 } from '../scripts/release/lib.mjs'
+import {
+  artifactArchitectures,
+  assertArchitectureCoverage,
+  assertAsarLayout,
+  assertExactArchitectures,
+  assertMacUnpackedNativeLayout,
+  assertPackagedExtensions,
+  expectedUnpackedNativeLayout,
+  parseArchitectures,
+  parseTeamIdentifier,
+  requireReleaseArtifacts,
+} from '../scripts/release/package-layout.mjs'
 import { SHIPPED_EXTENSION_FILENAMES } from '../electron/main/extension-manifest'
 import { producedReleaseArtifactNames, readElectronBuilderConfig, RELEASE_BUILD_MATRIX } from '../scripts/release/artifact-names.mjs'
 import {
@@ -60,7 +62,7 @@ import { assertFuseWire, ELECTRON_FUSE_CONFIG } from '../scripts/release/fuses.c
 import { collectAuditAdvisories, describeAuditEvaluation, evaluateAuditReport, parseAuditExceptions, readAuditExceptions } from '../scripts/release/audit-exceptions.mjs'
 import {
   assertValidAuthenticode,
-  assertUnpackedNativeLayout as assertCrossPlatformUnpackedNativeLayout,
+  assertCrossPlatformUnpackedNativeLayout,
   expectedArtifactExtensions,
   expectedAuthenticodeSigner,
   expectedNativeFiles,
@@ -1589,7 +1591,7 @@ describe('post-package verification helpers', () => {
     mkdirSync(dirname(fallback), { recursive: true })
     writeFileSync(fallback, 'fixture')
     try {
-      expect(() => assertUnpackedNativeLayout(fallbackDirectory, architectures, () => architectures)).not.toThrow()
+      expect(() => assertMacUnpackedNativeLayout(fallbackDirectory, architectures, () => architectures)).not.toThrow()
     } finally {
       rmSync(fallbackDirectory, { recursive: true, force: true })
     }
@@ -1602,7 +1604,7 @@ describe('post-package verification helpers', () => {
     }
     try {
       // A future runtime-library name still matches the bounded wildcard.
-      expect(() => assertUnpackedNativeLayout(futureDirectory, architectures, () => architectures)).not.toThrow()
+      expect(() => assertMacUnpackedNativeLayout(futureDirectory, architectures, () => architectures)).not.toThrow()
     } finally {
       rmSync(futureDirectory, { recursive: true, force: true })
     }
@@ -1612,7 +1614,7 @@ describe('post-package verification helpers', () => {
     const architectures = new Set(['arm64'])
     const directory = createUnpackedFixture(architectures)
     try {
-      expect(() => assertUnpackedNativeLayout(directory, architectures, () => new Set(['arm64']))).not.toThrow()
+      expect(() => assertMacUnpackedNativeLayout(directory, architectures, () => new Set(['arm64']))).not.toThrow()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
@@ -1623,7 +1625,7 @@ describe('post-package verification helpers', () => {
     const missingDirectory = createUnpackedFixture(architectures)
     rmSync(join(missingDirectory, expectedUnpackedNativeLayout(architectures).files.at(-1)!))
     try {
-      expect(() => assertUnpackedNativeLayout(missingDirectory, architectures, () => architectures)).toThrow(/Missing unpacked/)
+      expect(() => assertMacUnpackedNativeLayout(missingDirectory, architectures, () => architectures)).toThrow(/Missing unpacked/)
     } finally {
       rmSync(missingDirectory, { recursive: true, force: true })
     }
@@ -1633,7 +1635,7 @@ describe('post-package verification helpers', () => {
     mkdirSync(dirname(extraPath), { recursive: true })
     writeFileSync(extraPath, 'fixture')
     try {
-      expect(() => assertUnpackedNativeLayout(extraDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*extra/)
+      expect(() => assertMacUnpackedNativeLayout(extraDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*extra/)
     } finally {
       rmSync(extraDirectory, { recursive: true, force: true })
     }
@@ -1641,7 +1643,7 @@ describe('post-package verification helpers', () => {
     const extraPrefixDirectory = createUnpackedFixture(architectures)
     mkdirSync(join(extraPrefixDirectory, 'empty-prefix'))
     try {
-      expect(() => assertUnpackedNativeLayout(extraPrefixDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*empty-prefix/)
+      expect(() => assertMacUnpackedNativeLayout(extraPrefixDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*empty-prefix/)
     } finally {
       rmSync(extraPrefixDirectory, { recursive: true, force: true })
     }
@@ -1651,7 +1653,7 @@ describe('post-package verification helpers', () => {
     const architectures = new Set(['arm64'])
     const directory = createUnpackedFixture(architectures)
     try {
-      expect(() => assertUnpackedNativeLayout(directory, architectures, (path: string) => (path.endsWith('addon.node') ? new Set(['x86_64']) : new Set(['arm64'])))).toThrow(
+      expect(() => assertMacUnpackedNativeLayout(directory, architectures, (path: string) => (path.endsWith('addon.node') ? new Set(['x86_64']) : new Set(['arm64'])))).toThrow(
         /addon\.node is missing app architecture.*arm64/,
       )
     } finally {
