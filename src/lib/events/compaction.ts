@@ -38,8 +38,10 @@ function compactionPartFromStart(raw: Record<string, unknown>): CompactionPart {
 function compactionPartFromEnd(raw: Record<string, unknown>): CompactionPart {
   const result = compactionResult(raw.result)
   const aborted = raw.aborted === true
+  // Harness adapters mark a successful pass that rewrote history in place,
+  // and so produced no summary, as completed.
   const hasResult = Boolean(result.summary || result.tokensBefore !== undefined || result.firstKeptEntryId)
-  const status = aborted ? 'cancelled' : hasResult ? 'done' : 'failed'
+  const status = aborted ? 'cancelled' : hasResult || raw.completed === true ? 'done' : 'failed'
   const outcome = aborted ? 'cancelled' : raw.errorSeverity === 'warning' ? 'skipped' : status === 'failed' ? 'failed' : undefined
   return {
     type: 'compaction',
@@ -85,6 +87,11 @@ function sameCompactionResult(left: CompactionPart, right: CompactionPart): bool
     return Boolean(left.reason && right.reason && left.reason === right.reason && (!left.error || !right.error || left.error === right.error))
   }
   return Boolean(left.summary && right.summary && left.summary === right.summary && left.tokensBefore === right.tokensBefore)
+}
+
+/** An end that omits a field (OMP ends carry no reason) must not erase what the running row learned at start. */
+function definedCompactionFields(part: CompactionPart): Partial<CompactionPart> {
+  return Object.fromEntries(Object.entries(part).filter(([, value]) => value !== undefined))
 }
 
 function compactionIndex(messages: TranscriptMessage[], status?: CompactionPart['status']): number {
@@ -135,7 +142,7 @@ export function applyCompactionEvent(messages: TranscriptMessage[], raw: Record<
     if (alreadyPersisted) return messages.filter((_, index) => index !== running)
     const completedAt = Date.now()
     return messages.map((message, index) => index === running
-      ? { ...message, completedAt, streaming: false, parts: message.parts.map((candidate) => candidate.type === 'compaction' ? { ...candidate, ...part } : candidate) }
+      ? { ...message, completedAt, streaming: false, parts: message.parts.map((candidate) => candidate.type === 'compaction' ? { ...candidate, ...definedCompactionFields(part!) } : candidate) }
       : message)
   }
   if (part.status !== 'running') {

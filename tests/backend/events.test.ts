@@ -98,6 +98,31 @@ describe('agent transport events', () => {
     })
   })
 
+  it('completes a result-less end that the harness adapter marked completed', () => {
+    const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'threshold' })
+    const finished = applyPrimeEvent(started, { type: 'compaction_end', aborted: false, willRetry: false, completed: true })
+    expect(finished.at(-1)).toMatchObject({ role: 'system', streaming: false })
+    expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'done', reason: 'threshold' })
+    expect(finished.at(-1)?.parts[0]).not.toHaveProperty('outcome', 'failed')
+  })
+
+  it('renders a warning end without a result as skipped', () => {
+    const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'threshold' })
+    const finished = applyPrimeEvent(started, { type: 'compaction_end', aborted: false, willRetry: false, errorSeverity: 'warning' })
+    expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'failed', outcome: 'skipped' })
+  })
+
+  it('keeps the running row reason and instructions when the end omits them', () => {
+    const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'manual', customInstructions: 'Keep the API notes.' })
+    const finished = applyPrimeEvent(started, {
+      type: 'compaction_end', aborted: false, willRetry: false,
+      result: { summary: 'Summarized.', tokensBefore: 80_000, firstKeptEntryId: 'kept-2' },
+    })
+    expect(finished.at(-1)?.parts[0]).toMatchObject({
+      type: 'compaction', status: 'done', reason: 'manual', customInstructions: 'Keep the API notes.', summary: 'Summarized.',
+    })
+  })
+
   it('does not duplicate the persisted failure outcome and end event', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_074_279_000)
     const events: Record<string, unknown>[] = [
