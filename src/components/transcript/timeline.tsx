@@ -80,9 +80,10 @@ function ReasoningPart({ part, streaming = false }: { part: Extract<MessagePart,
   return <div className="activity-line activity-line--reasoning"><MarkdownText text={boundText(part.text, 40_000, '\n… [Reasoning truncated in the desktop view.]')} streaming={streaming} /></div>
 }
 
-export function ThinkingDots({ labelled = false }: { labelled?: boolean }) {
+/** Decorative and hidden from assistive technology: render it beside visible status text. */
+export function ThinkingDots() {
   return (
-    <span className="thinking-dots" role={labelled ? 'status' : undefined} aria-label={labelled ? 'Prime is thinking' : undefined} aria-hidden={labelled ? undefined : true}>
+    <span className="thinking-dots" aria-hidden="true">
       <span /><span /><span />
     </span>
   )
