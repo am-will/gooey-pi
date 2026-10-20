@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { resolveCommandInvocation } from './lib.mjs'
 
@@ -27,7 +27,7 @@ function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-/** Windows npm is a .cmd shim Node cannot spawn without a shell, so commands go through the shared resolver. */
+/** Commands go through the shared resolver so Windows .cmd shims such as npm spawn without a shell. */
 export function run(command, args, cwd, { platform = process.platform, env = process.env, spawn = spawnSync } = {}) {
   const invocation = resolveCommandInvocation(command, args, platform, env)
   const result = spawn(invocation.file, invocation.args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: invocation.shell })
@@ -65,18 +65,13 @@ function verifyVendorPatches() {
 
     const work = mkdtempSync(join(tmpdir(), 'gooeypi-vendor-patch-'))
     try {
-      const rebuilt = join(work, 'rebuilt')
       const reviewed = join(work, 'reviewed')
-      mkdirSync(rebuilt)
       mkdirSync(reviewed)
       run('tar', ['-xzf', basePath, '-C', work], ROOT)
       run('git', ['apply', patchPath], work)
       run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
       assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
-
-      run('npm', ['pack', join(work, 'package'), '--pack-destination', rebuilt, '--ignore-scripts'], ROOT)
-      const generated = join(rebuilt, basename(outputPath))
-      console.log(`${spec.output}: content verified; reproducible archive ${sha256(generated)}`)
+      console.log(`${spec.output}: content verified against ${spec.patch}`)
     } finally {
       rmSync(work, { recursive: true, force: true })
     }
