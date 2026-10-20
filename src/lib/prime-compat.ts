@@ -1,4 +1,4 @@
-import type { PrimeImplementation } from '../types/api'
+import type { PrimeImplementation, SkillRecord } from '../types/api'
 
 /** How user-facing copy names the Rust build. */
 export const RUST_PRIME_AGENT_NAME = 'Prime Agent 0.10+'
@@ -48,4 +48,31 @@ export function primeUnavailableCapabilitiesNotice(implementation: PrimeImplemen
   const unavailable = PRIME_RUST_UNAVAILABLE_CAPABILITIES.filter(({ id }) => !primeCapabilityAvailable(implementation, id))
   if (!unavailable.length) return undefined
   return `Not available with ${RUST_PRIME_AGENT_NAME}: ${unavailable.map(({ label }) => label).join(', ')}. Pi and OMP keep them.`
+}
+
+/** GooeyPi's own Plugins-page records that Prime loads as TypeScript extensions. */
+const PRIME_EXTENSION_CAPABILITY_RECORDS: ReadonlyMap<string, PrimeRustUnavailableCapability> = new Map([
+  ['prime-work-browser', 'browser'],
+  ['gooeypi-ask-user', 'askUser'],
+])
+
+/**
+ * Availability of a Plugins-page record on this Prime build. Rust Prime
+ * cannot load GooeyPi's browser and ask-user extensions or any discovered
+ * user or project TypeScript extension, so those are labelled instead of
+ * shown as active; every other record is left alone.
+ */
+export function primeCapabilityRecordAvailability(
+  record: Pick<SkillRecord, 'id' | 'kind' | 'location'>,
+  implementation: PrimeImplementation | undefined,
+): SkillRecord['availability'] | undefined {
+  const capability = PRIME_EXTENSION_CAPABILITY_RECORDS.get(record.id)
+    ?? (record.kind === 'extension' && record.location !== 'system' ? 'typescriptExtensions' : undefined)
+  if (!capability || primeCapabilityAvailable(implementation, capability)) return undefined
+  return {
+    available: false,
+    detail: capability === 'typescriptExtensions'
+      ? `${RUST_PRIME_AGENT_NAME} does not load TypeScript extensions.`
+      : `${RUST_PRIME_AGENT_NAME} cannot load GooeyPi's TypeScript extension for this capability. Pi and OMP keep it.`,
+  }
 }

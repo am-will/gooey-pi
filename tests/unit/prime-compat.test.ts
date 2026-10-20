@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PRIME_RUST_UNAVAILABLE_CAPABILITIES,
   primeCapabilityAvailable,
+  primeCapabilityRecordAvailability,
   primeImplementationFromVersion,
   primeUnavailableCapabilitiesNotice,
 } from '../../src/lib/prime-compat'
@@ -53,6 +54,39 @@ describe('Prime capability availability', () => {
     )
     expect(primeUnavailableCapabilitiesNotice('typescript')).toBeUndefined()
     expect(primeUnavailableCapabilitiesNotice(undefined)).toBeUndefined()
+  })
+
+  it('labels the Plugins records Rust Prime cannot load', () => {
+    const browser = { id: 'prime-work-browser', kind: 'skill', location: 'system' } as const
+    const askUser = { id: 'gooeypi-ask-user', kind: 'extension', location: 'system' } as const
+    const userExtension = { id: 'extension:user:legacy', kind: 'extension', location: 'user' } as const
+    const projectExtension = { id: 'extension:project:tools', kind: 'extension', location: 'project' } as const
+
+    for (const record of [browser, askUser]) {
+      expect(primeCapabilityRecordAvailability(record, 'rust')).toEqual({
+        available: false,
+        detail: 'Prime Agent 0.10+ cannot load GooeyPi\'s TypeScript extension for this capability. Pi and OMP keep it.',
+      })
+    }
+    for (const record of [userExtension, projectExtension]) {
+      expect(primeCapabilityRecordAvailability(record, 'rust')).toEqual({ available: false, detail: 'Prime Agent 0.10+ does not load TypeScript extensions.' })
+    }
+    for (const record of [browser, askUser, userExtension]) {
+      expect(primeCapabilityRecordAvailability(record, 'typescript')).toBeUndefined()
+      expect(primeCapabilityRecordAvailability(record, undefined)).toBeUndefined()
+    }
+  })
+
+  it('leaves Rust Prime records it can load alone', () => {
+    for (const record of [
+      { id: 'prime-work-schedules', kind: 'skill', location: 'system' },
+      { id: 'gooeypi-computer-use', kind: 'extension', location: 'system' },
+      { id: 'skill:user:notes', kind: 'skill', location: 'user' },
+      { id: 'constructor', kind: 'package', location: 'user' },
+      { id: 'prime-mcp-docs', kind: 'mcp', location: 'user' },
+    ] as const) {
+      expect(primeCapabilityRecordAvailability(record, 'rust')).toBeUndefined()
+    }
   })
 
   it('withholds a listed capability only from Rust Prime', () => {

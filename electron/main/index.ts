@@ -5,6 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
+import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
@@ -799,6 +800,7 @@ async function bootstrap(): Promise<void> {
     }
   }
   const plugins = new PluginService(primeExecutable, (path) => projects.authorizeProjectRoot(path), {
+    capabilityAvailability: (record) => primeCapabilityRecordAvailability(record, discovery.primeImplementation()),
     builtInSkills: async () => [{
       id: 'prime-work-schedules', name: 'Scheduled tasks',
       description: 'Create and manage durable project and thread schedules from an agent.',
