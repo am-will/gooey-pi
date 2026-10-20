@@ -3,7 +3,11 @@ import { isRecord } from '../validation'
 import type { HarnessRpcAdapter } from './harness-adapter'
 import type { RpcObject } from './types'
 
-/** A compact command in flight, holding the compaction_end its harness streamed until the command answers. */
+/**
+ * A compact command in flight, and the compaction_end its harness streamed
+ * for it. That end waits for the command's answer unless it already reports
+ * how the compaction ended.
+ */
 export interface ManualCompaction {
   end?: RpcObject
 }
@@ -32,6 +36,11 @@ export function isCompactRefusal(adapter: Pick<HarnessRpcAdapter, 'compactRefusa
  */
 export function isManualCompactionReason(reason: unknown): boolean {
   return reason === undefined || isRequestedCompactionReason(reason)
+}
+
+/** Whether a streamed end already reports a result or a cancellation, which nothing in its command's answer can change. */
+export function reportsCompactionOutcome(end: RpcObject): boolean {
+  return end.aborted === true || isRecord(end.result)
 }
 
 /** The start of a manual compaction the harness did not announce itself. */

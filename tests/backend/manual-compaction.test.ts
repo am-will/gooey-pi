@@ -212,6 +212,22 @@ describe('manual compaction lifecycle', () => {
     expect(events.some((event) => event.type === 'agent_start')).toBe(true)
   })
 
+  it('forwards at once a streamed end that already reports its result', async () => {
+    // Nothing in the answer can change a result, and the run a steer starts
+    // right after must not appear to open before the compaction closed.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'manual' })
+      send({ type: 'compaction_end', reason: 'manual', result: ${JSON.stringify(RESULT)}, aborted: false, willRetry: false })
+      send({ type: 'agent_start' })
+      ok(${JSON.stringify(RESULT)})`, PI_RPC_ADAPTER, events)
+
+    await runtime.command({ type: 'compact' })
+
+    expect(events.map((event) => event.type).filter((type) => type === 'agent_start' || type === 'compaction_start' || type === 'compaction_end'))
+      .toEqual(['compaction_start', 'compaction_end', 'agent_start'])
+  })
+
   it('forwards the end a harness streamed for a compaction its runtime stopped', async () => {
     // Pi cancels a running compaction on abort, streams an aborted end, then
     // fails the compact command.
