@@ -118,7 +118,7 @@ function runModelProbe(
       if (settled || !countBytes(chunk)) return
       scan(decoder.write(chunk))
     })
-    // stderr is diagnostic noise, never parsed — but a runaway producer still
+    // stderr is diagnostic noise and never parsed, but a runaway producer still
     // counts against the shared byte budget.
     child.stderr?.on('data', (chunk: Buffer) => {
       if (!settled) countBytes(chunk)
