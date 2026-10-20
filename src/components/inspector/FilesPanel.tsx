@@ -45,6 +45,10 @@ export function getFileIcon(filename: string) {
   return <FileText size={13} />
 }
 
+// One shared collator: localeCompare with options resolves a new collator on
+// every call, which dominates tree building for folders with thousands of files.
+const compareNames = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true }).compare
+
 export function buildTreeFromEntries(
   entries: ProjectFileEntry[],
   root: string,
@@ -119,7 +123,7 @@ export function buildTreeFromEntries(
   const sortNodes = (nodes: FileTreeNode[]) => {
     nodes.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+      return compareNames(a.name, b.name)
     })
     for (const node of nodes) {
       if (node.children.length > 0) {

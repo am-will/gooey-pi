@@ -109,6 +109,19 @@ describe('FilesPanel tree building logic', () => {
     ])
   })
 
+  it('sorts names case-insensitively with numeric segments in natural order', () => {
+    const entries: ProjectFileEntry[] = [
+      { path: 'file10.txt', type: 'file' },
+      { path: 'file2.txt', type: 'file' },
+      { path: 'File1.txt', type: 'file' },
+    ]
+    expect(buildTreeFromEntries(entries, '/root', 0).map((node) => node.name)).toEqual([
+      'File1.txt',
+      'file2.txt',
+      'file10.txt',
+    ])
+  })
+
   it('creates ancestor directory placeholders if missing from listing', () => {
     const entries: ProjectFileEntry[] = [
       { path: 'a/b/c/deep.txt', type: 'file' },
