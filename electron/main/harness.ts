@@ -24,6 +24,8 @@ export interface HarnessDescriptor {
   windowsNpmShim?: { shim: string; entrypoint: readonly string[] }
   agentDir: (home: string) => string
   sessionRoot: (home: string) => string
+  /** Project-relative directory (as path segments) that holds the harness's project agent state. */
+  projectAgentSegments: readonly string[]
 }
 
 export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
@@ -40,6 +42,7 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     windowsNpmShim: { shim: 'prime-agent.cmd', entrypoint: ['prime-agent', 'dist', 'bundle', 'cli.js'] },
     agentDir: (home) => join(home, '.prime', 'agent'),
     sessionRoot: (home) => join(home, '.prime', 'agent', 'sessions'),
+    projectAgentSegments: ['.prime', 'agent'],
   },
   omp: {
     id: 'omp',
@@ -54,6 +57,7 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     },
     agentDir: (home) => join(home, '.omp', 'agent'),
     sessionRoot: (home) => join(home, '.omp', 'agent', 'sessions'),
+    projectAgentSegments: ['.omp'],
   },
   pi: {
     id: 'pi',
@@ -68,5 +72,6 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     windowsNpmShim: { shim: 'pi.cmd', entrypoint: ['@earendil-works', 'pi-coding-agent', 'dist', 'cli.js'] },
     agentDir: (home) => join(home, '.pi', 'agent'),
     sessionRoot: (home) => join(home, '.pi', 'agent', 'sessions'),
+    projectAgentSegments: ['.pi'],
   },
 }
