@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { FuseState, FuseV1Options, FuseVersion, flipFuses, getCurrentFuseWire } from '@electron/fuses'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import {
   bootstrapNpm,
   parsePinnedNpmArtifact,
@@ -1389,6 +1389,15 @@ describe('fuse hardening configuration', () => {
     expect(() => assertFuseWire({ ...wire, [FuseV1Options.EnableNodeCliInspectArguments]: FuseState.REMOVED })).toThrow(/EnableNodeCliInspectArguments is REMOVED/)
     const { [FuseV1Options.WasmTrapHandlers]: _omitted, ...truncated } = wire
     expect(() => assertFuseWire(truncated)).toThrow('Electron fuse WasmTrapHandlers is undefined, expected ENABLE')
+    // Every hardened fuse is enforced on its own: flipping or dropping any one of them fails.
+    for (const option of Object.keys(ELECTRON_FUSE_CONFIG)) {
+      const name = FuseV1Options[Number(option)]
+      const flipped = wire[option] === FuseState.ENABLE ? FuseState.DISABLE : FuseState.ENABLE
+      expect(() => assertFuseWire({ ...wire, [option]: flipped })).toThrow(`Electron fuse ${name} is ${FuseState[flipped]}`)
+      const { [option]: _dropped, ...missing } = wire
+      expect(() => assertFuseWire(missing)).toThrow(`Electron fuse ${name} is undefined`)
+    }
+    expect(Object.keys(ELECTRON_FUSE_CONFIG)).toHaveLength(9)
   })
 
   test('accepts the wire after-pack flips into a binary and rejects an unflipped one', async () => {
@@ -1881,17 +1890,34 @@ describe('cross-platform packaging repair', () => {
 })
 
 describe('DMG verification cleanup', () => {
-  test('detach failures are logged instead of masking the original error and cleanup always runs', () => {
-    const source = readFileSync('scripts/release/verify-package.mjs', 'utf8')
-    const verifyDmg = source.slice(source.indexOf('async function verifyDmg'), source.indexOf('export async function verifyPackage'))
-    // hdiutil detach runs inside its own try/catch that only logs.
-    expect(verifyDmg).toMatch(/try\s*\{\s*run\('hdiutil', \['detach', mountPoint\]\)\s*\}\s*catch \(detachError\)\s*\{\s*console\.error/)
-    // The rmSync cleanup is attempted unconditionally after the detach attempt.
-    const finallyIndex = verifyDmg.indexOf('} finally {')
-    const cleanupIndex = verifyDmg.indexOf('rmSync(mountPoint, { recursive: true, force: true })')
-    expect(finallyIndex).toBeGreaterThan(-1)
-    expect(cleanupIndex).toBeGreaterThan(finallyIndex)
-    expect(verifyDmg.slice(cleanupIndex)).not.toContain('detach')
+  test('detach failures are logged instead of masking the original error and cleanup always runs', async () => {
+    const releaseDirectory = mkdtempSync(join(tmpdir(), 'gooeypi-dmg-release-'))
+    writeFileSync(join(releaseDirectory, 'GooeyPi-1.0.0-arm64.dmg'), '')
+    writeFileSync(join(releaseDirectory, 'GooeyPi-1.0.0-arm64.zip'), '')
+    let mountPoint: string | undefined
+    const spawnSync = vi.fn((command: string, args: string[]) => {
+      if (command === 'hdiutil' && args[0] === 'attach') mountPoint = args[args.indexOf('-mountpoint') + 1]
+      if (command === 'hdiutil' && args[0] === 'detach') return { status: 1, stdout: '', stderr: 'resource busy' }
+      return { status: 0, stdout: '', stderr: '' }
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Scoped rather than hoisted so the other tests in this file keep spawning real processes.
+    vi.resetModules()
+    vi.doMock('node:child_process', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:child_process')>()), spawnSync }))
+    try {
+      const { verifyPackage } = await import('../scripts/release/verify-package.mjs')
+      // The empty mount holds no .app; that original error must survive the failed detach.
+      await expect(verifyPackage({ mode: 'qa', releaseDirectory })).rejects.toThrow(/Expected exactly one packaged \.app/)
+      expect(spawnSync).toHaveBeenCalledWith('hdiutil', ['detach', mountPoint], expect.anything())
+      expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/hdiutil detach failed/))
+      expect(mountPoint).toBeDefined()
+      expect(existsSync(mountPoint as string)).toBe(false)
+    } finally {
+      vi.doUnmock('node:child_process')
+      vi.resetModules()
+      consoleError.mockRestore()
+      rmSync(releaseDirectory, { recursive: true, force: true })
+    }
   })
 })
 
