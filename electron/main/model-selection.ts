@@ -19,8 +19,11 @@ function normalizedModelText(value: string): string {
 function modelMatchScore(query: string, model: PrimeModelDescriptor): number {
   const wanted = normalizedModelText(query)
   if (!wanted) return 0
+  // A field with no ASCII letters or digits (e.g. a CJK display name) normalizes to '', and
+  // `wanted.includes('')` is always true, so empty fields would otherwise match every query.
   const fields = [model.key, model.id, model.name, `${model.provider} ${model.name}`, `${model.provider} ${model.id}`]
     .map(normalizedModelText)
+    .filter((field) => field.length > 0)
   if (fields.includes(wanted)) return 10_000
   const wantedTokens = new Set(wanted.split(' '))
   let best = 0
