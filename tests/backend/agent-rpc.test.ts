@@ -1544,9 +1544,12 @@ describe('session actions without harness session_action_update events', () => {
     await manager.command(runtime.runtimeId, { type: 'prompt', message: 'hello' })
     await manager.command(runtime.runtimeId, { type: 'steer', message: 'STEER-ME' })
     await waitUntil(() => events.some((event) => event.type === 'agent_end'))
-    await new Promise((resolveWait) => setTimeout(resolveWait, 200))
+    // Whatever the runtime sent at agent_end is answered before this.
+    await manager.command(runtime.runtimeId, { type: 'get_state' })
 
     expect(events.some((event) => event.type === 'session_action_update')).toBe(false)
+    // The prompt's refresh, the steer's admission check and the call above: none at agent_end.
+    expect(stateReadsAfterPrompt(fake)).toBe(3)
   })
 })
 
