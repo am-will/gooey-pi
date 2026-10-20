@@ -4,7 +4,9 @@ export const MAX_QUEUED_ACTIONS = 128
 export const MAX_PREVIEW_LENGTH = 4_096
 
 function boundedPreview(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length <= MAX_PREVIEW_LENGTH ? value : undefined
+  // Previews are used only for prefix matching against local steers, so truncating keeps stored
+  // state bounded without dropping the whole snapshot when one queued message is long.
+  return typeof value === 'string' ? value.slice(0, MAX_PREVIEW_LENGTH) : undefined
 }
 
 export function parseSessionActionSnapshot(value: unknown): SessionActionSnapshot | null {
