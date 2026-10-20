@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readSessionMetadata } from '../../electron/main/sessions/metadata'
 import { readTranscript } from '../../electron/main/sessions/transcript'
+import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { configureGooeyPiAgentMessageSigning, encodeGooeyPiAgentMessage, loadOrCreateGooeyPiAgentMessageKey, parseGooeyPiAgentMessage } from '../../electron/main/collaboration/message-envelope'
 
 const dirs: string[] = []
@@ -188,6 +189,71 @@ describe('tool result placement in assembled turns', () => {
       'result:wrote',
       'result:appended',
     ])
+  })
+})
+
+describe('provider errors that end a turn', () => {
+  const overloaded = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+  const write = (messages: Array<[id: string, message: Record<string, unknown>] | Record<string, unknown>>): string => {
+    const file = makeSessionFile()
+    let parentId: string | null = null
+    const records = [JSON.stringify({ type: 'session', version: 3, id: 'session-1', cwd: '/project' })]
+    for (const item of messages) {
+      const record: Record<string, unknown> = Array.isArray(item) ? { type: 'message', id: item[0], parentId, message: item[1] } : { ...item, parentId }
+      records.push(JSON.stringify(record))
+      parentId = String(record.id)
+    }
+    writeFileSync(file, `${records.join('\n')}\n`)
+    return file
+  }
+  const user = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] })
+  const failed = (stopReason = 'error', errorMessage = overloaded) => ({ role: 'assistant', content: [], stopReason, errorMessage })
+  const answer = { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop' }
+  const shape = (transcript: Awaited<ReturnType<typeof readTranscript>>) => transcript.map((message) => `${message.id}:${message.role}`)
+
+  it('shows the error of a run that failed at the provider', async () => {
+    const transcript = await readTranscript(write([['user-1', user('retry me')], ['assistant-1', failed()]]), false)
+
+    expect(shape(transcript)).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system'])
+    expect(transcript.at(-1)?.parts).toEqual([{ type: 'text', text: overloaded }])
+  })
+
+  it('bounds the error exactly as the live run does', async () => {
+    const long = failed('error', `  ${'x'.repeat(5_000)}  `)
+    const transcript = await readTranscript(write([['user-1', user('retry me')], ['assistant-1', long]]), false)
+    const live = PRIME_RUST_RPC_ADAPTER.normalizeEvent({ type: 'agent_end', messages: [long] }, { runtimeId: 'runtime', harness: 'prime', cwd: '/project', isStreaming: true })
+
+    expect(transcript.at(-1)?.parts).toEqual([{ type: 'text', text: 'x'.repeat(4_000) }])
+    expect(live).toEqual([{ type: 'agent_end', messages: [long] }, { type: 'error', error: 'x'.repeat(4_000), synthetic: true }])
+  })
+
+  it('keeps an earlier failed turn above the prompt that followed it', async () => {
+    const file = write([['user-1', user('retry me')], ['assistant-1', failed()], ['user-2', user('try again')], ['assistant-2', answer]])
+    expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user', 'assistant-2:assistant'])
+  })
+
+  it('keeps the error across records the transcript does not render', async () => {
+    const file = write([
+      ['user-1', user('retry me')],
+      ['assistant-1', failed()],
+      { type: 'model_change', id: 'model-1', provider: 'anthropic', modelId: 'claude-opus-5-5' },
+      { type: 'service_tier_change', id: 'tier-1', serviceTier: 'default' },
+      { type: 'custom_message', id: 'digest-1', customType: 'harness_digest', content: '[harness-digest]', display: false },
+      ['user-2', user('try another model')],
+    ])
+    expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user'])
+  })
+
+  it('shows nothing for a failure the agent recovered from, an abort, or a run still streaming', async () => {
+    const retried = write([['user-1', user('retry me')], ['assistant-1', failed()], ['assistant-2', answer]])
+    const compacted = write([['user-1', user('too long')], ['assistant-1', failed('error', 'prompt is too long')], { type: 'compaction', id: 'compact-1', summary: 'Summary', firstKeptEntryId: 'user-1', tokensBefore: 1_000 }, ['assistant-2', answer]])
+    const aborted = write([['user-1', user('stop')], ['assistant-1', failed('aborted', 'Request was aborted')]])
+    const backoff = write([['user-1', user('retry me')], ['assistant-1', failed()]])
+
+    expect(shape(await readTranscript(retried, false))).toEqual(['user-1:user', 'assistant-1:assistant'])
+    expect(shape(await readTranscript(compacted, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'compact-1:system', 'assistant-2:assistant'])
+    expect(shape(await readTranscript(aborted, false))).toEqual(['user-1:user', 'assistant-1:assistant'])
+    expect(shape(await readTranscript(backoff, true))).toEqual(['user-1:user', 'assistant-1:assistant'])
   })
 })
 

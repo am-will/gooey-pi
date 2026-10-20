@@ -1,11 +1,11 @@
-import type { PrimeEventEnvelope, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
+import type { PrimeEventEnvelope, PrimeImplementation, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
 import { resolveExecutable, type ExecutableSource } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
 import { isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
 import { isThinkingLevel, validateRpcCommand } from './command-schema'
-import { PRIME_RPC_ADAPTER, type HarnessRpcAdapter } from './harness-adapter'
+import { PRIME_RPC_ADAPTER, type HarnessRpcAdapter, type StartRecovery } from './harness-adapter'
 import { RpcRuntime } from './runtime'
 import type { RpcObject } from './types'
 import type { WorkspaceUseLease, WorkspaceUseOwner } from '../repository-use-gate'
@@ -19,6 +19,16 @@ export interface ProviderCatalog {
   capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined>
 }
 
+/** What a runtime environment provider knows about the start it is minting capabilities for. */
+export interface RuntimeEnvironmentScope {
+  cwd: string
+  sessionPath?: string
+  /** False for scheduler children, which must never expose UI-blocking tools. */
+  interactive: boolean
+  /** The Prime build of the adapter chosen for this start; absent for TypeScript Prime and the other harnesses. */
+  implementation?: PrimeImplementation
+}
+
 export class AgentRpcManager {
   private readonly runtimes = new Map<string, RpcRuntime>()
   private readonly startingRuntimes = new Set<string>()
@@ -27,16 +37,21 @@ export class AgentRpcManager {
   private runtimeEnvironmentRevision = 0
   private disabledModels: () => ReadonlySet<string> = () => new Set()
   private eventSink: (envelope: PrimeEventEnvelope) => void = () => undefined
-  private runtimeEnvironmentProvider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv = () => ({})
+  private runtimeEnvironmentProvider: (scope: RuntimeEnvironmentScope) => NodeJS.ProcessEnv = () => ({})
   private runtimeStartListener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void = () => undefined
   private runtimeEndListener: (environment: NodeJS.ProcessEnv, info?: RuntimeInfo) => void = () => undefined
   private runtimeAdmission: Promise<void> = Promise.resolve()
+  private recoverStart: StartRecovery = async () => false
   private beginWorkspaceUse: (
     cwd: string,
     owner: WorkspaceUseOwner,
     retireIfIdle: () => Promise<boolean>,
   ) => Promise<WorkspaceUseLease> = async () => ({ release: () => undefined })
   private closed = false
+  /** Harness identity (id, agent name), which every adapter for the harness shares. */
+  private readonly adapter: HarnessRpcAdapter
+  /** Resolved once per start; each runtime keeps the adapter it was spawned with. */
+  private readonly adapterForStart: () => HarnessRpcAdapter
 
   constructor(
     private readonly executable: ExecutableSource,
@@ -44,10 +59,13 @@ export class AgentRpcManager {
     private readonly validateSessionPath: (path: string) => Promise<string>,
     private readonly providers?: ProviderCatalog,
     private readonly disabledProviders: () => ReadonlySet<string> = () => new Set(),
-    private readonly adapter: HarnessRpcAdapter = PRIME_RPC_ADAPTER,
+    adapter: HarnessRpcAdapter | (() => HarnessRpcAdapter) = PRIME_RPC_ADAPTER,
     /** Approval-mode override consumed only by harness arg builders that support it (OMP). */
     private readonly approvalMode: () => string | undefined = () => undefined,
-  ) {}
+  ) {
+    this.adapterForStart = typeof adapter === 'function' ? adapter : () => adapter
+    this.adapter = this.adapterForStart()
+  }
 
   setEventSink(sink: (envelope: PrimeEventEnvelope) => void): void { this.eventSink = sink }
 
@@ -61,7 +79,7 @@ export class AgentRpcManager {
     this.beginWorkspaceUse = provider
   }
 
-  setRuntimeEnvironmentProvider(provider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv): void {
+  setRuntimeEnvironmentProvider(provider: (scope: RuntimeEnvironmentScope) => NodeJS.ProcessEnv): void {
     this.runtimeEnvironmentProvider = provider
   }
 
@@ -75,18 +93,35 @@ export class AgentRpcManager {
     this.runtimeEndListener = listener
   }
 
+  setStartRecovery(recover: StartRecovery): void { this.recoverStart = recover }
+
   beginShutdown(): void { this.closed = true }
 
   async start(raw: unknown): Promise<RuntimeInfo> {
-    return this.startWithMode(raw, true)
+    return this.startRecovering(raw, true)
   }
 
   /** Internal scheduler entrypoint: unattended children must never expose UI-blocking tools. */
   async startUnattended(raw: unknown): Promise<RuntimeInfo> {
-    return this.startWithMode(raw, false)
+    return this.startRecovering(raw, false)
   }
 
-  private async startWithMode(raw: unknown, interactive: boolean): Promise<RuntimeInfo> {
+  /**
+   * A failed start, already cleaned up, is attempted once more with a fresh
+   * adapter and environment when the start recovery repaired its cause. The
+   * second attempt is final.
+   */
+  private async startRecovering(raw: unknown, interactive: boolean): Promise<RuntimeInfo> {
+    const adapter = this.adapterForStart()
+    try {
+      return await this.startWithMode(raw, interactive, adapter)
+    } catch (error) {
+      if (!await this.recoverStart(error, adapter).catch(() => false)) throw error
+    }
+    return this.startWithMode(raw, interactive, this.adapterForStart())
+  }
+
+  private async startWithMode(raw: unknown, interactive: boolean, adapter: HarnessRpcAdapter): Promise<RuntimeInfo> {
     this.requireOpen()
     const executable = resolveExecutable(this.executable)
     if (!executable) throw new Error(`${this.adapter.agentName} executable was not found`)
@@ -114,7 +149,7 @@ export class AgentRpcManager {
     if (options.fast !== undefined && typeof options.fast !== 'boolean') throw new TypeError('fast must be a boolean')
     this.requireOpen()
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
-    const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive })
+    const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, implementation: adapter.implementation })
     let runtime: RpcRuntime | undefined
     let workspaceUse!: WorkspaceUseLease
     workspaceUse = await this.beginWorkspaceUse(
@@ -135,7 +170,7 @@ export class AgentRpcManager {
       try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
     }
     try {
-      const args = this.adapter.buildStartArgs({
+      const args = adapter.buildStartArgs({
         cwd,
         sessionPath,
         providerId: selectedModel?.provider,
@@ -159,7 +194,7 @@ export class AgentRpcManager {
           },
           runtimeEnvironment,
           {},
-          this.adapter,
+          adapter,
         )
         // Record the environment generation before admission resolves so a
         // concurrent settings refresh cannot mistake this child for a new one.
@@ -225,7 +260,7 @@ export class AgentRpcManager {
     // Validation is harness-independent; the harness vocabulary applies after
     // it. set_service_tier passes through untranslated because the fast-mode
     // interception below routes it via runtime.setServiceTier instead.
-    const translated = this.adapter.translateCommand(command)
+    const translated = runtime.adapter.translateCommand(command)
     if (command.type === 'set_model' && this.providers) {
       await this.providers.requireAvailableModel(`${String(command.provider)}/${String(command.modelId)}`, this.disabledProviders(), this.disabledModels())
     }

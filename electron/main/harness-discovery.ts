@@ -1,12 +1,18 @@
-import { HARNESS_IDS, type AppSettings, type HarnessId, type HarnessStatus } from '../../src/types/api'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { primeImplementationFromVersion } from '../../src/lib/prime-compat'
+import { HARNESS_IDS, type AppSettings, type HarnessId, type HarnessStatus, type PrimeImplementation } from '../../src/types/api'
 import { HARNESSES, type HarnessDescriptor } from './harness'
 import { hasControlCharacter, lastNonEmptyLine, sanitizedDetail } from './lib/process-detail'
+import { inspectPrimeNpmBridge, PRIME_NPM_BRIDGE_UNMIGRATED_DETAIL } from './prime-npm-bridge'
 import { findHarnessExecutable, processFailureReason, runProcess, type ExecutableCandidateFailure } from './process-utils'
 import type { JsonStateStore } from './store'
 
 type RuntimePaths = Record<HarnessId, string>
 type HarnessProblem = NonNullable<HarnessStatus['problem']>
-export type HarnessProbeFailureKind = 'spawn' | 'exit' | 'timeout' | 'overflow'
+/** 'skipped' marks a candidate GooeyPi refused to execute; its detail is the whole reason. */
+export type HarnessProbeFailureKind = 'spawn' | 'exit' | 'timeout' | 'overflow' | 'skipped'
 export interface HarnessProbeFailure {
   kind: HarnessProbeFailureKind
   code?: number
@@ -20,10 +26,19 @@ type ExecutableFinder = (
   onFailure?: (failure: ExecutableCandidateFailure) => void,
 ) => Promise<string | null>
 type ExecutableProbe = (executable: string) => Promise<HarnessProbe>
+type PrimeImplementationProbe = (executable: string) => Promise<PrimeImplementation>
 
 export interface HarnessDiscoveryOptions {
   findExecutable?: ExecutableFinder
   probeExecutable?: ExecutableProbe
+  probePrimeImplementation?: PrimeImplementationProbe
+}
+
+const PROBE_LIMITS = { timeoutMs: 10_000, maxBytes: 16 * 1024 }
+const UNMIGRATED_PRIME_NPM_BRIDGE: HarnessProbe = {
+  runnable: false,
+  version: null,
+  failure: { kind: 'skipped', detail: PRIME_NPM_BRIDGE_UNMIGRATED_DETAIL },
 }
 
 function processDetail(stdout: string, stderr: string): string {
@@ -31,6 +46,7 @@ function processDetail(stdout: string, stderr: string): string {
 }
 
 function probeFailureDetail(failure: HarnessProbeFailure): string {
+  if (failure.kind === 'skipped') return failure.detail
   const suffix = failure.detail ? `: ${failure.detail}` : ''
   if (failure.kind === 'exit') return `exited with code ${failure.code ?? 'unknown'}${suffix}`
   if (failure.kind === 'timeout') return `timed out${suffix}`
@@ -56,7 +72,7 @@ const emptyStatuses = (): Record<HarnessId, HarnessStatus> => ({
 
 export async function probeHarnessExecutable(executable: string): Promise<HarnessProbe> {
   try {
-    const result = await runProcess(executable, ['--version'], { timeoutMs: 10_000, maxBytes: 16 * 1024 })
+    const result = await runProcess(executable, ['--version'], PROBE_LIMITS)
     const failure = processFailureReason(result)
     if (failure) {
       return {
@@ -74,6 +90,28 @@ export async function probeHarnessExecutable(executable: string): Promise<Harnes
     return { runnable: true, version }
   } catch (error) {
     return { runnable: false, version: null, failure: spawnFailure(error) }
+  }
+}
+
+/**
+ * Classifies a Prime build whose version string did not: TypeScript accepts
+ * --extension (and loads nothing for --version) while Rust rejects the unknown
+ * option. Anything inconclusive counts as Rust, because leaving out
+ * --extension only drops capabilities, visibly, while passing it to Rust is
+ * fatal. The extension path lives in a fresh private directory and is never
+ * created.
+ */
+export async function probePrimeImplementation(executable: string): Promise<PrimeImplementation> {
+  let directory: string | undefined
+  try {
+    directory = await mkdtemp(join(tmpdir(), 'gooeypi-prime-probe-'))
+    const result = await runProcess(executable, ['--extension', join(directory, 'never-created.ts'), '--version'], PROBE_LIMITS)
+    return processFailureReason(result) ? 'rust' : 'typescript'
+  } catch {
+    // An unwritable temporary directory leaves the probe inconclusive too.
+    return 'rust'
+  } finally {
+    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -105,6 +143,7 @@ export class HarnessDiscoveryService {
   private refreshRevision = 0
   private readonly findExecutable: ExecutableFinder
   private readonly probeExecutable: ExecutableProbe
+  private readonly probePrimeImplementation: PrimeImplementationProbe
 
   constructor(
     private readonly runtimePaths: () => RuntimePaths,
@@ -112,10 +151,16 @@ export class HarnessDiscoveryService {
   ) {
     this.findExecutable = options.findExecutable ?? findHarnessExecutable
     this.probeExecutable = options.probeExecutable ?? probeHarnessExecutable
+    this.probePrimeImplementation = options.probePrimeImplementation ?? probePrimeImplementation
   }
 
   executable(harness: HarnessId): string | null {
     return this.statuses[harness].path
+  }
+
+  /** Implementation of the published Prime executable; undefined while none is discovered. */
+  primeImplementation(): PrimeImplementation | undefined {
+    return this.statuses.prime.implementation
   }
 
   snapshot(): Record<HarnessId, HarnessStatus> {
@@ -129,11 +174,17 @@ export class HarnessDiscoveryService {
       const probes = new Map<string, HarnessProbe>()
       let lastFailure: HarnessProblem | undefined
       let overrideFailure: HarnessProblem | undefined
-      const probe = async (candidate: string) => {
-        const result = await this.probeExecutable(candidate)
+      const probeCandidate = async (candidate: string): Promise<HarnessProbe> => {
+        // Probing an un-migrated npm bridge would run the Rust installer. It is
+        // rejected unexecuted, and a rejected candidate is never published,
+        // so no later CLI call can reach it either.
+        const result = harness === 'prime' && await inspectPrimeNpmBridge(candidate) === 'unmigrated'
+          ? UNMIGRATED_PRIME_NPM_BRIDGE
+          : await this.probeExecutable(candidate)
         probes.set(candidate, result)
-        return result.runnable
+        return result
       }
+      const probe = async (candidate: string) => (await probeCandidate(candidate)).runnable
       const onFailure = (failure: ExecutableCandidateFailure): void => {
         const probeResult = probes.get(failure.path)
         const reported: HarnessProblem = probeResult?.failure
@@ -153,10 +204,12 @@ export class HarnessDiscoveryService {
           : undefined)
         return problem ? { path: null, version: null, problem } : { path: null, version: null }
       }
-      const result = probes.get(path) ?? await this.probeExecutable(path)
-      return result.runnable
-        ? { path, version: result.version }
-        : { path: null, version: null, problem: { path, reason: result.failure ? probeFailureDetail(result.failure) : 'could not run' } }
+      const result = probes.get(path) ?? await probeCandidate(path)
+      if (!result.runnable) return { path: null, version: null, problem: { path, reason: result.failure ? probeFailureDetail(result.failure) : 'could not run' } }
+      if (harness !== 'prime') return { path, version: result.version }
+      // Published versions classify without another process; only an
+      // unreadable version pays for the feature probe.
+      return { path, version: result.version, implementation: primeImplementationFromVersion(result.version) ?? await this.probePrimeImplementation(path) }
     }))
     const next = emptyStatuses()
     for (const [index, harness] of HARNESS_IDS.entries()) {

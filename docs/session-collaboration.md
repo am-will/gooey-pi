@@ -2,7 +2,7 @@
 
 GooeyPi lets top-level sessions in the same harness and working directory coordinate without turning them into parent/child subagents. In the composer, type `@` and part of a sidebar session title, then select the result. The visible `@title` is sent with a model-only routing block containing the stable session UUID. A session's context menu also exposes **Copy session UUID** for explicit coordination prompts.
 
-Every Prime, OMP, and pi runtime receives six app-owned tools:
+Every TypeScript Prime, OMP, and pi runtime receives six app-owned tools. Rust Prime (0.9.9 betas and 0.10+) cannot load the collaboration extension, so its runtimes get none of them and the capability is labelled unavailable (see `docs/harness-discovery.md`).
 
 - `gooeypi_session_list`: list accessible peer titles, UUIDs, status, and liveness.
 - `gooeypi_session_models`: list models available to this harness from providers currently active in GooeyPi, including each model's exact key and reasoning levels.

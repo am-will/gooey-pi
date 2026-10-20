@@ -3,6 +3,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAgentEvents } from '../../src/hooks/useAgentEvents'
 import { useWorkspaceRuntime } from '../../src/hooks/useWorkspaceRuntime'
 import type { HarnessId, PrimeWorkApi, ProjectRecord, SessionRecord, TranscriptMessage } from '../../src/types/api'
 
@@ -182,6 +183,73 @@ describe('prompt admission versus background transcript reads', () => {
       { role: 'user', steerState: 'read', timestamp: 2, parts: [{ type: 'text', text: 'fast steer' }] },
       { role: 'system', kind: 'steer-read-marker', parts: [{ type: 'text', text: 'Steer read here' }] },
     ])
+  })
+
+  it('settles a Rust Prime steer from the synthetic pickup and keeps both answers apart', () => {
+    let flushFrame: FrameRequestCallback | undefined
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { flushFrame = callback; return 1 }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    let deliver!: (payload: { runtimeId: string; event: Record<string, unknown> }) => void
+    const events = { agent: { onEvent: (listener: typeof deliver) => { deliver = listener; return () => undefined } } } as unknown as PrimeWorkApi
+    function AgentEventsProbe() {
+      latest = useWorkspaceRuntime({ bridge: null, harness: 'prime', initialProject: project, initialSession: session, sessions: [session], initialMessages: [], reportError: () => undefined })
+      useAgentEvents({
+        bridge: events,
+        runtimeIdRef: latest.runtimeIdRef,
+        runtimeSessionsRef: latest.runtimeSessionsRef,
+        runtimeOwnerRef: latest.runtimeOwnerRef,
+        workspaceRef: latest.workspaceRef,
+        setSessions: () => undefined,
+        setRuntime: latest.setRuntime,
+        reconcileQueuedPrompts: latest.reconcileQueuedPrompts,
+        queueAgentEvent: latest.queueAgentEvent,
+        reconcileTranscriptForEvent: latest.reconcileTranscriptForEvent,
+        showExtensionUi: () => undefined,
+        clearExtensionUi: () => undefined,
+        refreshGit: async () => undefined,
+        refreshGitOnTerminalEvent: false,
+        activeSessionVisible: true,
+      })
+      return null
+    }
+    act(() => { root.render(createElement(AgentEventsProbe)) })
+    latest.runtimeIdRef.current = 'runtime'
+    const running = { kind: 'turn' as const, phase: 'running' as const }
+    const user = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] })
+    const text = (delta: string) => ({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta } })
+    const send = (...sequence: Array<Record<string, unknown>>) => act(() => {
+      for (const event of sequence) deliver({ runtimeId: 'runtime', event })
+    })
+
+    // The order the main process forwards a Rust Prime steer in: get_state
+    // reports the queued steer, and the synthetic pickup precedes the user
+    // message_start that delivers it.
+    send({ type: 'agent_start' }, { type: 'turn_start' }, { type: 'message_start', message: user('go') }, text('first '))
+    act(() => {
+      const id = latest.queuePrompt('STEER-ME', 'steer', [{ type: 'text', text: 'STEER-ME' }], 2)
+      deliver({ runtimeId: 'runtime', event: { type: 'session_action_update', synthetic: true, actions: { queuedCount: 1, steering: ['STEER-ME'], followUps: [], active: running } } })
+      latest.acceptSteer(id)
+      latest.acknowledgeSteer(id, { queuedCount: 1, steering: ['STEER-ME'], followUps: [], active: running })
+    })
+    send(
+      text('answer'),
+      { type: 'turn_end' },
+      { type: 'turn_start' },
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [], active: running } },
+      { type: 'message_start', message: user('STEER-ME') },
+      text('steer answer'),
+      { type: 'turn_end' },
+      { type: 'agent_end', messages: [] },
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [] } },
+    )
+    act(() => { flushFrame?.(3) })
+
+    expect(latest.pendingQueuedPrompts).toEqual([])
+    const answers = latest.messages
+      .filter((message) => message.role === 'assistant')
+      .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''))
+    expect(answers).toEqual(['first ', 'answer', 'steer answer'])
+    expect(latest.messages.map((message) => message.kind ?? message.steerState ?? message.role)).toEqual(['assistant', 'read', 'assistant', 'steer-read-marker', 'assistant'])
   })
 
   it('keeps the optimistic user message when a pending background read resolves after the prompt', async () => {

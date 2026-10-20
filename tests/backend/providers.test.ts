@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -432,4 +432,63 @@ describe('Prime provider adapter', () => {
     expect(providerService).not.toHaveProperty('removeMcpCredential')
   })
 
+})
+
+describe('Prime CLI credentials', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  /** A home whose only Prime Inference login is the separate Prime CLI's ~/.prime/config.json. */
+  function primeCliHome(): { configPath: string; config: string; agentDir: string } {
+    const home = mkdtempSync(join(tmpdir(), 'prime-work-prime-cli-home-'))
+    dirs.push(home)
+    const agentDir = join(home, 'agent')
+    mkdirSync(join(home, '.prime'))
+    mkdirSync(agentDir)
+    const configPath = join(home, '.prime', 'config.json')
+    const config = `${JSON.stringify({ api_key: 'prime-cli-test-key', team_id: 'team-from-cli' }, null, 2)}\n`
+    writeFileSync(configPath, config)
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('PRIME_AGENT_CODING_AGENT_DIR', agentDir)
+    vi.stubEnv('PRIME_API_KEY', '')
+    vi.stubEnv('PRIME_TEAM_ID', '')
+    // A configured Prime Inference login refreshes its private model list; keep that offline.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline test') }))
+    return { configPath, config, agentDir }
+  }
+
+  /** The Prime Inference row, and how many of its models GooeyPi would offer. */
+  async function primeInference(providerService: PrimeProviderService) {
+    const catalog = await providerService.catalog(true)
+    return {
+      provider: catalog.providers.find((provider) => provider.id === 'prime-inference'),
+      offered: catalog.models.filter((model) => model.provider === 'prime-inference' && model.available).length,
+    }
+  }
+
+  it('counts the Prime CLI login for TypeScript Prime by default', async () => {
+    primeCliHome()
+    const { provider, offered } = await primeInference(new PrimeProviderService())
+    expect(provider).toMatchObject({ authSource: 'prime_cli', authLabel: 'Prime CLI' })
+    expect(offered).toBeGreaterThan(0)
+  })
+
+  it('ignores and never rewrites the Prime CLI login for Rust Prime', async () => {
+    const { configPath, config } = primeCliHome()
+    const providerService = new PrimeProviderService({ primeCliCredentials: false })
+
+    const { provider, offered } = await primeInference(providerService)
+    expect(provider).toMatchObject({ configured: false, authSource: undefined })
+    expect(offered).toBe(0)
+    await providerService.logout('prime-inference')
+    expect(readFileSync(configPath, 'utf8')).toBe(config)
+  })
+
+  it.each([true, false])('honors a key stored in auth.json (Prime CLI credentials %s)', async (primeCliCredentials) => {
+    const { agentDir } = primeCliHome()
+    writeFileSync(join(agentDir, 'auth.json'), JSON.stringify({ 'prime-inference': { type: 'api_key', key: 'stored-test-key' } }))
+    const { provider, offered } = await primeInference(new PrimeProviderService({ primeCliCredentials }))
+    // TypeScript Prime prefers the CLI login over auth.json; Rust Prime reads auth.json only.
+    expect(provider?.authSource).toBe(primeCliCredentials ? 'prime_cli' : 'stored')
+    expect(offered).toBeGreaterThan(0)
+  })
 })

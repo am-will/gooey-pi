@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_EVENT_QUEUE_LIMIT, admitAgentEvent, contextUsageFromEvent, sessionUsageFromEvent, type PendingAgentEvent } from '../../src/app/agent-events'
-import { replayPrimeEvents } from '../../src/lib/events'
+import { applyPrimeEvent, replayPrimeEvents } from '../../src/lib/events'
 import { contextDialLabel, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
 
 describe('context usage events', () => {
@@ -140,5 +140,65 @@ describe('provider fallback events', () => {
       streaming: true,
       parts: [{ type: 'text', text: 'beforeafter', partId: expect.any(String) }],
     })
+  })
+})
+
+describe('turn errors', () => {
+  const failedRun = [{ type: 'agent_start' }, { type: 'agent_end' }, { type: 'error', error: '529 overloaded_error: Overloaded', synthetic: true }]
+  const texts = (messages: ReturnType<typeof replayPrimeEvents>) => messages.map((message) => [message.role, message.parts.flatMap((part) => part.type === 'text' ? [part.text] : [])])
+
+  it('replaces the empty-turn fallback with the error that ended the run', () => {
+    const batched = replayPrimeEvents([], failedRun)
+    const sequential = failedRun.reduce(applyPrimeEvent, [] as ReturnType<typeof replayPrimeEvents>)
+
+    for (const messages of [batched, sequential]) {
+      expect(texts(messages)).toEqual([['assistant', []], ['system', ['529 overloaded_error: Overloaded']]])
+      expect(messages[0]?.streaming).toBe(false)
+    }
+  })
+
+  it('keeps the fallback when an extension or the transport fails after the turn', () => {
+    for (const type of ['extension_error', 'transport_error']) {
+      expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, { type: 'agent_end' }, { type, error: 'later failure' }])))
+        .toEqual([['assistant', ['Completed without a text response.']], ['system', ['later failure']]])
+    }
+  })
+})
+
+describe('tool failures', () => {
+  const start = { type: 'tool_execution_start', toolCallId: 'call_bad1', toolName: 'bash', args: { command: 'ls' } }
+  const end = (isError?: boolean) => ({
+    type: 'tool_execution_end', toolCallId: 'call_bad1', toolName: 'bash',
+    result: { content: [{ type: 'text', text: 'Tool bash not found' }] }, ...(isError === undefined ? {} : { isError }),
+  })
+  const resultMessage = (isError: boolean, toolCallId = 'call_bad1') => ({
+    type: 'message_end',
+    message: { role: 'toolResult', toolCallId, toolName: 'bash', content: [{ type: 'text', text: 'Tool bash not found' }], isError },
+  })
+  const tools = (events: Array<Record<string, unknown>>) => {
+    const run = [{ type: 'agent_start' }, ...events]
+    const shape = (messages: ReturnType<typeof replayPrimeEvents>) => messages.flatMap((message) => message.parts.map((part) => part.type === 'toolResult' ? `result:${part.isError}` : part.type))
+    const batched = shape(replayPrimeEvents([], run))
+    expect(shape(run.reduce(applyPrimeEvent, [] as ReturnType<typeof replayPrimeEvents>))).toEqual(batched)
+    return batched
+  }
+
+  it('marks the tool failed from its toolResult message when tool_execution_end omits isError', () => {
+    expect(tools([start, end(), resultMessage(true)])).toEqual(['toolCall', 'result:true'])
+  })
+
+  it('keeps the flag tool_execution_end reported', () => {
+    expect(tools([start, end(true), resultMessage(true)])).toEqual(['toolCall', 'result:true'])
+    expect(tools([start, end(true), resultMessage(false)])).toEqual(['toolCall', 'result:true'])
+    expect(tools([start, end(false), resultMessage(false)])).toEqual(['toolCall', 'result:false'])
+  })
+
+  it('leaves a finished turn alone when a toolResult message arrives after it', () => {
+    expect(tools([start, end(false), { type: 'agent_end' }, resultMessage(true)])).toEqual(['toolCall', 'result:false'])
+  })
+
+  it('ignores a toolResult message for a call it never saw', () => {
+    expect(tools([start, end(), resultMessage(true, 'call_other')])).toEqual(['toolCall', 'result:false'])
+    expect(tools([resultMessage(true)])).toEqual([])
   })
 })
