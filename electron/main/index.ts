@@ -633,7 +633,7 @@ async function bootstrap(): Promise<void> {
 
   const providers = new PrimeProviderService({
     openExternal: async (url) => { await shell.openExternal(url, { activate: true }) },
-    primeCliCredentials: initialHarnesses.prime.implementation !== 'rust',
+    executable: primeExecutable, implementation: () => discovery.primeImplementation(),
   })
   providerService = providers
   const disabledProviders = () => new Set(stateStore.getSettings().disabledProviders)

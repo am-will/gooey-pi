@@ -6,10 +6,13 @@ import { getSupportedThinkingLevels, supportsFastMode } from 'prime-agent-ai'
 import { BUILTIN_MCP_CATALOG } from 'prime-agent-ai/mcp'
 import type { Api, Model } from 'prime-agent-ai'
 import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
-import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor, ProviderAuthEvent, ProviderAuthMethod, ProviderAuthSource, SkillRecord } from '../../src/types/api'
+import type { PrimeImplementation, PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor, ProviderAuthEvent, ProviderAuthMethod, ProviderAuthSource, SkillRecord } from '../../src/types/api'
 import { NETWORK_MCP_AUTH_UNAVAILABLE, NETWORK_MCP_UNAVAILABLE_DETAIL } from '../../src/lib/mcp-policy'
+import type { CliModelCatalogOptions } from './model-catalog-cli'
 import { catalogLimitWarnings, limitCatalogRelations } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
+import type { ExecutableSource } from './process-utils'
+import { RustPrimeModelCatalogService } from './providers-prime-rust'
 import { requireString, requireWebUrl } from './validation'
 
 const CATALOG_TTL_MS = 30_000
@@ -115,9 +118,32 @@ function toModelDescriptor(model: Model<Api>, available: Set<string>): PrimeMode
   }
 }
 
+export interface PrimeProviderServiceOptions {
+  authPath?: string
+  modelsPath?: string
+  /** The discovered prime-agent, which Rust Prime's model catalog is read from. */
+  executable?: ExecutableSource
+  /** The discovered Prime build, read on every catalog request; undefined keeps the TypeScript path. */
+  implementation?: () => PrimeImplementation | undefined
+  /**
+   * Counts the separate Prime CLI login in ~/.prime/config.json as Prime
+   * Inference auth, as TypeScript Prime does at runtime. Rust Prime only
+   * reads auth.json, so for it the CLI key would show models that fail to
+   * start, and a logout would rewrite another tool's file. Defaults to
+   * whether the build is TypeScript when the service is built: the auth store
+   * reads this option once.
+   */
+  primeCliCredentials?: boolean
+  /** Probe limits for Rust Prime's model catalog. */
+  rustProbe?: CliModelCatalogOptions
+  openExternal?: (url: string) => Promise<void>
+}
+
 export class PrimeProviderService {
   private readonly authStorage: AuthStorage
   private readonly registry: ModelRegistry
+  private readonly implementation: () => PrimeImplementation | undefined
+  private readonly rustModels: RustPrimeModelCatalogService
   private cachedCatalog: PrimeModelCatalog | null = null
   private cachedAt = 0
   private catalogRefresh: Promise<PrimeModelCatalog> | null = null
@@ -125,15 +151,12 @@ export class PrimeProviderService {
   private eventSink: (event: ProviderAuthEvent) => void = () => undefined
   private readonly openExternal: (url: string) => Promise<void>
 
-  /**
-   * primeCliCredentials (default true) counts the separate Prime CLI login in
-   * ~/.prime/config.json as Prime Inference auth, as TypeScript Prime does at
-   * runtime. Rust Prime only reads auth.json, so for it the CLI key would show
-   * models that fail to start, and a logout would rewrite another tool's file.
-   */
-  constructor(options: { authPath?: string; modelsPath?: string; primeCliCredentials?: boolean; openExternal?: (url: string) => Promise<void> } = {}) {
-    this.authStorage = AuthStorage.create(options.authPath, { usePrimeCliConfig: options.authPath === undefined && options.primeCliCredentials !== false })
+  constructor(options: PrimeProviderServiceOptions = {}) {
+    this.implementation = options.implementation ?? (() => undefined)
+    const primeCliCredentials = options.primeCliCredentials ?? this.implementation() !== 'rust'
+    this.authStorage = AuthStorage.create(options.authPath, { usePrimeCliConfig: options.authPath === undefined && primeCliCredentials })
     this.registry = ModelRegistry.create(modelRegistryAuthStorage(this.authStorage), options.modelsPath)
+    this.rustModels = new RustPrimeModelCatalogService(options.executable ?? null, (modelProviders) => this.rustProviderDescriptors(modelProviders), options.rustProbe)
     this.openExternal = options.openExternal ?? (async () => undefined)
   }
 
@@ -153,6 +176,7 @@ export class PrimeProviderService {
   }
 
   async catalog(force = false, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelCatalog> {
+    if (this.implementation() === 'rust') return this.rustCatalog(force, disabledProviders, disabledModels)
     if (!force && this.cachedCatalog && Date.now() - this.cachedAt < CATALOG_TTL_MS) {
       return withModelVisibility(this.cachedCatalog, disabledProviders, disabledModels)
     }
@@ -202,6 +226,48 @@ export class PrimeProviderService {
     }
     this.cachedAt = Date.now()
     return this.cachedCatalog
+  }
+
+  /**
+   * Rust Prime's catalog comes from its own RPC probe, never from the bundled
+   * TypeScript registry's model refresh: that would list 0.7's models and
+   * rewrite Rust's prime-inference-private-models.json in TypeScript's
+   * format. Until a probe has answered once, a failing probe still yields the
+   * provider rows, so credentials can be added, with the failure as the
+   * warning. Later failures keep the last loaded catalog.
+   */
+  private async rustCatalog(force: boolean, disabledProviders: ReadonlySet<string>, disabledModels: ReadonlySet<string>): Promise<PrimeModelCatalog> {
+    try {
+      return await this.rustModels.catalog(force, disabledProviders, disabledModels)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      return withModelVisibility({
+        primeVersion: 'unknown',
+        refreshedAt: new Date().toISOString(),
+        models: [],
+        providers: limitCatalogRelations([], this.rustProviderDescriptors(new Set())).providers,
+        warning: `The Prime Agent model catalog could not be loaded (${reason.slice(0, 4_000)}).`,
+      }, disabledProviders, disabledModels)
+    }
+  }
+
+  /**
+   * Provider rows for Rust Prime's catalog. Auth state still comes from the
+   * shared auth.json and models.json through the in-process store, which is
+   * reloaded here without the registry's network refresh. Providers without
+   * Rust models are listed too, so a key can be added. Rust lists models
+   * only for providers it has credentials for, so such a provider is
+   * configured even when the store cannot see the credential, such as an
+   * environment source only Rust reads.
+   */
+  private rustProviderDescriptors(modelProviders: ReadonlySet<string>): PrimeProviderDescriptor[] {
+    this.registry.refresh()
+    const oauthProviders = this.oauthProviderNames()
+    const providerIds = listableProviderIds([...modelProviders, ...this.registry.getAll().map((model) => model.provider), ...oauthProviders.keys()])
+    return providerIds.map((id) => {
+      const authStatus = this.registry.getProviderAuthStatus(id)
+      return this.providerDescriptor(id, authStatus.configured || !modelProviders.has(id) ? authStatus : { configured: true }, oauthProviders)
+    })
   }
 
   /** Display names of the providers that sign in through an OAuth flow. */
@@ -309,6 +375,7 @@ export class PrimeProviderService {
   invalidate(): void {
     this.cachedCatalog = null
     this.cachedAt = 0
+    this.rustModels.invalidate()
   }
 
   private async requireProvider(providerId: string, expectedMethod?: ProviderAuthMethod): Promise<PrimeProviderDescriptor> {
