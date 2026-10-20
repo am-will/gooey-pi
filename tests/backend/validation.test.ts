@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   firstAccepted,
+  isOneOf,
   isPathWithin,
   requireExistingPath,
   requireGitPath,
@@ -13,6 +14,7 @@ import {
   requireWebUrl,
   stripAnsi,
 } from '../../electron/main/validation'
+import { HARNESS_IDS, type HarnessId, LOCALE_PREFERENCES } from '../../src/types/api'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -313,5 +315,25 @@ describe('firstAccepted', () => {
 
   it('rejects an empty attempt list', async () => {
     await expect(firstAccepted([])).rejects.toThrow(/at least one attempt/)
+  })
+})
+
+describe('isOneOf', () => {
+  it('accepts every member of an as-const array', () => {
+    for (const harness of HARNESS_IDS) expect(isOneOf(HARNESS_IDS, harness), harness).toBe(true)
+    for (const locale of LOCALE_PREFERENCES) expect(isOneOf(LOCALE_PREFERENCES, locale), locale).toBe(true)
+  })
+
+  it('rejects non-members, near misses and non-string values', () => {
+    for (const value of ['Prime', 'prime ', '', 'zh', undefined, null, 0, {}, ['prime']]) {
+      expect(isOneOf(HARNESS_IDS, value), String(value)).toBe(false)
+    }
+  })
+
+  it('narrows unknown input to the array element type', () => {
+    const value: unknown = 'pi'
+    if (!isOneOf(HARNESS_IDS, value)) throw new Error('expected a harness id')
+    const harness: HarnessId = value
+    expect(harness).toBe('pi')
   })
 })

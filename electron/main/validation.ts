@@ -8,6 +8,11 @@ export function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Type guard over a readonly `as const` array, so enum checks need neither hand-written literals nor casts. */
+export function isOneOf<T extends readonly unknown[]>(values: T, value: unknown): value is T[number] {
+  return (values as readonly unknown[]).includes(value)
+}
+
 export function requireRecord(value: unknown, label = 'value'): JsonObject {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
   return value
