@@ -337,6 +337,20 @@ describe('first prompt delivery across a workspace switch', () => {
     expect(state.sessions().map((item) => item.id)).toEqual(['existing', 'other'])
   })
 
+  it('stops a started runtime that serves a different session and reports it', async () => {
+    const state = fixture({ selectedSession: existingSession })
+
+    const sending = state.actions.sendPrompt('Continue the plan')
+    await vi.waitFor(() => expect(state.agentStart).toHaveBeenCalledOnce())
+    state.start.resolve(startedRuntime)
+
+    await expect(sending).rejects.toThrow('Prime Agent returned a runtime for a different workspace or session.')
+    expect(state.stop).toHaveBeenCalledWith('started-runtime')
+    expect(state.command).not.toHaveBeenCalled()
+    expect(state.runtimeSessions.has('started-runtime')).toBe(false)
+    expect(state.messages().map((message) => message.role)).toEqual(['system'])
+  })
+
   it('attaches the started runtime and shows the prompt while its workspace stays selected', async () => {
     const state = fixture()
 
