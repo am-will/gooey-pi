@@ -10,7 +10,7 @@ import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAsse
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
-import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, settledCompactionEnd, type CompactAnswer } from './manual-compaction'
+import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, settledCompactionEnd, type CompactAnswer, type ManualCompaction } from './manual-compaction'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
@@ -93,9 +93,7 @@ export class RpcRuntime {
   private watchdogDisposed = false
   private lastActivityAt = Date.now()
   private lastRealCompactionEventAt = 0
-  // The compact command in flight, holding the compaction_end its harness
-  // streamed until the command answers (see compact).
-  private manualCompaction: { end?: RpcObject } | null = null
+  private manualCompaction: ManualCompaction | null = null
   private readonly chunks: RpcChunkAssembler
 
   constructor(
@@ -244,7 +242,7 @@ export class RpcRuntime {
    * refusal answers as a skipped compaction instead of a failed request.
    */
   private async compact(command: RpcObject): Promise<RpcObject> {
-    const compaction: { end?: RpcObject } = {}
+    const compaction: ManualCompaction = {}
     this.manualCompaction = compaction
     try {
       const response = await this.request(command, 10 * 60_000)
@@ -259,7 +257,7 @@ export class RpcRuntime {
     }
   }
 
-  private settleManualCompaction(compaction: { end?: RpcObject }, command: RpcObject, answer: CompactAnswer): void {
+  private settleManualCompaction(compaction: ManualCompaction, command: RpcObject, answer: CompactAnswer): void {
     if (this.manualCompaction === compaction) this.manualCompaction = null
     // A runtime that exited or is stopping publishes no more lifecycle.
     if (this.watchdogDisposed) return
@@ -483,7 +481,8 @@ export class RpcRuntime {
 
   /** Runs one normalized event through the streaming, compaction and session-action state, then forwards it. */
   private handleEvent(value: RpcObject): void {
-    // OMP ends carry no reason; the start they close names it.
+    // A compact command's own end waits for its answer (see compact). OMP
+    // ends carry no reason; the start they close names it.
     if (value.type === 'compaction_end' && this.manualCompaction && !this.manualCompaction.end
       && isManualCompactionReason(value.reason ?? this.compactionStartReason)) {
       this.manualCompaction.end = value

@@ -2,6 +2,11 @@ import { isRecord } from '../validation'
 import type { HarnessRpcAdapter } from './harness-adapter'
 import type { RpcObject } from './types'
 
+/** A compact command in flight, holding the compaction_end its harness streamed until the command answers. */
+export interface ManualCompaction {
+  end?: RpcObject
+}
+
 /**
  * How a compact command answered: the result it succeeded with, or the error
  * it failed with and whether that error only refused a compaction there was
