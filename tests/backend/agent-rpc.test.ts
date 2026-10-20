@@ -25,16 +25,26 @@ afterEach(async () => {
 })
 
 describe('agent RPC exit details', () => {
-  const writeExitingAgent = (body: string): { cwd: string; executable: string } => {
+  const writeAgent = (name: string, source: string): { cwd: string; executable: string } => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-exit-'))
     dirs.push(cwd)
-    const executable = join(cwd, 'exit-agent.cjs')
-    writeFileSync(executable, `#!/usr/bin/env node
-${body}
-`)
+    const executable = join(cwd, name)
+    writeFileSync(executable, source)
     chmodSync(executable, 0o755)
     return { cwd, executable }
   }
+  const writeExitingAgent = (body: string) => writeAgent('exit-agent.cjs', `#!/usr/bin/env node
+${body}
+`)
+  // An agent that rejects its argv closes stdin before it exits, so GooeyPi's
+  // first write can break the pipe before the close event that says why.
+  const writeStdinClosingAgent = (lingerSeconds: number) => writeAgent('exit-agent.sh', `#!/bin/sh
+exec 0<&-
+printf 'Error: Unknown option: --extension\\n' >&2
+sleep ${lingerSeconds}
+exit 1
+`)
+  const stderrTail = (runtime: RpcRuntime): string => (runtime as unknown as { transport: { stderrTail(): string } }).transport.stderrTail()
 
   it('includes a sanitized stderr tail when the agent exits before any frame', async () => {
     const fake = writeExitingAgent(`process.stderr.write('Error: Tool "session_list" from extension "pi-session-search" conflicts with extension "omp-work-collaboration"')
@@ -42,6 +52,28 @@ process.exit(1)`)
     const runtime = new RpcRuntime(fake.executable, [], fake.cwd, () => undefined, () => undefined)
     try {
       await expect(runtime.handshake()).rejects.toThrow(/RPC exited \(1\): Error: Tool "session_list"/)
+    } finally {
+      await runtime.stop()
+    }
+  })
+
+  it('reports the exit and its stderr tail when a write breaks the pipe first', async () => {
+    const fake = writeStdinClosingAgent(0.5)
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, () => undefined, () => undefined)
+    try {
+      await waitUntil(() => stderrTail(runtime).includes('Unknown option'))
+      await expect(runtime.handshake()).rejects.toThrow('Prime Agent RPC exited (1): Error: Unknown option: --extension')
+    } finally {
+      await runtime.stop()
+    }
+  })
+
+  it('still fails a broken pipe when the agent never exits', async () => {
+    const fake = writeStdinClosingAgent(30)
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, () => undefined, () => undefined)
+    try {
+      await waitUntil(() => stderrTail(runtime).includes('Unknown option'))
+      await expect(runtime.handshake()).rejects.toThrow(/EPIPE/)
     } finally {
       await runtime.stop()
     }

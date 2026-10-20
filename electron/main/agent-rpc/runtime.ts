@@ -11,7 +11,7 @@ import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
 import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, reportsCompactionOutcome, settledCompactionEnd, type CompactAnswer, type ManualCompaction } from './manual-compaction'
-import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
+import { FramedRpcTransport, isBrokenPipe, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
 
@@ -127,7 +127,9 @@ export class RpcRuntime {
       (error) => this.failTransport(error),
       () => !this.stopped,
     )
-    this.child.stdin.on('error', (error) => this.fail(error))
+    // A broken pipe also fails the write that hit it, which the transport
+    // holds until the close event reports why the child went away.
+    this.child.stdin.on('error', (error) => { if (!isBrokenPipe(error)) this.fail(error) })
     this.child.once('error', (error) => this.fail(error))
     this.child.once('close', (code, signal) => {
       this.disposeCompactionWatchdog()
