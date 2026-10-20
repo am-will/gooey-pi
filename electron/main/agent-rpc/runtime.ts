@@ -258,7 +258,6 @@ export class RpcRuntime {
     if (this.manualCompaction === compaction) this.manualCompaction = null
     // A runtime that exited or is stopping publishes no more lifecycle.
     if (this.watchdogDisposed) return
-    if (!compaction.end && 'error' in answer) return
     if (!compaction.end && this.compactionEpisode === 'none') this.handleEvent(manualCompactionStart(command))
     this.handleEvent(settledCompactionEnd(compaction.end, command, answer))
   }

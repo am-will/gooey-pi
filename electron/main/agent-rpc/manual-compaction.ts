@@ -16,14 +16,19 @@ export function manualCompactionStart(command: RpcObject): RpcObject {
  * The compaction_end that agrees with a compact command's answer. Harnesses
  * differ in what a manual compaction streams: Pi and Prime stream an end
  * before they answer, while OMP streams nothing and answers with the result
- * alone. A streamed end is kept as the harness sent it and only completed
- * from the answer; without one, the answer stands in for it.
+ * alone, and Rust Prime streams the same bare end for every compaction that
+ * did not succeed. A streamed end is kept as the harness sent it and only
+ * completed from the answer; without one, the answer stands in for it.
  */
 export function settledCompactionEnd(streamed: RpcObject | undefined, command: RpcObject, answer: CompactAnswer): RpcObject {
   const end: RpcObject = streamed
     ? { ...streamed }
     : { type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false, ...customInstructions(command), synthetic: true }
-  if ('result' in answer && !isRecord(end.result) && isRecord(answer.result)) end.result = answer.result
+  if ('result' in answer) {
+    if (!isRecord(end.result) && isRecord(answer.result)) end.result = answer.result
+  } else if (end.aborted !== true && end.errorMessage === undefined) {
+    end.errorMessage = answer.error
+  }
   return end
 }
 

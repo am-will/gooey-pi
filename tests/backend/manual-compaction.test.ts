@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
+import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
 import type { RpcObject } from '../../electron/main/agent-rpc/types'
 import { waitUntil } from '../helpers/wait'
@@ -82,6 +82,46 @@ describe('manual compaction lifecycle', () => {
       { type: 'compaction_start', reason: 'manual' },
       { type: 'compaction_end', reason: 'manual', result: RESULT, aborted: false, willRetry: false },
     ])
+  })
+
+  it('publishes a failed compaction for a compact command that failed without streaming one', async () => {
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`send({ id: command.id, type: 'response', command: 'compact', success: false, error: 'Summarizer unavailable' })`, OMP_RPC_ADAPTER, events)
+
+    await expect(runtime.command({ type: 'compact' })).rejects.toThrow('Summarizer unavailable')
+
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'manual', synthetic: true },
+      { type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false, errorMessage: 'Summarizer unavailable', synthetic: true },
+    ])
+  })
+
+  it('completes a bare streamed end with the error its compact command failed with', async () => {
+    // Rust Prime 0.10 streams the same bare end for every unsuccessful compaction.
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'requested' })
+      send({ type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false })
+      send({ id: command.id, type: 'response', command: 'compact', success: false, error: 'Compaction failed: Summarization failed' })`, PRIME_RUST_RPC_ADAPTER, events)
+
+    await expect(runtime.command({ type: 'compact' })).rejects.toThrow('Compaction failed: Summarization failed')
+
+    expect(compactionEvents(events)).toEqual([
+      { type: 'compaction_start', reason: 'requested' },
+      { type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false, errorMessage: 'Compaction failed: Summarization failed' },
+    ])
+  })
+
+  it('keeps the outcome a streamed end already reports', async () => {
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`
+      send({ type: 'compaction_start', reason: 'manual' })
+      send({ type: 'compaction_end', reason: 'manual', aborted: true, willRetry: false })
+      send({ id: command.id, type: 'response', command: 'compact', success: false, error: 'Compaction cancelled' })`, PI_RPC_ADAPTER, events)
+
+    await expect(runtime.command({ type: 'compact' })).rejects.toThrow('Compaction cancelled')
+
+    expect(compactionEvents(events).at(-1)).toEqual({ type: 'compaction_end', reason: 'manual', aborted: true, willRetry: false })
   })
 
   it('closes a running compaction the watchdog announced with the answered result', async () => {
