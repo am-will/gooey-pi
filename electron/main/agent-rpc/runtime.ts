@@ -11,6 +11,7 @@ import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { LiveContextUsageTracker, withLiveContextUsage } from './context-usage'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
+import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
 
 interface PendingRequest {
@@ -419,7 +420,7 @@ export class RpcRuntime {
         return
       }
       if (raw.success !== true) {
-        const detail = typeof raw.error === 'string' && raw.error.trim() ? raw.error.trim().slice(0, 4_000) : `RPC command ${pending.command} failed`
+        const detail = boundedErrorDetail(raw.error) ?? `RPC command ${pending.command} failed`
         pending.reject(new Error(detail))
         return
       }

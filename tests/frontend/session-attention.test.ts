@@ -43,6 +43,15 @@ describe('session lifecycle attention', () => {
     expect(Date.parse(waitingAgain.updatedAt)).toBeGreaterThan(Date.parse(waiting.updatedAt))
   })
 
+  it('ends a run that agent_end closes and an error follows as failed', () => {
+    const completed = applySessionLifecycleEvent(session(), { type: 'agent_end' }, false, 1)
+    const failed = applySessionLifecycleEvent(completed, { type: 'error', error: '529 overloaded', synthetic: true }, false, 2)
+
+    expect(completed.status).toBe('complete')
+    expect(failed).toMatchObject({ status: 'failed', eventRevision: 2 })
+    expect(sessionAttentionSignature(failed)).toBe('failed:2')
+  })
+
   it('advances lifecycle revision without changing attention for failures', () => {
     const failed = applySessionLifecycleEvent(session(), { type: 'transport_error' }, false, 1)
     expect(failed).toMatchObject({ status: 'failed', eventRevision: 1 })

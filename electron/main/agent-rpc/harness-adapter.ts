@@ -4,6 +4,7 @@ import { MAX_QUEUED_ACTIONS, consumeDeliveredPrompt } from '../../../src/lib/ses
 import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
+import { boundedErrorDetail } from './limits'
 import type { RpcObject } from './types'
 
 /** Normalized start inputs the manager resolves before the harness turns them into argv. */
@@ -180,13 +181,29 @@ function userMessageText(message: unknown): string | undefined {
   return message.content.flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join(' ')
 }
 
+/** The provider error that ended a run, from the run's last assistant message; undefined unless that message failed. */
+function providerRunError(messages: unknown): string | undefined {
+  if (!Array.isArray(messages)) return undefined
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message: unknown = messages[index]
+    if (isRecord(message) && message.role === 'assistant') return message.stopReason === 'error' ? boundedErrorDetail(message.errorMessage) : undefined
+  }
+  return undefined
+}
+
 /**
- * Rust Prime delivers a queued steer or follow-up as a user message_start in
- * the running turn without reporting the queue change. The synthetic update
- * ahead of that message lets the renderer settle the pending prompt before
- * the answer to it streams.
+ * Rust Prime's in-process RPC neither retries a failed provider call nor
+ * reports the failure: the run just ends. An error event after its agent_end
+ * marks the turn failed. A queued steer or follow-up arrives as a user
+ * message_start in the running turn, with no word about the queue; the
+ * synthetic update ahead of it lets the renderer settle the pending prompt
+ * before the answer to it streams.
  */
 function normalizeRustPrimeEvent(event: RpcObject, state: Readonly<RuntimeInfo>): RpcObject | readonly RpcObject[] {
+  if (event.type === 'agent_end') {
+    const error = providerRunError(event.messages)
+    return error ? [event, { type: 'error', error, synthetic: true }] : event
+  }
   if (event.type === 'message_start' && state.isStreaming && state.sessionActions) {
     const text = userMessageText(event.message)
     const actions = text === undefined ? null : consumeDeliveredPrompt(state.sessionActions, text)

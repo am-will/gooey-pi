@@ -1343,6 +1343,34 @@ describe('Rust Prime event normalization', () => {
     expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(delivered, { ...queued, isStreaming: false })).toBe(delivered)
     expect(PRIME_RPC_ADAPTER.normalizeEvent(delivered, queued)).toBe(delivered)
   })
+
+  // The agent_end Rust Prime 0.10 sends when the provider answers 529.
+  const failedRun = (stopReason: string, errorMessage?: string) => ({
+    type: 'agent_end',
+    messages: [
+      { role: 'custom', customType: 'harness_digest', content: '[harness-digest]', display: false },
+      { role: 'user', content: [{ type: 'text', text: 'retry me' }] },
+      { role: 'assistant', content: [], stopReason, ...(errorMessage === undefined ? {} : { errorMessage }) },
+    ],
+  })
+  const overloaded = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+
+  it('follows a run that failed at the provider with an error event', () => {
+    const event = failedRun('error', overloaded)
+    expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(event, queued)).toEqual([event, { type: 'error', error: overloaded, synthetic: true }])
+    const [, error] = PRIME_RUST_RPC_ADAPTER.normalizeEvent(failedRun('error', ` ${'x'.repeat(5_000)} `), queued) as RpcObject[]
+    expect(error.error).toBe('x'.repeat(4_000))
+  })
+
+  it('ends every other run with its agent_end alone', () => {
+    for (const event of [failedRun('aborted', 'Request was aborted'), failedRun('stop'), failedRun('error'), failedRun('error', '  '), { type: 'agent_end' }]) {
+      expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(event, queued)).toBe(event)
+    }
+    const earlierFailure = { type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'error', errorMessage: overloaded }, { role: 'assistant', stopReason: 'stop' }] }
+    expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(earlierFailure, queued)).toBe(earlierFailure)
+    const typescript = failedRun('error', overloaded)
+    expect(PRIME_RPC_ADAPTER.normalizeEvent(typescript, queued)).toBe(typescript)
+  })
 })
 
 describe('framed RPC transport stdio failure', () => {
