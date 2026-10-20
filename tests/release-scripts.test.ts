@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { FuseState, FuseV1Options, FuseVersion, flipFuses, getCurrentFuseWire } from '@electron/fuses'
 import { describe, expect, test } from 'vitest'
 import {
@@ -1703,6 +1703,31 @@ describe('cross-platform packaging repair', () => {
     ])
     expect(calls[0].env).toBe(calls[1].env)
     expect(calls[0].env).toMatchObject({ TASK_MARKER: 'kept', PYTHON: '/usr/bin/python3' })
+  })
+
+  test('resolves the renderer @ alias for checkouts whose path has spaces or non-ASCII characters', () => {
+    // URL.pathname would percent-encode the alias (%20, %C3%A9), which Vite
+    // never decodes, so dev and build broke in a profile like C:\Users\Jane Doe.
+    // Node resolves the imported module through symlinks such as macOS's /var.
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'gooeypi checkout é-')))
+    try {
+      writeFileSync(join(directory, 'electron.vite.config.ts'), readFileSync('electron.vite.config.ts'))
+      symlinkSync(join(process.cwd(), 'node_modules'), join(directory, 'node_modules'), 'junction')
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          "const { default: config } = await import(process.argv[1]); console.log(config.renderer.resolve.alias['@'])",
+          pathToFileURL(join(directory, 'electron.vite.config.ts')).href,
+        ],
+        { encoding: 'utf8' },
+      )
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout.trim()).toBe(join(directory, 'src'))
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
 

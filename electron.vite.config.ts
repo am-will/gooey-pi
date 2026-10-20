@@ -1,6 +1,7 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
   main: {
@@ -19,7 +20,7 @@ export default defineConfig({
   renderer: {
     root: '.',
     plugins: [react()],
-    resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },
+    resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
     // Full minification, but function names survive so the React component
     // stacks ErrorBoundary logs stay readable; no sourcemap can restore those,
     // since React reads them from the function names at runtime. Costs ~4% of
