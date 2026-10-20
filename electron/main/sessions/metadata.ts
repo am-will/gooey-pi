@@ -116,7 +116,8 @@ export function ingestMessageActivity(state: MessageActivityAccumulator, record:
   if (typeof message.role === 'string') state.lastRole = message.role
   if (typeof message.stopReason === 'string') state.stopReason = message.stopReason
   // Previews and first prompts show only visible text, never model reasoning.
-  const text = textFromContent(message.content, 4_096, { includeThinking: false })
+  // Retained parse state only ever feeds one-line clips, so compact once here.
+  const text = compactText(textFromContent(message.content, 4_096, { includeThinking: false }))
   if (message.role === 'user') {
     if (!state.firstUser && text) state.firstUser = text
     state.lastUserMessageAt = validTimestamp(message.timestamp, validTimestamp(record.timestamp, state.lastUserMessageAt ?? state.createdAt))
@@ -145,7 +146,7 @@ function ingestMetadataLine(state: MetadataAccumulator, line: string): void {
     if (typeof value.modelId === 'string') state.model = value.modelId
     if (typeof value.provider === 'string') state.provider = value.provider
   } else if (value.type === 'thinking_level_change' && typeof value.thinkingLevel === 'string') state.thinkingLevel = value.thinkingLevel
-  else if (value.type === 'session_info' && typeof value.name === 'string') state.sessionName = value.name
+  else if (value.type === 'session_info' && typeof value.name === 'string') state.sessionName = compactText(value.name, 100)
   else if (value.type === 'session_state' && isRecord(value.state) && typeof value.state.status === 'string') state.lifecycle = value.state.status
   else if (value.type === 'agent_status' && isRecord(value.status)) {
     state.taskState = typeof value.status.taskState === 'string' ? value.status.taskState : undefined

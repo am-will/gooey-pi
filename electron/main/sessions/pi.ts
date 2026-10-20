@@ -18,7 +18,7 @@ import {
   type SessionMetadataReader,
   type SessionMetadataReaderIo,
 } from './metadata'
-import type { TranscriptFileReader } from './transcript'
+import { compactText, type TranscriptFileReader } from './transcript'
 
 /**
  * Pi session JSONL v3 layout under `~/.pi/agent/sessions/<bucket>/`:
@@ -54,7 +54,7 @@ const piMetadataParser = createBucketedMetadataParser((state, value) => {
     if (typeof value.provider === 'string') state.provider = value.provider
   } else if (value.type === 'session_info' && typeof value.name === 'string') {
     // The latest session_info name wins; an empty name falls back to the prompt.
-    state.displayName = value.name
+    state.displayName = compactText(value.name, 100)
   }
 })
 

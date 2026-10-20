@@ -120,6 +120,23 @@ describe('pi metadata reader', () => {
     expect(titles.get('cleared')).toBe('original prompt')
   })
 
+  it('bounds an oversized session_info name to the title length', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } }),
+        piEntry('session_info', 'bb22cc33', 'aa11bb22', { name: 'n'.repeat(1024 * 1024) }),
+      ],
+    })
+
+    const title = (await service.list())[0]?.title ?? ''
+    expect(title).toHaveLength(100)
+    expect(title.endsWith('…')).toBe(true)
+  })
+
   it('previews only visible assistant text, never thinking parts', async () => {
     const { root, project, service } = setup()
     mkdirSync(join(root, BUCKET))

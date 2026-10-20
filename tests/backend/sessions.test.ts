@@ -9,7 +9,7 @@ import { AgentRpcManager } from '../../electron/main/agent-rpc'
 import { ProjectService } from '../../electron/main/projects'
 import { SessionService, type SessionServiceOptions } from '../../electron/main/sessions'
 import { boundedSessionDiscoveryNames, SessionMetadataCatalog, type SessionCatalogIo } from '../../electron/main/sessions/catalog'
-import { applyLiveMetadata, createSessionMetadataReader, METADATA_VERIFY_TAIL_BYTES, readSessionMetadata, type SessionMetadata } from '../../electron/main/sessions/metadata'
+import { applyLiveMetadata, createSessionMetadataReader, ingestMessageActivity, METADATA_VERIFY_TAIL_BYTES, readSessionMetadata, type SessionMetadata } from '../../electron/main/sessions/metadata'
 import { JsonStateStore } from '../../electron/main/store'
 import { waitUntil } from '../helpers/wait'
 
@@ -529,6 +529,46 @@ describe('Prime session previews', () => {
     appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'tool-turn', parentId: 'answer', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'more reasoning' }, { type: 'toolCall', name: 'bash', arguments: {} }] } })}\n`)
     expect((await service.list(undefined, false, true))[0]?.preview).toBe('Final answer')
     expect((await readSessionMetadata(file)).preview).toBe('Final answer')
+  })
+})
+
+describe('retained metadata parse state', () => {
+  it('stores one-line clips of message text instead of 4 KiB strings', () => {
+    const state = { createdAt: '2025-01-01T00:00:00.000Z', firstUser: '', preview: '' }
+    ingestMessageActivity(state, { message: { role: 'user', content: 'x'.repeat(16 * 1024) } })
+    expect(state.firstUser).toHaveLength(160)
+    expect(state.preview).toBe(state.firstUser)
+  })
+
+  it('bounds an oversized session name without changing the visible title or preview', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-retained-name-')); dirs.push(dir)
+    const file = join(dir, 'named.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'named', cwd: '/project', timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'word '.repeat(2_000) } }),
+      JSON.stringify({ type: 'session_info', id: 'name', parentId: 'user', name: 'n'.repeat(1024 * 1024) }),
+      '',
+    ].join('\n'))
+
+    const metadata = await readSessionMetadata(file)
+    expect(metadata.title).toBe(`${'n'.repeat(99)}…`)
+    expect(metadata.sessionName).toBe(metadata.title)
+    expect(metadata.preview).toBe(`${'word '.repeat(31)}word…`)
+  })
+
+  it('does not let whitespace-only names or replies blank the title or preview', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-retained-blank-')); dirs.push(dir)
+    const file = join(dir, 'blank.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'blank', cwd: '/project', timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'real prompt' } }),
+      JSON.stringify({ type: 'message', id: 'reply', parentId: 'user', message: { role: 'assistant', content: 'visible reply' } }),
+      JSON.stringify({ type: 'message', id: 'blank-reply', parentId: 'reply', message: { role: 'assistant', content: '  \n\t ' } }),
+      JSON.stringify({ type: 'session_info', id: 'name', parentId: 'blank-reply', name: '   ' }),
+      '',
+    ].join('\n'))
+
+    expect(await readSessionMetadata(file)).toMatchObject({ title: 'real prompt', preview: 'visible reply' })
   })
 })
 

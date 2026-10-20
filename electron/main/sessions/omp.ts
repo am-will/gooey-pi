@@ -55,7 +55,7 @@ const ompMetadataParser = createBucketedMetadataParser((state, value) => {
       state.model = separator > 0 ? value.model.slice(separator + 1) : value.model
     }
   } else if ((value.type === 'title_change' || value.type === 'title') && typeof value.title === 'string') {
-    state.displayName = value.title
+    state.displayName = compactText(value.title, 100)
   }
 })
 

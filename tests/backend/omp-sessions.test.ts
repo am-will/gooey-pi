@@ -135,6 +135,23 @@ describe('OMP metadata reader', () => {
     expect(titles.get('renamed')).toBe('Renamed in tail')
   })
 
+  it('bounds an oversized title_change title to the title length', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, '-bucket'))
+    const file = join(root, '-bucket', NAME_A)
+    writeOmpSession(file, {
+      cwd: project,
+      entries: [
+        ompEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'original prompt' } }),
+        ompEntry('title_change', 'bb22cc33', 'aa11bb22', { title: 't'.repeat(1024 * 1024) }),
+      ],
+    })
+
+    const title = (await service.list())[0]?.title ?? ''
+    expect(title).toHaveLength(100)
+    expect(title.endsWith('…')).toBe(true)
+  })
+
   it('picks up an in-place title-slot rewrite without losing incremental tail state', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-omp-title-')); dirs.push(dir)
     const file = join(dir, NAME_A)
