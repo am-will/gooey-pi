@@ -77,7 +77,11 @@ export function createPiSessionMetadataReader(io: SessionMetadataReaderIo = node
  */
 export function appendPiSessionInfo(filePath: string, title: string): boolean {
   try {
-    const parentId = currentPiLeafId(filePath)
+    const content = readFileSync(filePath, 'utf8')
+    const parentId = currentPiLeafId(content)
+    // A crash-truncated (unterminated) last line would otherwise swallow the
+    // new record into one unparseable line and silently lose the rename.
+    const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : ''
     const record = `${JSON.stringify({
       type: 'session_info',
       id: randomBytes(4).toString('hex'),
@@ -85,15 +89,15 @@ export function appendPiSessionInfo(filePath: string, title: string): boolean {
       timestamp: new Date().toISOString(),
       name: title,
     })}\n`
-    appendFileSync(filePath, record, 'utf8')
+    appendFileSync(filePath, `${separator}${record}`, 'utf8')
     return true
   } catch {
     return false
   }
 }
 
-function currentPiLeafId(filePath: string): string | null {
-  const lines = readFileSync(filePath, 'utf8').split('\n')
+function currentPiLeafId(content: string): string | null {
+  const lines = content.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!.trim()
     if (!line) continue

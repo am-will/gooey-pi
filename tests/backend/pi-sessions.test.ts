@@ -470,4 +470,40 @@ describe('pi file-level rename fallback', () => {
     const appended = JSON.parse(readFileSync(file, 'utf8').slice(before.length).trim()) as { parentId: string }
     expect(appended.parentId).toBe('deadbeef')
   })
+
+  it('starts a fresh line when the last complete entry has no trailing LF', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } })],
+    })
+    appendFileSync(file, piEntry('message', 'bb22cc33', 'aa11bb22', { message: { role: 'assistant', content: 'unterminated' } }))
+
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
+    const records = lines.map((line) => JSON.parse(line) as { type: string; id?: string; parentId?: string | null; name?: string })
+    expect(records.at(-2)).toMatchObject({ type: 'message', id: 'bb22cc33' })
+    expect(records.at(-1)).toMatchObject({ type: 'session_info', parentId: 'bb22cc33', name: 'Renamed offline' })
+    expect((await service.list())[0]?.title).toBe('Renamed offline')
+  })
+
+  it('parents to the last complete entry and keeps the record parseable after a truncated partial line', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } })],
+    })
+    appendFileSync(file, '{"type":"message","id":"cafe')
+
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const lines = readFileSync(file, 'utf8').split('\n')
+    expect(lines.at(-1)).toBe('')
+    expect(lines.at(-3)).toBe('{"type":"message","id":"cafe')
+    expect(JSON.parse(lines.at(-2)!)).toMatchObject({ type: 'session_info', parentId: 'aa11bb22', name: 'Renamed offline' })
+    expect((await service.list())[0]?.title).toBe('Renamed offline')
+  })
 })
