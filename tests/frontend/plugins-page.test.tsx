@@ -454,3 +454,66 @@ describe('PluginsPage bundled capability controls', () => {
     expect(mutateCapability).not.toHaveBeenCalled()
   })
 })
+
+describe('PluginsPage on Rust Prime', () => {
+  let container: HTMLDivElement
+  let root: Root
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+  })
+  afterEach(() => { act(() => root.unmount()); container.remove() })
+
+  const gooeyExtensionDetail = 'Prime Agent 0.10+ cannot load GooeyPi\'s TypeScript extension for this capability. Pi and OMP keep it.'
+  const records: SkillRecord[] = [
+    { ...askUser, availability: { available: false, detail: gooeyExtensionDetail } },
+    { id: 'prime-work-browser', name: 'Browser', description: 'In-app browser.', kind: 'skill', location: 'system', enabled: true, availability: { available: false, detail: gooeyExtensionDetail } },
+    { id: 'extension:user:legacy', name: 'legacy', description: 'A personal extension.', kind: 'extension', location: 'user', enabled: true, availability: { available: false, detail: 'Prime Agent 0.10+ does not load TypeScript extensions.' } },
+    computerUse,
+  ]
+  const render = (harness: 'prime' | 'omp', primeImplementation: 'rust' | 'typescript', skills = records) => act(async () => {
+    root.render(<PluginsPage
+      harness={harness} primeImplementation={primeImplementation} skills={skills} warnings={[]} loading={false}
+      askUserEnabled={true} onSetAskUserEnabled={async () => undefined}
+      browserEnabled={true} onSetBrowserEnabled={async () => undefined}
+      computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined}
+      onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })}
+      onInstallExtension={async () => ({ ok: true, output: '' })} onSetMcpSupport={async () => ({ ok: true, output: '' })}
+      onConnectMcp={async () => ({ ok: true, output: '' })} onSetMcpEnabled={async () => ({ ok: true, output: '' })}
+    />)
+  })
+
+  it('labels what Rust Prime cannot load instead of offering a toggle', async () => {
+    await render('prime', 'rust')
+
+    for (const name of ['Ask user', 'Browser', 'legacy']) {
+      const status = container.querySelector(`[role="img"][aria-label="Unavailable ${name}"]`)
+      expect(status).not.toBeNull()
+      expect(container.querySelector(`#${status?.getAttribute('aria-describedby')}`)?.textContent).toContain('Prime Agent 0.10+')
+      expect(container.querySelector(`button[aria-label="Disable ${name}"]`)).toBeNull()
+    }
+    // Computer use works on Rust Prime; its install prompt stays actionable.
+    expect(container.querySelector('button[aria-label="Enable Computer Use | TryCUA"]')).not.toBeNull()
+    expect(container.textContent).toContain('Not available with Prime Agent 0.10+: Browser control, Ask user, Session collaboration, Fast mode, TypeScript extensions.')
+
+    await act(async () => { container.querySelector<HTMLButtonElement>('.button--primary')!.click() })
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    const addExtension = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Add Extension'))!
+    expect(addExtension.disabled).toBe(true)
+    expect(addExtension.textContent).toContain('Prime Agent 0.10+ does not load TypeScript extensions.')
+  })
+
+  it('shows no Prime notice for TypeScript Prime or another harness', async () => {
+    const offered = records.map((record) => record.id === computerUse.id ? record : { ...record, availability: undefined })
+    await render('prime', 'typescript', offered)
+    expect(container.textContent).not.toContain('Not available with Prime Agent 0.10+')
+    expect(container.querySelector('button[aria-label="Disable Browser"]')).not.toBeNull()
+
+    await render('omp', 'rust', offered)
+    expect(container.textContent).not.toContain('Not available with Prime Agent 0.10+')
+    await act(async () => { container.querySelector<HTMLButtonElement>('.button--primary')!.click() })
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    expect([...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Add Extension'))?.disabled).toBe(false)
+  })
+})
