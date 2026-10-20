@@ -1,7 +1,7 @@
 import type { PrimeImplementation, SkillRecord } from '../types/api'
 
 /** How user-facing copy names the Rust build. */
-export const RUST_PRIME_AGENT_NAME = 'Prime Agent 0.10+'
+export const RUST_PRIME_AGENT_NAME = 'Rust Prime Agent'
 export const RUST_PRIME_EXTENSIONS_DETAIL = `${RUST_PRIME_AGENT_NAME} does not load TypeScript extensions.`
 
 export const PRIME_IMPLEMENTATION_LABELS: Readonly<Record<PrimeImplementation, string>> = Object.freeze({ typescript: 'TypeScript', rust: 'Rust' })

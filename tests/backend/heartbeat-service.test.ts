@@ -97,7 +97,7 @@ if (args[0] === 'schedule' && args[1] === 'list') {
 
 describe('HeartbeatService on Rust Prime', () => {
   /** A runtime open on the heartbeat's session whose harness has no heartbeat commands, as Rust Prime's adapter refuses them. */
-  function rustRuntime(executable: string, error: Error = new UnsupportedRpcCommandError('manage_heartbeat', 'Prime Agent 0.10+')) {
+  function rustRuntime(executable: string, error: Error = new UnsupportedRpcCommandError('manage_heartbeat', 'Rust Prime Agent')) {
     const runtime = { runtimeId: 'rust-runtime', sessionFile: heartbeat.sessionFile }
     const agents = {
       list: vi.fn(() => [runtime]),
@@ -123,7 +123,7 @@ describe('HeartbeatService on Rust Prime', () => {
     const cli = fakePrimeCli()
     const { service } = rustRuntime(cli.executable)
 
-    await expect(service.manage('heartbeat-one', action)).rejects.toThrow('Prime Agent 0.10+ pauses and resumes native heartbeats only through its background service')
+    await expect(service.manage('heartbeat-one', action)).rejects.toThrow('Rust Prime Agent pauses and resumes native heartbeats only through its background service')
     expect(cli.argv().map((args) => args[1])).not.toContain('cancel')
   })
 

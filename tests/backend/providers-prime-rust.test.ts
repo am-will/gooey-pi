@@ -67,8 +67,8 @@ describe('Rust Prime model catalog service', () => {
     await expect(service.requireAvailableModel('anthropic/claude-opus-5-5')).resolves.toMatchObject({ id: 'claude-opus-5-5' })
     // Without a provider-row builder, each provider's credentials belong to the CLI.
     expect(catalog.providers.map((provider) => [provider.id, provider.authMethod, provider.authLabel])).toEqual([
-      ['anthropic', 'external', 'Credentials managed by Prime Agent 0.10+'],
-      ['openai', 'external', 'Credentials managed by Prime Agent 0.10+'],
+      ['anthropic', 'external', 'Credentials managed by Rust Prime Agent'],
+      ['openai', 'external', 'Credentials managed by Rust Prime Agent'],
     ])
   })
 

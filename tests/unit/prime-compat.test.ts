@@ -50,7 +50,7 @@ describe('Prime capability availability', () => {
 
   it('names what Rust Prime does not offer in one notice', () => {
     expect(primeUnavailableCapabilitiesNotice('rust')).toBe(
-      'Not available with Prime Agent 0.10+: Browser control, Ask user, Session collaboration, Fast mode, TypeScript extensions. Pi and OMP keep them.',
+      'Not available with Rust Prime Agent: Browser control, Ask user, Session collaboration, Fast mode, TypeScript extensions. Pi and OMP keep them.',
     )
     expect(primeUnavailableCapabilitiesNotice('typescript')).toBeUndefined()
     expect(primeUnavailableCapabilitiesNotice(undefined)).toBeUndefined()
@@ -65,11 +65,11 @@ describe('Prime capability availability', () => {
     for (const record of [browser, askUser]) {
       expect(primeCapabilityRecordAvailability(record, 'rust')).toEqual({
         available: false,
-        detail: 'Prime Agent 0.10+ cannot load GooeyPi\'s TypeScript extension for this capability. Pi and OMP keep it.',
+        detail: 'Rust Prime Agent cannot load GooeyPi\'s TypeScript extension for this capability. Pi and OMP keep it.',
       })
     }
     for (const record of [userExtension, projectExtension]) {
-      expect(primeCapabilityRecordAvailability(record, 'rust')).toEqual({ available: false, detail: 'Prime Agent 0.10+ does not load TypeScript extensions.' })
+      expect(primeCapabilityRecordAvailability(record, 'rust')).toEqual({ available: false, detail: 'Rust Prime Agent does not load TypeScript extensions.' })
     }
     for (const record of [browser, askUser, userExtension]) {
       expect(primeCapabilityRecordAvailability(record, 'typescript')).toBeUndefined()

@@ -842,7 +842,7 @@ describe('harness settings surfaces', () => {
     for (const label of ['Browser control', 'Ask user', 'Session collaboration', 'Fast mode', 'TypeScript extensions']) {
       expect(limits?.textContent).toContain(label)
     }
-    expect(limits?.textContent).toContain('Prime Agent 0.10+')
+    expect(limits?.textContent).toContain('Rust Prime Agent')
   })
 
   it('renders OMP provider toggles while keeping credentials CLI-owned', async () => {

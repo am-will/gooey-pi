@@ -1309,7 +1309,7 @@ describe('Rust Prime runtimes', () => {
     const runtime = await manager.start({ cwd: fake.cwd })
 
     await expect(manager.command(runtime.runtimeId, { type: 'manage_heartbeat', activeSessionId: 'rust-session', jobId: 'heartbeat-1', action: 'pause' }))
-      .rejects.toThrow(new UnsupportedRpcCommandError('manage_heartbeat', 'Prime Agent 0.10+'))
+      .rejects.toThrow(new UnsupportedRpcCommandError('manage_heartbeat', 'Rust Prime Agent'))
     await expect(manager.command(runtime.runtimeId, { type: 'extension_ui_response', id: 'ui-1', cancelled: true }))
       .rejects.toBeInstanceOf(UnsupportedRpcCommandError)
     await expect(manager.command(runtime.runtimeId, { type: 'list_heartbeats' })).resolves.toMatchObject({ data: { heartbeats: [] } })
