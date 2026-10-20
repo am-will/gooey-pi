@@ -33,7 +33,7 @@ Prime Agent shipped as a TypeScript CLI through 0.9.8 and as a Rust rewrite from
 2. Only an unreadable version pays for a feature probe: `prime-agent --extension <path in a fresh private directory, never created> --version`. TypeScript accepts the flag and loads nothing for `--version` (exit 0); Rust exits on the unknown option.
 3. An inconclusive probe counts as Rust. Leaving out `--extension` only drops capabilities, visibly, while passing it to Rust is fatal.
 
-Discovery runs at startup and on Refresh. A start that used TypeScript argv and failed with Rust's `Unknown option: --extension` (for example after `prime-agent update` while GooeyPi was open) refreshes discovery once and retries once, with the Rust adapter if Prime now classifies as Rust. The main process then signals the window, which runs the same Refresh, so Settings, Capabilities, Scheduled and the composer show the new build without a manual Refresh.
+Discovery runs at startup and on Refresh. A start that used TypeScript argv and failed with Rust's `Unknown option: --extension` (for example after `prime-agent update` while GooeyPi was open) refreshes discovery once and retries once, with the Rust adapter if Prime now classifies as Rust. The main process then signals the window, which runs the same Refresh (it adopts the new detection, then reloads the active harness's model catalog and Capabilities records), so Settings, Capabilities, Scheduled and the composer show the new build without a manual Refresh.
 
 ### What the classification changes
 

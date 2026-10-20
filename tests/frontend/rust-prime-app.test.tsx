@@ -5,7 +5,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
-import type { AppMeta, PrimeImplementation, PrimeModelCatalog, PrimeWorkApi, ProjectRecord } from '../../src/types/api'
+import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
+import type { AppMeta, PrimeImplementation, PrimeModelCatalog, PrimeWorkApi, ProjectRecord, SkillRecord } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -31,16 +32,25 @@ const meta = (implementation: PrimeImplementation | undefined): AppMeta => ({
   harnesses: { prime: { path: '/usr/bin/prime-agent', version: '0.10.0', implementation }, omp: { path: null, version: null }, pi: { path: null, version: null } },
 })
 
+/** Browser control as the main process lists it: its availability follows the detected build. */
+function browserControl(implementation: PrimeImplementation | undefined): SkillRecord {
+  const record = { id: 'prime-work-browser', name: 'Browser control', description: 'Drive the browser panel.', kind: 'extension', location: 'system', enabled: true } as const
+  return { ...record, availability: primeCapabilityRecordAvailability(record, implementation) }
+}
+
 const unsubscribe = () => () => undefined
 let container: HTMLDivElement
 let root: Root
 
-function bridgeFor(appMeta: AppMeta): PrimeWorkApi {
+/** A bridge whose Prime classification is read from `detected` on every call, like the main process's discovery. */
+function bridgeFor(detected: () => PrimeImplementation | undefined) {
   const settings = { ...DEFAULT_SETTINGS, activeHarness: 'prime' as const }
-  return {
+  const harnessesChanged = new Set<() => void>()
+  const bridge = {
     app: {
-      getMeta: vi.fn(async () => appMeta), refreshHarnesses: vi.fn(async () => ({ meta: appMeta, settings })),
-      setTitleBarTheme: vi.fn(async () => true), onOpenSettings: vi.fn(unsubscribe), onHarnessesChanged: vi.fn(unsubscribe),
+      getMeta: vi.fn(async () => meta(detected())), refreshHarnesses: vi.fn(async () => ({ meta: meta(detected()), settings })),
+      setTitleBarTheme: vi.fn(async () => true), onOpenSettings: vi.fn(unsubscribe),
+      onHarnessesChanged: vi.fn((callback: () => void) => { harnessesChanged.add(callback); return () => { harnessesChanged.delete(callback) } }),
     },
     updates: { getState: vi.fn(async () => ({ phase: 'idle' as const })), onChanged: vi.fn(unsubscribe) },
     projects: { list: vi.fn(async () => [project]), listCheckouts: vi.fn(async () => null), touch: vi.fn(async () => true) },
@@ -48,13 +58,18 @@ function bridgeFor(appMeta: AppMeta): PrimeWorkApi {
     agent: { list: vi.fn(async () => []), onEvent: vi.fn(unsubscribe) },
     pets: { list: vi.fn(async () => []) },
     providers: { catalog: vi.fn(async () => catalog), onAuthEvent: vi.fn(unsubscribe) },
-    plugins: { list: vi.fn(async () => ({ skills: [], warnings: [] })) },
+    plugins: { list: vi.fn(async () => ({ skills: [browserControl(detected())], warnings: [] })) },
     browser: { state: vi.fn(async () => ({ tabs: [] })), onChanged: vi.fn(unsubscribe), onPointer: vi.fn(unsubscribe), onActivity: vi.fn(unsubscribe) },
     heartbeats: { list: vi.fn(async () => []) },
     schedules: { list: vi.fn(async () => []), onChanged: vi.fn(unsubscribe) },
     settings: { get: vi.fn(async () => settings), update: vi.fn(async (patch) => ({ ...settings, ...patch })) },
     git: { status: vi.fn(async () => ({ isRepo: false, files: [] })) },
-  } as unknown as PrimeWorkApi
+  }
+  return {
+    bridge,
+    /** What the main process sends after a start recovery re-detected the harnesses. */
+    signalHarnessesChanged: () => act(async () => { for (const callback of harnessesChanged) callback() }),
+  }
 }
 
 beforeEach(() => {
@@ -72,16 +87,34 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-async function renderComposer(implementation: PrimeImplementation | undefined): Promise<HTMLElement> {
-  Object.defineProperty(window, 'prime', { configurable: true, value: bridgeFor(meta(implementation)) })
-  await act(async () => root.render(<App />))
+async function waitFor<T>(read: () => T | null | undefined, condition: string): Promise<T> {
   const started = Date.now()
   while (Date.now() - started < 4_000) {
-    const composer = container.querySelector<HTMLElement>('.composer')
-    if (composer?.textContent?.includes('GPT-5.6')) return composer
+    const value = read()
+    if (value) return value
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 20)) })
   }
-  throw new Error('The composer never showed the catalog model')
+  throw new Error(`Timed out waiting until ${condition}`)
+}
+
+async function renderApp(detected: () => PrimeImplementation | undefined) {
+  const main = bridgeFor(detected)
+  Object.defineProperty(window, 'prime', { configurable: true, value: main.bridge as unknown as PrimeWorkApi })
+  await act(async () => root.render(<App />))
+  return main
+}
+
+async function renderComposer(implementation: PrimeImplementation | undefined): Promise<HTMLElement> {
+  await renderApp(() => implementation)
+  return waitFor(() => {
+    const composer = container.querySelector<HTMLElement>('.composer')
+    return composer?.textContent?.includes('GPT-5.6') ? composer : null
+  }, 'the composer shows the catalog model')
+}
+
+async function navigate(label: string) {
+  const button = await waitFor(() => container.querySelector<HTMLButtonElement>(`.sidebar__primary button[title="${label}"]`), `the ${label} button renders`)
+  await act(async () => { button.click() })
 }
 
 describe('composer fast toggle before a runtime exists', () => {
@@ -95,5 +128,23 @@ describe('composer fast toggle before a runtime exists', () => {
     const composer = await renderComposer(implementation)
 
     expect(composer.querySelector<HTMLButtonElement>('.fast-mode-toggle')?.disabled).toBe(false)
+  })
+})
+
+describe('a start recovery that reclassifies Prime as Rust', () => {
+  it('reloads the Capabilities records, whose availability follows the detected build', async () => {
+    let implementation: PrimeImplementation = 'typescript'
+    const main = await renderApp(() => implementation)
+    await navigate('Capabilities')
+    await waitFor(() => container.querySelector('[aria-label="Disable Browser control"]'), 'Browser control is offered')
+    const listed = main.bridge.plugins.list.mock.calls.length
+
+    implementation = 'rust'
+    await main.signalHarnessesChanged()
+
+    await waitFor(() => container.querySelector('[aria-label="Unavailable Browser control"]'), 'Browser control is labelled unavailable')
+    expect(main.bridge.app.refreshHarnesses).toHaveBeenCalledOnce()
+    expect(main.bridge.plugins.list).toHaveBeenCalledTimes(listed + 1)
+    expect(main.bridge.plugins.list).toHaveBeenLastCalledWith('/project', 'prime')
   })
 })

@@ -44,17 +44,18 @@ async function renderRefresh(
   // Settings' transaction runs the operation it is given; the generic signature does not survive vi.fn.
   const reconcileExternalSettings = vi.fn((operation: () => Promise<unknown>) => operation())
   const refreshProviders = vi.fn(async () => undefined)
+  const refreshCapabilities = vi.fn(async () => undefined)
   let refresh: (() => Promise<void>) | undefined
   function Probe() {
-    refresh = useHarnessRefresh({ bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: reconcileExternalSettings as never, refreshProviders, reportError })
+    refresh = useHarnessRefresh({ bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: reconcileExternalSettings as never, refreshProviders, refreshCapabilities, reportError })
     return null
   }
   await act(async () => { root.render(<Probe />) })
-  return { refresh: () => act(async () => { await refresh?.() }), refreshHarnesses, reconcileExternalSettings, refreshProviders, reportError }
+  return { refresh: () => act(async () => { await refresh?.() }), refreshHarnesses, reconcileExternalSettings, refreshProviders, refreshCapabilities, reportError }
 }
 
 describe('harness refresh', () => {
-  it('re-detects harnesses inside the settings transaction and reloads the active catalog', async () => {
+  it('re-detects harnesses inside the settings transaction and reloads the active catalog and capabilities', async () => {
     const view = await renderRefresh({ meta: meta('/bin/prime-agent'), settings: { ...DEFAULT_SETTINGS, activeHarness: 'prime' } })
 
     await view.refresh()
@@ -62,18 +63,29 @@ describe('harness refresh', () => {
     expect(view.reconcileExternalSettings).toHaveBeenCalledExactlyOnceWith(view.refreshHarnesses)
     expect(view.refreshHarnesses).toHaveBeenCalledOnce()
     expect(view.refreshProviders).toHaveBeenCalledExactlyOnceWith(true)
+    expect(view.refreshCapabilities).toHaveBeenCalledOnce()
   })
 
   it.each([
     ['the active harness is no longer installed', meta(null), 'prime'],
     ['the main process selected another harness', meta('/bin/prime-agent'), 'pi'],
-  ] as const)('leaves the catalog alone when %s', async (_case, nextMeta, nextHarness) => {
+  ] as const)('leaves the catalog and capabilities alone when %s', async (_case, nextMeta, nextHarness) => {
     const view = await renderRefresh({ meta: nextMeta, settings: { ...DEFAULT_SETTINGS, activeHarness: nextHarness } })
 
     await view.refresh()
 
     expect(view.refreshHarnesses).toHaveBeenCalledOnce()
     expect(view.refreshProviders).not.toHaveBeenCalled()
+    expect(view.refreshCapabilities).not.toHaveBeenCalled()
+  })
+
+  it('still reloads the capabilities when the catalog reload fails', async () => {
+    const view = await renderRefresh({ meta: meta('/bin/prime-agent'), settings: { ...DEFAULT_SETTINGS, activeHarness: 'prime' } })
+    const failure = new Error('catalog probe failed')
+    view.refreshProviders.mockRejectedValueOnce(failure)
+
+    await expect(view.refresh()).rejects.toBe(failure)
+    expect(view.refreshCapabilities).toHaveBeenCalledOnce()
   })
 
   it('reruns the same refresh when the main process re-detects the harnesses, until unmount', async () => {
@@ -85,6 +97,7 @@ describe('harness refresh', () => {
 
     expect(view.reconcileExternalSettings).toHaveBeenCalledExactlyOnceWith(view.refreshHarnesses)
     expect(view.refreshProviders).toHaveBeenCalledExactlyOnceWith(true)
+    expect(view.refreshCapabilities).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
     expect(main.unsubscribe).toHaveBeenCalledOnce()
     root = createRoot(container)

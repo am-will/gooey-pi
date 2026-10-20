@@ -262,9 +262,6 @@ export default function App() {
     () => meta ? HARNESS_IDS.filter((harness) => Boolean(meta.harnesses[harness].path)) : [],
     [meta],
   )
-  const refreshDetectedHarnesses = useHarnessRefresh({
-    bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh, reportError,
-  })
   useEffect(() => {
     if (detectedHarnesses.length) setNoHarnessPromptDismissed(false)
   }, [detectedHarnesses.length])
@@ -348,6 +345,9 @@ export default function App() {
   const agentTabVisible = view === 'session' && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
   const pluginScope = activeProject?.primaryFolder && !activeProject.inferred ? activeProject.primaryFolder : undefined
   const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: bridge ? [] : SAMPLE_SKILLS, reportError })
+  const refreshDetectedHarnesses = useHarnessRefresh({
+    bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh, refreshCapabilities: pluginSkills.refresh, reportError,
+  })
   useEffect(() => () => { demoTimerRef.current.forEach(window.clearTimeout) }, [])
 
   const refreshSchedules = useCallback(async () => {
