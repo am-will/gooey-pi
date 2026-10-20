@@ -62,7 +62,9 @@ export function useAgentEvents({
       if (sessionFile) {
         runtimeSessionsRef.current.set(runtimeId, sessionFile)
         if (sessionLifecycleChange(event)) {
-          const visible = activeSessionVisible && workspaceRef.current.sessionFile === sessionFile
+          // A new chat shows its own runtime's session before it adopts it.
+          const shownFile = workspaceRef.current.sessionFile ?? (runtimeIdRef.current === runtimeId ? sessionFile : undefined)
+          const visible = activeSessionVisible && shownFile === sessionFile
           setSessions((items) => items.map((session) => session.filePath === sessionFile
             ? applySessionLifecycleEvent(session, event, visible)
             : session))
