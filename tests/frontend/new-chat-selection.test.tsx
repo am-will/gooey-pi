@@ -187,6 +187,24 @@ describe('new chat selection', () => {
     expect(sessions.find((session) => session.id === 'started')).toMatchObject({ status: 'complete', unread: false })
   })
 
+  it('keeps an adopted chat live transcript while a stale listing briefly drops its session', async () => {
+    const app = renderApp()
+    act(() => { workspace.activateWorkspace(project) })
+
+    await app.send('Build the sidebar')
+    await app.startRuntime()
+    expect(workspace.activeSessionId).toBe('started')
+    const live = workspace.messages
+
+    // A listing requested before the harness wrote the file resolves last.
+    act(() => { setSessions([existing]) })
+    expect(workspace.messages).toBe(live)
+
+    act(() => { setSessions([existing, started]) })
+    expect(workspace.messages).toBe(live)
+    expect(app.read).not.toHaveBeenCalled()
+  })
+
   it('reads a viewed new chat turn as seen when it ends before the catalog listing renders', () => {
     const app = renderApp()
     act(() => { workspace.activateWorkspace(project) })

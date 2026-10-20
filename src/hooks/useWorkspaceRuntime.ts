@@ -547,8 +547,14 @@ export function useWorkspaceRuntime({
   const externalSessionSyncRevision = locallyOwnedActiveSession ? undefined : activeSession?.syncRevision
 
   useEffect(() => {
+    const selected = workspaceRef.current
     if (!bridge || !activeSession?.filePath) {
-      if (bridge && !activeSession) {
+      // A stale listing can briefly drop the session this workspace's own
+      // runtime is writing; its live transcript stays until the record returns.
+      const owner = runtimeOwnerRef.current
+      const ownsSelectedSession = Boolean(selected.sessionFile && owner?.generation === selected.generation
+        && runtimeSessionsRef.current.get(owner.runtimeId) === selected.sessionFile)
+      if (bridge && !activeSession && !ownsSelectedSession) {
         transcriptLoadRef.current = null
         lastTranscriptReadWorkspaceRef.current = null
         setMessages([])
@@ -556,7 +562,6 @@ export function useWorkspaceRuntime({
       setLoadingSession(false)
       return
     }
-    const selected = workspaceRef.current
     if (selected.generation !== workspaceGeneration || selected.sessionFile !== activeSession.filePath) {
       // Recovery: an admitted load for the live workspace snapshot must still be
       // started even when this render's catalog view diverges (for example a
