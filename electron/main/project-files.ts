@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
-import type { ProjectFileEntry, ProjectFileListing } from '../../src/types/api'
+import { PROJECT_FILE_LISTING_LIMIT, type ProjectFileEntry, type ProjectFileListing } from '../../src/types/api'
 
 const IGNORED_LISTING_DIRECTORIES = new Set([
   '.git',
@@ -21,12 +21,13 @@ const IGNORED_LISTING_DIRECTORIES = new Set([
  * panel. The walk is breadth-first so the entry budget only cuts the deepest
  * levels: one large early folder cannot starve root files or later siblings.
  */
-export async function listProjectFiles(root: string, maxEntries = 5_000): Promise<ProjectFileListing> {
+export async function listProjectFiles(root: string, maxEntries = PROJECT_FILE_LISTING_LIMIT): Promise<ProjectFileListing> {
   const entries: ProjectFileEntry[] = []
   let skipped = 0
+  let truncated = false
   const directories = [root]
 
-  for (let index = 0; index < directories.length && entries.length < maxEntries; index += 1) {
+  for (let index = 0; index < directories.length && !truncated; index += 1) {
     const directory = directories[index]
     let children: Dirent[]
     try {
@@ -39,10 +40,12 @@ export async function listProjectFiles(root: string, maxEntries = 5_000): Promis
     }
     children.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
     for (const child of children) {
-      if (entries.length >= maxEntries) break
       if (child.isSymbolicLink()) continue
       if (child.isDirectory() && IGNORED_LISTING_DIRECTORIES.has(child.name)) continue
       if (!child.isDirectory() && !child.isFile()) continue
+      // Only a child that would have been listed proves the listing is cut;
+      // trailing symlinks, ignored trees and empty folders hide nothing.
+      if (entries.length >= maxEntries) { truncated = true; break }
       const absolutePath = resolve(directory, child.name)
       const relativePath = relative(root, absolutePath)
       const path = process.platform === 'win32' ? relativePath.split('\\').join('/') : relativePath
@@ -51,5 +54,5 @@ export async function listProjectFiles(root: string, maxEntries = 5_000): Promis
     }
   }
 
-  return { entries, skipped }
+  return { entries, skipped, truncated }
 }
