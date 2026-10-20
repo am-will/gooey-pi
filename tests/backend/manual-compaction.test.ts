@@ -196,18 +196,19 @@ describe('manual compaction lifecycle', () => {
   it('closes a compaction with its own end when a run starts before the command answers', async () => {
     // Rust Prime kicks its queue pump before it writes the end and the answer,
     // so a steer parked during the compaction can start its run in between.
+    // Its bare end waits for the answer to say the compaction was skipped.
     const events: RpcObject[] = []
     const runtime = await startRuntime(`
       send({ type: 'compaction_start', reason: 'requested' })
-      send({ type: 'compaction_end', reason: 'requested', result: ${JSON.stringify(RESULT)}, aborted: false, willRetry: false })
+      send({ type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false })
       send({ type: 'agent_start' })
-      ok(${JSON.stringify(RESULT)})`, PRIME_RUST_RPC_ADAPTER, events)
+      send({ id: command.id, type: 'response', command: 'compact', success: false, error: ${JSON.stringify(PRIME_TOO_SHORT)} })`, PRIME_RUST_RPC_ADAPTER, events)
 
-    await runtime.command({ type: 'compact' })
+    await expect(runtime.command({ type: 'compact' })).resolves.toMatchObject({ success: true, data: { skipped: true } })
 
     expect(compactionEvents(events)).toEqual([
       { type: 'compaction_start', reason: 'requested' },
-      { type: 'compaction_end', reason: 'requested', result: RESULT, aborted: false, willRetry: false },
+      { type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false, errorSeverity: 'warning', errorMessage: PRIME_TOO_SHORT },
     ])
     expect(events.some((event) => event.type === 'agent_start')).toBe(true)
   })
@@ -246,6 +247,21 @@ describe('manual compaction lifecycle', () => {
       { type: 'compaction_start', reason: 'manual' },
       { type: 'compaction_end', reason: 'manual', aborted: true, willRetry: false },
     ])
+  })
+
+  it('completes the bare end a stopped runtime holds from the answer', async () => {
+    const events: RpcObject[] = []
+    const runtime = await startRuntime(`send({ type: 'compaction_start', reason: 'requested' })`, PRIME_RUST_RPC_ADAPTER, events, `
+      send({ type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false })
+      send({ id: compacting.id, type: 'response', command: 'compact', success: false, error: 'Compaction failed: aborted' })
+      ok()`)
+    const answered = expect(runtime.command({ type: 'compact' })).rejects.toThrow('Compaction failed: aborted')
+    await waitUntil(() => events.some((event) => event.type === 'compaction_start'))
+
+    await runtime.stop()
+
+    await answered
+    expect(compactionEvents(events).at(-1)).toEqual({ type: 'compaction_end', reason: 'requested', aborted: false, willRetry: false, errorMessage: 'Compaction failed: aborted' })
   })
 
   it('closes a running compaction the watchdog announced with the answered result', async () => {
