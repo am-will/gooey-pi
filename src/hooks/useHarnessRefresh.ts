@@ -1,18 +1,15 @@
 import { useCallback, useEffect } from 'react'
-import type { AppMeta, AppSettings, HarnessId, PrimeWorkApi } from '@/types/api'
-
-interface HarnessRefreshResult {
-  meta: AppMeta
-  settings: AppSettings
-}
+import type { useAppSettings } from '@/hooks/useAppSettings'
+import type { useBootstrap } from '@/hooks/useBootstrap'
+import type { HarnessId, PrimeWorkApi } from '@/types/api'
 
 interface UseHarnessRefreshOptions {
   bridge: PrimeWorkApi | null
   activeHarness: HarnessId
   /** Re-detects every harness in the main process and returns the new meta and settings. */
-  refreshHarnesses(): Promise<HarnessRefreshResult | null>
+  refreshHarnesses: ReturnType<typeof useBootstrap>['refreshHarnesses']
   /** Runs an external settings transaction after queued local changes, then adopts its settings. */
-  reconcileExternalSettings<T extends { settings: AppSettings }>(operation: () => Promise<T | null>): Promise<T | null>
+  reconcileExternalSettings: ReturnType<typeof useAppSettings>['reconcileExternalSettings']
   refreshProviders(force: boolean): Promise<void>
   /** Reloads the active harness's Capabilities records, whose availability follows the detected build. */
   refreshCapabilities(): Promise<void>
