@@ -585,7 +585,7 @@ async function bootstrap(): Promise<void> {
   const primeExecutable = () => discovery.executable('prime')
   const ompExecutable = () => discovery.executable('omp')
   const piExecutable = () => discovery.executable('pi')
-  const sessions = new SessionService(stateStore, primeExecutable)
+  const sessions = new SessionService(stateStore, primeExecutable, undefined, { primeImplementation: () => discovery.primeImplementation() })
   // OMP has no live-CLI overlay (`omp list --json` does not exist), so the OMP
   // catalog is constructed with a null executable and JSONL-only metadata.
   const ompSessions = new SessionService(stateStore, null, undefined, ompSessionServiceOptions())

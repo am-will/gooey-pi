@@ -2,8 +2,9 @@ import { watch, type Dirent, type Stats } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import type { HarnessId, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
+import type { HarnessId, PrimeImplementation, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
+import { RUST_PRIME_AGENT_NAME } from '../../src/lib/prime-compat'
 import { queueDaemonFollowUp } from './agent-daemon'
 import { comparePaths, createAdmissionQueue, createSingleFlight, type AdmissionQueue } from './lib/async'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
@@ -53,6 +54,11 @@ const watchSessionDirectory: SessionWatchFactory = (path, options, listener) => 
 
 const authorizePrimeSessionPath: SessionPathAuthorizer = (root, path) => isPathWithin(root, path) && path.endsWith('.jsonl')
 
+/** Worker states of a live catalog row whose daemon worker is up and holds the session; 'stopping' and 'failed' workers are going away. */
+const RESIDENT_WORKER_STATES: ReadonlySet<unknown> = new Set(['starting', 'ready', 'recovering'])
+
+const RUST_PRIME_RENAME_NEEDS_RUNTIME = `Send this session a message in GooeyPi, then rename it. ${RUST_PRIME_AGENT_NAME} renames a session that is not running by starting a background worker for it, which would keep GooeyPi from reopening the session.`
+
 /** The daemon address of a live catalog row, checked before it reaches argv or the daemon socket. */
 function liveActiveSessionId(live: JsonRecord): string {
   const activeSessionId = requireId(live.activeSessionId ?? live.id, 'activeSessionId')
@@ -85,6 +91,8 @@ export interface SessionServiceOptions {
    * to accept `set_session_name` and no CLI fallback exists.
    */
   renameFile?: (filePath: string, title: string) => boolean
+  /** The discovered Prime build, which decides how a session with no runtime is renamed; unset keeps the TypeScript behavior. */
+  primeImplementation?: () => PrimeImplementation | undefined
   maxConcurrentTranscriptReads?: number
   maxPendingTranscriptReads?: number
 }
@@ -105,6 +113,7 @@ export class SessionService {
   private readonly isSessionPathAuthorized: SessionPathAuthorizer
   private readonly watchDirectory: SessionWatchFactory
   private readonly renameFile: ((filePath: string, title: string) => boolean) | undefined
+  private readonly primeImplementation: () => PrimeImplementation | undefined
   private readonly changeListeners = new Set<(event: SessionChangeEvent) => void>()
   private sessionWatcher: SessionWatcher | null = null
   private readonly bucketWatchers = new Map<string, SessionWatcher>()
@@ -148,6 +157,7 @@ export class SessionService {
       options.catalogNameTimestamp,
     )
     this.renameFile = options.renameFile
+    this.primeImplementation = options.primeImplementation ?? (() => undefined)
   }
 
   bindRuntimeHooks(hooks: {
@@ -280,9 +290,24 @@ export class SessionService {
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
     // OMP/pi services are constructed with a null CLI path (electron/main/index.ts).
     if (!primeAgentPath) return this.renameFile?.(safePath, safeTitle) ?? false
-    const metadata = await this.readMetadata(safePath)
-    const result = await runProcess(primeAgentPath, ['rename', metadata.id, safeTitle, '--json'], { timeoutMs: 30_000 })
+    const selector = this.primeImplementation() === 'rust'
+      ? await this.residentWorkerSelector(safePath)
+      : (await this.readMetadata(safePath)).id
+    const result = await runProcess(primeAgentPath, ['rename', selector, safeTitle, '--json'], { timeoutMs: 30_000 })
     return result.code === 0
+  }
+
+  /**
+   * Rust Prime renames a session that no worker holds by waking a daemon
+   * worker for it, and that worker's runtime lease then refuses GooeyPi's
+   * --resume until it idles out (90 minutes by default). The CLI rename is
+   * used only when a resident worker already holds the session, and it is
+   * addressed to that worker.
+   */
+  private async residentWorkerSelector(safePath: string): Promise<string> {
+    const live = (await this.catalog.liveSessions()).get(safePath)
+    if (!live || !RESIDENT_WORKER_STATES.has(live.workerState)) throw new Error(RUST_PRIME_RENAME_NEEDS_RUNTIME)
+    return liveActiveSessionId(live)
   }
 
   async archive(filePath: unknown, archivedValue: unknown = true): Promise<boolean> {
