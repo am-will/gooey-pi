@@ -1,4 +1,4 @@
-import type { PrimeImplementation, SkillRecord } from '../types/api'
+import type { HarnessId, PrimeImplementation, SkillRecord } from '../types/api'
 
 /** How user-facing copy names the Rust build. */
 export const RUST_PRIME_AGENT_NAME = 'Rust Prime Agent'
@@ -54,6 +54,15 @@ export type PrimeRustUnavailableCapability = (typeof PRIME_RUST_UNAVAILABLE_CAPA
  */
 export function primeCapabilityAvailable(implementation: PrimeImplementation | undefined, _capability: PrimeRustUnavailableCapability): boolean {
   return implementation !== 'rust'
+}
+
+/**
+ * Whether the harness can run fast mode at all. A catalog row's
+ * fastModeSupported counts only where it can: the renderer may still hold a
+ * TypeScript catalog right after Prime is reclassified as Rust.
+ */
+export function harnessOffersFastMode(harness: HarnessId, primeImplementation: PrimeImplementation | undefined): boolean {
+  return harness !== 'prime' || primeCapabilityAvailable(primeImplementation, 'fastMode')
 }
 
 /** One sentence naming the capabilities this Prime build does not offer; undefined when it offers them all. */

@@ -42,7 +42,7 @@ Both builds start as `prime-agent --mode rpc --cwd <dir>` plus `--resume <sessio
 Not offered on Rust Prime, and labelled on the Settings card and the Capabilities page; Pi and OMP keep them:
 
 - browser control, ask user and session collaboration (they ship as TypeScript extensions);
-- fast mode (0.10 RPC has no service-tier command);
+- fast mode (0.10 RPC has no service-tier command, so the composer offers no Fast toggle, even before a runtime starts);
 - user and project TypeScript extensions (0.10 packages provide only skills, prompts and themes).
 
 Scheduled tasks (a Python skill) and computer use work on both builds. Other Rust behavior GooeyPi adapts to:

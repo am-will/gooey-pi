@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  harnessOffersFastMode,
   PRIME_RUST_UNAVAILABLE_CAPABILITIES,
   primeCapabilityAvailable,
   primeCapabilityRecordAvailability,
@@ -46,6 +47,15 @@ describe('Prime capability availability', () => {
       'TypeScript extensions',
     ])
     expect(Object.isFrozen(PRIME_RUST_UNAVAILABLE_CAPABILITIES)).toBe(true)
+  })
+
+  it('offers fast mode on every harness except Rust Prime', () => {
+    expect(harnessOffersFastMode('prime', 'rust')).toBe(false)
+    expect(harnessOffersFastMode('prime', 'typescript')).toBe(true)
+    expect(harnessOffersFastMode('prime', undefined)).toBe(true)
+    // The Prime build says nothing about OMP or Pi.
+    expect(harnessOffersFastMode('omp', 'rust')).toBe(true)
+    expect(harnessOffersFastMode('pi', 'rust')).toBe(true)
   })
 
   it('names what Rust Prime does not offer in one notice', () => {
