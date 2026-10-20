@@ -6,9 +6,10 @@ import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
 import { parseCompactCommand, parseMcpCommand } from '@/lib/slash-commands'
+import { deliverToStartedSession } from '@/lib/started-session-delivery'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -51,6 +52,7 @@ interface StartedSessionIndexInput {
   sessionFile: string | undefined
   setSessions: Dispatch<SetStateAction<SessionRecord[]>>
   fallbackTitle?: string
+  /** False once the merged catalog would no longer be the one on screen. */
   isCurrent?(): boolean
 }
 
@@ -338,6 +340,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       setSubmitting(true)
       const admitted = workspace.workspaceRef.current
       const generation = admitted.generation
+      const isCurrent = () => workspace.workspaceRef.current.generation === generation
       let startedPrompt = false
       let queuedPromptId: string | undefined
       const sentAt = Date.now()
@@ -366,7 +369,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           if (userMessageAppended) return
           // The workspace may have switched while a command was in flight;
           // an optimistic append would land in the wrong transcript.
-          if (workspace.workspaceRef.current.generation !== generation) return
+          if (!isCurrent()) return
           userMessageAppended = true
           workspace.setMessages((items) => [...items, userMessage])
           if (admitted.sessionFile) setSessions((items) => items.map((session) => session.filePath === admitted.sessionFile ? { ...session, lastUserMessageAt: sentAtIso } : session))
@@ -388,7 +391,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         const owner = workspace.runtimeOwnerRef.current
         const tracked = workspace.runtimeIdRef.current ? liveRuntimes.find((item) => item.runtimeId === workspace.runtimeIdRef.current) : undefined
         const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
-        let activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
+        const activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
         const selectedSession = selected.sessionFile ? sessions.find((session) => session.filePath === selected.sessionFile) : undefined
         if (compactCommand && !activeRuntime) {
           if (!selected.sessionFile) { setToast('Nothing to compact yet.'); return }
@@ -402,8 +405,15 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           if (compactCommand && intent === 'steer') setToast('Compaction will run when the current turn finishes.')
           return
         }
-        let startedRuntime = false
-        let startedSessionNeedsTitle = false
+        const promptRequest = { type: 'prompt', message: prompt, streamingBehavior: streamingBehaviorForIntent(intent), ...(images.length ? { images } : {}) }
+        const compactRequest = compactCommand && { type: 'compact', ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}) }
+        const showPrompt = (runtime: RuntimeInfo) => {
+          if (!isCurrent()) return
+          startedPrompt = true
+          appendUserMessage()
+          workspace.setRuntime({ ...runtime, isStreaming: true })
+          workspace.setMessages((items) => [...items, { id: `assistant-${Date.now()}`, role: 'assistant', timestamp: Date.now(), streaming: true, parts: [] }])
+        }
         if (!activeRuntime) {
           workspace.attachRuntime(undefined, generation)
           if (images.length > 0 && selected.sessionFile && selectedSession?.status === 'running') {
@@ -415,9 +425,10 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             completeQueuedFlush()
             return
           }
+          let startedRuntime: RuntimeInfo
           try {
             if (!provider.model) throw new Error(`No model is available for ${HARNESS_AGENT_NAMES[activeHarness]}. Enable or connect a provider, then try again.`)
-            activeRuntime = await bridge.agent.start({ cwd: selected.cwd, sessionPath: selected.sessionFile, model: provider.model, thinking: provider.effort, fast: provider.fast, harness: activeHarness })
+            startedRuntime = await bridge.agent.start({ cwd: selected.cwd, sessionPath: selected.sessionFile, model: provider.model, thinking: provider.effort, fast: provider.fast, harness: activeHarness })
           } catch (startError) {
             if (images.length === 0 && selected.sessionFile && await followUpExternalSession(selected.sessionFile)) {
               if (intent === 'steer') appendUserMessage()
@@ -426,31 +437,30 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             }
             throw startError
           }
-          startedRuntime = true
-          if (workspace.workspaceRef.current.generation !== generation) { await bridge.agent.stop(activeRuntime.runtimeId).catch(() => false); return }
-          const indexedSession = await indexStartedSession({
+          // The forced re-list returns the whole harness catalog, so it may
+          // only merge while that harness is still the one on screen.
+          const catalogIsCurrent = () => getDeps().settingsState.settings.activeHarness === activeHarness
+          await deliverToStartedSession({
             bridge,
-            harness: activeHarness,
-            sessionFile: activeRuntime.sessionFile,
-            setSessions,
-            isCurrent: () => workspace.workspaceRef.current.generation === generation,
+            runtime: startedRuntime,
+            cwd: selected.cwd,
+            sessionFile: selected.sessionFile,
+            agentName: HARNESS_AGENT_NAMES[activeHarness],
+            request: compactRequest || promptRequest,
+            runtimeSessions: workspace.runtimeSessionsRef.current,
+            indexSession: () => indexStartedSession({ bridge, harness: activeHarness, sessionFile: startedRuntime.sessionFile, setSessions, isCurrent: catalogIsCurrent }),
+            titleSession: compactCommand ? undefined : () => titleStartedSession({ bridge, harness: activeHarness, runtimeId: startedRuntime.runtimeId, sessionFile: startedRuntime.sessionFile, prompt, setSessions, isCurrent: catalogIsCurrent }),
+            present: () => {
+              workspace.attachRuntime(startedRuntime, generation)
+              if (!compactCommand) showPrompt(startedRuntime)
+            },
           })
-          if (workspace.workspaceRef.current.generation !== generation) {
-            await bridge.agent.stop(activeRuntime.runtimeId).catch(() => false)
-            return
-          }
-          startedSessionNeedsTitle = !indexedSession || indexedSession.title === 'Untitled session'
-        }
-        if (activeRuntime.cwd !== selected.cwd || (selected.sessionFile && activeRuntime.sessionFile !== selected.sessionFile)) {
-          if (startedRuntime) await bridge.agent.stop(activeRuntime.runtimeId).catch(() => false)
-          throw new Error(`${HARNESS_AGENT_NAMES[activeHarness]} returned a runtime for a different workspace or session.`)
+          completeQueuedFlush()
+          return
         }
         workspace.attachRuntime(activeRuntime, generation)
-        if (compactCommand) {
-          await bridge.agent.command(activeRuntime.runtimeId, {
-            type: 'compact',
-            ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}),
-          })
+        if (compactRequest) {
+          await bridge.agent.command(activeRuntime.runtimeId, compactRequest)
           completeQueuedFlush()
         } else if (activeRuntime.isStreaming) {
           // Follow-ups are daemon-owned. Steers get a renderer-only pending
@@ -469,28 +479,9 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           }
           completeQueuedFlush()
         } else {
-          startedPrompt = true
-          appendUserMessage()
-          workspace.setRuntime({ ...activeRuntime, isStreaming: true })
-          workspace.setMessages((items) => [...items, { id: `assistant-${Date.now()}`, role: 'assistant', timestamp: Date.now(), streaming: true, parts: [] }])
-          await bridge.agent.command(activeRuntime.runtimeId, {
-            type: 'prompt',
-            message: prompt,
-            streamingBehavior: streamingBehaviorForIntent(intent),
-            ...(images.length ? { images } : {}),
-          })
+          showPrompt(activeRuntime)
+          await bridge.agent.command(activeRuntime.runtimeId, promptRequest)
           completeQueuedFlush()
-          if (startedRuntime && startedSessionNeedsTitle) {
-            void titleStartedSession({
-              bridge,
-              harness: activeHarness,
-              runtimeId: activeRuntime.runtimeId,
-              sessionFile: activeRuntime.sessionFile,
-              prompt,
-              setSessions,
-              isCurrent: () => workspace.workspaceRef.current.generation === generation,
-            })
-          }
         }
       } catch (error) {
         if (queuedFlushPromptId) {
@@ -500,8 +491,13 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           }
         }
         if (queuedPromptId) workspace.removeQueuedPrompt(queuedPromptId)
-        if (workspace.workspaceRef.current.generation !== generation) return
         const failure = requestFailureMessage(error)
+        if (!isCurrent()) {
+          // The admitting transcript is gone; a row would land in whichever
+          // session is visible now, so name the target in a toast instead.
+          setToast(`Your message for “${admitted.session?.title ?? sessionTitleFromPrompt(prompt)}” was not delivered. ${failure}`)
+          throw error
+        }
         if (startedPrompt) workspace.setRuntime((current) => current ? { ...current, isStreaming: false } : current)
         workspace.setMessages((items) => {
           const finalized = startedPrompt
