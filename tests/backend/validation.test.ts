@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   boundedErrorMessage,
+  errorCode,
   firstAccepted,
   isBoundedString,
   isModelId,
@@ -494,5 +495,26 @@ describe('boundedErrorMessage', () => {
     expect(boundedErrorMessage(new Error(''))).toBe('Unknown error')
     expect(boundedErrorMessage('')).toBe('Unknown error')
     expect(boundedErrorMessage(new Error(''), 240, 'Update check failed')).toBe('Update check failed')
+  })
+})
+
+describe('errorCode', () => {
+  it('returns the string code of errno-style errors', () => {
+    expect(errorCode(Object.assign(new Error('missing'), { code: 'ENOENT' }))).toBe('ENOENT')
+    expect(errorCode({ code: 'EEXIST' })).toBe('EEXIST')
+  })
+
+  it('reads a real filesystem error code', () => {
+    let thrown: unknown
+    try { rmSync(join(temp('gooey-error-code-'), 'missing')) } catch (error) { thrown = error }
+    expect(errorCode(thrown)).toBe('ENOENT')
+  })
+
+  it('returns an empty string when there is no string code instead of throwing', () => {
+    expect(errorCode(new Error('plain'))).toBe('')
+    expect(errorCode(Object.assign(new Error('numeric'), { code: 42 }))).toBe('')
+    for (const value of ['ENOENT', undefined, null, 0, ['ENOENT'], [{ code: 'ENOENT' }]]) {
+      expect(errorCode(value), String(value)).toBe('')
+    }
   })
 })

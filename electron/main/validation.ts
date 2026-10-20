@@ -177,6 +177,11 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** The errno-style string `code` of a thrown value (e.g. 'ENOENT'), or '' when there is none; safe for non-object throws. */
+export function errorCode(error: unknown): string {
+  return isRecord(error) && typeof error.code === 'string' ? error.code : ''
+}
+
 /** A single-line, length-capped error message for logs and dialogs; `fallback` replaces an empty message. */
 export function boundedErrorMessage(error: unknown, maxLength = 512, fallback = 'Unknown error'): string {
   return errorMessage(error).replace(/[\r\n\t]+/g, ' ').slice(0, maxLength) || fallback
