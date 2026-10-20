@@ -51,6 +51,9 @@ const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
 const sessionActions = ${JSON.stringify(options.sessionActions)}
 let negotiated = false
 let streaming = false
+// OMP's contextUsage, served by get_state and get_session_stats; prompt scripts may move it.
+let contextTokens = 12000
+const contextUsage = () => ({ tokens: contextTokens, contextWindow: 200000, percent: contextTokens / 2000 })
 send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2] })
 send({ type: 'available_commands_update', commands: [{ name: 'help' }] })
 send({ type: 'fake_argv', argv: process.argv.slice(2) })
@@ -73,12 +76,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     send({ id: command.id, type: 'response', command: 'get_state', success: true, data: {
       sessionId: 'omp-session', isStreaming: streaming, isCompacting: false, thinkingLevel: 'medium',
       fastModeEnabled: true, model: { provider: 'openai-codex', id: 'gpt-5.6-luna', name: 'Luna GPT-5.6' },
-      contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+      contextUsage: contextUsage(),
       queuedMessageCount: ${options.queuedMessageCount ?? 0},
       ...(sessionActions ? { sessionActions } : {}),
     } })
   } else if (command.type === 'get_session_stats') {
-    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 }, tokens: { input: 9000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
+    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: contextUsage(), tokens: { input: 9000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
   } else if (command.type === 'branch' || command.type === 'get_branch_messages') {
     send({ id: command.id, type: 'response', command: command.type, success: true, data: { received: command.type, entryId: command.entryId } })
   } else if (command.type === 'fork' || command.type === 'get_fork_messages') {
