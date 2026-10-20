@@ -18,6 +18,12 @@ export interface PendingExtensionUi {
   runtimeId: string
   request: ExtensionUiRequest
   requests?: QuestionnaireSelectRequest[]
+  // GooeyPi's own Ask User timeout, as opposed to one the harness enforces.
+  // It pauses while its dialog is hidden; remainingMs is what is left of it
+  // when its timer next starts.
+  ownedTimeout?: { remainingMs: number }
+  // Epoch ms at which the running timer expires the dialog.
+  deadline?: number
 }
 
 export function pendingExtensionUiForRuntime(
@@ -48,12 +54,6 @@ export function useExtensionUi({
   const timedOutQuestionnairesRef = useRef<Set<string>>(new Set())
   const activeRuntimeIdRef = useRef(activeRuntimeId)
   useLayoutEffect(() => { activeRuntimeIdRef.current = activeRuntimeId })
-
-  const showPendingForActiveRuntime = useCallback(() => {
-    const visible = pendingExtensionUiForRuntime(pendingByRuntimeRef.current, activeRuntimeIdRef.current)
-    extensionUiRef.current = visible
-    setExtensionUi(visible)
-  }, [])
 
   const clearExtensionUi = useCallback((runtimeId?: string) => {
     const targetRuntimeId = runtimeId ?? extensionUiRef.current?.runtimeId
@@ -137,17 +137,56 @@ export function useExtensionUi({
     }
   }, [bridge, cancelPending, clearExtensionUi, reportError, runtimeSessionsRef, setRuntime, setSessions])
 
-  const scheduleTimeout = useCallback((pending: PendingExtensionUi) => {
-    const timeout = 'timeout' in pending.request ? pending.request.timeout : undefined
-    if (timeout === undefined || timerByRuntimeRef.current.has(pending.runtimeId)) return
-    timerByRuntimeRef.current.set(pending.runtimeId, window.setTimeout(() => {
-      const current = pendingByRuntimeRef.current.get(pending.runtimeId)
-      if (!current || current.request.id !== pending.request.id) return
-      if (current.request.method === 'questionnaire') timedOutQuestionnairesRef.current.add(`${pending.runtimeId}:${pending.request.id}`)
-      cancelPending(current)
-      clearExtensionUi(pending.runtimeId)
-    }, timeout))
+  const expirePending = useCallback((pending: PendingExtensionUi) => {
+    if (pending.request.method === 'questionnaire') timedOutQuestionnairesRef.current.add(`${pending.runtimeId}:${pending.request.id}`)
+    cancelPending(pending)
+    clearExtensionUi(pending.runtimeId)
   }, [cancelPending, clearExtensionUi])
+
+  const startTimer = useCallback((pending: PendingExtensionUi, delay: number): PendingExtensionUi => {
+    const { runtimeId, request } = pending
+    timerByRuntimeRef.current.set(runtimeId, window.setTimeout(() => {
+      const current = pendingByRuntimeRef.current.get(runtimeId)
+      if (current?.request.id === request.id) expirePending(current)
+    }, delay))
+    return { ...pending, deadline: Date.now() + delay }
+  }, [expirePending])
+
+  // A harness timeout runs from arrival, because the harness enforces the same
+  // deadline itself. GooeyPi's own Ask User timeout only runs while its dialog
+  // is visible, so a question in a background session waits for the user.
+  const syncTimer = useCallback((runtimeId: string): PendingExtensionUi | null => {
+    const pending = pendingByRuntimeRef.current.get(runtimeId)
+    if (!pending) return null
+    let next = pending
+    if (!pending.ownedTimeout) {
+      const timeout = 'timeout' in pending.request ? pending.request.timeout : undefined
+      if (timeout !== undefined && pending.deadline === undefined) next = startTimer(pending, timeout)
+    } else if (activeRuntimeIdRef.current === runtimeId) {
+      if (pending.deadline === undefined) next = startTimer(pending, pending.ownedTimeout.remainingMs)
+    } else if (pending.deadline !== undefined) {
+      window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
+      timerByRuntimeRef.current.delete(runtimeId)
+      next = { ...pending, ownedTimeout: { remainingMs: Math.max(0, pending.deadline - Date.now()) }, deadline: undefined }
+    }
+    if (next !== pending) pendingByRuntimeRef.current.set(runtimeId, next)
+    return next
+  }, [startTimer])
+
+  const showPendingForActiveRuntime = useCallback(() => {
+    for (const runtimeId of pendingByRuntimeRef.current.keys()) syncTimer(runtimeId)
+    const visible = pendingExtensionUiForRuntime(pendingByRuntimeRef.current, activeRuntimeIdRef.current)
+    extensionUiRef.current = visible
+    setExtensionUi(visible)
+  }, [syncTimer])
+
+  const presentPending = useCallback((pending: PendingExtensionUi) => {
+    pendingByRuntimeRef.current.set(pending.runtimeId, pending)
+    const current = syncTimer(pending.runtimeId)
+    if (activeRuntimeIdRef.current !== pending.runtimeId) return
+    extensionUiRef.current = current
+    setExtensionUi(current)
+  }, [syncTimer])
 
   const showExtensionUi = useCallback((runtimeId: string, rawEvent: Record<string, unknown>) => {
     const request = parseExtensionUiRequest(rawEvent)
@@ -183,8 +222,11 @@ export function useExtensionUi({
         }))
         .sort((a, b) => a.index - b.index)
       const total = request.questionnaire.total
-      const pending: PendingExtensionUi = {
-        runtimeId,
+      presentPending({
+        // Later questions of a group keep the timer the first one started.
+        ...(sameQuestionnaire
+          ? previous
+          : { runtimeId, ownedTimeout: request.timeout === undefined ? { remainingMs: ASK_USER_TIMEOUT_MS } : undefined }),
         request: {
           method: 'questionnaire',
           id: request.questionnaire.groupId,
@@ -192,18 +234,10 @@ export function useExtensionUi({
           questions,
           total,
           complete: questions.length >= total,
-          timeout: previous?.request.method === 'questionnaire'
-            ? previous.request.timeout
-            : request.timeout ?? ASK_USER_TIMEOUT_MS,
+          timeout: request.timeout ?? ASK_USER_TIMEOUT_MS,
         },
         requests,
-      }
-      pendingByRuntimeRef.current.set(runtimeId, pending)
-      if (activeRuntimeIdRef.current === runtimeId) {
-        extensionUiRef.current = pending
-        setExtensionUi(pending)
-      }
-      scheduleTimeout(pending)
+      })
       return
     }
 
@@ -212,14 +246,8 @@ export function useExtensionUi({
       cancelPending(previous)
       clearExtensionUi(runtimeId)
     }
-    const pending = { runtimeId, request }
-    pendingByRuntimeRef.current.set(runtimeId, pending)
-    if (activeRuntimeIdRef.current === runtimeId) {
-      extensionUiRef.current = pending
-      setExtensionUi(pending)
-    }
-    scheduleTimeout(pending)
-  }, [bridge, cancelPending, clearExtensionUi, scheduleTimeout])
+    presentPending({ runtimeId, request })
+  }, [bridge, cancelPending, clearExtensionUi, presentPending])
 
   const hasOpenRequestForSession = useCallback((filePath: string): boolean => {
     for (const runtimeId of pendingByRuntimeRef.current.keys()) {
