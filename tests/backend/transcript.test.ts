@@ -232,6 +232,18 @@ describe('provider errors that end a turn', () => {
     expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user', 'assistant-2:assistant'])
   })
 
+  it('keeps the error across records the transcript does not render', async () => {
+    const file = write([
+      ['user-1', user('retry me')],
+      ['assistant-1', failed()],
+      { type: 'model_change', id: 'model-1', provider: 'anthropic', modelId: 'claude-opus-5-5' },
+      { type: 'service_tier_change', id: 'tier-1', serviceTier: 'default' },
+      { type: 'custom_message', id: 'digest-1', customType: 'harness_digest', content: '[harness-digest]', display: false },
+      ['user-2', user('try another model')],
+    ])
+    expect(shape(await readTranscript(file, false))).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system', 'user-2:user'])
+  })
+
   it('shows nothing for a failure the agent recovered from, an abort, or a run still streaming', async () => {
     const retried = write([['user-1', user('retry me')], ['assistant-1', failed()], ['assistant-2', answer]])
     const compacted = write([['user-1', user('too long')], ['assistant-1', failed('error', 'prompt is too long')], { type: 'compaction', id: 'compact-1', summary: 'Summary', firstKeptEntryId: 'user-1', tokensBefore: 1_000 }, ['assistant-2', answer]])
