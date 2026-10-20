@@ -78,6 +78,7 @@ export function useWorkspaceRuntime({
   const [activeProjectId, setActiveProjectId] = useState(initialProject?.id)
   const [activeSessionId, setActiveSessionId] = useState(initialSession?.id)
   // Mount identity of the opened workspace: its session, or its new chat.
+  // A new chat keeps it after adopting the session its runtime started.
   const [viewKey, setViewKey] = useState(initialSession?.id ?? 'new:0')
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null)
   const [workspaceGeneration, setWorkspaceGeneration] = useState(0)
@@ -520,6 +521,23 @@ export function useWorkspaceRuntime({
     observedSteerIdsRef.current.add(id)
     reconcileQueuedPrompts(snapshot)
   }, [reconcileQueuedPrompts])
+
+  // A new chat becomes the session its own runtime started once the catalog
+  // lists that file, so the sidebar selects it and its turns read as seen.
+  // It keeps its generation and view key: the live transcript, the composer,
+  // and queued prompts carry over, and the read effect below skips a reload.
+  const runtimeId = runtime?.runtimeId
+  const runtimeSessionFile = runtime?.sessionFile
+  useEffect(() => {
+    const selected = workspaceRef.current
+    const owner = runtimeOwnerRef.current
+    if (selected.session || !runtimeSessionFile || owner?.generation !== selected.generation || owner.runtimeId !== runtimeId) return
+    const started = sessions.find((session) => session.filePath === runtimeSessionFile)
+    if (!started) return
+    workspaceRef.current = { ...selected, session: started, cwd: workspaceCwd(selected.project, started), sessionFile: started.filePath }
+    lastTranscriptReadWorkspaceRef.current = { generation: selected.generation, sessionFile: started.filePath }
+    setActiveSessionId(started.id)
+  }, [runtimeId, runtimeSessionFile, sessions])
 
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const locallyOwnedActiveSession = Boolean(
