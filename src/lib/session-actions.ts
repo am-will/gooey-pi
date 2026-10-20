@@ -1,4 +1,4 @@
-import type { PromptDeliveryIntent, SessionActionSnapshot } from '../types/api'
+import type { PromptDeliveryIntent, RuntimeInfo, SessionActionSnapshot } from '../types/api'
 
 export const MAX_QUEUED_ACTIONS = 128
 export const MAX_PREVIEW_LENGTH = 4_096
@@ -32,6 +32,16 @@ export function parseSessionActionSnapshot(value: unknown): SessionActionSnapsho
 
 export function emptySessionActionSnapshot(): SessionActionSnapshot {
   return { queuedCount: 0, steering: [], followUps: [] }
+}
+
+/**
+ * True only when a runtime has nothing in flight: not streaming, not compacting, no active session
+ * action and nothing queued. Callers that may stop or reuse a runtime must use this full check so
+ * queued steers and follow-ups are never dropped between turns.
+ */
+export function isRuntimeIdle(runtime: Pick<RuntimeInfo, 'isStreaming' | 'isCompacting' | 'sessionActions'>): boolean {
+  const actions = runtime.sessionActions
+  return !runtime.isStreaming && !runtime.isCompacting && !actions?.active && (actions?.queuedCount ?? 0) === 0
 }
 
 export function streamingBehaviorForIntent(intent: PromptDeliveryIntent): 'steer' | 'followUp' {
