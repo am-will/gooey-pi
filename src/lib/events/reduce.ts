@@ -367,7 +367,7 @@ export function replayPrimeEvents(
       if (raw.expected === true || next.at(-1)?.role === 'system') continue
       const reason = raw.code !== null && raw.code !== undefined ? `exit code ${String(raw.code)}` : string(raw.signal) ?? 'an unknown error'
       copyTranscript()
-      // Harness-neutral: this reducer serves both Prime Agent and OMP events.
+      // Harness-neutral: this reducer serves Pi, OMP, and Prime Agent events.
       next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text: `The agent stopped unexpectedly (${reason}). Send the message again to restart it.` })] })
     }
   }
