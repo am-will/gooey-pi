@@ -1,6 +1,6 @@
 import type { HarnessId, PrimeContextUsage, PrimeImplementation, RuntimeInfo, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
 import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
-import { MAX_QUEUED_ACTIONS } from '../../../src/lib/session-actions'
+import { MAX_QUEUED_ACTIONS, consumeDeliveredPrompt } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
@@ -172,6 +172,29 @@ const PRIME_RUST_UNSUPPORTED_COMMANDS = new Set([
   'set_heartbeat', 'update_heartbeat', 'manage_heartbeat', 'observe', 'extension_ui_response',
 ])
 
+/** A user message's text, joined the way Rust Prime builds a queue preview. */
+function userMessageText(message: unknown): string | undefined {
+  if (!isRecord(message) || message.role !== 'user') return undefined
+  if (typeof message.content === 'string') return message.content
+  if (!Array.isArray(message.content)) return undefined
+  return message.content.flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join(' ')
+}
+
+/**
+ * Rust Prime delivers a queued steer or follow-up as a user message_start in
+ * the running turn without reporting the queue change. The synthetic update
+ * ahead of that message lets the renderer settle the pending prompt before
+ * the answer to it streams.
+ */
+function normalizeRustPrimeEvent(event: RpcObject, state: Readonly<RuntimeInfo>): RpcObject | readonly RpcObject[] {
+  if (event.type === 'message_start' && state.isStreaming && state.sessionActions) {
+    const text = userMessageText(event.message)
+    const actions = text === undefined ? null : consumeDeliveredPrompt(state.sessionActions, text)
+    if (actions) return [{ type: 'session_action_update', actions, synthetic: true }, event]
+  }
+  return event
+}
+
 /**
  * Rust Prime Agent (the 0.9.9 betas and 0.10+) keeps the TypeScript RPC
  * envelope, vocabulary and --skill flag, but exits on --extension as an
@@ -189,7 +212,7 @@ export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
   sessionActionEvents: false,
   buildStartArgs: (input) => primeStartArgs(input, false),
   translateCommand: rejectCommands(PRIME_RUST_UNSUPPORTED_COMMANDS, RUST_PRIME_AGENT_NAME),
-  normalizeEvent: (event) => event,
+  normalizeEvent: normalizeRustPrimeEvent,
   readState: () => ({}),
 }
 

@@ -13,7 +13,7 @@ import { FramedRpcTransport } from '../../electron/main/agent-rpc/transport'
 import type { RpcObject } from '../../electron/main/agent-rpc/types'
 import { PrimeProviderService } from '../../electron/main/providers'
 import { RepositoryUseGate } from '../../electron/main/repository-use-gate'
-import type { RuntimeInfo } from '../../src/types/api'
+import type { RuntimeInfo, SessionActionSnapshot } from '../../src/types/api'
 import { waitUntil } from '../helpers/wait'
 
 const dirs: string[] = []
@@ -1288,17 +1288,60 @@ describe('session actions without harness session_action_update events', () => {
     expect(manager.list().map((runtime) => runtime.runtimeId)).toEqual([second.runtimeId])
   })
 
+  it('settles a delivered steer ahead of the user message that carries it', async () => {
+    const fake = fakeQueueingPrime(400)
+    const events: RpcObject[] = []
+    const manager = queueingManager(fake.executable, PRIME_RUST_RPC_ADAPTER, events)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'go' })
+    const admitted = await manager.command(runtime.runtimeId, { type: 'steer', message: 'STEER-ME' })
+    expect(admitted.sessionActions).toEqual({ queuedCount: 1, steering: ['STEER-ME'], followUps: [], active: running })
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+
+    const delivery = events.findIndex((event) => event.type === 'message_start' && JSON.stringify(event.message).includes('STEER-ME'))
+    expect(delivery).toBeGreaterThan(0)
+    expect(events[delivery - 1]).toEqual({ type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [], active: running } })
+  })
+
   it('leaves session actions to the harness events on TypeScript Prime', async () => {
-    const fake = fakeQueueingPrime(100)
+    const fake = fakeQueueingPrime(300)
     const events: RpcObject[] = []
     const manager = queueingManager(fake.executable, PRIME_RPC_ADAPTER, events)
     const runtime = await manager.start({ cwd: fake.cwd })
 
     await manager.command(runtime.runtimeId, { type: 'prompt', message: 'hello' })
+    await manager.command(runtime.runtimeId, { type: 'steer', message: 'STEER-ME' })
     await waitUntil(() => events.some((event) => event.type === 'agent_end'))
     await new Promise((resolveWait) => setTimeout(resolveWait, 200))
 
     expect(events.some((event) => event.type === 'session_action_update')).toBe(false)
+  })
+})
+
+describe('Rust Prime event normalization', () => {
+  const running = { kind: 'turn' as const, phase: 'running' as const }
+  const state = (sessionActions: SessionActionSnapshot): RuntimeInfo => ({ runtimeId: 'runtime', harness: 'prime', cwd: '/project', isStreaming: true, sessionActions })
+  const queued = state({ queuedCount: 1, steering: ['change direction'], followUps: [], active: running })
+  const delivered = {
+    type: 'message_start',
+    message: { role: 'user', content: [{ type: 'text', text: 'change' }, { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }, { type: 'text', text: 'direction' }] },
+  }
+
+  it('puts the queue change ahead of a delivered steer', () => {
+    expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(delivered, queued)).toEqual([
+      { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [], active: running } },
+      delivered,
+    ])
+  })
+
+  it('passes every other message through untouched', () => {
+    const prompt = { type: 'message_start', message: { role: 'user', content: 'first prompt' } }
+    const assistant = { type: 'message_start', message: { role: 'assistant', content: [] } }
+    expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(prompt, queued)).toBe(prompt)
+    expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(assistant, queued)).toBe(assistant)
+    expect(PRIME_RUST_RPC_ADAPTER.normalizeEvent(delivered, { ...queued, isStreaming: false })).toBe(delivered)
+    expect(PRIME_RPC_ADAPTER.normalizeEvent(delivered, queued)).toBe(delivered)
   })
 })
 
