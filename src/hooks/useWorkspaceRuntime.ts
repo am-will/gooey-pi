@@ -77,6 +77,8 @@ export function useWorkspaceRuntime({
   const activeQueuedPromptOwnerRef = useRef<string | undefined>(queuedPromptOwner(initialProject, initialSession, undefined, 0))
   const [activeProjectId, setActiveProjectId] = useState(initialProject?.id)
   const [activeSessionId, setActiveSessionId] = useState(initialSession?.id)
+  // Mount identity of the opened workspace: its session, or its new chat.
+  const [viewKey, setViewKey] = useState(initialSession?.id ?? 'new:0')
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null)
   const [workspaceGeneration, setWorkspaceGeneration] = useState(0)
   const [loadingSession, setLoadingSession] = useState(false)
@@ -199,6 +201,7 @@ export function useWorkspaceRuntime({
     setPendingQueuedPrompts(queuedPrompts)
     setActiveProjectId(project?.id)
     setActiveSessionId(session?.id)
+    setViewKey(session?.id ?? `new:${generation}`)
     attachRuntime(nextRuntime, generation)
     if (bridge) {
       setMessages([])
@@ -598,6 +601,7 @@ export function useWorkspaceRuntime({
     acknowledgeSteer,
     activeProjectId,
     activeSessionId,
+    viewKey,
     runtime,
     setRuntime,
     workspaceGeneration,
