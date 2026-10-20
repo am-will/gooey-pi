@@ -7,12 +7,13 @@ import { requireString } from './validation'
 
 /**
  * Shared model-catalog machinery for the harnesses whose catalog comes from an
- * external CLI (OMP's `omp models --json`, pi's RPC probe) instead of
- * in-process npm modules. Everything here is harness-agnostic: caching,
- * single-flight refresh, stale-catalog degradation, untrusted-entry validation,
- * provider derivation, and the version probe. Subclasses supply only how raw
- * model entries are fetched, how one entry maps to a descriptor, and how the
- * CLI reports its version.
+ * external CLI (OMP's `omp models --json`, the RPC probe pi and Rust Prime
+ * answer) instead of in-process npm modules. Everything here is
+ * harness-agnostic: caching, single-flight refresh, invalidation,
+ * stale-catalog degradation, untrusted-entry validation, provider derivation,
+ * and the version probe. Subclasses supply how raw model entries are fetched,
+ * how one entry maps to a descriptor, and how the CLI reports its version,
+ * and may replace the default provider rows.
  */
 const CATALOG_TTL_MS = 30_000
 export { MAX_CATALOG_PROVIDERS } from './model-catalog'
