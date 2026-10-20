@@ -94,6 +94,8 @@
 .select-control--compact { height: 26px; border-radius: 999px; }
 .model-fallback-chip { max-width: 210px; height: 26px; display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 0 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border)); border-radius: 999px; color: var(--warning); background: var(--warning-soft); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .permissions-chip { height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); background: var(--surface-subtle); font-size: 10.5px; }
+/* No position: relative here, so the checkout menu sizes against .composer__footer.
+   Only the model picker, below, anchors its popover to its trigger. */
 .worktree-picker, .model-picker { min-width: 0; flex: 0 1 auto; }
 .worktree-picker__trigger, .model-picker__trigger { max-width: 150px; cursor: pointer; }
 .worktree-picker__trigger:hover:not(:disabled), .worktree-picker__trigger[aria-expanded="true"], .model-picker__trigger:hover:not(:disabled), .model-picker__trigger[aria-expanded="true"] { color: var(--text); background: var(--surface-hover); }
@@ -112,7 +114,6 @@
 .worktree-picker__empty, .model-picker__empty { display: block; padding: 8px; color: var(--text-tertiary); font-size: 10.5px; }
 /* Model-picker specifics: everything above is shared with the checkout picker
    so both composer popovers keep one control vocabulary. */
-/* Only the model popover anchors to its trigger; the checkout menu sizes against .composer__footer. */
 .model-picker { position: relative; }
 .model-picker__popover { right: auto; left: 0; width: min(420px, calc(100vw - 48px)); }
 .model-picker__search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; margin-bottom: 6px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-tertiary); background: var(--surface-subtle); }
