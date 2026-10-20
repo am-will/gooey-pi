@@ -201,11 +201,11 @@ jobs:
           - runner: windows-2022
             package: npm run package:win:local-qa
             artifact: gooeypi-local-qa-windows
+            # Unsigned QA builds produce no AppX/MSIX: without a signature it
+            # would be a Store-only package Windows refuses to install.
             path: |
               release/win/**/*.exe
               release/win/**/*.zip
-              release/win/**/*.appx
-              release/win/**/*.msix
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:

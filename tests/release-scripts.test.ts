@@ -1526,6 +1526,10 @@ describe('post-package verification helpers', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     expect(ciWorkflow).toContain('release/linux/**/*.pacman')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/*.pacman')
+    // The Windows local-QA upload lists exactly the artifacts a QA build produces.
+    const localQa = load(ciWorkflow) as { jobs: { 'local-qa-package': { strategy: { matrix: { include: Array<{ runner: string; path: string }> } } } } }
+    const windowsLeg = localQa.jobs['local-qa-package'].strategy.matrix.include.find((leg) => leg.runner.startsWith('windows-'))
+    expect(windowsLeg?.path.trim().split('\n')).toEqual(expectedArtifactExtensions('win', 'qa').map((extension) => `release/win/**/*${extension}`))
   })
 
   test('keeps a Chromium locale for every language the app can display', () => {
