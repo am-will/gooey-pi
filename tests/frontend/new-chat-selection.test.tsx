@@ -187,6 +187,20 @@ describe('new chat selection', () => {
     expect(sessions.find((session) => session.id === 'started')).toMatchObject({ status: 'complete', unread: false })
   })
 
+  it('reads a viewed new chat turn as seen when it ends before the catalog listing renders', () => {
+    const app = renderApp()
+    act(() => { workspace.activateWorkspace(project) })
+    act(() => { workspace.attachRuntime(startedRuntime, workspace.workspaceGeneration) })
+
+    act(() => {
+      setSessions([existing, started])
+      app.emit({ type: 'agent_end' })
+    })
+
+    expect(workspace.activeSessionId).toBe('started')
+    expect(sessions.find((session) => session.id === 'started')).toMatchObject({ status: 'complete', unread: false })
+  })
+
   it('leaves the selection alone when the user switched away before the first prompt was delivered', async () => {
     const app = renderApp()
     act(() => { workspace.activateWorkspace(project) })
