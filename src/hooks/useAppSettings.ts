@@ -48,11 +48,17 @@ export function useAppSettings({ bridge, reportError }: UseAppSettingsOptions) {
     if ('terminalOpen' in panelPatch) setTerminalOpenState(next.terminalOpen)
   }, [])
 
+  // Persisted panel values for the panels the user has not opened or closed
+  // for the moment; a transient panel keeps what it shows.
+  const confirmedPanelPatch = useCallback((next: AppSettings) => (
+    confirmedPanelSettings(next, PANEL_SETTING_KEYS.filter((key) => !transientPanelKeysRef.current.has(key)))
+  ), [])
+
   const takeConfirmedPanelPatch = useCallback((next: AppSettings) => {
-    const keys = PANEL_SETTING_KEYS.filter((key) => !transientPanelKeysRef.current.has(key))
+    const patch = confirmedPanelPatch(next)
     transientPanelKeysRef.current.clear()
-    return confirmedPanelSettings(next, keys)
-  }, [])
+    return patch
+  }, [confirmedPanelPatch])
 
   const updateSettings = useCallback(async (patch: Partial<AppSettings>) => {
     const mutation = ++settingsMutationRef.current
@@ -90,12 +96,12 @@ export function useAppSettings({ bridge, reportError }: UseAppSettingsOptions) {
     confirmedSettingsRef.current = result.settings
     // A new optimistic mutation started while the external operation ran.
     // Keep it visible; its queued result will become the next authority.
-    if (settingsMutationRef.current === revision) {
-      transientPanelKeysRef.current.clear()
-      applySettings(result.settings, result.settings)
-    }
+    // The external snapshot carries only persisted panel values, so a panel
+    // opened or closed for the moment keeps what it shows and stays
+    // transient for the next local save.
+    if (settingsMutationRef.current === revision) applySettings(result.settings, confirmedPanelPatch(result.settings))
     return result
-  }, [applySettings])
+  }, [applySettings, confirmedPanelPatch])
 
   useEffect(() => {
     if (!bridge) {

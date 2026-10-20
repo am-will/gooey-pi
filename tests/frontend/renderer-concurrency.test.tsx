@@ -187,6 +187,31 @@ describe('settings queue reconciliation', () => {
     expect(state.settings).toEqual(saved)
     expect([state.sidebarOpen, state.inspectorOpen]).toEqual([false, false])
   })
+
+  it('keeps transient panel state through an external reconciliation and the save after it', async () => {
+    const update = vi.fn(async (patch: Partial<AppSettings>) => ({ ...DEFAULT_SETTINGS, ...patch }))
+    const bridge = {
+      settings: { get: async () => DEFAULT_SETTINGS, update },
+    } as unknown as PrimeWorkApi
+    const reportError = vi.fn()
+    let state!: ReturnType<typeof useAppSettings>
+    function SettingsProbe() {
+      state = useAppSettings({ bridge, reportError })
+      return <Probe />
+    }
+    await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
+    // The compact layout closes the sidebar for the moment after a session is selected.
+    await act(async () => { state.setSidebarOpen(false) })
+
+    // A harness refresh the main process asked for, while that session runs.
+    await act(async () => { await state.reconcileExternalSettings(async () => ({ settings: { ...DEFAULT_SETTINGS, activeHarness: 'pi' as const } })) })
+    expect(state.settings.activeHarness).toBe('pi')
+    expect(state.sidebarOpen).toBe(false)
+
+    await act(async () => { await state.updateSettings({ theme: 'dark' }) })
+    expect(state.settings.theme).toBe('dark')
+    expect(state.sidebarOpen).toBe(false)
+  })
 })
 
 describe('transcript read ownership', () => {
