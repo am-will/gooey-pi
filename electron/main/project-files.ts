@@ -16,13 +16,18 @@ const IGNORED_LISTING_DIRECTORIES = new Set([
   '.venv',
 ])
 
-/** Lists files and directories under an already-authorized root for the Files panel. */
+/**
+ * Lists files and directories under an already-authorized root for the Files
+ * panel. The walk is breadth-first so the entry budget only cuts the deepest
+ * levels: one large early folder cannot starve root files or later siblings.
+ */
 export async function listProjectFiles(root: string, maxEntries = 5_000): Promise<ProjectFileListing> {
   const entries: ProjectFileEntry[] = []
   let skipped = 0
+  const directories = [root]
 
-  const visit = async (directory: string): Promise<void> => {
-    if (entries.length >= maxEntries) return
+  for (let index = 0; index < directories.length && entries.length < maxEntries; index += 1) {
+    const directory = directories[index]
     let children: Dirent[]
     try {
       children = await readdir(directory, { withFileTypes: true })
@@ -30,7 +35,7 @@ export async function listProjectFiles(root: string, maxEntries = 5_000): Promis
       // An unreadable directory (permissions, races) must not fail the whole
       // listing; report it so the UI can note the gap.
       skipped += 1
-      return
+      continue
     }
     children.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
     for (const child of children) {
@@ -42,10 +47,9 @@ export async function listProjectFiles(root: string, maxEntries = 5_000): Promis
       const relativePath = relative(root, absolutePath)
       const path = process.platform === 'win32' ? relativePath.split('\\').join('/') : relativePath
       entries.push({ path, type: child.isDirectory() ? 'directory' : 'file' })
-      if (child.isDirectory()) await visit(absolutePath)
+      if (child.isDirectory()) directories.push(absolutePath)
     }
   }
 
-  await visit(root)
   return { entries, skipped }
 }

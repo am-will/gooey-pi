@@ -445,8 +445,8 @@ describe('ProjectService file listing', () => {
     expect(await service.listFiles(root)).toEqual({
       entries: [
         { path: 'src', type: 'directory' },
-        { path: 'src/index.ts', type: 'file' },
         { path: 'README.md', type: 'file' },
+        { path: 'src/index.ts', type: 'file' },
       ],
       skipped: 0,
     })
@@ -490,8 +490,8 @@ describe('ProjectService file listing', () => {
     expect(listing).toEqual({
       entries: [
         { path: 'src', type: 'directory' },
-        { path: 'src/main.ts', type: 'file' },
         { path: 'README.md', type: 'file' },
+        { path: 'src/main.ts', type: 'file' },
       ],
       skipped: 0,
     })
