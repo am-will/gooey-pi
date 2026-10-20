@@ -1123,13 +1123,17 @@ function fakeRustPrime(): { cwd: string; executable: string; commands: () => Rpc
   const argvLog = join(cwd, 'argv.jsonl')
   writeFileSync(executable, `#!/usr/bin/env node
 const fs = require('node:fs')
+if (process.argv[2] === '--version') { process.stdout.write('0.10.0\\n'); process.exit(0) }
 fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv.slice(2)) + '\\n')
 if (process.argv.includes('--extension')) {
   process.stderr.write('Error: Unknown option: --extension\\n')
   process.exit(1)
 }
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
-const model = { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT-5.4' }
+const flag = (name) => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined
+const model = flag('--model') ? { provider: flag('--provider'), id: flag('--model'), name: flag('--model') } : { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT-5.4' }
+// A 0.10-only model, in get_available_models' entry shape.
+const opus = { provider: 'anthropic', id: 'claude-opus-5-5', name: 'Claude Opus 5.5', api: 'anthropic-messages', reasoning: true, input: ['text', 'image'], contextWindow: 1000000, maxTokens: 128000, thinkingLevelMap: { off: null, minimal: null, xhigh: 'xhigh', max: 'max' } }
 require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
   const command = JSON.parse(line)
   fs.appendFileSync(${JSON.stringify(log)}, line + '\\n')
@@ -1137,6 +1141,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   if (command.type === 'get_state') ok({ sessionId: 'rust-session', isStreaming: false, isCompacting: false, model })
   else if (command.type === 'get_session_stats') ok({ contextUsage: { tokens: 1, contextWindow: 100, percent: 1 } })
   else if (command.type === 'list_heartbeats') ok({ heartbeats: [] })
+  else if (command.type === 'get_available_models') ok({ models: [opus] })
   else if (['prompt', 'abort', 'set_model', 'cycle_model'].includes(command.type)) ok(command.type === 'cycle_model' ? { model } : undefined)
   else send({ id: command.id, type: 'response', command: command.type, success: false, error: 'Unknown command: ' + command.type })
 })
@@ -1271,6 +1276,29 @@ describe('Rust Prime runtimes', () => {
     await expect(manager.start({ cwd: fake.cwd })).resolves.toMatchObject({ harness: 'prime', sessionId: 'rust-session' })
 
     expect(variants).toEqual([undefined, 'rust'])
+  })
+
+  it('starts on a 0.10-only model, validated against the catalog Rust Prime itself reports', async () => {
+    const fake = fakeRustPrime()
+    const providers = new PrimeProviderService({ authPath: join(fake.cwd, 'auth.json'), modelsPath: join(fake.cwd, 'models.json'), executable: fake.executable, implementation: () => 'rust' })
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, providers, () => new Set(), PRIME_RUST_RPC_ADAPTER)
+    managers.push(manager)
+
+    const runtime = await manager.start({ cwd: fake.cwd, model: 'anthropic/claude-opus-5-5', thinking: 'xhigh' })
+
+    expect(fake.spawns()).toEqual([
+      ['--mode', 'rpc', '--no-session'],
+      ['--mode', 'rpc', '--cwd', fake.cwd, '--provider', 'anthropic', '--model', 'claude-opus-5-5', '--thinking', 'xhigh'],
+    ])
+    expect(runtime).toMatchObject({
+      model: { provider: 'anthropic', id: 'claude-opus-5-5' },
+      availableThinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      imageInputSupported: true,
+      fastModeSupported: false,
+    })
+    // A 0.7 model that Rust does not list is refused before anything is spawned.
+    await expect(manager.start({ cwd: fake.cwd, model: 'anthropic/claude-opus-4-1' })).rejects.toThrow('Model was not found in the Prime Agent catalog')
+    expect(fake.spawns()).toHaveLength(2)
   })
 
   it('refuses the commands 0.10 RPC cannot run before they reach the agent', async () => {
