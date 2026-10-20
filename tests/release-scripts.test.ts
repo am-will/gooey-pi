@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -1789,6 +1789,28 @@ describe('vendor patch verification', () => {
       const result = spawnSync('git', ['check-attr', 'text', '--', patch], { encoding: 'utf8' })
       expect(result.status, result.stderr).toBe(0)
       expect(result.stdout.trim()).toBe(`${patch}: text: unset`)
+    }
+  })
+
+  test('rejects a CRLF patch checkout with a re-checkout hint instead of rewriting it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gooeypi-crlf-patch-'))
+    const release = join(root, 'scripts', 'release')
+    const patch = 'prime-agent-0.7.0-gooeypi.1.patch'
+    mkdirSync(release, { recursive: true })
+    mkdirSync(join(root, 'vendor', 'patches'), { recursive: true })
+    try {
+      // The copied verifier resolves vendor/ from its own location; its helpers still load from the repository.
+      copyFileSync('scripts/release/verify-vendor-patches.mjs', join(release, 'verify-vendor-patches.mjs'))
+      writeFileSync(join(release, 'lib.mjs'), `export * from ${JSON.stringify(new URL('../scripts/release/lib.mjs', import.meta.url).href)}\n`)
+      copyFileSync('vendor/prime-agent-0.7.0.tgz', join(root, 'vendor', 'prime-agent-0.7.0.tgz'))
+      writeFileSync(join(root, 'vendor', 'patches', patch), readFileSync(join('vendor', 'patches', patch), 'utf8').replaceAll('\n', '\r\n'))
+
+      const result = spawnSync(process.execPath, [join(release, 'verify-vendor-patches.mjs')], { encoding: 'utf8' })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain(`Vendor patch has CRLF line endings from a converted checkout: vendor/patches/${patch}`)
+      expect(result.stderr).toContain('git checkout -- vendor/patches')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })
