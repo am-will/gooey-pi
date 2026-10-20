@@ -208,6 +208,7 @@ export function formatRelative(value?: string | number): string {
   return formatter.format(Math.round(seconds / 604800), 'week')
 }
 
+/** Last path segment for POSIX and Windows separators, ignoring trailing separators. */
 export function basename(path: string): string {
-  return path.split(/[/]/).filter(Boolean).at(-1) ?? path
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
 }
