@@ -372,6 +372,32 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('Prime message')
   })
 
+  it('renders a refused manual compaction as a notice, not a failure', () => {
+    const html = render([{
+      id: 'refused',
+      role: 'system',
+      parts: [{ type: 'compaction', status: 'failed', outcome: 'skipped', reason: 'manual', error: 'Nothing to compact (session too small)' }],
+    }])
+    expect(html).toContain('Nothing to compact yet')
+    expect(html).toContain('activity-line--compaction is-skipped')
+    expect(html).toContain('skipped')
+    expect(html).not.toContain('is-failed')
+    expect(html).not.toContain('needs attention')
+    expect(html).not.toContain('Prime message')
+  })
+
+  it('keeps naming other skipped compactions and genuine failures apart', () => {
+    const html = render([
+      { id: 'auto', role: 'system', parts: [{ type: 'compaction', status: 'failed', outcome: 'skipped', reason: 'threshold', error: 'Auto-compaction skipped: no model' }] },
+      { id: 'failed', role: 'system', parts: [{ type: 'compaction', status: 'failed', outcome: 'failed', reason: 'manual', error: 'Compaction failed: Summarization failed' }] },
+    ])
+    expect(html).toContain('Context compaction skipped')
+    expect(html).toContain('Context compaction failed')
+    expect(html.match(/is-skipped/g)).toHaveLength(1)
+    expect(html.match(/is-failed/g)).toHaveLength(1)
+    expect(html.match(/needs attention/g)).toHaveLength(1)
+  })
+
   it('labels OMP idle and incomplete-response compactions', () => {
     const html = render([
       { id: 'idle', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'idle' }] },

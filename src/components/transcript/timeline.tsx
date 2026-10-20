@@ -8,6 +8,7 @@ import {
   FileCode2,
   GitFork,
   Globe2,
+  Info,
   Layers3,
   LoaderCircle,
   MessageCircle,
@@ -188,31 +189,39 @@ function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction'
   return 'context'
 }
 
+function compactionLabel(part: Extract<MessagePart, { type: 'compaction' }>): string {
+  if (part.status === 'running') return 'Compacting context'
+  if (part.status === 'done') return 'Context compacted'
+  if (part.status === 'cancelled') return 'Context compaction cancelled'
+  if (part.outcome !== 'skipped') return 'Context compaction failed'
+  // A compaction someone asked for is skipped only when the history is too short for one.
+  return part.reason === 'manual' || part.reason === 'requested' ? 'Nothing to compact yet' : 'Context compaction skipped'
+}
+
 function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compaction' }> }) {
   const [open, setOpen] = useState(false)
   const canExpand = Boolean(part.summary || part.error)
-  const label = part.status === 'running'
-    ? 'Compacting context'
-    : part.status === 'done'
-      ? 'Context compacted'
-      : part.status === 'cancelled' ? 'Context compaction cancelled' : part.outcome === 'skipped' ? 'Context compaction skipped' : 'Context compaction failed'
-  const state = part.status === 'running'
+  // A skip is benign: it reads as a notice, never as a failure.
+  const tone = part.outcome === 'skipped' ? 'skipped' : part.status
+  const state = tone === 'running'
     ? <><LoaderCircle className="spin" size={12} /> running</>
-    : part.status === 'done'
+    : tone === 'done'
       ? <><Check size={12} /> {part.willRetry ? 'continuing' : 'done'}</>
-      : <><CircleAlert size={12} /> {part.status === 'cancelled' ? 'cancelled' : 'needs attention'}</>
+      : tone === 'skipped'
+        ? <><Info size={12} /> skipped</>
+        : <><CircleAlert size={12} /> {tone === 'cancelled' ? 'cancelled' : 'needs attention'}</>
   const details = part.error || part.summary
   const tokenLabel = part.tokensBefore === undefined ? '' : `${part.tokensBefore.toLocaleString()} tokens before`
-  return <div className={`activity-line activity-line--compaction is-${part.status}`}>
+  return <div className={`activity-line activity-line--compaction is-${tone}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
-      <span className="activity-line__icon">{part.status === 'running' ? <LoaderCircle className="spin" size={13} /> : part.status === 'done' ? <Layers3 size={13} /> : <CircleAlert size={13} />}</span>
-      <span className="activity-line__kind">{label}</span>
+      <span className="activity-line__icon">{tone === 'running' ? <LoaderCircle className="spin" size={13} /> : tone === 'done' ? <Layers3 size={13} /> : tone === 'skipped' ? <Info size={13} /> : <CircleAlert size={13} />}</span>
+      <span className="activity-line__kind">{compactionLabel(part)}</span>
       <span className="activity-compaction__reason">{compactionReasonLabel(part.reason)}</span>
       {tokenLabel ? <span className="activity-compaction__tokens">{tokenLabel}</span> : null}
       <span className="activity-tool__state">{state}</span>
       {canExpand ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
     </button>
-    {open && details ? <div className={`activity-compaction__details ${part.status === 'done' ? '' : 'is-error'}`}><MarkdownText text={boundText(details, 40_000, '\n… [Compaction details truncated in the desktop view.]')} /></div> : null}
+    {open && details ? <div className={`activity-compaction__details ${tone === 'done' || tone === 'skipped' ? '' : 'is-error'}`}><MarkdownText text={boundText(details, 40_000, '\n… [Compaction details truncated in the desktop view.]')} /></div> : null}
   </div>
 }
 
