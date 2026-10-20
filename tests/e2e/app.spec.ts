@@ -710,6 +710,21 @@ test.describe('Prime Work desktop smoke', () => {
       if (pane) pane.style.minWidth = '0'
     })
 
+    const checkoutTrigger = page.getByRole('button', { name: /^Checkout:/ })
+    const expectCheckoutMenuInsideFooter = async () => {
+      await checkoutTrigger.click()
+      const menuBounds = await page.getByRole('menu', { name: 'Git worktrees' }).evaluate((menu) => {
+        const menuRect = menu.getBoundingClientRect()
+        const footerRect = menu.closest('.composer__footer')!.getBoundingClientRect()
+        return { menuLeft: menuRect.left, menuRight: menuRect.right, menuWidth: menuRect.width, footerLeft: footerRect.left, footerRight: footerRect.right, footerWidth: footerRect.width }
+      })
+      expect(menuBounds.menuLeft).toBeGreaterThanOrEqual(menuBounds.footerLeft - 0.5)
+      expect(menuBounds.menuRight).toBeLessThanOrEqual(menuBounds.footerRight + 0.5)
+      expect(menuBounds.menuWidth).toBeGreaterThanOrEqual(Math.min(340, menuBounds.footerWidth) - 1)
+      await checkoutTrigger.click()
+      await expect(page.getByRole('menu', { name: 'Git worktrees' })).toHaveCount(0)
+    }
+
     const model = page.locator('.model-picker')
     const modelTrigger = model.locator('.model-picker__trigger')
     const reasoning = page.locator('.select-control').filter({ has: page.getByRole('combobox', { name: 'Reasoning effort' }) })
@@ -731,16 +746,7 @@ test.describe('Prime Work desktop smoke', () => {
       return { controlsRight: controlsRect.right, actionsLeft: actionsRect.left }
     })
     expect(controlBounds.controlsRight).toBeLessThanOrEqual(controlBounds.actionsLeft)
-
-    await page.getByRole('button', { name: /^Checkout:/ }).click()
-    const menuBounds = await page.getByRole('menu', { name: 'Git worktrees' }).evaluate((menu) => {
-      const menuRect = menu.getBoundingClientRect()
-      const footerRect = menu.closest('.composer__footer')!.getBoundingClientRect()
-      return { menuLeft: menuRect.left, menuRight: menuRect.right, menuWidth: menuRect.width, footerLeft: footerRect.left, footerRight: footerRect.right, footerWidth: footerRect.width }
-    })
-    expect(menuBounds.menuLeft).toBeGreaterThanOrEqual(menuBounds.footerLeft - 0.5)
-    expect(menuBounds.menuRight).toBeLessThanOrEqual(menuBounds.footerRight + 0.5)
-    expect(menuBounds.menuWidth).toBeGreaterThanOrEqual(Math.min(340, menuBounds.footerWidth) - 1)
+    await expectCheckoutMenuInsideFooter()
   })
 
   test('loads the sandboxed preload bridge and hermetic service data', async () => {
