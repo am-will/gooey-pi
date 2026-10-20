@@ -404,6 +404,36 @@ describe('JsonStateStore', () => {
     expect(store.getArchivedSessions()).toEqual(['/sessions/kept.jsonl'])
   })
 
+  it('returns detached copies of values handed back by an update mutator', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeFileSync(path, JSON.stringify({
+      version: 4,
+      projects: [{ id: 'p1', harness: 'omp', name: 'One', path: '/one', folders: ['/one'], primaryFolder: '/one' }],
+      settings: defaultSettings(),
+      archivedSessions: [],
+      dismissedProjectPaths: [],
+      schedules: [],
+    }))
+    const store = new JsonStateStore(path)
+
+    const settings = await store.update((state) => state.settings)
+    settings.theme = 'dark'
+    expect(store.getSettings().theme).toBe(defaultSettings().theme)
+
+    const project = await store.update((state) => state.projects[0])
+    project.folders.push('/x')
+    expect(store.getProjects()[0].folders).toEqual(['/one'])
+
+    const before = readFileSync(path, 'utf8')
+    await expect(store.update((state) => {
+      state.archivedSessions.push('uncloneable-result')
+      return () => 1
+    })).rejects.toThrow(/cloned/)
+    expect(store.snapshot().archivedSessions).toEqual([])
+    expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+
   it('migrates version 2 state: projects gain the prime harness and settings gain harness defaults', () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')

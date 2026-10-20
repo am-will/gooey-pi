@@ -588,9 +588,11 @@ export class JsonStateStore {
       const draft = structuredClone(this.state)
       const result = mutator(draft)
       capUnboundedCollections(draft)
+      // Detach before persisting: callers never hold live state, and an uncloneable result aborts the write.
+      const detached = structuredClone(result)
       await this.persist(draft)
       this.state = draft
-      return result
+      return detached
     })
     this.queue = operation.then(() => undefined, () => undefined)
     return operation
