@@ -4,7 +4,7 @@ import { MAX_QUEUED_ACTIONS, consumeDeliveredPrompt } from '../../../src/lib/ses
 import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
-import { boundedErrorDetail } from './limits'
+import { providerErrorDetail } from './limits'
 import type { RpcObject } from './types'
 
 /** Normalized start inputs the manager resolves before the harness turns them into argv. */
@@ -186,7 +186,7 @@ function providerRunError(messages: unknown): string | undefined {
   if (!Array.isArray(messages)) return undefined
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message: unknown = messages[index]
-    if (isRecord(message) && message.role === 'assistant') return message.stopReason === 'error' ? boundedErrorDetail(message.errorMessage) : undefined
+    if (isRecord(message) && message.role === 'assistant') return providerErrorDetail(message)
   }
   return undefined
 }

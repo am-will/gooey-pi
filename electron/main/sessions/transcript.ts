@@ -6,6 +6,7 @@ import { strictJsonLines } from '../jsonl'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
 import { parseGooeyPiAgentMessage } from '../collaboration/message-envelope'
+import { providerErrorDetail } from '../agent-rpc/limits'
 
 const MAX_TRANSCRIPT_GRAPH_BYTES = 16 * 1024 * 1024
 const MAX_TRANSCRIPT_GRAPH_RECORDS = 10_000
@@ -132,8 +133,8 @@ function partsFromMessage(message: JsonRecord): MessagePart[] {
 
 /** The system row naming the provider error an assistant message ended with; undefined for any other message. */
 function providerErrorRow(message: JsonRecord, id: string, timestamp: TranscriptMessage['timestamp']): TranscriptMessage | undefined {
-  if (message.stopReason !== 'error' || typeof message.errorMessage !== 'string' || !message.errorMessage.trim()) return undefined
-  return { id: `${id}:error`, role: 'system', timestamp, parts: [{ type: 'text', text: boundedString(message.errorMessage.trim(), MAX_PART_TEXT_CHARS) }] }
+  const error = providerErrorDetail(message)
+  return error === undefined ? undefined : { id: `${id}:error`, role: 'system', timestamp, parts: [{ type: 'text', text: error }] }
 }
 
 function boundedTranscript(transcript: TranscriptMessage[]): TranscriptMessage[] {

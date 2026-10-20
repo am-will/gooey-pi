@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readSessionMetadata } from '../../electron/main/sessions/metadata'
 import { readTranscript } from '../../electron/main/sessions/transcript'
+import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { configureGooeyPiAgentMessageSigning, encodeGooeyPiAgentMessage, loadOrCreateGooeyPiAgentMessageKey, parseGooeyPiAgentMessage } from '../../electron/main/collaboration/message-envelope'
 
 const dirs: string[] = []
@@ -215,6 +216,15 @@ describe('provider errors that end a turn', () => {
 
     expect(shape(transcript)).toEqual(['user-1:user', 'assistant-1:assistant', 'assistant-1:error:system'])
     expect(transcript.at(-1)?.parts).toEqual([{ type: 'text', text: overloaded }])
+  })
+
+  it('bounds the error exactly as the live run does', async () => {
+    const long = failed('error', `  ${'x'.repeat(5_000)}  `)
+    const transcript = await readTranscript(write([['user-1', user('retry me')], ['assistant-1', long]]), false)
+    const live = PRIME_RUST_RPC_ADAPTER.normalizeEvent({ type: 'agent_end', messages: [long] }, { runtimeId: 'runtime', harness: 'prime', cwd: '/project', isStreaming: true })
+
+    expect(transcript.at(-1)?.parts).toEqual([{ type: 'text', text: 'x'.repeat(4_000) }])
+    expect(live).toEqual([{ type: 'agent_end', messages: [long] }, { type: 'error', error: 'x'.repeat(4_000), synthetic: true }])
   })
 
   it('keeps an earlier failed turn above the prompt that followed it', async () => {

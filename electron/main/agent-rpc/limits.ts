@@ -14,3 +14,12 @@ export function rpcRequestFrameBytes(command: RpcObject): number {
 export function boundedErrorDetail(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, MAX_ERROR_DETAIL_CHARS) : undefined
 }
+
+/**
+ * The provider error an assistant message ended with, bounded like any other
+ * error detail; undefined unless its stopReason is error. The live run and
+ * the transcript read back from disk show the same text.
+ */
+export function providerErrorDetail(message: Readonly<Record<string, unknown>>): string | undefined {
+  return message.stopReason === 'error' ? boundedErrorDetail(message.errorMessage) : undefined
+}
