@@ -175,8 +175,13 @@ const PROVIDERS_PAGE_INTROS: Record<HarnessId, string> = {
 /** Rust Prime's catalog lists only models it has credentials for, so there is no full catalogue to browse. */
 const RUST_PRIME_PROVIDERS_PAGE_INTRO = `Connect accounts and choose which providers and their models appear in GooeyPi. ${RUST_PRIME_AGENT_NAME} lists only the models your credentials can use, so a provider's models appear once it is connected. You may need to log in to or out of providers in the Prime Agent CLI before they appear on this screen.`
 
+interface ProvidersSettingsProps extends ProviderSettingsProps {
+  /** Detected Prime build; Rust Prime gets its own intro. */
+  primeImplementation?: PrimeImplementation
+}
+
 /** The Providers settings page: heading plus the provider/model catalog section. */
-export function ProvidersSettings({ primeImplementation, ...props }: ProviderSettingsProps & { primeImplementation?: PrimeImplementation }) {
+export function ProvidersSettings({ primeImplementation, ...props }: ProvidersSettingsProps) {
   const harness = props.harness ?? 'prime'
   const intro = harness === 'prime' && primeImplementation === 'rust' ? RUST_PRIME_PROVIDERS_PAGE_INTRO : PROVIDERS_PAGE_INTROS[harness]
   return (
