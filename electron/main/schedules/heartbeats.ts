@@ -1,5 +1,5 @@
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
+import { RUST_PRIME_AGENT_NAME, RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '../../../src/lib/prime-compat'
 import type { NativeHeartbeatRecord, PrimeImplementation } from '../../../src/types/api'
 import { UnsupportedRpcCommandError, type AgentRpcManager } from '../agent-rpc'
 import { resolveExecutable, runProcess, type ExecutableSource } from '../process-utils'
@@ -48,7 +48,7 @@ function unlessUnsupported(error: unknown): undefined {
 function heartbeatActionUnavailable(action: HeartbeatAction, implementation: PrimeImplementation | undefined): Error {
   if (implementation !== 'rust') return new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
   if (action === 'stop') return new Error(`${RUST_PRIME_AGENT_NAME} could not stop this native heartbeat. Check that its background service is running and try again.`)
-  return new Error(`${RUST_PRIME_AGENT_NAME} pauses and resumes native heartbeats only through its background service, which GooeyPi cannot use yet. Stop still works.`)
+  return new Error(RUST_PRIME_HEARTBEAT_PAUSE_DETAIL)
 }
 
 export class HeartbeatService {
