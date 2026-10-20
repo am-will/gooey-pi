@@ -8,7 +8,7 @@ import { queueDaemonFollowUp } from './agent-daemon'
 import { comparePaths, createAdmissionQueue, createSingleFlight, type AdmissionQueue } from './lib/async'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
 import { SessionMetadataCatalog, type SessionCatalogIo, type SessionNameTimestamp } from './sessions/catalog'
-import { createSessionMetadataReader, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
+import { createSessionMetadataReader, type JsonRecord, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
 import { readTranscript } from './sessions/transcript'
 import type { JsonStateStore } from './store'
 import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString } from './validation'
@@ -52,6 +52,13 @@ const watchSessionDirectory: SessionWatchFactory = (path, options, listener) => 
 )
 
 const authorizePrimeSessionPath: SessionPathAuthorizer = (root, path) => isPathWithin(root, path) && path.endsWith('.jsonl')
+
+/** The daemon address of a live catalog row, checked before it reaches argv or the daemon socket. */
+function liveActiveSessionId(live: JsonRecord): string {
+  const activeSessionId = requireId(live.activeSessionId ?? live.id, 'activeSessionId')
+  if (activeSessionId.startsWith('-')) throw new Error('Prime Agent returned an invalid active session identifier')
+  return activeSessionId
+}
 
 export interface SessionServiceOptions {
   /** Harness stamped on every record and change event this service emits; defaults to 'prime'. */
@@ -252,8 +259,7 @@ export class SessionService {
     // up to MAX_SESSION_FILES * 4 serial realpath calls.
     const active = (await this.catalog.liveSessions()).get(safePath)
     if (active?.lifecycle !== 'live' || active.isSessionActive !== true) return false
-    const activeSessionId = requireId(active.activeSessionId ?? active.id, 'activeSessionId')
-    if (activeSessionId.startsWith('-')) throw new Error('Prime Agent returned an invalid active session identifier')
+    const activeSessionId = liveActiveSessionId(active)
 
     const status = await runProcess(primeAgentPath, ['status', '--json'], { timeoutMs: 15_000, maxBytes: 1024 * 1024 })
     if (status.code !== 0 || status.timedOut || status.outputExceeded) throw new Error('GooeyPi could not inspect the Prime Agent daemon')
