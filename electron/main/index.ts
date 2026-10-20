@@ -29,6 +29,7 @@ import { ScheduledRunExecutor } from './schedules/executor'
 import { HeartbeatService } from './schedules/heartbeats'
 import { AutomationService } from './schedules/service'
 import { AgentScheduleBridge } from './schedules/agent-bridge'
+import { mirrorBundledSkill } from './lib/bundled-skill-mirror'
 import { AgentBrowserBridge } from './browser/agent-bridge'
 import { AgentBrowserService } from './browser/agent-service'
 import { AgentCollaborationBridge } from './collaboration/agent-bridge'
@@ -765,7 +766,7 @@ async function bootstrap(): Promise<void> {
   const browserProfile = session.fromPartition(BROWSER_PARTITION)
   browserProfile.on('will-download', (event, item, owner) => downloads?.handle(event, item, owner, settings.get().browserAskForDownloads))
   const scheduleSkillPath = app.isPackaged
-    ? join(process.resourcesPath, 'skills', 'prime-work-schedules')
+    ? await mirrorBundledSkill(join(process.resourcesPath, 'skills', 'prime-work-schedules'), join(userDataPath, 'bundled-skills'))
     : join(app.getAppPath(), 'assets', 'skills', 'prime-work-schedules')
   const browserSkillPath = app.isPackaged
     ? join(process.resourcesPath, 'skills', 'prime-work-browser')
