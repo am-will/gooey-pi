@@ -1,17 +1,17 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
+  // electron-vite 5 externalizes main and preload dependencies by default
+  // (build.externalizeDeps), so no explicit plugin is needed.
   main: {
-    plugins: [externalizeDepsPlugin()],
     // Fully minify production code: Electron never consumes readable output,
     // and less source is faster for V8 to read, parse, and compile at startup.
     build: { lib: { entry: 'electron/main/index.ts' }, minify: 'esbuild' },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       lib: { entry: 'electron/preload/index.ts', formats: ['cjs'] },
       rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.js' } },
