@@ -45,6 +45,10 @@ export class AgentRpcManager {
     retireIfIdle: () => Promise<boolean>,
   ) => Promise<WorkspaceUseLease> = async () => ({ release: () => undefined })
   private closed = false
+  /** Harness identity (id, agent name), which every adapter variant of the harness shares. */
+  private readonly adapter: HarnessRpcAdapter
+  /** Resolved once per start; each runtime keeps the adapter it was spawned with. */
+  private readonly adapterForStart: () => HarnessRpcAdapter
 
   constructor(
     private readonly executable: ExecutableSource,
@@ -52,10 +56,13 @@ export class AgentRpcManager {
     private readonly validateSessionPath: (path: string) => Promise<string>,
     private readonly providers?: ProviderCatalog,
     private readonly disabledProviders: () => ReadonlySet<string> = () => new Set(),
-    private readonly adapter: HarnessRpcAdapter = PRIME_RPC_ADAPTER,
+    adapter: HarnessRpcAdapter | (() => HarnessRpcAdapter) = PRIME_RPC_ADAPTER,
     /** Approval-mode override consumed only by harness arg builders that support it (OMP). */
     private readonly approvalMode: () => string | undefined = () => undefined,
-  ) {}
+  ) {
+    this.adapterForStart = typeof adapter === 'function' ? adapter : () => adapter
+    this.adapter = this.adapterForStart()
+  }
 
   setEventSink(sink: (envelope: PrimeEventEnvelope) => void): void { this.eventSink = sink }
 
@@ -122,6 +129,7 @@ export class AgentRpcManager {
     if (options.fast !== undefined && typeof options.fast !== 'boolean') throw new TypeError('fast must be a boolean')
     this.requireOpen()
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
+    const adapter = this.adapterForStart()
     const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive })
     let runtime: RpcRuntime | undefined
     let workspaceUse!: WorkspaceUseLease
@@ -143,7 +151,7 @@ export class AgentRpcManager {
       try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
     }
     try {
-      const args = this.adapter.buildStartArgs({
+      const args = adapter.buildStartArgs({
         cwd,
         sessionPath,
         providerId: selectedModel?.provider,
@@ -167,7 +175,7 @@ export class AgentRpcManager {
           },
           runtimeEnvironment,
           {},
-          this.adapter,
+          adapter,
         )
         // Record the environment generation before admission resolves so a
         // concurrent settings refresh cannot mistake this child for a new one.
@@ -233,7 +241,7 @@ export class AgentRpcManager {
     // Validation is harness-independent; the harness vocabulary applies after
     // it. set_service_tier passes through untranslated because the fast-mode
     // interception below routes it via runtime.setServiceTier instead.
-    const translated = this.adapter.translateCommand(command)
+    const translated = runtime.adapter.translateCommand(command)
     if (command.type === 'set_model' && this.providers) {
       await this.providers.requireAvailableModel(`${String(command.provider)}/${String(command.modelId)}`, this.disabledProviders(), this.disabledModels())
     }

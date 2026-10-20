@@ -127,7 +127,7 @@ export class RpcRuntime {
     private readonly onExit: (runtime: RpcRuntime) => void,
     extraEnvironment: NodeJS.ProcessEnv = {},
     watchdogTimings: Partial<CompactionWatchdogTimings> = {},
-    private readonly adapter: HarnessRpcAdapter = PRIME_RPC_ADAPTER,
+    readonly adapter: HarnessRpcAdapter = PRIME_RPC_ADAPTER,
     private readonly chunkAssemblyTiming: RpcChunkAssemblyTiming = DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING,
   ) {
     this.watchdogTimings = { ...DEFAULT_COMPACTION_WATCHDOG_TIMINGS, ...watchdogTimings }

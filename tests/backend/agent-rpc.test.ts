@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
 import { validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
 import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
@@ -330,6 +330,25 @@ describe('agent RPC responses', () => {
     await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Prime Agent executable was not found')
     executable = fake.executable
     await expect(manager.start({ cwd: fake.cwd })).resolves.toMatchObject({ harness: 'prime', cwd: fake.cwd })
+  })
+
+  it('resolves the adapter once per start and keeps it for the runtime', async () => {
+    const state = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'busy', isStreaming: true, isCompacting: false } }"
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", state)
+    const refusing: HarnessRpcAdapter = { ...PRIME_RPC_ADAPTER, translateCommand: () => { throw new Error('refused by the second adapter') } }
+    let current = PRIME_RPC_ADAPTER
+    const adapterSource = vi.fn(() => current)
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), adapterSource)
+    managers.push(manager)
+    const constructionCalls = adapterSource.mock.calls.length
+
+    const first = await manager.start({ cwd: fake.cwd })
+    current = refusing
+    const second = await manager.start({ cwd: fake.cwd })
+
+    expect(adapterSource).toHaveBeenCalledTimes(constructionCalls + 2)
+    await expect(manager.command(first.runtimeId, { type: 'prompt', message: 'first adapter' })).resolves.toMatchObject({ success: true })
+    await expect(manager.command(second.runtimeId, { type: 'prompt', message: 'second adapter' })).rejects.toThrow('refused by the second adapter')
   })
 
   it('hydrates and refreshes authoritative context-window usage', async () => {
