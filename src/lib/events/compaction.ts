@@ -1,4 +1,5 @@
 import type { MessagePart, TranscriptMessage } from '@/types/api'
+import { isCompactionReason } from '@/lib/compaction-reason'
 import { nextTranscriptId, withPartId } from './ids'
 import { record, string } from './parse'
 
@@ -7,9 +8,7 @@ import { record, string } from './parse'
 type CompactionPart = Extract<MessagePart, { type: 'compaction' }>
 
 function compactionReason(value: unknown): CompactionPart['reason'] {
-  return value === 'manual' || value === 'threshold' || value === 'overflow' || value === 'requested' || value === 'idle' || value === 'incomplete'
-    ? value
-    : undefined
+  return isCompactionReason(value) ? value : undefined
 }
 
 function compactionOutcome(value: unknown): CompactionPart['outcome'] {

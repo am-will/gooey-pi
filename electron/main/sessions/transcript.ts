@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
+import { isCompactionReason } from '../../../src/lib/compaction-reason'
 import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { strictJsonLines } from '../jsonl'
 import { isRecord } from '../validation'
@@ -330,10 +331,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       const customType = typeof entry.customType === 'string' ? boundedString(entry.customType, 200) : 'activity'
       if (customType === 'compaction_outcome') {
         const outcome = details?.outcome === 'cancelled' ? 'cancelled' : details?.outcome === 'skipped' ? 'skipped' : 'failed'
-        const reason = details?.reason === 'manual' || details?.reason === 'threshold' || details?.reason === 'overflow' || details?.reason === 'requested'
-          || details?.reason === 'idle' || details?.reason === 'incomplete'
-          ? details.reason
-          : undefined
+        const reason = isCompactionReason(details?.reason) ? details.reason : undefined
         const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
         const text = boundedString(textFromContent(entry.content), MAX_PART_TEXT_CHARS)
         transcript.push({
