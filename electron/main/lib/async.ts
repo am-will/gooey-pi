@@ -51,6 +51,37 @@ export function createSingleFlight<K, V>(): SingleFlight<K, V> {
   }
 }
 
+export interface KeyedMutex<K> {
+  /** Runs `action` after every earlier action for `key` settles; different keys run concurrently. */
+  run<T>(key: K, action: () => Promise<T>): Promise<T>
+  readonly size: number
+}
+
+/**
+ * Per-key FIFO mutual exclusion. Each caller chains a private gate that only ever resolves, so a
+ * rejected (or synchronously throwing) action releases the next waiter and its error reaches only
+ * its own caller. The entry for a key clears once its last queued action settles.
+ */
+export function createKeyedMutex<K>(): KeyedMutex<K> {
+  const tails = new Map<K, Promise<void>>()
+  return {
+    async run<T>(key: K, action: () => Promise<T>): Promise<T> {
+      const previous = tails.get(key) ?? Promise.resolve()
+      let release!: () => void
+      const current = new Promise<void>((done) => { release = done })
+      tails.set(key, current)
+      await previous
+      try {
+        return await action()
+      } finally {
+        release()
+        if (tails.get(key) === current) tails.delete(key)
+      }
+    },
+    get size() { return tails.size },
+  }
+}
+
 export interface AdmissionQueueOptions {
   maxConcurrent: number
   /** Tasks admitted beyond `maxConcurrent` wait here; further tasks are rejected. */
