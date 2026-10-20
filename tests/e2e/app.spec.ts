@@ -710,6 +710,8 @@ test.describe('Prime Work desktop smoke', () => {
       if (pane) pane.style.minWidth = '0'
     })
 
+    // The checkout menu sizes against the footer, not its trigger, both while the
+    // trigger shows its label and once it collapses to an icon.
     const checkoutTrigger = page.getByRole('button', { name: /^Checkout:/ })
     const expectCheckoutMenuInsideFooter = async () => {
       await checkoutTrigger.click()
@@ -731,6 +733,8 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(modelTrigger.locator('span')).toHaveCSS('display', 'block')
     await expect(reasoning.locator('.select-control__chevron')).toHaveCSS('display', 'none')
     await expect(reasoning.getByRole('combobox')).toHaveCSS('opacity', '1')
+    await expect(page.locator('.worktree-picker__label')).toBeVisible()
+    await expectCheckoutMenuInsideFooter()
 
     await page.locator('.conversation-column').evaluate((node) => { node.style.flex = '0 0 300px' })
     await expect(modelTrigger.locator('span')).toHaveCSS('display', 'none')
