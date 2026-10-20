@@ -1,5 +1,6 @@
 import { join, win32 } from 'node:path'
 
+import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '../../src/lib/harness'
 import type { HarnessId } from '../../src/types/api'
 
 /**
@@ -28,8 +29,8 @@ export interface HarnessDescriptor {
 export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
   prime: {
     id: 'prime',
-    productName: 'Prime Work',
-    agentName: 'Prime Agent',
+    productName: HARNESS_PRODUCT_NAMES.prime,
+    agentName: HARNESS_AGENT_NAMES.prime,
     executableName: (platform) => platform === 'win32' ? 'prime-agent.exe' : 'prime-agent',
     binaryEnvVar: 'PRIME_AGENT_BINARY',
     bundledResourceDirs: [['agent'], ['agent', 'bin']],
@@ -42,8 +43,8 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
   },
   omp: {
     id: 'omp',
-    productName: 'OMP Work',
-    agentName: 'OMP',
+    productName: HARNESS_PRODUCT_NAMES.omp,
+    agentName: HARNESS_AGENT_NAMES.omp,
     executableName: (platform) => platform === 'win32' ? 'omp.exe' : 'omp',
     binaryEnvVar: 'OMP_BINARY',
     bundledResourceDirs: [],
@@ -56,8 +57,8 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
   },
   pi: {
     id: 'pi',
-    productName: 'Pi Work',
-    agentName: 'Pi',
+    productName: HARNESS_PRODUCT_NAMES.pi,
+    agentName: HARNESS_AGENT_NAMES.pi,
     executableName: (platform) => platform === 'win32' ? 'pi.exe' : 'pi',
     binaryEnvVar: 'PI_BINARY',
     bundledResourceDirs: [],

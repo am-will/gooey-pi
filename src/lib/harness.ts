@@ -1,4 +1,4 @@
-import type { HarnessId } from '@/types/api'
+import type { HarnessId } from '../types/api'
 
 export const HARNESS_SELECTOR_ORDER: readonly HarnessId[] = ['pi', 'omp', 'prime']
 
