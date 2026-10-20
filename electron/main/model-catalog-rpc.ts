@@ -159,11 +159,6 @@ export abstract class RpcModelCatalogService extends CliModelCatalogService {
   /** Maps a validated entry and its optional thinking-level map to a descriptor. */
   protected abstract describeModel(entry: ValidatedModelEntry, thinkingLevelMap: Record<string, unknown> | undefined): PrimeModelDescriptor
 
-  /** Both RPC-probed CLIs print a bare semver such as `0.84.1`. */
-  protected parseVersion(stdout: string): string | null {
-    return stdout.match(/^v?([0-9][0-9A-Za-z.+-]{0,63})$/)?.[1] ?? null
-  }
-
   protected async fetchModelEntries(executable: string): Promise<unknown[]> {
     const frame = await runModelProbe(executable, this.probeArgs, { harnessLabel: this.harnessLabel, cliName: this.cliName }, {
       timeoutMs: this.timeoutMs,

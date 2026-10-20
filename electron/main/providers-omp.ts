@@ -42,11 +42,6 @@ export class OmpModelCatalogService extends CliModelCatalogService {
     return safeChildEnvironment()
   }
 
-  /** The CLI prints `omp/<semver>`. */
-  protected parseVersion(stdout: string): string | null {
-    return stdout.match(/^omp\/([0-9A-Za-z.+-]{1,64})$/)?.[1] ?? null
-  }
-
   protected async fetchModelEntries(executable: string): Promise<unknown[]> {
     const result = await runProcess(executable, ['models', '--json'], {
       timeoutMs: this.timeoutMs,
