@@ -41,6 +41,11 @@ export function parseReleasePlatforms(value = RELEASE_PLATFORMS.join(',')) {
  * `windowsUnsigned` drops the MSIX for unsigned beta Windows releases: without
  * an Authenticode certificate electron-builder can only emit a Store-only
  * package (publisher CN=ms) that Windows refuses to install.
+ *
+ * electron-updater downloads differentially by fetching `<feed url>.blockmap`
+ * for the macOS ZIPs and the NSIS installer, so those assets publish their
+ * blockmaps beside them and must never be renamed. The AppImage and Windows ZIP
+ * embed their blockmaps and need no separate asset.
  */
 export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS, { windowsUnsigned = false } = {}) {
   if (windowsUnsigned && !platforms.includes('win')) throw new Error('Unsigned Windows release assets require the win release platform')
@@ -49,7 +54,9 @@ export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS, { wind
       [`GooeyPi-${version}-m-chip.dmg`, `GooeyPi-${version}-arm64.dmg`],
       [`GooeyPi-${version}-intel-chip.dmg`, `GooeyPi-${version}-x64.dmg`],
       [`GooeyPi-${version}-arm64.zip`],
+      [`GooeyPi-${version}-arm64.zip.blockmap`],
       [`GooeyPi-${version}-x64.zip`],
+      [`GooeyPi-${version}-x64.zip.blockmap`],
     ],
     linux: [
       [`GooeyPi-${version}-linux-arm64.AppImage`],
@@ -62,7 +69,12 @@ export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS, { wind
       [`GooeyPi-${version}-linux-x86_64.rpm`],
     ],
     // electron-builder emits the MSIX-compatible package as .appx; publish the same bytes with the modern .msix extension.
-    win: [[`GooeyPi-${version}-win-x64.exe`], [`GooeyPi-${version}-win-x64.zip`], ...(windowsUnsigned ? [] : [[`GooeyPi-${version}-win-x64.msix`, `GooeyPi-${version}-win-x64.appx`]])],
+    win: [
+      [`GooeyPi-${version}-win-x64.exe`],
+      [`GooeyPi-${version}-win-x64.exe.blockmap`],
+      [`GooeyPi-${version}-win-x64.zip`],
+      ...(windowsUnsigned ? [] : [[`GooeyPi-${version}-win-x64.msix`, `GooeyPi-${version}-win-x64.appx`]]),
+    ],
   }
   const entries = platforms
     .flatMap((platform) => [...assets[platform], ...UPDATE_METADATA_BY_PLATFORM[platform].map((name) => [name])])

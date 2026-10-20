@@ -822,6 +822,8 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/win/**/latest*.yml')
+    // Differential auto-updates need the blockmaps of the files electron-updater downloads.
+    expect(releaseWorkflow).toContain('release/win/**/*.exe.blockmap')
     expect(releaseWorkflow).toMatch(/needs: \[validate, production-audit, package, package-linux, package-windows\]/)
     expect(releaseWorkflow).toContain("needs.package-windows.result != 'skipped'")
     expect(releaseWorkflow).toContain('--platforms "$platforms"')
@@ -924,6 +926,7 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(releaseWorkflow).toContain('name: gooeypi-public-macos-${{ matrix.arch }}')
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/*.dmg')
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/*.zip')
+    expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/*.zip.blockmap')
     expect(releaseWorkflow).toContain('electron-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles(')
     // Universal binaries are excluded by design: the release ships two builds.
     expect(releaseWorkflow).not.toContain('--universal')
@@ -947,8 +950,24 @@ describe('GitHub Release publication', () => {
   test('selects an exact enabled platform set', () => {
     expect(parseReleasePlatforms('mac,linux')).toEqual(['mac', 'linux'])
     expect(expectedGitHubReleaseAssets('0.2.0', ['mac', 'linux'])).not.toContain('GooeyPi-0.2.0-win-x64.exe')
-    expect(expectedGitHubReleaseAssets('0.2.0', ['mac'])).toEqual(['GooeyPi-0.2.0-arm64.zip', 'GooeyPi-0.2.0-intel-chip.dmg', 'GooeyPi-0.2.0-m-chip.dmg', 'GooeyPi-0.2.0-x64.zip', 'latest-mac.yml'])
-    expect(expectedDownloadedReleaseAssets('0.2.0', ['mac'])).toEqual(['GooeyPi-0.2.0-arm64.zip', 'GooeyPi-0.2.0-x64.dmg', 'GooeyPi-0.2.0-arm64.dmg', 'GooeyPi-0.2.0-x64.zip', 'latest-mac.yml'])
+    expect(expectedGitHubReleaseAssets('0.2.0', ['mac'])).toEqual([
+      'GooeyPi-0.2.0-arm64.zip',
+      'GooeyPi-0.2.0-arm64.zip.blockmap',
+      'GooeyPi-0.2.0-intel-chip.dmg',
+      'GooeyPi-0.2.0-m-chip.dmg',
+      'GooeyPi-0.2.0-x64.zip',
+      'GooeyPi-0.2.0-x64.zip.blockmap',
+      'latest-mac.yml',
+    ])
+    expect(expectedDownloadedReleaseAssets('0.2.0', ['mac'])).toEqual([
+      'GooeyPi-0.2.0-arm64.zip',
+      'GooeyPi-0.2.0-arm64.zip.blockmap',
+      'GooeyPi-0.2.0-x64.dmg',
+      'GooeyPi-0.2.0-arm64.dmg',
+      'GooeyPi-0.2.0-x64.zip',
+      'GooeyPi-0.2.0-x64.zip.blockmap',
+      'latest-mac.yml',
+    ])
     expect(expectedGitHubReleaseAssets('0.2.0', ['linux'])).toEqual([
       'GooeyPi-0.2.0-linux-aarch64.pacman',
       'GooeyPi-0.2.0-linux-aarch64.rpm',
@@ -963,9 +982,20 @@ describe('GitHub Release publication', () => {
     ])
     expect(() => parseReleasePlatforms('mac,mac')).toThrow(/duplicates/)
     expect(() => parseReleasePlatforms('mac,android')).toThrow(/Unsupported/)
-    expect(expectedGitHubReleaseAssets('0.2.0', ['win'])).toEqual(['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.msix', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml'])
+    expect(expectedGitHubReleaseAssets('0.2.0', ['win'])).toEqual([
+      'GooeyPi-0.2.0-win-x64.exe',
+      'GooeyPi-0.2.0-win-x64.exe.blockmap',
+      'GooeyPi-0.2.0-win-x64.msix',
+      'GooeyPi-0.2.0-win-x64.zip',
+      'latest.yml',
+    ])
     // Unsigned beta Windows builds cannot install as an MSIX, so they never publish one.
-    expect(expectedGitHubReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).toEqual(['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml'])
+    expect(expectedGitHubReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).toEqual([
+      'GooeyPi-0.2.0-win-x64.exe',
+      'GooeyPi-0.2.0-win-x64.exe.blockmap',
+      'GooeyPi-0.2.0-win-x64.zip',
+      'latest.yml',
+    ])
     expect(expectedDownloadedReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).not.toContain('GooeyPi-0.2.0-win-x64.appx')
     expect(() => releaseAssetNames('0.2.0', ['mac', 'linux'], { windowsUnsigned: true })).toThrow(/require the win release platform/)
   })
@@ -979,14 +1009,14 @@ describe('GitHub Release publication', () => {
     writeFileSync(join(projectDirectory, 'package.json'), JSON.stringify({ version: '0.2.0' }))
     writeFileSync(join(projectDirectory, 'package-lock.json'), JSON.stringify({ version: '0.2.0', packages: { '': { version: '0.2.0' } } }))
     // A stray Store-only package in the downloaded artifacts must not be published.
-    for (const name of ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.zip', 'GooeyPi-0.2.0-win-x64.appx', 'GooeyPi-0.2.0-win-x64.msix']) {
+    for (const name of ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.exe.blockmap', 'GooeyPi-0.2.0-win-x64.zip', 'GooeyPi-0.2.0-win-x64.appx', 'GooeyPi-0.2.0-win-x64.msix']) {
       writeFileSync(join(inputDirectory, 'gooeypi-public-windows', name), `asset ${name}`)
     }
     writeFileSync(
       join(inputDirectory, 'gooeypi-public-windows', 'latest.yml'),
       'version: 0.2.0\nfiles:\n  - url: GooeyPi-0.2.0-win-x64.exe\n    sha512: exe-digest\n    size: 42\npath: GooeyPi-0.2.0-win-x64.exe\nsha512: exe-digest\n',
     )
-    const expected = ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml']
+    const expected = ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.exe.blockmap', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml']
     try {
       const outputDirectory = join(directory, 'release-assets')
       const result = await prepareGitHubRelease({ inputDirectory, outputDirectory, projectDirectory, platforms: ['win'], windowsUnsigned: true, tag: 'v0.2.0' })
@@ -1008,6 +1038,14 @@ describe('GitHub Release publication', () => {
       expect(misused.status).toBe(1)
       expect(misused.stderr).toMatch(/require the win release platform/)
 
+      // The installer's blockmap is what makes updates differential, so it is required too.
+      const blockmap = join(inputDirectory, 'gooeypi-public-windows', 'GooeyPi-0.2.0-win-x64.exe.blockmap')
+      rmSync(blockmap)
+      await expect(
+        prepareGitHubRelease({ inputDirectory, outputDirectory: join(directory, 'no-blockmap'), projectDirectory, platforms: ['win'], windowsUnsigned: true, tag: 'v0.2.0' }),
+      ).rejects.toThrow(/missing GooeyPi-0\.2\.0-win-x64\.exe\.blockmap$/)
+      writeFileSync(blockmap, 'asset blockmap')
+
       // A signed release still requires the MSIX.
       rmSync(join(inputDirectory, 'gooeypi-public-windows', 'GooeyPi-0.2.0-win-x64.appx'))
       await expect(prepareGitHubRelease({ inputDirectory, outputDirectory: join(directory, 'signed'), projectDirectory, platforms: ['win'], tag: 'v0.2.0' })).rejects.toThrow(
@@ -1028,8 +1066,17 @@ describe('GitHub Release publication', () => {
     const feeds = [...names.keys()].filter((name) => name.endsWith('.yml'))
     expect(feeds).toEqual(['latest-linux-arm64.yml', 'latest-linux.yml', 'latest-mac.yml', 'latest.yml'])
     // Every produced artifact is published and every published asset (other than
-    // the updater feeds) is produced - both directions, no index coupling.
-    expect([...names.values()].filter((name) => !name.endsWith('.yml')).sort()).toEqual(produced)
+    // the updater feeds and blockmaps) is produced - both directions, no index coupling.
+    expect([...names.values()].filter((name) => !name.endsWith('.yml') && !name.endsWith('.blockmap')).sort()).toEqual(produced)
+    // electron-updater fetches `<update file>.blockmap` for exactly the macOS ZIPs and the NSIS installer.
+    const blockmaps = [...names].filter(([published]) => published.endsWith('.blockmap'))
+    expect(blockmaps.every(([published, downloaded]) => published === downloaded)).toBe(true)
+    expect(blockmaps.map(([published]) => published)).toEqual(
+      produced
+        .filter((name) => /^GooeyPi-0\.2\.0-(?:arm64|x64)\.zip$/.test(name) || name.endsWith('.exe'))
+        .map((name) => `${name}.blockmap`)
+        .sort(),
+    )
     const targetCount = Object.entries(RELEASE_BUILD_MATRIX).reduce((total, [platform, architectures]) => total + architectures.length * config[platform].target.length, 0)
     expect(produced).toHaveLength(targetCount)
     // Only the two macOS DMGs are renamed for the public download page.

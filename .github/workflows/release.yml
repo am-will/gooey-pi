@@ -183,6 +183,7 @@ jobs:
           path: |
             release/mac/${{ matrix.arch }}/*.dmg
             release/mac/${{ matrix.arch }}/*.zip
+            release/mac/${{ matrix.arch }}/*.zip.blockmap
             release/mac/${{ matrix.arch }}/latest*.yml
           if-no-files-found: error
 
@@ -296,6 +297,7 @@ jobs:
           name: gooeypi-public-windows
           path: |
             release/win/**/*.exe
+            release/win/**/*.exe.blockmap
             release/win/**/*.zip
             release/win/**/*.appx
             release/win/**/*.msix
