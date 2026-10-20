@@ -3,6 +3,8 @@ import type { PrimeImplementation } from '../types/api'
 /** How user-facing copy names the Rust build. */
 export const RUST_PRIME_AGENT_NAME = 'Prime Agent 0.10+'
 
+export const PRIME_IMPLEMENTATION_LABELS: Readonly<Record<PrimeImplementation, string>> = Object.freeze({ typescript: 'TypeScript', rust: 'Rust' })
+
 /**
  * Prime Agent shipped as a TypeScript CLI through 0.9.8 and as a Rust rewrite
  * from the 0.9.9 betas on (0.10.0 is the first stable Rust release). Both
@@ -39,4 +41,11 @@ export type PrimeRustUnavailableCapability = (typeof PRIME_RUST_UNAVAILABLE_CAPA
 /** An unclassified Prime (undefined) keeps the TypeScript behavior. */
 export function primeCapabilityAvailable(implementation: PrimeImplementation | undefined, capability: PrimeRustUnavailableCapability): boolean {
   return implementation !== 'rust' || !PRIME_RUST_UNAVAILABLE_CAPABILITIES.some(({ id }) => id === capability)
+}
+
+/** One sentence naming the capabilities this Prime build does not offer; undefined when it offers them all. */
+export function primeUnavailableCapabilitiesNotice(implementation: PrimeImplementation | undefined): string | undefined {
+  const unavailable = PRIME_RUST_UNAVAILABLE_CAPABILITIES.filter(({ id }) => !primeCapabilityAvailable(implementation, id))
+  if (!unavailable.length) return undefined
+  return `Not available with ${RUST_PRIME_AGENT_NAME}: ${unavailable.map(({ label }) => label).join(', ')}. Pi and OMP keep them.`
 }

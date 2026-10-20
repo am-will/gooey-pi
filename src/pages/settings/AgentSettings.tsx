@@ -1,8 +1,9 @@
 import { Bot, Keyboard, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
-import { HARNESS_IDS, OMP_APPROVAL_MODES, type HarnessId, type OmpApprovalMode } from '@/types/api'
+import { HARNESS_IDS, OMP_APPROVAL_MODES, type HarnessId, type HarnessStatus, type OmpApprovalMode } from '@/types/api'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '@/lib/harness'
+import { PRIME_IMPLEMENTATION_LABELS, primeUnavailableCapabilitiesNotice } from '@/lib/prime-compat'
 import { detectRendererPlatform, shortcutLabel } from '@/lib/platform-shortcuts'
 import type { SettingsMetaSectionProps } from './contracts'
 import { DraftSettingField } from './DraftSettingField'
@@ -13,6 +14,12 @@ const APPROVAL_MODE_LABELS: Record<OmpApprovalMode, string> = {
   'always-ask': 'Always ask',
   'write': 'Prompt for exec only (write)',
   'yolo': 'YOLO (never prompt)',
+}
+
+/** Version and, for Prime, the detected implementation: "v0.10.0 · Rust". */
+function runtimeBadge(status: HarnessStatus | undefined): string | undefined {
+  const parts = [status?.version ? `v${status.version}` : '', status?.implementation ? PRIME_IMPLEMENTATION_LABELS[status.implementation] : '']
+  return parts.filter(Boolean).join(' · ') || undefined
 }
 
 export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: SettingsMetaSectionProps) {
@@ -65,14 +72,17 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
         {HARNESS_IDS.map((harness) => {
           const name = HARNESS_AGENT_NAMES[harness]
           const status = meta?.harnesses[harness]
+          const badge = runtimeBadge(status)
+          const unavailable = primeUnavailableCapabilitiesNotice(status?.implementation)
           return (
             <div className="runtime-card" key={harness}>
               <span className={status?.path ? 'is-online' : ''}><Bot size={17} /></span>
               <div>
                 <strong>{status?.path ? `${name} is ready` : `${name} not detected`}</strong>
                 <small title={status?.problem ? `${status.problem.path}: ${status.problem.reason}` : undefined}>{status?.path ?? (status?.problem ? `${status.problem.path}: ${status.problem.reason}` : `Install ${name}, then refresh harnesses.`)}</small>
+                {unavailable ? <small className="runtime-card__limits">{unavailable}</small> : null}
               </div>
-              {status?.version ? <code>v{status.version}</code> : null}
+              {badge ? <code>{badge}</code> : null}
             </div>
           )
         })}

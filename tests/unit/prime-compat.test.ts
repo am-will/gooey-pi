@@ -3,6 +3,7 @@ import {
   PRIME_RUST_UNAVAILABLE_CAPABILITIES,
   primeCapabilityAvailable,
   primeImplementationFromVersion,
+  primeUnavailableCapabilitiesNotice,
 } from '../../src/lib/prime-compat'
 
 describe('Prime implementation classification', () => {
@@ -44,6 +45,14 @@ describe('Prime capability availability', () => {
       'TypeScript extensions',
     ])
     expect(Object.isFrozen(PRIME_RUST_UNAVAILABLE_CAPABILITIES)).toBe(true)
+  })
+
+  it('names what Rust Prime does not offer in one notice', () => {
+    expect(primeUnavailableCapabilitiesNotice('rust')).toBe(
+      'Not available with Prime Agent 0.10+: Browser control, Ask user, Session collaboration, Fast mode, TypeScript extensions. Pi and OMP keep them.',
+    )
+    expect(primeUnavailableCapabilitiesNotice('typescript')).toBeUndefined()
+    expect(primeUnavailableCapabilitiesNotice(undefined)).toBeUndefined()
   })
 
   it('withholds a listed capability only from Rust Prime', () => {

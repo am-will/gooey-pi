@@ -822,6 +822,29 @@ describe('harness settings surfaces', () => {
     expect(container.textContent).toContain('/Users/you/.local/bin/pi: exited with code 1: Node.js is too old')
   })
 
+  it.each([
+    ['rust', '0.10.0', 'v0.10.0 · Rust'],
+    ['typescript', '0.7.0-gooeypi.1', 'v0.7.0-gooeypi.1 · TypeScript'],
+  ] as const)('shows the %s Prime implementation in its runtime card', async (implementation, version, badge) => {
+    const implementationMeta: AppMeta = { ...meta, harnesses: { ...meta.harnesses, prime: { path: '/usr/local/bin/prime-agent', version, implementation } } }
+
+    await act(async () => {
+      root.render(<AgentSettings settings={{ ...DEFAULT_SETTINGS, activeHarness: 'prime' }} meta={implementationMeta} onUpdate={vi.fn()} onRefreshHarnesses={vi.fn(async () => undefined)} />)
+    })
+
+    const primeCard = [...container.querySelectorAll('.runtime-card')].find((card) => card.textContent?.includes('Prime Agent is ready'))!
+    expect(primeCard.querySelector('code')?.textContent).toBe(badge)
+    const limits = primeCard.querySelector('.runtime-card__limits')
+    if (implementation === 'typescript') {
+      expect(limits).toBeNull()
+      return
+    }
+    for (const label of ['Browser control', 'Ask user', 'Session collaboration', 'Fast mode', 'TypeScript extensions']) {
+      expect(limits?.textContent).toContain(label)
+    }
+    expect(limits?.textContent).toContain('Prime Agent 0.10+')
+  })
+
   it('renders OMP provider toggles while keeping credentials CLI-owned', async () => {
     const catalog: PrimeModelCatalog = {
       primeVersion: '17.2.11', refreshedAt: '2026-08-06T00:00:00.000Z',
