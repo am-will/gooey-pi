@@ -12,6 +12,8 @@ import {
   MODEL_ID,
   MODEL_KEY,
   PROVIDER_ID,
+  requireAbsolutePath,
+  requireExistingDirectory,
   requireExistingPath,
   requireGitPath,
   requireId,
@@ -129,6 +131,41 @@ describe('requireExistingPath', () => {
     await expect(requireExistingPath(join(dir, 'missing.txt'))).rejects.toThrow()
     await expect(requireExistingPath(`${dir}\0`)).rejects.toThrow(/NUL/)
     await expect(requireExistingPath(undefined)).rejects.toThrow(/must be a string/)
+  })
+})
+
+describe('requireAbsolutePath', () => {
+  it('returns absolute paths unchanged without requiring them to exist', () => {
+    expect(requireAbsolutePath('/tmp/does-not-exist/child')).toBe('/tmp/does-not-exist/child')
+    expect(requireAbsolutePath('/tmp/root/../other')).toBe('/tmp/root/../other')
+  })
+
+  it('rejects relative, empty, oversized, NUL-containing and non-string input with the label', () => {
+    expect(() => requireAbsolutePath('relative/dir', 'project path')).toThrow('project path must be absolute')
+    expect(() => requireAbsolutePath('./dir')).toThrow('path must be absolute')
+    expect(() => requireAbsolutePath('', 'project path')).toThrow('project path is too short')
+    expect(() => requireAbsolutePath(`/${'a'.repeat(4096)}`)).toThrow(/too long/)
+    expect(() => requireAbsolutePath('/tmp/a\0b')).toThrow(/NUL/)
+    expect(() => requireAbsolutePath(undefined, 'project path')).toThrow('project path must be a string')
+    expect(() => requireAbsolutePath({})).toThrow(TypeError)
+  })
+})
+
+describe('requireExistingDirectory', () => {
+  it('returns the real path of an existing directory', async () => {
+    const dir = temp('prime-work-validation-')
+    mkdirSync(join(dir, 'nested'))
+    const linked = join(dir, 'linked')
+    symlinkSync(join(dir, 'nested'), linked)
+    expect(await requireExistingDirectory(linked)).toBe(await requireExistingPath(join(dir, 'nested')))
+  })
+
+  it('rejects files, relative paths and non-strings with the existing messages', async () => {
+    const dir = temp('prime-work-validation-')
+    writeFileSync(join(dir, 'file.txt'), 'data')
+    await expect(requireExistingDirectory(join(dir, 'file.txt'), 'cwd')).rejects.toThrow('cwd must be a directory')
+    await expect(requireExistingDirectory('relative/dir', 'cwd')).rejects.toThrow('cwd must be absolute')
+    await expect(requireExistingDirectory(42, 'cwd')).rejects.toThrow('cwd must be a string')
   })
 })
 

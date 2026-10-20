@@ -75,19 +75,22 @@ export function isPathWithin(root: string, candidate: string): boolean {
   return rel === '' || !(rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
 }
 
-export async function requireExistingDirectory(value: unknown, label = 'path'): Promise<string> {
+/** A bounded, NUL-free absolute path string. Lexical only: it neither resolves symlinks nor requires the path to exist. */
+export function requireAbsolutePath(value: unknown, label = 'path'): string {
   const input = requireString(value, label, { min: 1, max: 4096 })
   if (!isAbsolute(input)) throw new TypeError(`${label} must be absolute`)
-  const path = await realpath(input)
+  return input
+}
+
+export async function requireExistingDirectory(value: unknown, label = 'path'): Promise<string> {
+  const path = await realpath(requireAbsolutePath(value, label))
   const stat = await lstat(path)
   if (!stat.isDirectory()) throw new TypeError(`${label} must be a directory`)
   return path
 }
 
 export async function requireExistingPath(value: unknown, label = 'path'): Promise<string> {
-  const input = requireString(value, label, { min: 1, max: 4096 })
-  if (!isAbsolute(input)) throw new TypeError(`${label} must be absolute`)
-  return realpath(input)
+  return realpath(requireAbsolutePath(value, label))
 }
 
 export function requireWebUrl(value: unknown, options: { mailto?: boolean; max?: number } = {}): string {
