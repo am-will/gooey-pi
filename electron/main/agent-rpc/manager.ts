@@ -25,6 +25,8 @@ export interface RuntimeEnvironmentScope {
   sessionPath?: string
   /** False for scheduler children, which must never expose UI-blocking tools. */
   interactive: boolean
+  /** Variant of the adapter chosen for this start, e.g. 'rust' for Rust Prime. */
+  variant?: HarnessRpcAdapter['variant']
 }
 
 export class AgentRpcManager {
@@ -130,7 +132,7 @@ export class AgentRpcManager {
     this.requireOpen()
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
     const adapter = this.adapterForStart()
-    const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive })
+    const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, variant: adapter.variant })
     let runtime: RpcRuntime | undefined
     let workspaceUse!: WorkspaceUseLease
     workspaceUse = await this.beginWorkspaceUse(

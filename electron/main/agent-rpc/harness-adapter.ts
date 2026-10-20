@@ -1,4 +1,5 @@
-import type { HarnessId, PrimeContextUsage, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
+import type { HarnessId, PrimeContextUsage, PrimeImplementation, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
+import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
 import { MAX_QUEUED_ACTIONS } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
 import { HARNESSES } from '../harness'
@@ -46,6 +47,8 @@ export interface HarnessRpcAdapter {
    * spawn the child with the authorized cwd as its working directory.
    */
   readonly spawnsInCwd?: boolean
+  /** Set on an alternative adapter for the same harness; 'rust' marks Rust Prime Agent. */
+  readonly variant?: 'rust'
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
   translateCommand(command: RpcObject): RpcObject
@@ -147,6 +150,38 @@ export const PRIME_RPC_ADAPTER: HarnessRpcAdapter = {
   normalizeEvent: (event) => event,
   buildServiceTierCommand: (serviceTier) => ({ type: 'set_service_tier', serviceTier }),
   readState: (data) => data.serviceTier === 'default' || data.serviceTier === 'priority' ? { serviceTier: data.serviceTier } : {},
+}
+
+/**
+ * Commands Rust Prime's in-process RPC refuses: messaging and heartbeat
+ * changes need its daemon, observe finds no active session, and it has no
+ * extension UI protocol. list_heartbeats still answers (with no jobs).
+ */
+const PRIME_RUST_UNSUPPORTED_COMMANDS = new Set([
+  'send_message', 'agent_messages_status', 'agent_messages_pause', 'agent_messages_resume', 'agent_messages_clear',
+  'set_heartbeat', 'update_heartbeat', 'manage_heartbeat', 'observe', 'extension_ui_response',
+])
+
+/**
+ * Rust Prime Agent (the 0.9.9 betas and 0.10+) keeps the TypeScript RPC
+ * envelope, vocabulary and --skill flag, but exits on --extension as an
+ * unknown option, so GooeyPi's TypeScript capability extensions are never
+ * passed. It also has no service-tier command.
+ */
+export const PRIME_RUST_RPC_ADAPTER: HarnessRpcAdapter = {
+  id: 'prime',
+  agentName: HARNESSES.prime.agentName,
+  variant: 'rust',
+  chunkedFrames: false,
+  buildStartArgs: (input) => primeStartArgs(input, false),
+  translateCommand: rejectCommands(PRIME_RUST_UNSUPPORTED_COMMANDS, RUST_PRIME_AGENT_NAME),
+  normalizeEvent: (event) => event,
+  readState: PRIME_RPC_ADAPTER.readState,
+}
+
+/** The adapter for the discovered Prime build; an unclassified Prime keeps the TypeScript argv. */
+export function primeRpcAdapter(implementation: PrimeImplementation | undefined): HarnessRpcAdapter {
+  return implementation === 'rust' ? PRIME_RUST_RPC_ADAPTER : PRIME_RPC_ADAPTER
 }
 
 const OMP_UNSUPPORTED_COMMANDS = new Set([

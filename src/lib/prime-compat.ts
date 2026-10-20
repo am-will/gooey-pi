@@ -1,5 +1,8 @@
 import type { PrimeImplementation } from '../types/api'
 
+/** How user-facing copy names the Rust build. */
+export const RUST_PRIME_AGENT_NAME = 'Prime Agent 0.10+'
+
 /**
  * Prime Agent shipped as a TypeScript CLI through 0.9.8 and as a Rust rewrite
  * from the 0.9.9 betas on (0.10.0 is the first stable Rust release). Both

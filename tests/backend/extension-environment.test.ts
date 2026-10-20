@@ -20,7 +20,7 @@ const electron = vi.hoisted(() => ({
 vi.mock('electron', () => electron)
 
 import { extensionRuntimeEnvironment, type CapabilityExtensionPaths } from '../../electron/main/index'
-import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER } from '../../electron/main/agent-rpc'
+import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter } from '../../electron/main/agent-rpc'
 
 const extensionPaths: CapabilityExtensionPaths = {
   schedule: '/app/extensions/omp-work-schedules.ts',
@@ -127,5 +127,49 @@ describe('capability extension environment parity (OMP and pi)', () => {
     expect(args.slice(-2)).toEqual(['--extension', '/app/extensions/omp-work-collaboration.ts'])
     const unsafe = adapter.buildStartArgs({ cwd: '/work', environment: { GOOEYPI_COLLABORATION_EXTENSION_PATH: '--session-injection' } })
     expect(unsafe).not.toContain('--session-injection')
+  })
+})
+
+describe('Prime argv per implementation', () => {
+  /** Every capability path a Prime runtime environment can carry. */
+  const primeEnvironment = {
+    PRIME_WORK_SCHEDULE_SKILL_PATH: '/app/skills/prime-work-schedules',
+    PRIME_WORK_BROWSER_SKILL_PATH: '/app/skills/prime-work-browser',
+    GOOEYPI_COMPUTER_USE_SKILL_PATH: '/app/skills/gooeypi-computer-use/SKILL.md',
+    PRIME_WORK_BROWSER_EXTENSION_PATH: '/app/extensions/prime-work-browser.ts',
+    PRIME_WORK_ASK_USER_EXTENSION_PATH: '/app/extensions/omp-work-ask-user.ts',
+    GOOEYPI_COLLABORATION_EXTENSION_PATH: '/app/extensions/omp-work-collaboration.ts',
+  }
+  const input = { cwd: '/work', sessionPath: '/sessions/a.jsonl', providerId: 'openai', modelId: 'gpt-5', thinking: 'high', environment: primeEnvironment }
+  const sharedArgs = [
+    '--mode', 'rpc', '--cwd', '/work', '--resume', '/sessions/a.jsonl', '--provider', 'openai', '--model', 'gpt-5', '--thinking', 'high',
+    '--skill', '/app/skills/prime-work-schedules', '--skill', '/app/skills/prime-work-browser', '--skill', '/app/skills/gooeypi-computer-use/SKILL.md',
+  ]
+
+  it('keeps the TypeScript Prime argv, extensions included', () => {
+    expect(PRIME_RPC_ADAPTER.buildStartArgs(input)).toEqual([
+      ...sharedArgs,
+      '--extension', '/app/extensions/prime-work-browser.ts',
+      '--extension', '/app/extensions/omp-work-ask-user.ts',
+      '--extension', '/app/extensions/omp-work-collaboration.ts',
+    ])
+  })
+
+  it('never passes --extension to Rust Prime', () => {
+    expect(PRIME_RUST_RPC_ADAPTER.buildStartArgs(input)).toEqual(sharedArgs)
+  })
+
+  it('still filters unsafe values for Rust Prime', () => {
+    const args = PRIME_RUST_RPC_ADAPTER.buildStartArgs({ cwd: '/work', environment: { PRIME_WORK_SCHEDULE_SKILL_PATH: '--session-injection' } })
+    expect(args).toEqual(['--mode', 'rpc', '--cwd', '/work'])
+    expect(() => PRIME_RUST_RPC_ADAPTER.buildStartArgs({ cwd: '/work', modelId: '--model-injection', environment: {} })).toThrow('Invalid model')
+  })
+
+  it.each([
+    ['rust', PRIME_RUST_RPC_ADAPTER],
+    ['typescript', PRIME_RPC_ADAPTER],
+    [undefined, PRIME_RPC_ADAPTER],
+  ] as const)('selects the adapter for a %s Prime', (implementation, adapter) => {
+    expect(primeRpcAdapter(implementation)).toBe(adapter)
   })
 })

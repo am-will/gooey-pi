@@ -1,6 +1,6 @@
 export type { AgentEventLimits } from './agent-rpc/events'
 export { AgentEventForwarder } from './agent-rpc/events'
 export type { HarnessRpcAdapter } from './agent-rpc/harness-adapter'
-export { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, UnsupportedRpcCommandError } from './agent-rpc/harness-adapter'
+export { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter, UnsupportedRpcCommandError } from './agent-rpc/harness-adapter'
 export type { ProviderCatalog, RuntimeEnvironmentScope } from './agent-rpc/manager'
 export { AgentRpcManager } from './agent-rpc/manager'

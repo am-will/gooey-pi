@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter, UnsupportedRpcCommandError, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
 import { validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
 import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
@@ -1083,6 +1083,76 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     } finally {
       await runtime.stop()
     }
+  })
+})
+
+/**
+ * A Rust-style Prime Agent: it exits on --extension like 0.10 does, answers
+ * set_service_tier with 'Unknown command', and records every command it
+ * receives.
+ */
+function fakeRustPrime(): { cwd: string; executable: string; commands: () => RpcObject[] } {
+  const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rust-rpc-'))
+  dirs.push(cwd)
+  const executable = join(cwd, 'fake-rust-prime.cjs')
+  const log = join(cwd, 'commands.jsonl')
+  writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs')
+if (process.argv.includes('--extension')) {
+  process.stderr.write('Error: Unknown option: --extension\\n')
+  process.exit(1)
+}
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+const model = { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT-5.4' }
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line)
+  fs.appendFileSync(${JSON.stringify(log)}, line + '\\n')
+  const ok = (data) => send({ id: command.id, type: 'response', command: command.type, success: true, ...(data ? { data } : {}) })
+  if (command.type === 'get_state') ok({ sessionId: 'rust-session', isStreaming: false, isCompacting: false, model })
+  else if (command.type === 'get_session_stats') ok({ contextUsage: { tokens: 1, contextWindow: 100, percent: 1 } })
+  else if (command.type === 'list_heartbeats') ok({ heartbeats: [] })
+  else if (['prompt', 'abort', 'set_model', 'cycle_model'].includes(command.type)) ok(command.type === 'cycle_model' ? { model } : undefined)
+  else send({ id: command.id, type: 'response', command: command.type, success: false, error: 'Unknown command: ' + command.type })
+})
+`)
+  chmodSync(executable, 0o755)
+  const commands = (): RpcObject[] => {
+    try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as RpcObject) } catch { return [] }
+  }
+  return { cwd, executable, commands }
+}
+
+describe('Rust Prime runtimes', () => {
+  const extensionEnvironment = { GOOEYPI_COLLABORATION_EXTENSION_PATH: '/app/extensions/omp-work-collaboration.ts' }
+
+  it('starts Rust Prime without --extension once the adapter source reports Rust', async () => {
+    const fake = fakeRustPrime()
+    let implementation: 'typescript' | 'rust' = 'typescript'
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), () => primeRpcAdapter(implementation))
+    managers.push(manager)
+    const variants: Array<string | undefined> = []
+    manager.setRuntimeEnvironmentProvider((scope) => { variants.push(scope.variant); return extensionEnvironment })
+
+    await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Prime Agent RPC exited (1): Error: Unknown option: --extension')
+    implementation = 'rust'
+    await expect(manager.start({ cwd: fake.cwd })).resolves.toMatchObject({ harness: 'prime', sessionId: 'rust-session' })
+
+    expect(variants).toEqual([undefined, 'rust'])
+  })
+
+  it('refuses the commands 0.10 RPC cannot run before they reach the agent', async () => {
+    const fake = fakeRustPrime()
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, undefined, () => new Set(), PRIME_RUST_RPC_ADAPTER)
+    managers.push(manager)
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await expect(manager.command(runtime.runtimeId, { type: 'manage_heartbeat', activeSessionId: 'rust-session', jobId: 'heartbeat-1', action: 'pause' }))
+      .rejects.toThrow(new UnsupportedRpcCommandError('manage_heartbeat', 'Prime Agent 0.10+'))
+    await expect(manager.command(runtime.runtimeId, { type: 'extension_ui_response', id: 'ui-1', cancelled: true }))
+      .rejects.toBeInstanceOf(UnsupportedRpcCommandError)
+    await expect(manager.command(runtime.runtimeId, { type: 'list_heartbeats' })).resolves.toMatchObject({ data: { heartbeats: [] } })
+    expect(fake.commands().map((command) => command.type)).not.toContain('manage_heartbeat')
+    expect(fake.commands().map((command) => command.type)).not.toContain('extension_ui_response')
   })
 })
 

@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
-import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER } from './agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
@@ -648,6 +648,7 @@ async function bootstrap(): Promise<void> {
     (path) => sessions.requireSessionPath(path),
     providers,
     disabledProviders,
+    () => primeRpcAdapter(discovery.primeImplementation()),
   )
   agents.setDisabledModelsProvider(disabledModels)
   agents.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
