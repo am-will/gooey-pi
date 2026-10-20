@@ -833,7 +833,9 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
 
   test('pins every release job to one commit SHA resolved by validate', () => {
     const workflow = readFileSync('.github/workflows/release.yml', 'utf8')
-    const parsed = load(workflow) as { jobs: Record<string, { outputs?: Record<string, string>; steps?: Array<{ id?: string; run?: string; with?: Record<string, unknown> }> }> }
+    const parsed = load(workflow) as {
+      jobs: Record<string, { outputs?: Record<string, string>; steps?: Array<{ id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }> }>
+    }
     expect(parsed.jobs.validate.outputs).toEqual({ sha: '${{ steps.resolve.outputs.sha }}' })
     expect(parsed.jobs.validate.steps?.find((step) => step.id === 'resolve')?.run).toContain('git rev-parse HEAD^{commit}')
     // validate resolves the movable tag once; every other job checks out that
@@ -843,6 +845,13 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
       expect(checkouts.length, name).toBeGreaterThan(0)
       for (const step of checkouts) expect(step.with?.ref, name).toBe(name === 'validate' ? '${{ env.RELEASE_REF }}' : '${{ needs.validate.outputs.sha }}')
     }
+    // A dispatched tag resolves as a tag, never a same-named branch, and the
+    // publish job refuses a tag that no longer points at the validated commit.
+    expect(workflow).toContain("RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}")
+    expect(workflow).toMatch(
+      /release-packages:[\s\S]*?git ls-remote origin "refs\/tags\/\$RELEASE_TAG" "refs\/tags\/\$RELEASE_TAG\^\{\}"[\s\S]*?"\$EXPECTED_SHA"[\s\S]*?Attest release assets[\s\S]*?gh release create "\$RELEASE_TAG"/,
+    )
+    expect(parsed.jobs['release-packages'].steps?.find((step) => step.run?.includes('git ls-remote'))).toMatchObject({ env: { EXPECTED_SHA: '${{ needs.validate.outputs.sha }}' } })
     // The ancestry check depends on the full history fetched above.
     expect(workflow).toContain('# fetch-depth: 0 above is what populates refs/remotes/origin/*')
     expect(workflow).toMatch(/fetch-depth: 0\n[\s\S]*?git merge-base --is-ancestor HEAD refs\/remotes\/origin\/main/)

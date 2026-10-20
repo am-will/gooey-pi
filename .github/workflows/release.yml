@@ -30,7 +30,8 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-  RELEASE_REF: ${{ inputs.tag || github.ref }}
+  # A bare dispatch tag name would let actions/checkout prefer a same-named branch.
+  RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
   RELEASE_WINDOWS_SIGNED_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_ENABLED == 'true') }}
   RELEASE_WINDOWS_UNSIGNED_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_windows_unsigned) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true') }}
   RELEASE_WINDOWS_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))) }}
@@ -349,6 +350,19 @@ jobs:
           flags=''
           if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then flags='--windows-unsigned'; fi
           node scripts/release/prepare-github-release.mjs --input downloaded-release-artifacts --output release-assets --tag "$RELEASE_TAG" --platforms "$platforms" $flags
+      # gh attaches the release to wherever the tag points at publish time, so a
+      # tag moved after validate would describe a commit other than the one the
+      # assets and attestations were built from. The peeled ^{} line of an
+      # annotated tag is listed last, so awk END yields the commit either way.
+      - name: Require the release tag to still point at the validated commit
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" | awk 'END{print $1}')
+          if [ -z "$tag_sha" ] || [ "$tag_sha" != "$EXPECTED_SHA" ]; then
+            echo "Tag $RELEASE_TAG resolves to ${tag_sha:-<missing>}, not the validated commit $EXPECTED_SHA."
+            exit 1
+          fi
       - name: Attest release assets
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
