@@ -443,47 +443,25 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('schedules:delete', (_event, id) => services.schedules.delete(id))
   handle('schedules:run-now', (_event, id) => services.schedules.runNow(id))
 
-  const forwardSessionChange = (change: SessionChangeEvent): void => {
+  /** Sends a main-process event to every authorized renderer still showing the trusted app. */
+  const broadcast = (channel: string, ...payload: unknown[]): void => {
     for (const [id, contents] of authorized) {
       if (contents.isDestroyed()) { authorized.delete(id); continue }
       if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('sessions:changed', change)
+        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send(channel, ...payload)
     }
   }
+  const forwardSessionChange = (change: SessionChangeEvent): void => broadcast('sessions:changed', change)
   const unsubscribeSessionChanges = services.sessions.onDidChange(forwardSessionChange)
   const unsubscribeOmpSessionChanges = services.omp.sessions.onDidChange(forwardSessionChange)
   const unsubscribePiSessionChanges = services.pi.sessions.onDidChange(forwardSessionChange)
-  const scheduleSubscription = services.schedules.onDidChange((change) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('schedules:changed', change)
-    }
-  })
+  const scheduleSubscription = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
   const unsubscribeScheduleChanges = typeof scheduleSubscription === 'function' ? scheduleSubscription : () => undefined
-  const browserSubscription = services.browser.onDidChange((state) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('browser:changed', state)
-    }
-  })
+  const browserSubscription = services.browser.onDidChange((state) => broadcast('browser:changed', state))
   const unsubscribeBrowserChanges = typeof browserSubscription === 'function' ? browserSubscription : () => undefined
-  const pointerSubscription = services.browser.onPointer((event) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('browser:pointer', event)
-    }
-  })
+  const pointerSubscription = services.browser.onPointer((event) => broadcast('browser:pointer', event))
   const unsubscribeBrowserPointer = typeof pointerSubscription === 'function' ? pointerSubscription : () => undefined
-  const activitySubscription = services.browser.onActivity((event) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('browser:activity', event)
-    }
-  })
+  const activitySubscription = services.browser.onActivity((event) => broadcast('browser:activity', event))
   const unsubscribeBrowserActivity = typeof activitySubscription === 'function' ? activitySubscription : () => undefined
 
   const registration: IpcRegistration = {
