@@ -7,6 +7,7 @@ import { HARNESS_AGENT_NAMES } from '@/lib/harness'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
 import { parseCompactCommand, parseMcpCommand } from '@/lib/slash-commands'
 import { deliverToStartedSession } from '@/lib/started-session-delivery'
+import { isSystemReport } from '@/lib/system-rows'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
 import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
@@ -517,7 +518,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           const finalized = startedPrompt
             ? items.flatMap((item) => item.streaming && item.role === 'assistant' && item.parts.length === 0 ? [] : [{ ...item, streaming: false }])
             : items
-          return finalized.at(-1)?.role === 'system' ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
+          return isSystemReport(finalized.at(-1)) ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
         })
         throw error
       } finally { setSubmitting(false) }
