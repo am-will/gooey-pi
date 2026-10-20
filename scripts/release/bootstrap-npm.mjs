@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, lstatSync, readFileSync } from 'node:fs'
 import { posix, resolve, win32 } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { assertSupportedNode, assertSupportedNpm, readNpmOutput, readRepositoryToolchain, runCommand, validateAbsoluteSingleLinePath } from './lib.mjs'
 
 const repositoryRootPath = fileURLToPath(new URL('../../', import.meta.url))
@@ -162,7 +162,8 @@ export function bootstrapNpm(options = {}) {
   return { current, installed, artifactPath: artifact.path, artifactIntegrity: artifact.integrity, ...layout, githubPathUpdated, githubEnvUpdated }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Also runs where import.meta.main is missing, so an unsupported Node still gets a toolchain error instead of exit 0.
+if (import.meta.main !== false) {
   try {
     bootstrapNpm()
   } catch (error) {

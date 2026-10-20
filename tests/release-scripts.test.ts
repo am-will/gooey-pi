@@ -187,19 +187,28 @@ describe('release preflight', () => {
     expect(result.stdout).not.toContain('pipeline passed')
   })
 
-  test('verify-package runs when invoked as a script and fails closed on a missing entrypoint', async () => {
-    const { invokedAsScript } = await import('../scripts/release/verify-package.mjs')
-    const original = process.argv[1]
+  test('release CLIs still run their checks when launched through a symlinked directory', () => {
+    // Node resolves the entry module through realpath while argv[1] keeps the link spelling.
+    const link = join(mkdtempSync(join(tmpdir(), 'gooeypi-release-link-')), 'release')
+    symlinkSync(fileURLToPath(new URL('../scripts/release', import.meta.url)), link, process.platform === 'win32' ? 'junction' : 'dir')
     try {
-      process.argv[1] = fileURLToPath(new URL('../scripts/release/verify-package.mjs', import.meta.url))
-      expect(invokedAsScript()).toBe(true)
-      process.argv[1] = join(tmpdir(), 'another-entrypoint.mjs')
-      expect(invokedAsScript()).toBe(false)
-      process.argv[1] = undefined as unknown as string
-      expect(invokedAsScript()).toBe(true)
+      const verify = spawnSync(process.execPath, [join(link, 'verify-package.mjs'), '--mode', 'bogus'], { encoding: 'utf8' })
+      expect(verify.status).not.toBe(0)
+      expect(verify.stderr).toContain('Verification mode must be public or qa')
+      const tag = spawnSync(process.execPath, [join(link, 'validate-release-tag.mjs'), '--tag', 'v0.0.0'], { encoding: 'utf8' })
+      expect(tag.status).not.toBe(0)
+      expect(tag.stderr).toContain('Release tag validation failed')
     } finally {
-      process.argv[1] = original
+      rmSync(dirname(link), { recursive: true, force: true })
     }
+  })
+
+  test('importing a release CLI module does not run its checks', () => {
+    const moduleUrl = new URL('../scripts/release/verify-package.mjs', import.meta.url).href
+    const imported = spawnSync(process.execPath, ['--input-type=module', '-e', 'await import(process.argv[1]); console.log("exitCode=" + (process.exitCode ?? 0))', moduleUrl], { encoding: 'utf8' })
+    expect(imported.status, imported.stderr).toBe(0)
+    expect(imported.stdout).toBe('exitCode=0\n')
+    expect(imported.stderr).toBe('')
   })
 
   test('binds the requested target architecture to the produced mac artifacts', async () => {

@@ -2,7 +2,6 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { listPackage } from '@electron/asar'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { assertFuseWire } from './fuses.cjs'
@@ -183,8 +182,7 @@ export async function verifyPackage(target, architecture, { unpackedOnly = false
   console.log(`Verified ${target}/${architecture} package: ${scope}, ASAR runtime layout, exact native unpack allowlist, Electron fuses${signature}.`)
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-if (invokedDirectly) {
+if (import.meta.main) {
   const platformIndex = process.argv.indexOf('--platform')
   const platform = platformIndex === -1 ? undefined : process.argv[platformIndex + 1]
   const archIndex = process.argv.indexOf('--arch')

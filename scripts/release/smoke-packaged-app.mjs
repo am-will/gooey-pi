@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { findUnpackedDirectory, packagedExecutablePath } from './verify-cross-platform-package.mjs'
 
 /**
@@ -174,8 +173,7 @@ function requireOption(value, label, allowed) {
   return value
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-if (invokedDirectly) {
+if (import.meta.main) {
   const option = (name) => {
     const index = process.argv.indexOf(name)
     return index === -1 ? undefined : process.argv[index + 1]

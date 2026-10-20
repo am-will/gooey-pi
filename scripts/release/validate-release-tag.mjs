@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const SEMANTIC_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
@@ -24,12 +23,7 @@ export function validateReleaseTag(tag, projectDirectory = process.cwd()) {
   return assertReleaseTag(tag, packageJson.version, packageLock.version, packageLock.packages?.['']?.version)
 }
 
-export function invokedAsScript() {
-  if (!process.argv[1]) return true
-  return import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-}
-
-if (invokedAsScript()) {
+if (import.meta.main) {
   const tagIndex = process.argv.indexOf('--tag')
   const tag = tagIndex === -1 ? undefined : process.argv[tagIndex + 1]
   try {

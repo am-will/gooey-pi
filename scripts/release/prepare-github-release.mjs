@@ -2,7 +2,6 @@
 import { createHash } from 'node:crypto'
 import { copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { dump, load } from 'js-yaml'
 import { validateReleaseTag } from './validate-release-tag.mjs'
 
@@ -215,17 +214,12 @@ export async function prepareGitHubRelease({ inputDirectory, outputDirectory, ta
   return { ...release, assets: [...names.keys()], checksumFile: 'SHA256SUMS.txt' }
 }
 
-export function invokedAsScript() {
-  if (!process.argv[1]) return true
-  return import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-}
-
 function option(name) {
   const index = process.argv.indexOf(name)
   return index === -1 ? undefined : process.argv[index + 1]
 }
 
-if (invokedAsScript()) {
+if (import.meta.main) {
   try {
     const inputDirectory = option('--input')
     const outputDirectory = option('--output')

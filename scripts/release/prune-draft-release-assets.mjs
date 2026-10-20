@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 /**
  * `gh release upload --clobber` replaces same-named assets but never removes
@@ -29,17 +28,12 @@ export function parseDraftAssetNames(source) {
   })
 }
 
-export function invokedAsScript() {
-  if (!process.argv[1]) return true
-  return import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-}
-
 function option(name) {
   const index = process.argv.indexOf(name)
   return index === -1 ? undefined : process.argv[index + 1]
 }
 
-if (invokedAsScript()) {
+if (import.meta.main) {
   try {
     const assetsFile = option('--assets')
     const expectedDirectory = option('--expected')

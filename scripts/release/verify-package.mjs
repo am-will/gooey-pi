@@ -3,7 +3,6 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { listPackage } from '@electron/asar'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { assertFuseWire } from './fuses.cjs'
@@ -172,18 +171,9 @@ export async function verifyPackage({ mode, releaseDirectory = resolve('release'
   )
 }
 
-// Fail closed: run verification unless this module was provably imported by
-// another entrypoint. A malformed or missing argv[1] must not skip the checks.
-export function invokedAsScript() {
-  if (!process.argv[1]) return true
-  try {
-    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-  } catch {
-    return true
-  }
-}
-
-if (invokedAsScript()) {
+// Node marks the realpath-resolved entry module, so a symlinked or junctioned
+// checkout still runs the verification instead of silently exiting 0.
+if (import.meta.main) {
   const modeIndex = process.argv.indexOf('--mode')
   const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : undefined
   const releaseDirectoryIndex = process.argv.indexOf('--release-directory')
