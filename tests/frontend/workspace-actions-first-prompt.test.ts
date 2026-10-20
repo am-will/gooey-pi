@@ -209,6 +209,40 @@ describe('first prompt delivery across a workspace switch', () => {
     expect(state.sessions().map((item) => item.id)).toEqual(['existing', 'other'])
   })
 
+  it('still starts a new chat for its admitted project when the user switches away before the start', async () => {
+    const state = fixture()
+    const runtimes = deferred<RuntimeInfo[]>()
+    state.agentList.mockImplementation(() => runtimes.promise)
+
+    const sending = state.actions.sendPrompt('Build the sidebar')
+    await vi.waitFor(() => expect(state.agentList).toHaveBeenCalledOnce())
+    state.switchWorkspace()
+    runtimes.resolve([])
+    await vi.waitFor(() => expect(state.agentStart).toHaveBeenCalledOnce())
+    state.start.resolve(startedRuntime)
+    await sending
+
+    expect(state.agentStart).toHaveBeenCalledWith({ cwd: project.primaryFolder, sessionPath: undefined, model: 'auto', thinking: 'medium', fast: false, harness: 'prime' })
+    expect(state.command).toHaveBeenCalledWith('started-runtime', expect.objectContaining({ type: 'prompt', message: 'Build the sidebar' }))
+    expect(state.messages()).toEqual([])
+  })
+
+  it('refuses an existing session prompt that was not sent before the user switched away', async () => {
+    const state = fixture({ selectedSession: existingSession })
+    const runtimes = deferred<RuntimeInfo[]>()
+    state.agentList.mockImplementation(() => runtimes.promise)
+
+    const sending = state.actions.sendPrompt('Continue the plan')
+    await vi.waitFor(() => expect(state.agentList).toHaveBeenCalledOnce())
+    state.switchWorkspace()
+    runtimes.resolve([])
+
+    await expect(sending).rejects.toThrow('Another session was opened before it was sent.')
+    expect(state.agentStart).not.toHaveBeenCalled()
+    expect(state.command).not.toHaveBeenCalled()
+    expect(state.setToast).toHaveBeenCalledWith('Your message for “Existing work” was not delivered. Request failed: Another session was opened before it was sent.')
+  })
+
   it('attaches the started runtime and shows the prompt while its workspace stays selected', async () => {
     const state = fixture()
 

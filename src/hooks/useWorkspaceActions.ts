@@ -382,12 +382,18 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           demoTimerRef.current.push(window.setTimeout(() => workspace.setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, streaming: false, completedAt: Date.now(), parts: [...item.parts, { type: 'toolResult', name: 'Inspect project', text: 'Project context loaded' }, { type: 'text', text: 'I’ve reviewed the project context and prepared the workspace. Connect the desktop bridge to run this request with Prime Agent.' }] } : item)), 1_250))
           return
         }
-        await grantProject(admitted.project)
-        if (workspace.workspaceRef.current.generation !== generation) return
-        const selected = workspace.workspaceRef.current
+        // A new chat has no saved session to return to, so a switch before
+        // its runtime starts still delivers it to the admitted project. An
+        // existing session keeps the message for a retry there instead.
+        const ensureDeliverable = () => {
+          if (!isCurrent() && admitted.sessionFile) throw new Error('Another session was opened before it was sent.')
+        }
+        const granted = await grantProject(admitted.project)
+        ensureDeliverable()
+        const selected = isCurrent() ? workspace.workspaceRef.current : { ...admitted, project: granted, cwd: workspaceCwd(granted, admitted.session) }
         if (!selected.cwd) throw new Error('The selected workspace has no working directory.')
         const liveRuntimes = (await bridge.agent.list()).filter((candidate) => candidate.harness === activeHarness)
-        if (workspace.workspaceRef.current.generation !== generation) return
+        ensureDeliverable()
         const owner = workspace.runtimeOwnerRef.current
         const tracked = workspace.runtimeIdRef.current ? liveRuntimes.find((item) => item.runtimeId === workspace.runtimeIdRef.current) : undefined
         const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
