@@ -8,6 +8,7 @@ import { resolveCommandInvocation } from './lib.mjs'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const VENDOR = join(ROOT, 'vendor')
+const EMPTY_CONFIG_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null'
 const PACKAGES = [
   {
     base: 'prime-agent-0.7.0.tgz',
@@ -72,8 +73,9 @@ for (const spec of PACKAGES) {
     mkdirSync(rebuilt)
     mkdirSync(reviewed)
     run('tar', ['-xzf', basePath, '-C', work], ROOT)
-    // A user or system core.autocrlf would otherwise rewrite the patched files' line endings.
-    run('git', ['-c', 'core.autocrlf=false', 'apply', patchPath], work)
+    // A user or system core.autocrlf, or a user gitattributes file (including the default
+    // ~/.config/git/attributes), would otherwise rewrite the patched files' line endings.
+    run('git', ['-c', 'core.autocrlf=false', '-c', `core.attributesFile=${EMPTY_CONFIG_PATH}`, 'apply', patchPath], work)
     run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
     assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
 
