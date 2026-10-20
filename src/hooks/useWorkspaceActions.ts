@@ -384,16 +384,19 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         }
         // A new chat has no saved session to return to, so a switch before
         // its runtime starts still delivers it to the admitted project. An
-        // existing session keeps the message for a retry there instead.
-        const ensureDeliverable = () => {
-          if (!isCurrent() && admitted.sessionFile) throw new Error('Another session was opened before it was sent.')
+        // existing session's message stays queued, or is refused back to its
+        // sender, for a retry in that session.
+        const stillDeliverable = () => {
+          if (isCurrent() || !admitted.sessionFile) return true
+          if (queuedFlushPromptId) return false
+          throw new Error('Another session was opened before it was sent.')
         }
         const granted = await grantProject(admitted.project)
-        ensureDeliverable()
+        if (!stillDeliverable()) return
         const selected = isCurrent() ? workspace.workspaceRef.current : { ...admitted, project: granted, cwd: workspaceCwd(granted, admitted.session) }
         if (!selected.cwd) throw new Error('The selected workspace has no working directory.')
         const liveRuntimes = (await bridge.agent.list()).filter((candidate) => candidate.harness === activeHarness)
-        ensureDeliverable()
+        if (!stillDeliverable()) return
         const owner = workspace.runtimeOwnerRef.current
         const tracked = workspace.runtimeIdRef.current ? liveRuntimes.find((item) => item.runtimeId === workspace.runtimeIdRef.current) : undefined
         const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))

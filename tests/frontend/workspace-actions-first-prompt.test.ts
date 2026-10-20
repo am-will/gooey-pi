@@ -140,6 +140,8 @@ function fixture({ selectedSession }: { selectedSession?: SessionRecord } = {}) 
     setRuntime,
     setToast,
     settings,
+    removeQueuedPrompt: workspace.removeQueuedPrompt,
+    markQueuedPromptFlushFailed: workspace.markQueuedPromptFlushFailed,
     runtimeSessions: workspace.runtimeSessionsRef.current,
     runtime: () => currentRuntime,
     messages: () => messages,
@@ -241,6 +243,23 @@ describe('first prompt delivery across a workspace switch', () => {
     expect(state.agentStart).not.toHaveBeenCalled()
     expect(state.command).not.toHaveBeenCalled()
     expect(state.setToast).toHaveBeenCalledWith('Your message for “Existing work” was not delivered. Request failed: Another session was opened before it was sent.')
+  })
+
+  it('leaves a queued message in its session when the user switches away before it flushes', async () => {
+    const state = fixture({ selectedSession: existingSession })
+    const runtimes = deferred<RuntimeInfo[]>()
+    state.agentList.mockImplementation(() => runtimes.promise)
+
+    const flushing = state.actions.sendPrompt('Queued follow-up', [], 'queue', 'queued-1')
+    await vi.waitFor(() => expect(state.agentList).toHaveBeenCalledOnce())
+    state.switchWorkspace()
+    runtimes.resolve([])
+    await flushing
+
+    expect(state.agentStart).not.toHaveBeenCalled()
+    expect(state.removeQueuedPrompt).not.toHaveBeenCalled()
+    expect(state.markQueuedPromptFlushFailed).not.toHaveBeenCalled()
+    expect(state.setToast).not.toHaveBeenCalled()
   })
 
   it('attaches the started runtime and shows the prompt while its workspace stays selected', async () => {
