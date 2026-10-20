@@ -170,7 +170,7 @@ export class ContextUsageProjection {
     this.snapshot = usage
   }
 
-  /** Folds live activity into the snapshot at a run boundary, until the next authoritative refresh replaces it. */
+  /** Folds live activity into the snapshot at a run boundary, leaving current() unchanged, until the next authoritative refresh replaces it. */
   bake(): void {
     if (!this.snapshot) return
     this.snapshot = this.current()

@@ -490,7 +490,6 @@ export class RpcRuntime {
       this.info.isStreaming = false
       this.info.isCompacting = false
       this.contextUsage.bake()
-      this.publishLiveContextUsage(true)
     } else if (value.type === 'compaction_start') {
       this.info.isCompacting = true
       this.compactionStartReason = value.reason
