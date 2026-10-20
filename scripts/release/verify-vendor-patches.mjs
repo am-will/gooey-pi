@@ -8,23 +8,31 @@ import { resolveCommandInvocation } from './lib.mjs'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const VENDOR = join(ROOT, 'vendor')
-const PACKAGES = [
+export const PACKAGES = [
   {
     base: 'prime-agent-0.7.0.tgz',
     output: 'prime-agent-0.7.0-gooeypi.1.tgz',
     patch: 'patches/prime-agent-0.7.0-gooeypi.1.patch',
-    baseSha256: '88b6578518c72cd51a825bc80f28e0fef9a64c67de4a7d6fd7afd7ca1b34da0b',
   },
   {
     base: 'prime-agent-ai-0.7.0.tgz',
     output: 'prime-agent-ai-0.7.0-gooeypi.1.tgz',
     patch: 'patches/prime-agent-ai-0.7.0-gooeypi.1.patch',
-    baseSha256: '7cdbb3e835f48dd103325f7a351ce540b27af4d161aeb9c7b9bdcc12fe7909af',
   },
 ]
+// Base archive digests live only in the dependency pin store, so an upgrade updates one place.
+const REFERENCE = JSON.parse(readFileSync(join(ROOT, 'scripts/release/dependency-pins.json'), 'utf8'))['reference-artifacts'] ?? {}
 
-function sha256(path) {
-  return createHash('sha256').update(readFileSync(path)).digest('hex')
+function sha512Sri(path) {
+  return `sha512-${createHash('sha512').update(readFileSync(path)).digest('base64')}`
+}
+
+export function basePinIntegrity(base, reference = REFERENCE) {
+  const pin = Object.values(reference).find((entry) => entry.path === `vendor/${base}`)
+  if (!pin || typeof pin.integrity !== 'string' || !pin.integrity.startsWith('sha512-')) {
+    throw new Error(`Base archive is not pinned in dependency-pins.json reference-artifacts: ${base}`)
+  }
+  return pin.integrity
 }
 
 /** Commands go through the shared resolver so Windows .cmd shims such as npm spawn without a shell. */
@@ -61,7 +69,7 @@ function verifyVendorPatches() {
     const basePath = join(VENDOR, spec.base)
     const outputPath = join(VENDOR, spec.output)
     const patchPath = join(VENDOR, spec.patch)
-    if (sha256(basePath) !== spec.baseSha256) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
+    if (sha512Sri(basePath) !== basePinIntegrity(spec.base)) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
 
     const work = mkdtempSync(join(tmpdir(), 'gooeypi-vendor-patch-'))
     try {

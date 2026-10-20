@@ -53,7 +53,7 @@ import {
 import { parseDraftAssetNames, staleDraftReleaseAssets } from '../scripts/release/prune-draft-release-assets.mjs'
 import { assertBundleSizeBudgets, assertPackageSizeBudgets, BUNDLE_SIZE_BUDGETS, collectBundleSizeMetrics, collectPackageSizeMetrics, PACKAGE_SIZE_BUDGETS } from '../scripts/release/size-budgets.mjs'
 import { assertReleaseTag } from '../scripts/release/validate-release-tag.mjs'
-import { run as runVendorPatchCommand } from '../scripts/release/verify-vendor-patches.mjs'
+import { basePinIntegrity, PACKAGES as VENDOR_PATCH_PACKAGES, run as runVendorPatchCommand } from '../scripts/release/verify-vendor-patches.mjs'
 // after-pack.cjs is CommonJS; the interop layer exposes module.exports properties as named exports.
 import { executablePath } from '../scripts/release/after-pack.cjs'
 import { assertFuseWire, ELECTRON_FUSE_CONFIG } from '../scripts/release/fuses.cjs'
@@ -1891,6 +1891,17 @@ describe('vendored supply-chain pins', () => {
 
     const unpinned = readdirSync('vendor').filter((name) => name.endsWith('.tgz') && !pinned.has(`vendor/${name}`))
     expect(unpinned, 'vendored tarballs without any pin').toEqual([])
+  })
+
+  test('vendor patch verification reads base archive digests from the reference pins', () => {
+    const reference = JSON.parse(readFileSync('scripts/release/dependency-pins.json', 'utf8'))['reference-artifacts'] as Record<string, { path: string; integrity: string }>
+    for (const { base } of VENDOR_PATCH_PACKAGES) {
+      const pin = Object.values(reference).find((entry) => entry.path === `vendor/${base}`)
+      expect(basePinIntegrity(base), `base archive not read from its pin: ${base}`).toBe(pin?.integrity)
+    }
+    // A base archive missing from the pin store, or pinned with a weaker digest, fails closed.
+    expect(() => basePinIntegrity('prime-agent-9.9.9.tgz')).toThrow('Base archive is not pinned in dependency-pins.json reference-artifacts: prime-agent-9.9.9.tgz')
+    expect(() => basePinIntegrity('base.tgz', { weak: { path: 'vendor/base.tgz', integrity: 'sha1-abc' } })).toThrow(/not pinned/)
   })
 
   test('the checked-in npm bootstrap archive matches its strict artifact pin and provenance record', () => {
