@@ -351,6 +351,30 @@ describe('agent RPC responses', () => {
     await expect(manager.command(second.runtimeId, { type: 'prompt', message: 'second adapter' })).rejects.toThrow('refused by the second adapter')
   })
 
+  it('runs every event an adapter expands one harness frame into, in order', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const actions = { queuedCount: 1, steering: [], followUps: ['after this turn'] }
+    const expanding: HarnessRpcAdapter = {
+      ...PRIME_RPC_ADAPTER,
+      normalizeEvent: (event) => event.type === 'burst' ? [{ type: 'session_action_update', actions }, { type: 'agent_end' }] : event,
+    }
+    const events: RpcObject[] = []
+    const runtime = new RpcRuntime(fake.executable, [], fake.cwd, ({ event }) => events.push(event), () => undefined, {}, {}, expanding)
+    try {
+      await runtime.handshake()
+      const frames = runtime as unknown as { handleFrame(frame: RpcObject): void }
+      frames.handleFrame({ type: 'agent_start' })
+      expect(runtime.snapshot().isStreaming).toBe(true)
+      frames.handleFrame({ type: 'burst' })
+
+      const lifecycle = events.filter((event) => ['agent_start', 'session_action_update', 'agent_end', 'burst'].includes(String(event.type)))
+      expect(lifecycle).toEqual([{ type: 'agent_start' }, { type: 'session_action_update', actions }, { type: 'agent_end' }])
+      expect(runtime.snapshot()).toMatchObject({ isStreaming: false, sessionActions: actions })
+    } finally {
+      await runtime.stop()
+    }
+  })
+
   it('hydrates and refreshes authoritative context-window usage', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-context-'))
     dirs.push(cwd)

@@ -1,4 +1,4 @@
-import type { HarnessId, PrimeContextUsage, PrimeImplementation, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
+import type { HarnessId, PrimeContextUsage, PrimeImplementation, RuntimeInfo, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
 import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
 import { MAX_QUEUED_ACTIONS } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
@@ -52,8 +52,12 @@ export interface HarnessRpcAdapter {
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
   translateCommand(command: RpcObject): RpcObject
-  /** Harness event → Prime event vocabulary; null swallows the event entirely. */
-  normalizeEvent(event: RpcObject): RpcObject | null
+  /**
+   * Harness event → Prime event vocabulary, given the runtime state before the
+   * event. One harness event may expand into several, which the runtime
+   * handles in order; null swallows the event entirely.
+   */
+  normalizeEvent(event: RpcObject, state: Readonly<RuntimeInfo>): RpcObject | readonly RpcObject[] | null
   /** The wire command that applies a service-tier preference; absent when the harness has no service tier, which the runtime reports as unsupported. */
   buildServiceTierCommand?(serviceTier: 'default' | 'priority'): RpcObject
   /** Reads harness-specific state fields out of get_state data. */

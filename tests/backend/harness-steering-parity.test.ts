@@ -38,11 +38,10 @@ describe.each(adapters)('%s steering protocol parity', (_name, adapter) => {
       },
     }
 
-    const normalizedQueued = adapter.normalizeEvent(queued)
-    const normalizedPickedUp = adapter.normalizeEvent(pickedUp)
-    expect(normalizedQueued).toBe(queued)
-    expect(normalizedPickedUp).toBe(pickedUp)
-    expect(parseSessionActionSnapshot(normalizedQueued?.actions)).toEqual(queued.actions)
-    expect(parseSessionActionSnapshot(normalizedPickedUp?.actions)).toEqual(pickedUp.actions)
+    const state = { runtimeId: 'runtime', harness: adapter.id, cwd: '/project', isStreaming: true }
+    expect(adapter.normalizeEvent(queued, state)).toBe(queued)
+    expect(adapter.normalizeEvent(pickedUp, state)).toBe(pickedUp)
+    expect(parseSessionActionSnapshot(queued.actions)).toEqual(queued.actions)
+    expect(parseSessionActionSnapshot(pickedUp.actions)).toEqual(pickedUp.actions)
   })
 })

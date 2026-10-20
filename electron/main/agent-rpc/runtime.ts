@@ -435,8 +435,13 @@ export class RpcRuntime {
       this.chunks.accept(raw)
       return
     }
-    const value = this.adapter.normalizeEvent(raw)
-    if (!value) return
+    const normalized = this.adapter.normalizeEvent(raw, this.info)
+    if (!normalized) return
+    for (const value of Array.isArray(normalized) ? normalized : [normalized]) this.handleEvent(value)
+  }
+
+  /** Runs one normalized event through the streaming, compaction and session-action state, then forwards it. */
+  private handleEvent(value: RpcObject): void {
     const liveUsageUpdate = this.liveContextUsage.handleEvent(value)
     if (liveUsageUpdate.reset) {
       this.contextUsageActivityBaseline = 0
