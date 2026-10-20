@@ -45,6 +45,24 @@ export function requireInteger(value: unknown, label: string, min: number, max: 
   return value as number
 }
 
+// Shared provider/model identifier grammar. No `g` flag: `.test()` on a shared regex must stay stateless.
+export const PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/i
+export const MODEL_ID = /^[a-z0-9._:/+-]{1,256}$/i
+/** `provider/model-id`; at most 128 + 1 + 256 = 385 characters. */
+export const MODEL_KEY = /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i
+
+export function isProviderId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && PROVIDER_ID.test(value)
+}
+
+export function isModelId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 && MODEL_ID.test(value)
+}
+
+export function isModelKey(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 385 && MODEL_KEY.test(value)
+}
+
 export function rejectUnknownKeys(value: JsonObject, allowed: readonly string[], label = 'value'): void {
   const allowedSet = new Set(allowed)
   const unknown = Object.keys(value).find((key) => !allowedSet.has(key))

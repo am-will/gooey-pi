@@ -4,8 +4,14 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   firstAccepted,
+  isModelId,
+  isModelKey,
   isOneOf,
   isPathWithin,
+  isProviderId,
+  MODEL_ID,
+  MODEL_KEY,
+  PROVIDER_ID,
   requireExistingPath,
   requireGitPath,
   requireId,
@@ -335,5 +341,67 @@ describe('isOneOf', () => {
     if (!isOneOf(HARNESS_IDS, value)) throw new Error('expected a harness id')
     const harness: HarnessId = value
     expect(harness).toBe('pi')
+  })
+})
+
+describe('provider and model identifier guards', () => {
+  const provider128 = `a${'b'.repeat(127)}`
+  const model256 = 'm'.repeat(256)
+
+  it.each([
+    ['a 1-character provider', 'a', true],
+    ['a 128-character provider', provider128, true],
+    ['a 129-character provider', `${provider128}c`, false],
+    ['an uppercase provider', 'OpenAI', true],
+    ['a provider with dots, dashes and underscores', 'openai-codex_v2.1', true],
+    ['a leading dash', '-openai', false],
+    ['a leading dot', '.openai', false],
+    ['a slash', 'open/ai', false],
+    ['an empty string', '', false],
+    ['a non-string', 42, false],
+  ])('isProviderId: %s -> %s', (_name, value, expected) => {
+    expect(isProviderId(value)).toBe(expected)
+  })
+
+  it.each([
+    ['a 256-character id', model256, true],
+    ['a 257-character id', `${model256}m`, false],
+    ['an id with path, colon and plus characters', 'org/model:latest+beta', true],
+    ['an id with a leading dash', '-model', true],
+    ['an id with a space', 'gpt 5', false],
+    ['an empty string', '', false],
+    ['a non-string', null, false],
+  ])('isModelId: %s -> %s', (_name, value, expected) => {
+    expect(isModelId(value)).toBe(expected)
+  })
+
+  it.each([
+    ['a simple key', 'openai/gpt-5', true],
+    ['a key whose id contains ":" and "+"', 'ollama/qwen3:32b+q4', true],
+    ['a key whose id contains further slashes', 'openrouter/anthropic/claude', true],
+    ['an uppercase provider', 'OpenAI/GPT-5', true],
+    ['the 385-character maximum', `${provider128}/${model256}`, true],
+    ['a 129-character provider', `${provider128}c/model`, false],
+    ['a 257-character id', `openai/${model256}m`, false],
+    ['no slash', 'openai', false],
+    ['an empty provider', '/gpt-5', false],
+    ['an empty id', 'openai/', false],
+    ['a leading dash on the provider', '-openai/gpt-5', false],
+    ['an empty string', '', false],
+    ['a non-string', { provider: 'openai', id: 'gpt-5' }, false],
+  ])('isModelKey: %s -> %s', (_name, value, expected) => {
+    expect(isModelKey(value)).toBe(expected)
+  })
+
+  it('keeps the shared patterns stateless across repeated calls', () => {
+    for (const pattern of [PROVIDER_ID, MODEL_ID, MODEL_KEY]) {
+      expect(pattern.global).toBe(false)
+      expect(pattern.sticky).toBe(false)
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(isProviderId('openai')).toBe(true)
+      expect(isModelId('gpt-5')).toBe(true)
+      expect(isModelKey('openai/gpt-5')).toBe(true)
+    }
   })
 })
