@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { HarnessDiscoveryService, detectedHarnesses, probeHarnessExecutable, probePrimeImplementation, reconcileActiveHarness, type HarnessProbeFailure } from '../../electron/main/harness-discovery'
 import { defaultSettings, type DesktopState } from '../../electron/main/store'
 import { HARNESSES, type HarnessDescriptor } from '../../electron/main/harness'
@@ -418,15 +418,18 @@ describe('Prime npm migration bridge', () => {
     await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: layout.prefix })).resolves.toBe('migrated')
   })
 
-  it('reads receipts from ~/.local unless an absolute prefix is configured', async () => {
+  it('reads receipts from ~/.local unless a prefix is configured, resolving a relative one as the launcher does', async () => {
     const layout = npmLayout(bridgeManifest)
+    layout.writeReceipt('0.10.0')
+    layout.writePayload()
     const home = join(layout.prefix, '..', 'home')
     mkdirSync(join(home, '.local', 'share', '.prime-agent-npm-bridge'), { recursive: true })
     writeFileSync(join(home, '.local', 'share', '.prime-agent-npm-bridge', '0.10.0.failed'), '')
 
     await expect(inspectPrimeNpmBridge(layout.bin, {}, home)).resolves.toBe('recovery')
-    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: 'relative/prefix' }, home)).resolves.toBe('recovery')
-    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: layout.prefix }, home)).resolves.toBe('unmigrated')
+    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: '' }, home)).resolves.toBe('recovery')
+    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: layout.prefix }, home)).resolves.toBe('migrated')
+    await expect(inspectPrimeNpmBridge(layout.bin, { PRIME_AGENT_RUST_PREFIX: relative(process.cwd(), layout.prefix) }, home)).resolves.toBe('migrated')
   })
 
   it('needs the Rust payload as well as the receipt to call a bridge migrated', async () => {

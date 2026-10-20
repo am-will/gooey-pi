@@ -1,6 +1,6 @@
 import { access, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join, sep } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { readAtMost } from './plugins/file-io'
 import { isRecord } from './validation'
 
@@ -46,8 +46,9 @@ export async function inspectPrimeNpmBridge(
   // Receipts are named by the package version; without a usable one the
   // launcher cannot have recorded a migration either.
   if (typeof manifest.version !== 'string' || !RELEASE_VERSION.test(manifest.version)) return 'unmigrated'
-  const configuredPrefix = env.PRIME_AGENT_RUST_PREFIX
-  const prefix = configuredPrefix && isAbsolute(configuredPrefix) ? configuredPrefix : join(home, '.local')
+  // The launcher's own rule: a relative prefix resolves against the working
+  // directory, which a probe launched from here shares with it.
+  const prefix = resolve(env.PRIME_AGENT_RUST_PREFIX || join(home, '.local'))
   const receipt = join(prefix, 'share', '.prime-agent-npm-bridge', manifest.version)
   if (await exists(receipt) && await exists(join(prefix, 'share', 'prime-agent', 'prime-agent'))) return 'migrated'
   if (await exists(`${receipt}.failed`)) return 'recovery'
