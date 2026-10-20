@@ -19,6 +19,14 @@ export interface ProviderCatalog {
   capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined>
 }
 
+/** What a runtime environment provider knows about the start it is minting capabilities for. */
+export interface RuntimeEnvironmentScope {
+  cwd: string
+  sessionPath?: string
+  /** False for scheduler children, which must never expose UI-blocking tools. */
+  interactive: boolean
+}
+
 export class AgentRpcManager {
   private readonly runtimes = new Map<string, RpcRuntime>()
   private readonly startingRuntimes = new Set<string>()
@@ -27,7 +35,7 @@ export class AgentRpcManager {
   private runtimeEnvironmentRevision = 0
   private disabledModels: () => ReadonlySet<string> = () => new Set()
   private eventSink: (envelope: PrimeEventEnvelope) => void = () => undefined
-  private runtimeEnvironmentProvider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv = () => ({})
+  private runtimeEnvironmentProvider: (scope: RuntimeEnvironmentScope) => NodeJS.ProcessEnv = () => ({})
   private runtimeStartListener: (environment: NodeJS.ProcessEnv, info: RuntimeInfo) => void = () => undefined
   private runtimeEndListener: (environment: NodeJS.ProcessEnv, info?: RuntimeInfo) => void = () => undefined
   private runtimeAdmission: Promise<void> = Promise.resolve()
@@ -61,7 +69,7 @@ export class AgentRpcManager {
     this.beginWorkspaceUse = provider
   }
 
-  setRuntimeEnvironmentProvider(provider: (scope: { cwd: string; sessionPath?: string; interactive: boolean }) => NodeJS.ProcessEnv): void {
+  setRuntimeEnvironmentProvider(provider: (scope: RuntimeEnvironmentScope) => NodeJS.ProcessEnv): void {
     this.runtimeEnvironmentProvider = provider
   }
 

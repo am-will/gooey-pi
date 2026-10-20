@@ -19,6 +19,7 @@ import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-disco
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
+import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
 import { PACKAGED_RENDERER_URL, PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
@@ -968,14 +969,9 @@ async function bootstrap(): Promise<void> {
       }
     }
   }
-  agents.setRuntimeEnvironmentProvider((scope) => ({
-    ...scheduleBridge.environmentFor(scope),
-    ...(stateStore.getSettings().browserEnabled ? browserBridge.environmentFor(scope) : {}),
-    ...collaborationBridge.environmentFor({ ...scope, harness: 'prime' }),
-    PRIME_WORK_ASK_USER_EXTENSION_PATH: stateStore.getSettings().askUserEnabled && scope.interactive ? ompAskUserExtensionPath : undefined,
-    GOOEYPI_MANAGES_ASK_USER: '1',
-    GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
-    GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
+  agents.setRuntimeEnvironmentProvider((scope) => primeRuntimeEnvironment(scope, {
+    settings: stateStore.getSettings(), scheduleBridge, browserBridge, collaborationBridge,
+    askUserExtensionPath: ompAskUserExtensionPath, cuaDriver, computerUseSkillPath,
   }))
   agents.setRuntimeStartListener((environment, info) => {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
