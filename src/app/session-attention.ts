@@ -1,3 +1,4 @@
+import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { parseExtensionUiRequest } from '@/lib/extension-ui'
 import type { SessionRecord, SessionStatus } from '@/types/api'
 
@@ -16,7 +17,7 @@ export function sessionLifecycleChange(event: Record<string, unknown>): SessionL
   // like new work or re-raise the finished turn's attention.
   if ((type === 'compaction_start' || type === 'compaction_end') && event.reason === 'idle') return undefined
   if (type === 'compaction_start') return { status: 'running', markUnread: false }
-  if (type === 'compaction_end' && event.willRetry !== true && (event.reason === 'manual' || event.reason === 'requested')) return { status: 'complete', markUnread: false }
+  if (type === 'compaction_end' && event.willRetry !== true && isRequestedCompactionReason(event.reason)) return { status: 'complete', markUnread: false }
   // A provider auto-retry continues the turn that the preceding agent_end
   // seemed to finish; a failed auto_retry_end is the turn's real terminal.
   if (type === 'auto_retry_start') return { status: 'running', markUnread: false }

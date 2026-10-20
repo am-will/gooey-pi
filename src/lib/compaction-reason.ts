@@ -14,3 +14,8 @@ const COMPACTION_REASONS: Record<PrimeCompactionReason, true> = {
 export function isCompactionReason(value: unknown): value is PrimeCompactionReason {
   return typeof value === 'string' && Object.hasOwn(COMPACTION_REASONS, value)
 }
+
+/** Whether someone asked for the compaction rather than a trigger: Pi and TypeScript Prime call it manual, Rust Prime calls it requested. */
+export function isRequestedCompactionReason(value: unknown): value is 'manual' | 'requested' {
+  return value === 'manual' || value === 'requested'
+}

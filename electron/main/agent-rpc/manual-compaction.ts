@@ -1,3 +1,4 @@
+import { isRequestedCompactionReason } from '../../../src/lib/compaction-reason'
 import { isRecord } from '../validation'
 import type { HarnessRpcAdapter } from './harness-adapter'
 import type { RpcObject } from './types'
@@ -27,11 +28,10 @@ export function isCompactRefusal(adapter: Pick<HarnessRpcAdapter, 'compactRefusa
 /**
  * Whether a compaction with this reason can be the one a compact command
  * runs. An automatic compaction names its trigger (threshold, overflow,
- * idle, incomplete); Pi and TypeScript Prime call a manual one manual, Rust
- * Prime calls it requested.
+ * idle, incomplete); OMP names no reason at all.
  */
 export function isManualCompactionReason(reason: unknown): boolean {
-  return reason === undefined || reason === 'manual' || reason === 'requested'
+  return reason === undefined || isRequestedCompactionReason(reason)
 }
 
 /** The start of a manual compaction the harness did not announce itself. */

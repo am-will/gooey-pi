@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import type { MessagePart, TranscriptMessage } from '@/types/api'
 import { writeClipboardText } from '@/lib/clipboard'
+import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { boundText } from '@/lib/render-bounds'
 import { MarkdownText } from '../MarkdownText'
 import { SyntaxText } from './syntax'
@@ -203,7 +204,7 @@ function compactionLabel(part: CompactionPartValue, tone: CompactionTone): strin
   if (tone === 'cancelled') return 'Context compaction cancelled'
   if (tone === 'failed') return 'Context compaction failed'
   // A compaction someone asked for is skipped only when the history is too short for one.
-  return part.reason === 'manual' || part.reason === 'requested' ? 'Nothing to compact yet' : 'Context compaction skipped'
+  return isRequestedCompactionReason(part.reason) ? 'Nothing to compact yet' : 'Context compaction skipped'
 }
 
 function CompactionPart({ part }: { part: CompactionPartValue }) {
