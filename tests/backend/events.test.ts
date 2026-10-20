@@ -121,6 +121,13 @@ describe('agent transport events', () => {
     }
   })
 
+  it('drops unknown compaction reasons, including inherited object keys', () => {
+    for (const reason of ['unknown', 'toString', '__proto__', 42]) {
+      const started = applyPrimeEvent([], { type: 'compaction_start', reason })
+      expect(started.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'running', reason: undefined })
+    }
+  })
+
   it('keeps the running row reason and instructions when the end omits them', () => {
     const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'manual', customInstructions: 'Keep the API notes.' })
     const finished = applyPrimeEvent(started, {
