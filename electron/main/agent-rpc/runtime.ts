@@ -10,7 +10,7 @@ import { errorMessage, isRecord } from '../validation'
 import { redactedStderrTail } from '../lib/process-detail'
 import { AgentEventForwarder } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
-import { LiveContextUsageTracker, withLiveContextUsage } from './context-usage'
+import { ContextUsageProjection } from './context-usage'
 import { FramedRpcTransport, type QueuedRpcWrite } from './transport'
 import type { RpcObject } from './types'
 
@@ -87,10 +87,7 @@ export class RpcRuntime {
   private requestedServiceTier: PrimeServiceTier = 'default'
   private contextUsageRefresh: Promise<void> | null = null
   private contextUsageRefreshRequest: ContextUsageRefreshRequest | null = null
-  private readonly liveContextUsage = new LiveContextUsageTracker()
-  private authoritativeContextUsage: PrimeContextUsage | undefined
-  private contextUsageActivityBaseline = 0
-  private contextUsageGeneration = 0
+  private readonly contextUsage = new ContextUsageProjection()
   private contextUsageEmitTimer: NodeJS.Timeout | null = null
   private lastContextUsageEmitAt = 0
   private continuationPending = false
@@ -466,11 +463,7 @@ export class RpcRuntime {
     }
     const value = this.adapter.normalizeEvent(raw)
     if (!value) return
-    const liveUsageUpdate = this.liveContextUsage.handleEvent(value)
-    if (liveUsageUpdate.reset) {
-      this.contextUsageActivityBaseline = 0
-      this.contextUsageGeneration += 1
-    }
+    const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)
       if (actions) this.info.sessionActions = actions
@@ -494,7 +487,8 @@ export class RpcRuntime {
       this.continuationPending = false
       this.info.isStreaming = false
       this.info.isCompacting = false
-      this.bakeLiveContextUsage()
+      this.contextUsage.bake()
+      this.publishLiveContextUsage(true)
     } else if (value.type === 'compaction_start') {
       this.info.isCompacting = true
       this.lastRealCompactionEventAt = Date.now()
@@ -512,12 +506,12 @@ export class RpcRuntime {
     } else if (value.type === 'auto_retry_start') this.retryPending = true
     else if (value.type === 'auto_retry_end') this.retryPending = false
     this.emit(value)
-    if (liveUsageUpdate.changed || liveUsageUpdate.reset) this.publishLiveContextUsage(value.type === 'message_end')
+    if (contextUsageMoved) this.publishLiveContextUsage(value.type === 'message_end')
     if (value.type === 'message_end'
       || value.type === 'tool_execution_end'
       || value.type === 'turn_end'
       || value.type === 'agent_end') {
-      void this.refreshContextUsage(this.liveContextUsage.tokens)
+      void this.refreshContextUsage(this.contextUsage.activityTokens)
     } else if (value.type === 'compaction_end') void this.refreshContextUsage()
   }
 
@@ -638,7 +632,7 @@ export class RpcRuntime {
   private refreshContextUsage(activityTokens?: number): Promise<void> {
     if (this.stopped) return Promise.resolve()
     const request: ContextUsageRefreshRequest = {
-      generation: this.contextUsageGeneration,
+      generation: this.contextUsage.generation,
       sessionId: this.info.sessionId,
       ...(activityTokens === undefined ? {} : { activityTokens }),
     }
@@ -672,7 +666,7 @@ export class RpcRuntime {
       const response = await this.request({ type: 'get_session_stats' }, 10_000)
       const usage = isRecord(response.data) ? parseContextUsage(response.data.contextUsage) : null
       const sessionUsage = parseSessionUsage(response.data)
-      if (request.generation !== this.contextUsageGeneration || request.sessionId !== this.info.sessionId) return
+      if (request.generation !== this.contextUsage.generation || request.sessionId !== this.info.sessionId) return
       if (sessionUsage && !this.stopped) {
         this.info.sessionUsage = sessionUsage
         this.emit({ type: 'session_usage', sessionUsage })
@@ -682,38 +676,13 @@ export class RpcRuntime {
   }
 
   private applyAuthoritativeContextUsage(usage: PrimeContextUsage, activityTokens?: number): void {
-    if (activityTokens !== undefined) {
-      const previous = this.authoritativeContextUsage
-      const activityDelta = Math.max(0, activityTokens - this.contextUsageActivityBaseline)
-      // A message_end event is forwarded just before persistence. If a very
-      // fast stats response still reflects the preceding message, keep its
-      // activity live and let the guaranteed trailing refresh absorb it.
-      const includesActivity = activityDelta === 0
-        || previous === undefined
-        || previous?.tokens === null
-        || usage.tokens === null
-        || (previous?.tokens !== undefined && usage.tokens >= previous.tokens + activityDelta)
-      if (includesActivity) this.contextUsageActivityBaseline = Math.max(this.contextUsageActivityBaseline, activityTokens)
-    }
-    this.authoritativeContextUsage = usage
-    this.publishLiveContextUsage(true)
-  }
-
-  private bakeLiveContextUsage(): void {
-    if (!this.authoritativeContextUsage) return
-    this.authoritativeContextUsage = withLiveContextUsage(
-      this.authoritativeContextUsage,
-      this.liveContextUsage.tokens,
-      this.contextUsageActivityBaseline,
-    )
-    this.contextUsageActivityBaseline = this.liveContextUsage.tokens
+    this.contextUsage.applySnapshot(usage, activityTokens)
     this.publishLiveContextUsage(true)
   }
 
   private publishLiveContextUsage(immediate = false): void {
-    const snapshot = this.authoritativeContextUsage
-    if (!snapshot) return
-    const usage = withLiveContextUsage(snapshot, this.liveContextUsage.tokens, this.contextUsageActivityBaseline)
+    const usage = this.contextUsage.current()
+    if (!usage) return
     const current = this.info.contextUsage
     const changed = !current
       || current.tokens !== usage.tokens
@@ -756,10 +725,7 @@ export class RpcRuntime {
     if (!isRecord(raw)) return
     if (typeof raw.sessionId === 'string') {
       if (this.info.sessionId !== undefined && raw.sessionId !== this.info.sessionId) {
-        this.liveContextUsage.reset()
-        this.contextUsageActivityBaseline = 0
-        this.contextUsageGeneration += 1
-        this.authoritativeContextUsage = undefined
+        this.contextUsage.reset()
         delete this.info.contextUsage
         delete this.info.sessionUsage
       }
