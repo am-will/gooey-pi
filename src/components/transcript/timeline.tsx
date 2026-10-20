@@ -179,7 +179,10 @@ function AgentActivityPart({ part }: { part: Extract<MessagePart, { type: 'agent
   </div>
 }
 
-function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction' }>['reason']): string {
+type CompactionPartValue = Extract<MessagePart, { type: 'compaction' }>
+type CompactionTone = CompactionPartValue['status'] | 'skipped'
+
+function compactionReasonLabel(reason: CompactionPartValue['reason']): string {
   if (reason === 'threshold') return 'automatic threshold'
   if (reason === 'overflow') return 'overflow recovery'
   if (reason === 'incomplete') return 'incomplete response recovery'
@@ -189,20 +192,24 @@ function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction'
   return 'context'
 }
 
-function compactionLabel(part: Extract<MessagePart, { type: 'compaction' }>): string {
-  if (part.status === 'running') return 'Compacting context'
-  if (part.status === 'done') return 'Context compacted'
-  if (part.status === 'cancelled') return 'Context compaction cancelled'
-  if (part.outcome !== 'skipped') return 'Context compaction failed'
+/** A compaction that ended without running because it was skipped is benign: it reads as a notice, never as a failure. */
+function compactionTone(part: CompactionPartValue): CompactionTone {
+  return part.status === 'failed' && part.outcome === 'skipped' ? 'skipped' : part.status
+}
+
+function compactionLabel(part: CompactionPartValue, tone: CompactionTone): string {
+  if (tone === 'running') return 'Compacting context'
+  if (tone === 'done') return 'Context compacted'
+  if (tone === 'cancelled') return 'Context compaction cancelled'
+  if (tone === 'failed') return 'Context compaction failed'
   // A compaction someone asked for is skipped only when the history is too short for one.
   return part.reason === 'manual' || part.reason === 'requested' ? 'Nothing to compact yet' : 'Context compaction skipped'
 }
 
-function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compaction' }> }) {
+function CompactionPart({ part }: { part: CompactionPartValue }) {
   const [open, setOpen] = useState(false)
   const canExpand = Boolean(part.summary || part.error)
-  // A skip is benign: it reads as a notice, never as a failure.
-  const tone = part.outcome === 'skipped' ? 'skipped' : part.status
+  const tone = compactionTone(part)
   const state = tone === 'running'
     ? <><LoaderCircle className="spin" size={12} /> running</>
     : tone === 'done'
@@ -215,7 +222,7 @@ function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compacti
   return <div className={`activity-line activity-line--compaction is-${tone}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
       <span className="activity-line__icon">{tone === 'running' ? <LoaderCircle className="spin" size={13} /> : tone === 'done' ? <Layers3 size={13} /> : tone === 'skipped' ? <Info size={13} /> : <CircleAlert size={13} />}</span>
-      <span className="activity-line__kind">{compactionLabel(part)}</span>
+      <span className="activity-line__kind">{compactionLabel(part, tone)}</span>
       <span className="activity-compaction__reason">{compactionReasonLabel(part.reason)}</span>
       {tokenLabel ? <span className="activity-compaction__tokens">{tokenLabel}</span> : null}
       <span className="activity-tool__state">{state}</span>

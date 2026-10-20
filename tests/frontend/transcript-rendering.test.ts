@@ -398,6 +398,13 @@ describe('transcript rendering', () => {
     expect(html.match(/needs attention/g)).toHaveLength(1)
   })
 
+  it('reads a compaction that completed as done even when its end also reported a skip', () => {
+    const html = render([{ id: 'done', role: 'system', parts: [{ type: 'compaction', status: 'done', outcome: 'skipped', reason: 'threshold', summary: 'Summarized.' }] }])
+    expect(html).toContain('Context compacted')
+    expect(html).toContain('activity-line--compaction is-done')
+    expect(html).not.toContain('skipped')
+  })
+
   it('labels OMP idle and incomplete-response compactions', () => {
     const html = render([
       { id: 'idle', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'idle' }] },
