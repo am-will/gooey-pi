@@ -1,3 +1,4 @@
+import { useSessionAttention } from '@/hooks/useSessionAttention'
 import { useNativeHeartbeats } from '@/hooks/useNativeHeartbeats'
 import { useBrowserPreviewState } from '@/hooks/useBrowserPreviewState'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -11,7 +12,6 @@ import { ResizeHandle } from '@/components/ResizeHandle'
 import { NoHarnessPrompt } from '@/components/NoHarnessPrompt'
 import { createAppKeydownHandler } from '@/lib/app-shortcuts'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
-import { activityClearEntry, companionClearEntry, readClearedActivity, readClearedAttention, writeClearedSignatures, CLEARED_ATTENTION_STORAGE_KEY, CLEARED_ACTIVITY_STORAGE_KEY } from '@/app/session-attention'
 import { errorMessage } from '@/lib/errors'
 import { LoadingPanel, TerminalLoadingPanel, VIEW_LOADING_KEYS } from '@/app/loading'
 import { I18nProvider, useLocaleTranslator } from '@/lib/i18n'
@@ -95,8 +95,7 @@ export default function App() {
   const initialSession = bridge ? undefined : SAMPLE_SESSIONS[0]
   const [projects, setProjects] = useState<ProjectRecord[]>(() => bridge ? [] : SAMPLE_PROJECTS)
   const [sessions, setSessions] = useState<SessionRecord[]>(() => bridge ? [] : SAMPLE_SESSIONS)
-  const [clearedAttention, setClearedAttention] = useState<Record<string, string>>(() => readClearedAttention())
-  const [clearedActivity, setClearedActivity] = useState<Record<string, string>>(() => readClearedActivity())
+  const { clearedAttention, clearedActivity, clearSessionAttention, clearActivity } = useSessionAttention({ setSessions })
   const [schedules, setSchedules] = useState<AutomationScheduleRecord[]>(() => bridge ? [] : SAMPLE_SCHEDULES)
   const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
   const [scheduleError, setScheduleError] = useState('')
@@ -138,38 +137,6 @@ export default function App() {
     if (!bridge) return
     void revealPath(bridge.app, path).then((failure) => { if (failure) setToast(failure) })
   }, [bridge])
-  useEffect(() => {
-    writeClearedSignatures(CLEARED_ATTENTION_STORAGE_KEY, clearedAttention)
-  }, [clearedAttention])
-  useEffect(() => {
-    writeClearedSignatures(CLEARED_ACTIVITY_STORAGE_KEY, clearedActivity)
-  }, [clearedActivity])
-  const clearSessionAttention = useCallback((session: SessionRecord) => {
-    const signature = companionClearEntry(session)
-    if (!signature) return
-    setClearedAttention((current) => current[session.id] === signature ? current : { ...current, [session.id]: signature })
-  }, [])
-  const clearActivity = useCallback((activitySessions: SessionRecord[]) => {
-    if (!activitySessions.length) return
-    const ids = new Set(activitySessions.map((session) => session.id))
-    setClearedActivity((current) => {
-      const next = { ...current }
-      for (const session of activitySessions) {
-        const signature = activityClearEntry(session)
-        if (signature) next[session.id] = signature
-      }
-      return next
-    })
-    setClearedAttention((current) => {
-      const next = { ...current }
-      for (const session of activitySessions) {
-        const signature = companionClearEntry(session)
-        if (signature) next[session.id] = signature
-      }
-      return next
-    })
-    setSessions((items) => items.map((session) => ids.has(session.id) ? { ...session, unread: false } : session))
-  }, [])
   const settingsState = useAppSettings({ bridge, reportError })
   const browserPreview = useBrowserPreviewState(settingsState.settings.browserHome)
   const { t } = useLocaleTranslator(settingsState.settings.locale)
