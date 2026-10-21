@@ -5,7 +5,7 @@ import { formatRelative } from '@/lib/data'
 import { formatSessionCost, formatSessionTokens } from '@/lib/format-cost'
 import { useI18n } from '@/lib/i18n'
 import { DEFINITION_STATUS_KEYS, HEARTBEAT_STATUS_KEYS } from '@/lib/schedule-labels'
-import { localizedFallbackNotice } from '@/lib/transcript-notes'
+import { transcriptText } from '@/lib/transcript-notes'
 import { MarkdownText } from '../MarkdownText'
 
 interface SummaryPanelProps {
@@ -28,7 +28,7 @@ export interface TranscriptSummary {
 }
 
 /** One pass for the tool count; one reverse walk that stops at the first text part. */
-export function summarizeTranscript(messages: TranscriptMessage[]): TranscriptSummary {
+export function summarizeTranscript(messages: TranscriptMessage[], t?: ReturnType<typeof useI18n>['t']): TranscriptSummary {
   let toolCount = 0
   for (const message of messages) {
     for (const part of message.parts) if (part.type === 'toolCall') toolCount += 1
@@ -39,7 +39,7 @@ export function summarizeTranscript(messages: TranscriptMessage[]): TranscriptSu
     for (let cursor = parts.length - 1; cursor >= 0; cursor -= 1) {
       const part = parts[cursor]
       if (part.type === 'text') {
-        lastText = part.text
+        lastText = t ? transcriptText(part, t) : part.text
         break
       }
     }
@@ -49,19 +49,17 @@ export function summarizeTranscript(messages: TranscriptMessage[]): TranscriptSu
 
 export const SummaryPanel = memo(function SummaryPanel({ agentName = 'Prime Agent', shortName = 'Prime', project, runtime, messages, git, automations, heartbeats, onOpenAutomation }: SummaryPanelProps) {
   const { t } = useI18n()
-  const { toolCount, lastText } = useMemo(() => summarizeTranscript(messages), [messages])
+  const { toolCount, lastText } = useMemo(() => summarizeTranscript(messages, t), [messages, t])
   const active = Boolean(runtime?.isStreaming || runtime?.isCompacting)
   const sessionCost = formatSessionCost(runtime?.sessionUsage)
   const sessionTokens = formatSessionTokens(runtime?.sessionUsage)
-  // The summary can be a provider-fallback notice, which arrives as English data;
-  // it is shown in the interface language here as well as in the transcript.
   const summaryText = lastText !== undefined ? lastText.slice(0, 220) : t('inspector.summary.empty')
   return (
     <div className="inspector-scroll scroll-area summary-panel">
       <section className="summary-hero">
         <span className={`run-state ${active ? 'is-running' : ''}`}>{active ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}{runtime?.isCompacting ? t('inspector.summary.state.compacting') : active ? t('inspector.summary.state.working', { name: shortName }) : t('inspector.summary.state.ready')}</span>
         <h2>{runtime?.isCompacting ? t('inspector.summary.heading.compacting') : active ? t('inspector.summary.heading.working') : t('inspector.summary.heading.overview')}</h2>
-        <MarkdownText text={localizedFallbackNotice(summaryText, t) ?? summaryText} />
+        <MarkdownText text={summaryText} />
       </section>
       <section className="summary-section"><h3>{t('inspector.summary.workspace')}</h3><dl className="detail-list"><div><dt>{t('inspector.summary.project')}</dt><dd>{project?.name ?? t('inspector.summary.noProject')}</dd></div><div><dt>{t('inspector.summary.branch')}</dt><dd><GitBranch size={12} />{git.branch ?? project?.gitBranch ?? '—'}</dd></div><div><dt>{t('inspector.summary.environment')}</dt><dd>{t('inspector.summary.local')}</dd></div><div><dt>{t('inspector.summary.workingDirectory')}</dt><dd title={project?.primaryFolder} className="mono truncate">{project?.primaryFolder ?? '—'}</dd></div></dl></section>
       <section className="summary-section"><h3>{t('inspector.summary.progress')}</h3><div className="progress-list"><div><Check size={13} /><span>{t('inspector.summary.contextLoaded')}</span></div><div><Check size={13} /><span>{t('inspector.summary.toolsRecorded', { count: toolCount })}</span></div><div className={git.files.length ? 'is-current' : ''}><CircleDot size={13} /><span>{git.files.length ? t('inspector.summary.filesReady', { count: git.files.length }) : git.isRepo ? t('inspector.summary.noChanges') : t('inspector.summary.noGit')}</span></div></div></section>

@@ -145,8 +145,13 @@ export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'reque
 export type PrimeCompactionStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type PrimeCompactionOutcome = 'failed' | 'cancelled' | 'skipped'
 
+export type TranscriptTextNotice =
+  | { kind: 'provider-fallback'; label: string; from?: string }
+  | { kind: 'empty-turn' }
+  | { kind: 'steer-read'; count: number }
+
 export type MessagePart =
-  | { type: 'text'; partId?: string; text: string }
+  | { type: 'text'; partId?: string; text: string; notice?: TranscriptTextNotice }
   | { type: 'thinking'; partId?: string; text: string }
   | { type: 'toolCall'; partId?: string; id?: string; name: string; args?: unknown }
   | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean; streaming?: boolean }

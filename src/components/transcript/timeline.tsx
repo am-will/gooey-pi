@@ -21,7 +21,7 @@ import { writeClipboardText } from '@/lib/clipboard'
 import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { boundText } from '@/lib/render-bounds'
-import { localizedFallbackNotice } from '@/lib/transcript-notes'
+import { transcriptText } from '@/lib/transcript-notes'
 import { MarkdownText } from '../MarkdownText'
 import { SyntaxText } from './syntax'
 
@@ -252,19 +252,6 @@ function partKey(part: MessagePart, index: number): string {
   return part.partId ?? `${part.type}:${index}`
 }
 
-/**
- * Note rows are normally renderer copy, but the provider-fallback notice is
- * written as English data by the desktop process while it reads a session log,
- * so it is mapped back onto its catalog entry here. Unrecognised text is shown
- * verbatim: harness and user messages must never be rewritten.
- *
- * A notice never arrives as a `text` part of a system row — `ActivityMessage`
- * renders that row itself and calls `localizedFallbackNotice` directly.
- */
-function noteText(text: string, t: ReturnType<typeof useI18n>['t']): string {
-  return localizedFallbackNotice(text, t) ?? text
-}
-
 export function WorkTimeline({ parts, showReasoning, showTools, streaming = false }: { parts: MessagePart[]; showReasoning: boolean; showTools: boolean; streaming?: boolean }) {
   const { t } = useI18n()
   const pairedResults = new Set<number>()
@@ -281,7 +268,7 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
     }
     if (part.type === 'toolResult') return showTools ? <StandaloneToolResult key={key} part={part} /> : null
     if (part.type === 'agentMessage') return <AgentActivityPart key={key} part={part} />
-    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(part.text, 40_000, '\n… [Note truncated in the desktop view.]')} /></div>
+    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(transcriptText(part, t), 40_000, '\n… [Note truncated in the desktop view.]')} /></div>
     return null
   })}</div>
 }

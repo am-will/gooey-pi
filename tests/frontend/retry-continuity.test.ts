@@ -96,7 +96,7 @@ describe('provider auto-retry transcript continuity', () => {
   it('removes the empty-turn fallback after the interface language changed', () => {
     setFormattingLocaleForTests('ja')
     const afterEnd = applyPrimeEvent(streamingAssistant(), { type: 'agent_end' })
-    expect(afterEnd[0]).toMatchObject({ streaming: false, parts: [{ type: 'text', text: translate('ja', 'transcript.emptyTurn') }] })
+    expect(afterEnd[0]).toMatchObject({ streaming: false, parts: [{ type: 'text', text: translate('en', 'transcript.emptyTurn'), notice: { kind: 'empty-turn' } }] })
 
     setFormattingLocaleForTests('en')
     const retrying = applyPrimeEvent(afterEnd, { type: 'auto_retry_start', attempt: 1, delayMs: 1000 })
@@ -119,7 +119,7 @@ describe('transcript row identity across languages', () => {
     const englishPart = english[0].parts.find((part) => part.type === 'toolCall')
     expect(japanesePart?.id).toBe('tool-fallback:Tool')
     expect(englishPart?.id).toBe(japanesePart?.id)
-    expect(japanesePart?.name).toBe(translate('ja', 'transcript.toolFallback'))
+    expect(japanesePart?.name).toBe('Tool')
     expect(englishPart?.name).toBe('Tool')
   })
 })

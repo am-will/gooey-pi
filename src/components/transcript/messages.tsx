@@ -10,7 +10,7 @@ import { boundText } from '@/lib/render-bounds'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { isSystemReport } from '@/lib/system-rows'
 import { useI18n } from '@/lib/i18n'
-import { localizedFallbackNotice } from '@/lib/transcript-notes'
+import { transcriptText } from '@/lib/transcript-notes'
 import { MarkdownText } from '../MarkdownText'
 import { OmpMark, PiMark, PrimeMark } from '../ui'
 import { InlineText } from './syntax'
@@ -36,9 +36,14 @@ function ImageAttachment({ part }: { part: Extract<MessagePart, { type: 'image' 
   )
 }
 
+function NarrativeText({ part, streaming }: { part: Extract<MessagePart, { type: 'text' }>; streaming: boolean }) {
+  const { t } = useI18n()
+  return <MarkdownText text={transcriptText(part, t)} streaming={streaming} />
+}
+
 function renderNarrative(parts: MessagePart[], keyPrefix: string, streaming = false) {
   return parts.map((part, index) => {
-    if (part.type === 'text') return <MarkdownText key={`${keyPrefix}-${index}`} text={part.text} streaming={streaming} />
+    if (part.type === 'text') return <NarrativeText key={`${keyPrefix}-${index}`} part={part} streaming={streaming} />
     if (part.type === 'image') return <ImageAttachment key={`${keyPrefix}-${index}`} part={part} />
     return null
   })
@@ -282,14 +287,15 @@ export const UserMessage = memo(function UserMessage({ message, onOpenSessionRef
 })
 
 export const SteerReadMarker = memo(function SteerReadMarker({ message }: { message: TranscriptMessage }) {
-  return <div className="message message--steer-read" role="status"><span>{messageText(message)}</span></div>
+  const { t } = useI18n()
+  return <div className="message message--steer-read" role="status"><span>{message.parts.flatMap((part) => part.type === 'text' ? [transcriptText(part, t)] : []).join('\n')}</span></div>
 })
 
 export const ActivityMessage = memo(function ActivityMessage({ message, harness = 'prime' }: { message: TranscriptMessage; harness?: HarnessId }) {
   const { t } = useI18n()
   const activityLabel = t('transcript.harnessMessage', { harness: HARNESS_SHORT_NAMES[harness] })
   const noticePart = message.role === 'system' && message.parts.length === 1 ? message.parts[0] : undefined
-  const notice = noticePart?.type === 'text' ? localizedFallbackNotice(noticePart.text, t) : null
+  const notice = noticePart?.type === 'text' && noticePart.notice ? transcriptText(noticePart, t) : null
   if (notice !== null) return <div className="message message--activity" role="note"><div className="activity-line activity-line--note"><MarkdownText text={notice} /></div></div>
 
   // A report other than a compaction row is an error. A notice keeps its text, which renders as a neutral note.

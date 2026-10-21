@@ -63,26 +63,6 @@ export function translate(locale: ResolvedLocale, key: MessageKey, values: Messa
   return Object.entries(values).reduce((result, [name, value]) => result.split(`{${name}}`).join(String(value)), template)
 }
 
-function copyMatches(message: Message | undefined, text: string): boolean {
-  if (typeof message === 'string') return message === text
-  return message !== undefined && (message.one === text || message.other === text)
-}
-
-/**
- * True when `text` is this key's copy in any locale.
- *
- * A few plain-module strings are not merely rendered but compared by value —
- * the transcript's empty-turn fallback row is dropped again when the turn is
- * retried. Comparing against one locale's translation breaks as soon as the
- * interface language changes between the write and the comparison (replay is
- * incremental), so those call sites match against every catalog instead. New
- * locales are covered automatically.
- */
-export function matchesLocalizedCopy(text: string, key: MessageKey): boolean {
-  if (copyMatches(englishCatalog[key], text)) return true
-  return Object.values(catalogs).some((catalog) => copyMatches(catalog?.[key], text))
-}
-
 interface I18nContextValue {
   locale: ResolvedLocale
   t(key: MessageKey, values?: MessageValues): string
@@ -90,12 +70,10 @@ interface I18nContextValue {
 
 const I18nContext = createContext<I18nContextValue>({ locale: 'en', t: (key, values) => translate('en', key, values) })
 
-// `Intl` formatters and other plain modules cannot read the React context, so the
-// resolved locale is mirrored here. Without it a user who picks Japanese on an
-// English OS still sees English relative timestamps ("2 hours ago") in the UI.
+// Plain event handlers cannot read the React context; keep their copy in the active interface language.
 let formattingLocale: ResolvedLocale = 'en'
 
-/** Locale tag for plain-module `Intl` formatting; mirrors the active interface locale. */
+/** Active interface locale for copy produced outside React. */
 export function formattingLocaleTag(): ResolvedLocale {
   return formattingLocale
 }
