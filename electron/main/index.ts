@@ -380,14 +380,15 @@ export function startupFailureDialog(error: unknown): StartupFailureDialog | nul
 
 export async function settleShutdown(
   steps: ReadonlyArray<PromiseLike<unknown>>,
-  options: { watchdogMs?: number; log?: (message: string) => void } = {},
+  options: { watchdogMs?: number; log?: (message: string) => void; drain?: () => Promise<unknown> } = {},
 ): Promise<void> {
   const log = options.log ?? ((message: string) => console.error(message))
   const watchdogMs = options.watchdogMs ?? 10_000
-  const settled = Promise.allSettled(steps).then((results) => {
+  const settled = Promise.allSettled(steps).then(async (results) => {
     for (const result of results) {
       if (result.status === 'rejected') log(`GooeyPi shutdown step failed: ${boundedErrorMessage(result.reason)}`)
     }
+    try { await options.drain?.() } catch (error) { log(`GooeyPi store shutdown failed: ${boundedErrorMessage(error)}`) }
   })
   let timer: NodeJS.Timeout | undefined
   const watchdog = new Promise<void>((resolve) => {
@@ -1035,8 +1036,5 @@ app.on('before-quit', (event) => {
     ompAgents?.stopAll() ?? Promise.resolve(),
     piAgents?.stopAll() ?? Promise.resolve(),
     stopChildProcesses(),
-  ]).then(async () => {
-    // Await the drain so the final persist lands before the process exits.
-    try { await store?.beginShutdown() } catch (error) { console.error(`GooeyPi store shutdown failed: ${boundedErrorMessage(error)}`) }
-  }).finally(() => app.quit())
+  ], { drain: async () => { await store?.beginShutdown() } }).finally(() => app.quit())
 })
