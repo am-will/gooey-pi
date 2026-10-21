@@ -59,6 +59,7 @@ export class RpcRuntime {
   private stopPromise: Promise<boolean> | null = null
   private readonly eventForwarder: AgentEventForwarder
   private stopped = false
+  private exitRequested = false
   private info: RuntimeInfo
   private requestedServiceTier: PrimeServiceTier = 'default'
   private contextUsageRefresh: Promise<void> | null = null
@@ -137,7 +138,7 @@ export class RpcRuntime {
       this.disposeContextUsage()
       const detail = code !== 0 && code !== null && !this.stopped && !this.receivedFrame ? redactedStderrTail(this.transport.stderrTail()) : ''
       this.fail(new Error(`${this.adapter.agentName} RPC exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`))
-      this.emit({ type: 'runtime_exit', code, signal, expected: this.stopped })
+      this.emit({ type: 'runtime_exit', code, signal, expected: this.exitRequested && !this.transportFailed })
       this.onExit(this)
     })
     this.scheduleCompactionPoll()
@@ -272,6 +273,7 @@ export class RpcRuntime {
   }
 
   stop(): Promise<boolean> {
+    this.exitRequested = true
     if (!this.stopPromise) {
       // Stop accepting partial frames before the abort round-trip: the child
       // may keep writing while that request is in flight.

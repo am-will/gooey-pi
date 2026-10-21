@@ -1094,6 +1094,7 @@ setInterval(() => {}, 1000)
     await waitUntil(() => manager.list().length === 0)
     expect(events.filter((envelope) => envelope.event.type === 'transport_error')).toHaveLength(1)
     expect(String(events.find((envelope) => envelope.event.type === 'transport_error')?.event.error)).toMatch(/maximum frame size/i)
+    expect(events.filter((envelope) => envelope.event.type === 'runtime_exit')).toMatchObject([{ event: { expected: false } }])
     expect(processExists(pid)).toBe(false)
   }, 12_000)
 
