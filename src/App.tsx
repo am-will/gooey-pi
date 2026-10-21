@@ -724,7 +724,7 @@ export default function App() {
         onOpenHarnessSettings={() => {
           setNoHarnessPromptDismissed(true)
           setSettingsSectionRequest((current) => ({ section: 'agent', id: current.id + 1 }))
-          setView('settings')
+          navigate('settings')
         }}
       />
     ) : null}
