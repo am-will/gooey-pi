@@ -768,7 +768,7 @@ export interface PrimeWorkApi {
   }
   projects: {
     list(harness?: HarnessId): Promise<ProjectRecord[]>
-    listFiles(root: string, harness?: HarnessId): Promise<ProjectFileListing>
+    listFiles(root: string, harness?: HarnessId, mode?: 'children'): Promise<ProjectFileListing>
     listCheckouts(projectId: string, harness?: HarnessId): Promise<CheckoutCatalog>
     executeCheckout(projectId: string, action: CheckoutAction, harness?: HarnessId): Promise<CheckoutChangeResult>
     add(harness?: HarnessId): Promise<ProjectRecord | null>

@@ -23,7 +23,7 @@ const IGNORED_LISTING_DIRECTORIES = new Set([
  * The budget applies per root (one project folder), and `truncated` reports
  * whether it hid any listable entry.
  */
-export async function listProjectFiles(root: string, maxEntries = PROJECT_FILE_LISTING_LIMIT): Promise<ProjectFileListing> {
+export async function listProjectFiles(root: string, maxEntries = PROJECT_FILE_LISTING_LIMIT, mode?: 'children'): Promise<ProjectFileListing> {
   const entries: ProjectFileEntry[] = []
   let skipped = 0
   let truncated = false
@@ -52,7 +52,7 @@ export async function listProjectFiles(root: string, maxEntries = PROJECT_FILE_L
       const relativePath = relative(root, absolutePath)
       const path = process.platform === 'win32' ? relativePath.split('\\').join('/') : relativePath
       entries.push({ path, type: child.isDirectory() ? 'directory' : 'file' })
-      if (child.isDirectory()) directories.push(absolutePath)
+      if (child.isDirectory() && mode !== 'children') directories.push(absolutePath)
     }
   }
 
