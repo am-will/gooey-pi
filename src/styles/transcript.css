@@ -29,7 +29,7 @@
 .user-annotations > summary::-webkit-details-marker { display: none; }
 .user-annotations > summary:hover { background: color-mix(in srgb, var(--annotation) 14%, transparent); }
 .user-annotations[open] > summary { margin-bottom: 5px; }
-.user-annotations > pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-secondary); font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.user-annotations > pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message--assistant { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; }
 .assistant-mark { padding-top: 1px; }
 .message__content { min-width: 0; font-size: 14px; line-height: 1.62; }
