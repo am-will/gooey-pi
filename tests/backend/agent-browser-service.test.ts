@@ -305,6 +305,27 @@ describe('AgentBrowserService', () => {
     expect(guest.executedScripts.some((code) => code.includes('marker.remove()'))).toBe(true)
   })
 
+  it('bounds a navigation whose loadURL promise never settles', async () => {
+    const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.loadURL = () => new Promise<void>(() => {})
+    vi.useFakeTimers()
+    try {
+      const navigation = service.navigate('/sessions/a.jsonl', { tabId, url: 'https://example.org/' })
+      const assertion = expect(navigation).rejects.toThrow(/did not answer this action in time/)
+      await vi.advanceTimersByTimeAsync(51)
+      await assertion
+    } finally { vi.useRealTimers() }
+  })
+
+  it('bounds stalled debugger input and insertText fallback', async () => {
+    const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.debugger.sendCommand = () => new Promise<void>(() => {})
+    guest.insertText = () => new Promise<void>(() => {})
+    await expect(service.type('/sessions/a.jsonl', { tabId, text: 'hello' })).rejects.toThrow(/did not answer this action in time/)
+  })
+
   it('rejects a guest call that never answers after actionTimeoutMs', async () => {
     const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
     const { guest, tabId } = await openAttached('/sessions/a.jsonl')
