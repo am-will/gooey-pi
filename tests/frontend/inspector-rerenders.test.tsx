@@ -74,7 +74,10 @@ const renderApp = async () => {
   // Resolve the lazy inspector chunk up front so its Suspense boundary settles on mount.
   await import('../../src/components/Inspector')
   await act(async () => { root.render(<App />) })
-  await act(async () => {})
+  for (let attempt = 0; attempt < 100 && !container.querySelector('.app-shell[data-ready="true"]'); attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+  }
+  expect(container.querySelector('.app-shell[data-ready="true"]')).not.toBeNull()
 }
 
 const openChangesTab = async () => {

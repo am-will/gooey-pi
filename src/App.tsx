@@ -24,7 +24,7 @@ import { openExternalUrl, revealPath } from '@/lib/desktop-actions'
 import { createSingleFlightAdmission, findProjectForSession, workspaceCwd } from '@/lib/workspace'
 import { waitForVoiceSession } from '@/lib/voice'
 import { activeProjectScriptKind } from '@/lib/project-scripts'
-import { SAMPLE_GIT, SAMPLE_PROJECTS, SAMPLE_SCHEDULES, SAMPLE_SESSIONS, SAMPLE_SKILLS, SAMPLE_TRANSCRIPT } from '@/lib/demo-workspace'
+import type * as DemoWorkspaceData from '@/lib/demo-workspace'
 import { HARNESS_PROVIDER_DOCS, HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { harnessOffersFastMode } from '@/lib/prime-compat'
 import { AgentBrowserLayer, type AgentSlotRect } from '@/components/AgentBrowserLayer'
@@ -48,6 +48,7 @@ import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
 import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type RuntimeInfo, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
+const DemoApp = lazy(() => import('@/app/DemoApp'))
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
 const CommandPalette = lazy(() => import('@/components/CommandPalette').then((module) => ({ default: module.CommandPalette })))
@@ -70,10 +71,14 @@ const EMPTY_PROVIDERS: PrimeProviderDescriptor[] = []
 const EMPTY_MESSAGES: TranscriptMessage[] = []
 export default function App() {
   const bridge = hasBridge() ? window.prime ?? null : null
-  const initialProject = bridge ? undefined : SAMPLE_PROJECTS[0]
-  const initialSession = bridge ? undefined : SAMPLE_SESSIONS[0]
-  const [projects, setProjects] = useState<ProjectRecord[]>(() => bridge ? [] : SAMPLE_PROJECTS)
-  const [sessions, setSessions] = useState<SessionRecord[]>(() => bridge ? [] : SAMPLE_SESSIONS)
+  return bridge ? <WorkspaceApp bridge={bridge} /> : <Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><DemoApp /></Suspense>
+}
+
+export function WorkspaceApp({ bridge, demo }: { bridge: PrimeWorkApi | null; demo?: typeof DemoWorkspaceData }) {
+  const initialProject = demo?.SAMPLE_PROJECTS[0]
+  const initialSession = demo?.SAMPLE_SESSIONS[0]
+  const [projects, setProjects] = useState<ProjectRecord[]>(() => demo?.SAMPLE_PROJECTS ?? [])
+  const [sessions, setSessions] = useState<SessionRecord[]>(() => demo?.SAMPLE_SESSIONS ?? [])
   const { clearedAttention, clearedActivity, clearSessionAttention, clearActivity } = useSessionAttention({ setSessions })
   const [view, setView] = useState<WorkspaceView>('session')
   const [settingsSectionRequest, setSettingsSectionRequest] = useState<{ section: 'general' | 'agent'; id: number }>({ section: 'general', id: 0 })
@@ -107,7 +112,7 @@ export default function App() {
   const { t } = useLocaleTranslator(settingsState.settings.locale)
   const appUpdates = useAppUpdates(bridge, reportError, settingsState.settings.locale)
   const activeHarness = settingsState.settings.activeHarness
-  const { schedules, setSchedules, scheduleError, setScheduleError, scheduleFocusId, setScheduleFocusId, refreshSchedules } = useAutomations({ bridge, harness: activeHarness, initialSchedules: bridge ? [] : SAMPLE_SCHEDULES, reportError })
+  const { schedules, setSchedules, scheduleError, setScheduleError, scheduleFocusId, setScheduleFocusId, refreshSchedules } = useAutomations({ bridge, harness: activeHarness, initialSchedules: demo?.SAMPLE_SCHEDULES ?? [], reportError })
   const selectHarness = useCallback((harness: HarnessId) => {
     setVoiceOrbOpen(false)
     setFocusPetVoiceControl(false)
@@ -118,7 +123,7 @@ export default function App() {
   const runtimeSnapshotObserverRef = useRef<((snapshot: RuntimeInfo) => void) | undefined>(undefined)
   const workspace = useWorkspaceRuntime({
     bridge, harness: activeHarness, initialProject, initialSession, sessions,
-    initialMessages: bridge ? [] : SAMPLE_TRANSCRIPT, reportError,
+    initialMessages: demo?.SAMPLE_TRANSCRIPT ?? [], reportError,
     onRuntimeSnapshot: (snapshot) => runtimeSnapshotObserverRef.current?.(snapshot),
   })
   const syncProviderRuntime = useCallback(async (runtimeId: string) => {
@@ -148,7 +153,7 @@ export default function App() {
     ?? projects.find((project) => project.id === workspace.activeProjectId)
     ?? projects[0], [projects, activeSession, workspace.activeProjectId])
   const activeCwd = workspaceCwd(activeProject, activeSession)
-  const { git, setGitSnapshot, gitRequestRef, refreshGit } = useGitStatus({ bridge, cwd: activeCwd, workspaceRef: workspace.workspaceRef, sessionStatus: activeSession?.status, locallyOwnedSession: Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath), initialSnapshot: bridge ? undefined : { cwd: SAMPLE_PROJECTS[0]?.primaryFolder, status: SAMPLE_GIT }, reportError })
+  const { git, setGitSnapshot, gitRequestRef, refreshGit } = useGitStatus({ bridge, cwd: activeCwd, workspaceRef: workspace.workspaceRef, sessionStatus: activeSession?.status, locallyOwnedSession: Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath), initialSnapshot: demo ? { cwd: demo.SAMPLE_PROJECTS[0]?.primaryFolder, status: demo.SAMPLE_GIT } : undefined, reportError })
   const mentionableSessions = useMemo(() => sessions.filter((session) => !session.archived
     && session.depth === 0
     && session.id !== activeSession?.id
@@ -249,7 +254,7 @@ export default function App() {
   useEffect(() => { if (!activeAgentTabs.length) setAgentPreviewSelected(true) }, [activeAgentTabs.length])
   const agentTabVisible = view === 'session' && !childHistory.isOpen && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
   const pluginScope = activeProject?.primaryFolder && !activeProject.inferred ? activeProject.primaryFolder : undefined
-  const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: bridge ? [] : SAMPLE_SKILLS, reportError })
+  const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: demo?.SAMPLE_SKILLS ?? [], reportError })
   const refreshDetectedHarnesses = useHarnessRefresh({
     bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh, refreshCapabilities: pluginSkills.refresh, reportError,
   })

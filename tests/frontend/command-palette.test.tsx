@@ -66,6 +66,7 @@ async function waitFor<T>(read: () => T | null | undefined, timeout = 4_000): Pr
 }
 
 async function openPalette(): Promise<HTMLElement> {
+  await waitFor(() => container.querySelector('.app-shell[data-ready="true"]'))
   await act(async () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))
   })

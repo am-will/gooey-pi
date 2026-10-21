@@ -14,6 +14,12 @@ describe('renderer bundle boundaries', () => {
     expect(appSource).toContain('<Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><Transcript')
   })
 
+  it('loads sample workspace data only through the browser demo entry', () => {
+    expect(appSource).toContain("const DemoApp = lazy(() => import('@/app/DemoApp'))")
+    expect(appSource).not.toMatch(/import \{ SAMPLE_/)
+    expect(readFileSync('src/app/DemoApp.tsx', 'utf8')).toContain("import * as demo from '@/lib/demo-workspace'")
+  })
+
   it('continues to lazy-load the terminal dependency graph', () => {
     expect(terminalStackSource).toContain("const TerminalDrawer = lazy(() => import('@/components/TerminalDrawer')")
     expect(appSource).not.toContain("import { TerminalDrawer } from '@/components/TerminalDrawer'")
