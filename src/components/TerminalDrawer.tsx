@@ -172,6 +172,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
   }, [sessionPath])
 
   useEffect(() => {
+    const bridge = window.prime
     const container = containerRef.current
     if (!container) return
     const terminal = new Terminal({
@@ -191,8 +192,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         onOpenLinkRef.current(uri, terminalLinkOpensExternally(event))
         return
       }
-      if (!window.prime) return
-      void openExternalUrl(window.prime.app, uri).then((failure) => {
+      if (!bridge) return
+      void openExternalUrl(bridge.app, uri).then((failure) => {
         if (failure) onErrorRef.current?.(failure)
       })
     })
@@ -226,38 +227,38 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     }
     const inputDisposable = terminal.onData((data) => {
       const id = terminalIdRef.current
-      if (id && window.prime) window.prime.terminal.input(id, data)
+      if (id && bridge) bridge.terminal.input(id, data)
     })
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       const id = terminalIdRef.current
-      if (id && window.prime) window.prime.terminal.resize(id, cols, rows)
+      if (id && bridge) bridge.terminal.resize(id, cols, rows)
     })
     const selectionDisposable = terminal.onSelectionChange(() => {
       const selection = boundTerminalText(terminal.getSelection(), TERMINAL_SELECTION_MAX_CHARS)
       onSelectionChangeRef.current(selection.text, selection.truncated)
     })
 
-    if (window.prime && cwd) {
+    if (bridge && cwd) {
       // Subscribe before create resolves: a fast shell can emit its prompt or exit before the IPC reply.
-      offData = window.prime.terminal.onData((event) => {
+      offData = bridge.terminal.onData((event) => {
         if (event.terminalId === terminalIdRef.current) terminal.write(event.data, scheduleActiveContext)
         else if (!terminalIdRef.current) {
           const next = `${bufferedData.get(event.terminalId) ?? ''}${event.data}`
           bufferedData.set(event.terminalId, next.slice(-256 * 1024))
         }
       })
-      offExit = window.prime.terminal.onExit((event) => {
+      offExit = bridge.terminal.onExit((event) => {
         if (event.terminalId === terminalIdRef.current) announceExit(event.exitCode)
         else if (!terminalIdRef.current) bufferedExits.set(event.terminalId, event.exitCode)
       })
-      window.prime.terminal.create({ cwd, shell, command, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
-        if (cancelled) { void window.prime.terminal.kill(terminalId); return }
+      bridge.terminal.create({ cwd, shell, command, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
+        if (cancelled) { void bridge.terminal.kill(terminalId); return }
         terminalIdRef.current = terminalId
         resolvedShellName = basename(actualShell)
         onStateChangeRef.current({ shellName: resolvedShellName, connected: true })
         const initialOutput = bufferedData.get(terminalId)
         const bindCurrentSession = async () => {
-          if (sessionPathRef.current) await window.prime.terminal.bindSession(terminalId, sessionPathRef.current)
+          if (sessionPathRef.current) await bridge.terminal.bindSession(terminalId, sessionPathRef.current)
           scheduleActiveContext()
         }
         if (initialOutput) terminal.write(initialOutput, () => { void bindCurrentSession().catch(() => undefined) })
@@ -302,7 +303,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       if (activeContextTimerRef.current !== undefined) window.clearTimeout(activeContextTimerRef.current)
       const id = terminalIdRef.current
       terminalIdRef.current = null
-      if (id && window.prime) void window.prime.terminal.kill(id)
+      if (id && bridge) void bridge.terminal.kill(id)
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null

@@ -224,14 +224,15 @@ export function FilesPanel({
     setSkipped(0)
     setTruncated(false)
     setVisibleLimit(1_000)
-    if (!project || !window.prime) return
+    const bridge = window.prime
+    if (!project || !bridge) return
     setLoading(true)
     try {
       const roots = project.folders.length ? project.folders : [project.primaryFolder]
       const groups = await Promise.all(
         roots.map(async (root) => ({
           root,
-          listing: await window.prime.projects.listFiles(root, project.harness, recursive ? undefined : 'children'),
+          listing: await bridge.projects.listFiles(root, project.harness, recursive ? undefined : 'children'),
         })),
       )
       if (loadToken.current !== token) return
@@ -278,11 +279,12 @@ export function FilesPanel({
       else next.delete(id)
       return next
     })
-    if (!opening || node.children.length > 0 || recursiveListing.current || loadedDirectories.current.has(id) || loadingDirectories.current.has(id) || !window.prime || !project) return
+    const bridge = window.prime
+    if (!opening || node.children.length > 0 || recursiveListing.current || loadedDirectories.current.has(id) || loadingDirectories.current.has(id) || !bridge || !project) return
     const token = loadToken.current
     loadingDirectories.current.add(id)
     try {
-      const listing = await window.prime.projects.listFiles(node.fullPath, project.harness, 'children')
+      const listing = await bridge.projects.listFiles(node.fullPath, project.harness, 'children')
       if (loadToken.current !== token) return
       const prefix = node.path ? `${node.path}/` : ''
       const entries = listing.entries.map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }))

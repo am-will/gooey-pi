@@ -144,6 +144,16 @@ describe('TerminalDrawer project command handle', () => {
     expect(onError).toHaveBeenCalledWith('Unable to start terminal')
   })
 
+  it('kills a late terminal spawn through its captured bridge after unmount', async () => {
+    let finish: ((value: { terminalId: string; shell: string }) => void) | undefined
+    create.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    renderDrawer(createHandle())
+    act(() => root.render(null))
+    Reflect.deleteProperty(window, 'prime')
+    await act(async () => { finish?.({ terminalId: 'late', shell: '/bin/sh' }) })
+    expect(kill).toHaveBeenCalledWith('late')
+  })
+
   it('reports terminal creation failures without fabricating an exit code', async () => {
     const handle = createHandle()
     renderDrawer(handle)
