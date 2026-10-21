@@ -1,5 +1,6 @@
+import { SESSION_FILE_MAX_BYTES, SESSION_FILE_MAX_RECORDS } from '../../electron/main/jsonl-limits'
 import { createHmac } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -32,6 +33,41 @@ describe('session file record tolerance', () => {
     const transcript = await readTranscript(file, false)
     expect(transcript).toHaveLength(1)
     expect(transcript[0]).toMatchObject({ id: 'user-1', role: 'user' })
+  })
+
+  it('refuses oversized sparse files in both readers before opening them', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-limit-')); dirs.push(dir)
+    const file = join(dir, 'oversized.jsonl')
+    writeFileSync(file, '')
+    truncateSync(file, SESSION_FILE_MAX_BYTES + 1)
+    await expect(readTranscript(file, false)).rejects.toThrow(/too large/)
+    await expect(createSessionMetadataReader()(file)).rejects.toThrow(/too large/)
+  })
+
+  it('tolerates malformed and non-object records in both same-file readers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-malformed-')); dirs.push(dir)
+    const file = join(dir, 'malformed.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'session' }),
+      JSON.stringify({ type: 'message', id: 'u', parentId: null, message: { role: 'user', content: 'question' } }),
+      '{not json', '[1]', 'null', '42',
+      JSON.stringify({ type: 'message', id: 'a', parentId: 'u', message: { role: 'assistant', content: 'answer' } }), '',
+    ].join('\n'))
+    expect((await readTranscript(file, false)).map(({ id }) => id)).toEqual(['u', 'a'])
+    expect(await createSessionMetadataReader()(file)).toMatchObject({ status: 'complete', preview: 'answer' })
+  })
+
+  it('shares the exact record cap across full and incremental readers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-record-limit-')); dirs.push(dir)
+    const file = join(dir, 'records.jsonl')
+    writeFileSync(file, '{"type":"x"}\n\n'.repeat(SESSION_FILE_MAX_RECORDS))
+    const incremental = createSessionMetadataReader()
+    await expect(readTranscript(file, false)).resolves.toEqual([])
+    await expect(incremental(file)).resolves.toMatchObject({ title: 'Untitled session' })
+    appendFileSync(file, '{"type":"x"}\n')
+    await expect(readTranscript(file, false)).rejects.toThrow(/too many records/)
+    await expect(incremental(file)).rejects.toThrow(/too many records/)
+    await expect(createSessionMetadataReader()(file)).rejects.toThrow(/too many records/)
   })
 
   it('refuses to stream a path that is not a regular file', async () => {

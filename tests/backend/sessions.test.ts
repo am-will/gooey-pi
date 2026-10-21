@@ -11,7 +11,7 @@ import { AgentRpcManager } from '../../electron/main/agent-rpc'
 import { ProjectService } from '../../electron/main/projects'
 import { SessionService, type SessionServiceOptions } from '../../electron/main/sessions'
 import { boundedSessionDiscoveryNames, SessionMetadataCatalog, type SessionCatalogIo } from '../../electron/main/sessions/catalog'
-import { applyLiveMetadata, createSessionMetadataReader, ingestMessageActivity, METADATA_VERIFY_TAIL_BYTES, type SessionMetadata } from '../../electron/main/sessions/metadata'
+import { applyLiveMetadata, createSessionMetadataReader, ingestMessageActivity, statusFrom, METADATA_VERIFY_TAIL_BYTES, type SessionMetadata } from '../../electron/main/sessions/metadata'
 import { JsonStateStore } from '../../electron/main/store'
 import { waitUntil } from '../helpers/wait'
 
@@ -59,6 +59,40 @@ describe('live session metadata', () => {
     id: 'session', filePath: '/sessions/session.jsonl', projectPath: '/project', title: 'Untitled session',
     createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
     status: 'unknown', depth: 0, pinned: false,
+  })
+
+  it.each([
+    [undefined, 'crash', 'user', undefined, 'failed'],
+    [undefined, 'archived', 'user', 'error', 'complete'],
+    ['completed', undefined, 'user', 'error', 'complete'],
+    ['needs_input', undefined, 'assistant', undefined, 'waiting'],
+    [undefined, undefined, 'assistant', 'error', 'failed'],
+    [undefined, undefined, 'assistant', undefined, 'complete'],
+    [undefined, undefined, 'toolResult', undefined, 'complete'],
+    [undefined, undefined, 'user', undefined, 'idle'],
+    [undefined, undefined, undefined, undefined, 'unknown'],
+  ])('derives status with precedence (%s, %s, %s, %s)', (task, lifecycle, role, stop, expected) => {
+    expect(statusFrom(task, lifecycle, role, stop)).toBe(expected)
+  })
+
+  it.each([
+    [{ workerState: 'failed', isStreaming: true }, 'failed'],
+    [{ lifecycle: 'archived' }, 'complete'],
+    [{ taskState: 'completed' }, 'complete'],
+    [{ taskState: 'needs_input' }, 'waiting'],
+  ])('derives live status from %o', (live, expected) => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, live)
+    expect(record.status).toBe(expected)
+  })
+
+  it('copies valid live metadata without accepting invalid depth or stale timestamps', () => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, { thinkingLevel: 'high', sessionName: '  ', rlmDepth: 2, modified: '2026-01-01T00:00:00Z', model: { id: 'model', provider: 'provider' } })
+    expect(record).toMatchObject({ title: 'Untitled session', thinkingLevel: 'high', depth: 2, updatedAt: '2026-01-01T00:00:00.000Z', model: 'model', provider: 'provider' })
+    for (const rlmDepth of [-1, 1.5]) applyLiveMetadata(record, { rlmDepth, modified: 'invalid' })
+    applyLiveMetadata(record, { modified: '2025-01-01T00:00:00Z' })
+    expect(record).toMatchObject({ depth: 2, updatedAt: '2026-01-01T00:00:00.000Z' })
   })
 
   it('does not show stale inactive daemon work as running', () => {
