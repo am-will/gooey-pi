@@ -136,6 +136,7 @@ export class SessionMetadataCatalog {
   private readonly metadataRequests = createSingleFlight<string, SessionMetadata>()
   private readonly canonicalByName = new Map<string, { canonical: string; dev: number; ino: number }>()
   private snapshot: SessionCatalogSnapshot | null = null
+  private scanInFlight: { revision: number; snapshot: Promise<SessionCatalogSnapshot | null> } | null = null
   private preparedRevision: number | null = null
   private preparedView: { revision: number; promise: Promise<SessionMetadata[]> } | null = null
   private reconcileTail: Promise<void> = Promise.resolve()
@@ -219,7 +220,9 @@ export class SessionMetadataCatalog {
   }
 
   private async performReconciliation(names: readonly string[], revision: number): Promise<SessionCatalogReconcileResult> {
-    const baseline = this.snapshot
+    let baseline = this.snapshot
+    const pendingScan = this.scanInFlight
+    if (names.length && baseline?.revision !== revision - 1 && pendingScan?.revision === revision - 1) baseline = await pendingScan.snapshot
     if (!names.length || !baseline || baseline.revision !== revision - 1) return FULL_SCAN
     const candidates = names.map((name) => baseline.candidatesByName.get(name))
     if (candidates.some((candidate) => !candidate || candidate.symbolicLink)) {
@@ -337,122 +340,131 @@ export class SessionMetadataCatalog {
   }
 
   private async scan(revision: number, executable: string | null): Promise<SessionMetadata[]> {
-    let entries: readonly SessionCatalogEntry[]
-    let root: string
-    let rootStat: Stats
-    const watchedRoot = this.sessionRoot()
+    let publish: (snapshot: SessionCatalogSnapshot | null) => void = () => undefined
+    const tracked = { revision, snapshot: new Promise<SessionCatalogSnapshot | null>((resolve) => { publish = resolve }) }
+    if (!this.scanInFlight || this.scanInFlight.revision <= revision) this.scanInFlight = tracked
     try {
-      [entries, root, rootStat] = await Promise.all([
-        this.io.readDirectory(watchedRoot),
-        this.io.canonicalize(watchedRoot),
-        this.io.inspect(watchedRoot),
+      let entries: readonly SessionCatalogEntry[]
+      let root: string
+      let rootStat: Stats
+      const watchedRoot = this.sessionRoot()
+      try {
+        [entries, root, rootStat] = await Promise.all([
+          this.io.readDirectory(watchedRoot),
+          this.io.canonicalize(watchedRoot),
+          this.io.inspect(watchedRoot),
+        ])
+      } catch { return [] }
+      if (!rootStat.isDirectory()) return []
+
+      // Timestamp-encoding names (Prime UUIDv7, OMP ISO prefixes) expose creation
+      // order without per-entry I/O. Admit a bounded deterministic set before
+      // canonicalization and stat; legacy names fall back to reverse lexical order.
+      const entriesByName = new Map<string, { symbolicLink: boolean }>()
+      for (const entry of entries) {
+        if (!((entry.isFile?.() ?? true) || (entry.isSymbolicLink?.() ?? false))) continue
+        const name = catalogNameKey(entry.name)
+        if (!name.endsWith('.jsonl') || !isSafeRelativeName(name) || entriesByName.has(name)) continue
+        entriesByName.set(name, { symbolicLink: entry.isSymbolicLink?.() === true })
+      }
+      const names = boundedSessionDiscoveryNames(
+        [...entriesByName.keys()],
+        this.maxSessionFiles,
+        this.nameTimestamp,
+      )
+      const ancestorPathsByName = new Map(names.map((name) => [name, ancestorPathsForName(watchedRoot, name)]))
+      const intermediatePaths = [...new Set([...ancestorPathsByName.values()].flatMap((paths) => paths.slice(1)))]
+      const inspectedIntermediates = await mapLimit(intermediatePaths, 32, async (path) => {
+        try {
+          const pathStat = await this.io.inspect(path)
+          return pathStat.isDirectory() ? { path, identity: pathIdentity(pathStat) } : null
+        } catch { return null }
+      })
+      const ancestorIdentitiesByPath = new Map<string, SessionPathIdentity>([
+        [watchedRoot, pathIdentity(rootStat)],
+        ...inspectedIntermediates.map(({ path, identity }) => [path, identity] as const),
       ])
-    } catch { return [] }
-    if (!rootStat.isDirectory()) return []
-
-    // Timestamp-encoding names (Prime UUIDv7, OMP ISO prefixes) expose creation
-    // order without per-entry I/O. Admit a bounded deterministic set before
-    // canonicalization and stat; legacy names fall back to reverse lexical order.
-    const entriesByName = new Map<string, { symbolicLink: boolean }>()
-    for (const entry of entries) {
-      if (!((entry.isFile?.() ?? true) || (entry.isSymbolicLink?.() ?? false))) continue
-      const name = catalogNameKey(entry.name)
-      if (!name.endsWith('.jsonl') || !isSafeRelativeName(name) || entriesByName.has(name)) continue
-      entriesByName.set(name, { symbolicLink: entry.isSymbolicLink?.() === true })
-    }
-    const names = boundedSessionDiscoveryNames(
-      [...entriesByName.keys()],
-      this.maxSessionFiles,
-      this.nameTimestamp,
-    )
-    const ancestorPathsByName = new Map(names.map((name) => [name, ancestorPathsForName(watchedRoot, name)]))
-    const intermediatePaths = [...new Set([...ancestorPathsByName.values()].flatMap((paths) => paths.slice(1)))]
-    const inspectedIntermediates = await mapLimit(intermediatePaths, 32, async (path) => {
-      try {
-        const pathStat = await this.io.inspect(path)
-        return pathStat.isDirectory() ? { path, identity: pathIdentity(pathStat) } : null
-      } catch { return null }
-    })
-    const ancestorIdentitiesByPath = new Map<string, SessionPathIdentity>([
-      [watchedRoot, pathIdentity(rootStat)],
-      ...inspectedIntermediates.map(({ path, identity }) => [path, identity] as const),
-    ])
-    const discovered = await mapLimit(names, 32, async (name): Promise<SessionFileCandidate | null> => {
-      try {
-        // stat() follows symlinks, so an unchanged dev/ino identity lets the
-        // cached canonical path stand in for a realpath call per entry.
-        const watchedPath = join(watchedRoot, name)
-        const ancestorPaths = ancestorPathsByName.get(name)!
-        if (ancestorPaths.some((path) => !ancestorIdentitiesByPath.has(path))) return null
-        const fileStat = await this.io.inspect(watchedPath)
-        if (!fileStat.isFile()) {
+      const discovered = await mapLimit(names, 32, async (name): Promise<SessionFileCandidate | null> => {
+        try {
+          // stat() follows symlinks, so an unchanged dev/ino identity lets the
+          // cached canonical path stand in for a realpath call per entry.
+          const watchedPath = join(watchedRoot, name)
+          const ancestorPaths = ancestorPathsByName.get(name)!
+          if (ancestorPaths.some((path) => !ancestorIdentitiesByPath.has(path))) return null
+          const fileStat = await this.io.inspect(watchedPath)
+          if (!fileStat.isFile()) {
+            this.canonicalByName.delete(name)
+            return null
+          }
+          const symbolicLink = entriesByName.get(name)?.symbolicLink === true
+          const known = symbolicLink ? undefined : this.canonicalByName.get(name)
+          const filePath = known && known.dev === fileStat.dev && known.ino === fileStat.ino
+            ? known.canonical
+            : await this.io.canonicalize(watchedPath)
+          this.canonicalByName.set(name, { canonical: filePath, dev: fileStat.dev, ino: fileStat.ino })
+          if (!isPathWithin(root, filePath)) {
+            this.canonicalByName.delete(name)
+            return null
+          }
+          return {
+            name,
+            filePath,
+            fileStat,
+            fingerprint: `${filePath}\0${fileStat.mtimeMs}\0${fileStat.size}`,
+            symbolicLink,
+            ancestorPaths,
+          }
+        } catch {
           this.canonicalByName.delete(name)
           return null
         }
-        const symbolicLink = entriesByName.get(name)?.symbolicLink === true
-        const known = symbolicLink ? undefined : this.canonicalByName.get(name)
-        const filePath = known && known.dev === fileStat.dev && known.ino === fileStat.ino
-          ? known.canonical
-          : await this.io.canonicalize(watchedPath)
-        this.canonicalByName.set(name, { canonical: filePath, dev: fileStat.dev, ino: fileStat.ino })
-        if (!isPathWithin(root, filePath)) {
-          this.canonicalByName.delete(name)
-          return null
+      })
+      if (this.canonicalByName.size > names.length) {
+        const listed = new Set(names)
+        for (const name of this.canonicalByName.keys()) {
+          if (!listed.has(name)) this.canonicalByName.delete(name)
         }
-        return {
-          name,
-          filePath,
-          fileStat,
-          fingerprint: `${filePath}\0${fileStat.mtimeMs}\0${fileStat.size}`,
-          symbolicLink,
-          ancestorPaths,
+      }
+      const byCanonicalPath = new Map<string, SessionFileCandidate>()
+      for (const candidate of discovered.sort((left, right) => comparePaths(left.name, right.name))) {
+        if (!byCanonicalPath.has(candidate.filePath)) byCanonicalPath.set(candidate.filePath, candidate)
+      }
+      const selected = [...byCanonicalPath.values()]
+        .sort((a, b) => b.fileStat.mtimeMs - a.fileStat.mtimeMs || comparePaths(a.filePath, b.filePath))
+        .slice(0, this.maxSessionFiles)
+      if (this.catalogRevision === revision) {
+        const activeFingerprints = new Set(selected.map((candidate) => candidate.fingerprint))
+        for (const fingerprint of this.metadataCache.keys()) {
+          if (!activeFingerprints.has(fingerprint)) this.metadataCache.delete(fingerprint)
         }
-      } catch {
-        this.canonicalByName.delete(name)
-        return null
       }
-    })
-    if (this.canonicalByName.size > names.length) {
-      const listed = new Set(names)
-      for (const name of this.canonicalByName.keys()) {
-        if (!listed.has(name)) this.canonicalByName.delete(name)
-      }
-    }
-    const byCanonicalPath = new Map<string, SessionFileCandidate>()
-    for (const candidate of discovered.sort((left, right) => comparePaths(left.name, right.name))) {
-      if (!byCanonicalPath.has(candidate.filePath)) byCanonicalPath.set(candidate.filePath, candidate)
-    }
-    const selected = [...byCanonicalPath.values()]
-      .sort((a, b) => b.fileStat.mtimeMs - a.fileStat.mtimeMs || comparePaths(a.filePath, b.filePath))
-      .slice(0, this.maxSessionFiles)
-    if (this.catalogRevision === revision) {
-      const activeFingerprints = new Set(selected.map((candidate) => candidate.fingerprint))
-      for (const fingerprint of this.metadataCache.keys()) {
-        if (!activeFingerprints.has(fingerprint)) this.metadataCache.delete(fingerprint)
-      }
-    }
 
-    const catalogPromise = this.liveCatalog(executable)
-    const metadata = await mapLimit(selected, 6, async (candidate) => {
-      try { return { candidate, metadata: await this.cachedMetadata(candidate, revision) } } catch { return null }
-    })
-    const catalog = await catalogPromise
-    const metadataByPath = new Map(metadata.map((entry) => [entry.candidate.filePath, entry.metadata]))
-    const successful = selected.filter((candidate) => metadataByPath.has(candidate.filePath))
-    const sessions = successful.map((candidate) => metadataByPath.get(candidate.filePath)!)
-    const activeAncestorPaths = new Set(successful.flatMap((candidate) => candidate.ancestorPaths))
-    const snapshot: SessionCatalogSnapshot = {
-      revision,
-      watchedRoot,
-      root,
-      ancestorIdentitiesByPath: new Map([...ancestorIdentitiesByPath].filter(([path]) => activeAncestorPaths.has(path))),
-      candidatesByName: new Map(successful.map((candidate) => [candidate.name, candidate])),
-      candidatesByPath: new Map(successful.map((candidate) => [candidate.filePath, candidate])),
-      indexByPath: new Map(sessions.map((session, index) => [session.filePath, index])),
-      sessions,
+      const catalogPromise = this.liveCatalog(executable)
+      const metadata = await mapLimit(selected, 6, async (candidate) => {
+        try { return { candidate, metadata: await this.cachedMetadata(candidate, revision) } } catch { return null }
+      })
+      const metadataByPath = new Map(metadata.map((entry) => [entry.candidate.filePath, entry.metadata]))
+      const successful = selected.filter((candidate) => metadataByPath.has(candidate.filePath))
+      const sessions = successful.map((candidate) => metadataByPath.get(candidate.filePath)!)
+      const activeAncestorPaths = new Set(successful.flatMap((candidate) => candidate.ancestorPaths))
+      const snapshot: SessionCatalogSnapshot = {
+        revision,
+        watchedRoot,
+        root,
+        ancestorIdentitiesByPath: new Map([...ancestorIdentitiesByPath].filter(([path]) => activeAncestorPaths.has(path))),
+        candidatesByName: new Map(successful.map((candidate) => [candidate.name, candidate])),
+        candidatesByPath: new Map(successful.map((candidate) => [candidate.filePath, candidate])),
+        indexByPath: new Map(sessions.map((session, index) => [session.filePath, index])),
+        sessions,
+      }
+      if (!this.snapshot || this.snapshot.revision <= revision) this.snapshot = snapshot
+      publish(snapshot)
+      const catalog = await catalogPromise
+      return this.materialize(snapshot, executable, catalog)
+    } finally {
+      publish(null)
+      if (this.scanInFlight === tracked) this.scanInFlight = null
     }
-    if (this.catalogRevision === revision) this.snapshot = snapshot
-    return this.materialize(snapshot, executable, catalog)
   }
 
   private async ancestorsUnchanged(snapshot: SessionCatalogSnapshot, candidates: readonly SessionFileCandidate[]): Promise<boolean> {
