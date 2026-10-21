@@ -32,6 +32,7 @@ const MAX_SESSION_FILES = 5_000
 const MAX_SESSION_WATCH_DIRECTORIES = 512
 const MAX_CONCURRENT_TRANSCRIPT_READS = 2
 const MAX_PENDING_TRANSCRIPT_READS = 32
+const MAX_CACHED_TRANSCRIPTS = 4
 
 type TranscriptReader = (filePath: string, isStreaming: boolean) => Promise<TranscriptMessage[]>
 
@@ -110,6 +111,7 @@ export class SessionService {
   private readonly catalog: SessionMetadataCatalog
   private readonly metadataReader: SessionMetadataReader
   private readonly transcriptReads = createSingleFlight<string, TranscriptMessage[]>()
+  private readonly transcriptCache = new Map<string, { key: string; value: TranscriptMessage[] }>()
   private readonly transcriptAdmission: AdmissionQueue
   private readonly transcriptReader: TranscriptReader
   private readonly isSessionPathAuthorized: SessionPathAuthorizer
@@ -264,10 +266,25 @@ export class SessionService {
     const info = await stat(safePath)
     const runtime = this.runtimeForSession(safePath)
     const streaming = runtime?.isStreaming === true || runtime?.isCompacting === true
-    const key = `${safePath}\0${info.dev}:${info.ino}\0${info.size}\0${info.mtimeMs}\0${streaming ? 1 : 0}`
-    // Coalesced callers share one immutable result; the IPC boundary clones it
+    const key = `${safePath}\0${info.dev}:${info.ino}\0${info.size}\0${info.mtimeMs}\0${info.ctimeMs}\0${streaming ? 1 : 0}`
+    // Coalesced and cached callers share one immutable result; the IPC boundary clones it
     // for the renderer, so a pre-IPC structuredClone would be a second copy.
-    return this.transcriptReads.run(key, () => this.transcriptAdmission.run(() => this.transcriptReader(safePath, streaming)))
+    return this.transcriptReads.run(key, () => this.transcriptAdmission.run(async () => {
+      const cached = this.transcriptCache.get(safePath)
+      if (cached?.key === key) {
+        this.transcriptCache.delete(safePath)
+        this.transcriptCache.set(safePath, cached)
+        return cached.value
+      }
+      const value = await this.transcriptReader(safePath, streaming)
+      this.transcriptCache.delete(safePath)
+      this.transcriptCache.set(safePath, { key, value })
+      while (this.transcriptCache.size > MAX_CACHED_TRANSCRIPTS) {
+        const oldest = this.transcriptCache.keys().next().value
+        if (oldest !== undefined) this.transcriptCache.delete(oldest)
+      }
+      return value
+    }))
   }
 
   async followUp(filePath: unknown, message: unknown, intent: unknown = 'queue'): Promise<boolean> {

@@ -1139,6 +1139,43 @@ describe('SessionService transcript read admission', () => {
   })
 })
 
+describe('bounded transcript result caching', () => {
+  it('reuses unchanged reads and invalidates on bytes or runtime phase changes', async () => {
+    const transcriptReader = vi.fn(async () => [{ id: 'result', role: 'user' as const, parts: [] }])
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'cached.jsonl')
+    writeSession(file, project, 'cached')
+    const first = await service.read(file)
+    expect(await service.read(file)).toBe(first)
+    expect(transcriptReader).toHaveBeenCalledOnce()
+    appendFileSync(file, '\n')
+    expect(await service.read(file)).not.toBe(first)
+    expect(transcriptReader).toHaveBeenCalledTimes(2)
+    service.bindRuntimeHooks({ get: () => ({ isStreaming: true }), stop: async () => undefined, rename: async () => false })
+    await service.read(file)
+    expect(transcriptReader).toHaveBeenCalledTimes(3)
+    expect(transcriptReader).toHaveBeenLastCalledWith(await service.requireSessionPath(file), true)
+  })
+
+  it('evicts the least recently used path and never caches reader failures', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const files = Array.from({ length: 5 }, (_, index) => join(root, `${index}.jsonl`))
+    for (const [index, file] of files.entries()) writeSession(file, project, String(index))
+    for (const file of files.slice(0, 4)) await service.read(file)
+    await service.read(files[0]!)
+    await service.read(files[4]!)
+    await service.read(files[0]!)
+    expect(transcriptReader).toHaveBeenCalledTimes(5)
+    await service.read(files[1]!)
+    expect(transcriptReader).toHaveBeenCalledTimes(6)
+    transcriptReader.mockRejectedValueOnce(new Error('transient read failure'))
+    await expect(service.read(files[2]!)).rejects.toThrow('transient read failure')
+    await expect(service.read(files[2]!)).resolves.toEqual([])
+    expect(transcriptReader).toHaveBeenCalledTimes(8)
+  })
+})
+
 describe('SessionService session path authorization', () => {
   it('also rejects non-regular files in the Rust native archive', async () => {
     const { root, service } = setup(undefined, { primeImplementation: () => 'rust' })
