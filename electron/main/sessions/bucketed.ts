@@ -22,6 +22,7 @@ import {
   textFromContent,
   validTimestamp,
   type TranscriptFileReader,
+  type TranscriptDialect,
 } from './transcript'
 
 /**
@@ -186,7 +187,11 @@ export function createBucketedMetadataParser(ingestRecord: BucketedRecordIngest)
  * `custom_message` types.
  */
 export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
-  return createTranscriptReader({
+  return createTranscriptReader(branchSummaryTranscriptDialect())
+}
+
+export function branchSummaryTranscriptDialect(): TranscriptDialect {
+  return {
     isRenderable: (entry) => entry.type === 'message' || entry.type === 'compaction' || entry.type === 'branch_summary'
       || (entry.type === 'custom_message' && entry.display === true)
       || Boolean(fallbackModelFromRecord(entry)),
@@ -202,7 +207,7 @@ export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
       // A summary with no text has nothing to show; the walk still passes through its record.
       return summary.trim() ? { ...noticeRow(entry, safeId, summary), notice: { kind: 'branch-summary' } } : undefined
     },
-  })
+  }
 }
 
 /** Fallbacks and branch summaries are neutral notices: they never render as failures. */
