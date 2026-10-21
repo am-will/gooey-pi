@@ -81,12 +81,9 @@ export class RpcRuntime {
   // agent_start a get_state that still reports the run is stale.
   private runEndedAt: number | null = null
   private runEndRefreshTimer: NodeJS.Timeout | null = null
-  // Compaction watchdog: some Prime Agent event paths buffer compaction_start
-  // until the surrounding RPC command settles, so the desktop would learn
-  // about a compaction only after it finished. get_state responses are never
-  // buffered, so polling the compacting flag while the runtime is active lets
-  // the desktop synthesize the missing lifecycle events; real events take
-  // precedence and duplicates are swallowed.
+  // Poll get_state while active to reveal compaction before buffered lifecycle
+  // events arrive. Real lifecycle events override polling and suppress
+  // duplicate synthesized events.
   private readonly watchdogTimings: CompactionWatchdogTimings
   private compactionEpisode: 'none' | 'real' | 'synthetic' = 'none'
   // OMP ends carry no reason, so the end reports the one its start announced.
