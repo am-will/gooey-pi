@@ -2,6 +2,7 @@
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import type { AutomationScheduleRecord, PrimeModelDescriptor, ProjectRecord } from '../../src/types/api'
 import { ScheduledPage } from '../../src/pages/ScheduledPage'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -25,4 +26,25 @@ it('renders the empty page and opens a create form', () => {
   const create = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('New schedule'))!
   act(() => create.click())
   expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
+})
+
+
+const task: AutomationScheduleRecord = {
+  schemaVersion: 1, id: 'task', harness: 'omp', revision: 3, title: 'Task', prompt: 'Do work', target: { kind: 'project', projectId: 'project' },
+  timing: { kind: 'rrule', rrule: 'FREQ=DAILY', dtstartLocal: '2027-01-01T09:00:00', timeZone: 'UTC' },
+  execution: { model: 'provider/model', thinking: 'auto', speed: 'normal' }, status: 'active', createdBy: 'user', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', runs: [],
+}
+const project: ProjectRecord = { id: 'project', harness: 'omp', name: 'Project', path: '/project', primaryFolder: '/project', folders: ['/project'], pinned: false, createdAt: '', lastOpenedAt: '', sessionCount: 0 }
+const model: PrimeModelDescriptor = { key: 'provider/model', provider: 'provider', id: 'model', name: 'Model', reasoning: true, input: ['text'], contextWindow: 100000, maxTokens: 1000, availableThinkingLevels: ['medium'], fastModeSupported: false, available: true }
+
+it.each(['updated', 'deleted'])('keeps the edit revision and never creates when the catalog is %s', async (change) => {
+  const onCreate = vi.fn(noop)
+  const onUpdate = vi.fn(noop)
+  const props = renderPage({ schedules: [task], projects: [project], models: [model], onCreate, onUpdate })
+  act(() => host.querySelector<HTMLButtonElement>('.schedule-row')!.click())
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === 'Edit')!.click())
+  renderPage({ ...props, schedules: change === 'deleted' ? [] : [{ ...task, revision: 4 }] })
+  await act(async () => document.querySelector('#schedule-editor-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(onCreate).not.toHaveBeenCalled()
+  expect(onUpdate).toHaveBeenCalledWith('task', expect.objectContaining({ revision: 3 }))
 })

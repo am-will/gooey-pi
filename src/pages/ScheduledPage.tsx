@@ -49,7 +49,7 @@ import { CREATED_BY_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTIO
 import { EmptyState, Modal, Segmented } from '@/components/ui'
 
 type ScheduleFilter = 'active' | 'paused' | 'attention' | 'all'
-type EditorMode = 'create' | 'edit'
+type ScheduleEditor = { mode: 'create' } | { mode: 'edit'; scheduleId: string; revision: number }
 
 interface ScheduledPageProps {
   harness: HarnessId
@@ -200,7 +200,7 @@ export function ScheduledPage({
   const { t } = useI18n()
   const [filter, setFilter] = useState<ScheduleFilter>('active')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [editor, setEditor] = useState<{ mode: EditorMode; scheduleId?: string } | null>(null)
+  const [editor, setEditor] = useState<ScheduleEditor | null>(null)
   const [form, setForm] = useState<ScheduleForm>(() => defaultForm(projects, sessions, models, lastSelectedModel, initialProjectId, initialSessionId))
   const [baseline, setBaseline] = useState('')
   const [saving, setSaving] = useState(false)
@@ -221,7 +221,6 @@ export function ScheduledPage({
   useEffect(() => {
     if (selectedScheduleId && schedules.some((item) => item.id === selectedScheduleId)) setSelectedId(selectedScheduleId)
   }, [schedules, selectedScheduleId])
-  const editingSchedule = editor?.mode === 'edit' ? schedules.find((item) => item.id === editor.scheduleId) : undefined
   const selectedProject = projectMap.get(form.projectId)
   const eligibleSessions = useMemo(() => {
     const project = projects.find((item) => item.id === form.projectId)
@@ -270,7 +269,7 @@ export function ScheduledPage({
   }
   const openEdit = (item: AutomationScheduleRecord) => {
     const next = formFromSchedule(item, models, lastSelectedModel)
-    setForm(next); setBaseline(JSON.stringify(next)); setFormError(''); setPreview(null); setEditor({ mode: 'edit', scheduleId: item.id })
+    setForm(next); setBaseline(JSON.stringify(next)); setFormError(''); setPreview(null); setEditor({ mode: 'edit', scheduleId: item.id, revision: item.revision })
   }
   const closeEditor = () => {
     if (saving) return
@@ -306,7 +305,7 @@ export function ScheduledPage({
   }
   const save = async (event: FormEvent) => {
     event.preventDefault()
-    if (saving) return
+    if (saving || !editor) return
     const validationError = validate()
     if (validationError || !currentTiming) { setFormError(validationError); return }
     setSaving(true); setFormError('')
@@ -315,7 +314,7 @@ export function ScheduledPage({
       timing: currentTiming, execution: executionFromForm(form),
     }
     try {
-      if (editor?.mode === 'edit' && editingSchedule) await onUpdate(editingSchedule.id, { revision: editingSchedule.revision, ...values })
+      if (editor.mode === 'edit') await onUpdate(editor.scheduleId, { revision: editor.revision, ...values })
       else await onCreate(values)
       setEditor(null)
     } catch (reason) { setFormError(errorMessage(reason)) }
