@@ -816,12 +816,12 @@ export interface PrimeWorkApi {
   }
   providers: {
     catalog(force?: boolean, harness?: HarnessId): Promise<PrimeModelCatalog>
-    saveApiKey(providerId: string, apiKey: string): Promise<PrimeModelCatalog>
-    logout(providerId: string): Promise<PrimeModelCatalog>
+    saveApiKey(providerId: string, apiKey: string, harness?: HarnessId): Promise<PrimeModelCatalog>
+    logout(providerId: string, harness?: HarnessId): Promise<PrimeModelCatalog>
     setEnabled(providerId: string, enabled: boolean, harness?: HarnessId): Promise<PrimeModelCatalog>
     setDisabled(providerIds: string[], harness?: HarnessId): Promise<PrimeModelCatalog>
     setModelEnabled(modelKey: string, enabled: boolean, harness?: HarnessId): Promise<PrimeModelCatalog>
-    startOAuth(providerId: string): Promise<{ flowId: string }>
+    startOAuth(providerId: string, harness?: HarnessId): Promise<{ flowId: string }>
     respondOAuth(flowId: string, promptId: string, value?: string): Promise<boolean>
     cancelOAuth(flowId: string): Promise<boolean>
     onAuthEvent(callback: (event: ProviderAuthEvent) => void): () => void
