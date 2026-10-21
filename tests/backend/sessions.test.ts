@@ -81,6 +81,16 @@ describe('live session metadata', () => {
     expect(record.status).toBe('idle')
   })
 
+  it('uses Rust Prime 0.10 hasRunningSubagents when the parent itself is inactive', () => {
+    const record = liveMetadata()
+    // v0.10.0 crates/pa-types/src/daemon/agent_roster.rs, subagents-running fixture.
+    applyLiveMetadata(record, { activeSessionId: 'a1', lifecycle: 'live', activity: 'working', isSessionActive: false, hasRunningSubagents: true })
+    expect(record.status).toBe('running')
+    expect(record.hasRunningRlmChildren).toBe(true)
+    applyLiveMetadata(record, { lifecycle: 'live', activity: 'idle', isSessionActive: false, hasRunningSubagents: false })
+    expect(record.status).toBe('idle')
+  })
+
   it('preserves the working-child status when the GooeyPi parent runtime is idle', async () => {
     const { root, project, service } = setup(undefined, {
       metadataReader: async (path) => ({ ...metadata(path, project, 'parent'), status: 'running', hasRunningRlmChildren: true }),
