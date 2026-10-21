@@ -293,17 +293,15 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     )
   }, [bridge, queueRuntimeMutation, runtime, updateFast])
 
-  // Credentials remain Prime-only, while desktop-owned provider visibility is
-  // stored independently for each harness.
   const saveApiKey = useCallback(async (providerId: string, apiKey: string) => {
     if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.providersDesktopOnly'))
-    setCatalogFor('prime', await bridge.providers.saveApiKey(providerId, apiKey))
-  }, [bridge, setCatalogFor])
+    setCatalogFor(harness, await bridge.providers.saveApiKey(providerId, apiKey, harness))
+  }, [bridge, harness, setCatalogFor])
 
   const logout = useCallback(async (providerId: string) => {
     if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.providersDesktopOnly'))
-    setCatalogFor('prime', await bridge.providers.logout(providerId))
-  }, [bridge, setCatalogFor])
+    setCatalogFor(harness, await bridge.providers.logout(providerId, harness))
+  }, [bridge, harness, setCatalogFor])
 
   const setEnabled = useCallback(async (providerId: string, enabled: boolean) => {
     if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.providersDesktopOnly'))
@@ -350,8 +348,8 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
 
   const startOAuth = useCallback(async (providerId: string) => {
     if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.providersDesktopOnly'))
-    await bridge.providers.startOAuth(providerId)
-  }, [bridge])
+    await bridge.providers.startOAuth(providerId, harness)
+  }, [bridge, harness])
 
   const respondOAuth = useCallback((promptId: string, value?: string) => {
     if (!bridge || !authEvent) return

@@ -226,6 +226,9 @@ describe('provider runtime mutations', () => {
     syncRuntime?: (runtimeId: string) => Promise<void>
     setEnabled?: PrimeWorkApi['providers']['setEnabled']
     setDisabled?: PrimeWorkApi['providers']['setDisabled']
+    saveApiKey?: PrimeWorkApi['providers']['saveApiKey']
+    logout?: PrimeWorkApi['providers']['logout']
+    startOAuth?: PrimeWorkApi['providers']['startOAuth']
     harness?: HarnessId
     reportError?: (error: unknown) => void
   }) {
@@ -235,6 +238,9 @@ describe('provider runtime mutations', () => {
       agent: { command: options.command },
       providers: {
         catalog: catalogMock,
+        saveApiKey: options.saveApiKey,
+        logout: options.logout,
+        startOAuth: options.startOAuth,
         onAuthEvent: vi.fn().mockReturnValue(() => undefined),
         setEnabled: options.setEnabled ?? vi.fn().mockResolvedValue(catalog),
         setDisabled: options.setDisabled ?? vi.fn().mockResolvedValue(catalog),
@@ -248,6 +254,18 @@ describe('provider runtime mutations', () => {
     }
     return render(<Harness />).then(() => ({ get value() { return value! }, catalogMock, syncRuntime, setDisabled: bridge.providers.setDisabled, reportError }))
   }
+
+  it.each(['pi', 'omp'] as const)('scopes credentials and authentication to %s', async (harness) => {
+    const saveApiKey = vi.fn().mockResolvedValue(catalog)
+    const logout = vi.fn().mockResolvedValue(catalog)
+    const startOAuth = vi.fn().mockResolvedValue(undefined)
+    const hook = await mountCatalogHook({ command: vi.fn(), harness, saveApiKey, logout, startOAuth })
+    await act(async () => { await hook.value.saveApiKey('openai', 'key'); await hook.value.logout('openai'); await hook.value.startOAuth('openai') })
+    expect(saveApiKey).toHaveBeenCalledWith('openai', 'key', harness)
+    expect(logout).toHaveBeenCalledWith('openai', harness)
+    expect(startOAuth).toHaveBeenCalledWith('openai', harness)
+    expect(hook.value.catalog).toEqual(catalog)
+  })
 
   it('serializes rapid reasoning changes and rolls back/synchronizes the latest rejection', async () => {
     const first = deferred<Record<string, unknown>>()
