@@ -1,3 +1,4 @@
+import { isBucketedSessionPath, timestampFromBucketedSessionName } from '../../electron/main/sessions/bucketed'
 import { appendFileSync, createReadStream, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,9 +9,7 @@ import { METADATA_VERIFY_TAIL_BYTES } from '../../electron/main/sessions/metadat
 import {
   appendPiSessionInfo,
   createPiSessionMetadataReader,
-  isPiSessionPath,
   piSessionServiceOptions,
-  piTimestampFromSessionName,
 } from '../../electron/main/sessions/pi'
 import { JsonStateStore } from '../../electron/main/store'
 
@@ -52,10 +51,10 @@ const BUCKET = '--Users-am.will-Applications-prime--'
 
 describe('pi session file names', () => {
   it('derives ordering timestamps from the ISO file-name prefix, with or without a bucket prefix', () => {
-    expect(piTimestampFromSessionName(NAME_C)).toBe(Date.parse('2026-08-10T22:41:20.246Z'))
-    expect(piTimestampFromSessionName(`${BUCKET}/${NAME_A}`)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
-    expect(piTimestampFromSessionName('legacy.jsonl')).toBeUndefined()
-    expect(piTimestampFromSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName(NAME_C)).toBe(Date.parse('2026-08-10T22:41:20.246Z'))
+    expect(timestampFromBucketedSessionName(`${BUCKET}/${NAME_A}`)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
+    expect(timestampFromBucketedSessionName('legacy.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
   })
 })
 
@@ -270,11 +269,11 @@ describe('pi session path authorization', () => {
   })
 
   it('validates candidate shapes without touching the filesystem', () => {
-    expect(isPiSessionPath('/root', `/root/${BUCKET}/${NAME_A}`)).toBe(true)
-    expect(isPiSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
-    expect(isPiSessionPath('/root', `/root/${BUCKET}/deep/${NAME_A}`)).toBe(false)
-    expect(isPiSessionPath('/root', `/elsewhere/${BUCKET}/${NAME_A}`)).toBe(false)
-    expect(isPiSessionPath('/root', `/root/${BUCKET}/session.txt`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/${BUCKET}/${NAME_A}`)).toBe(true)
+    expect(isBucketedSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/${BUCKET}/deep/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/elsewhere/${BUCKET}/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/${BUCKET}/session.txt`)).toBe(false)
   })
 })
 

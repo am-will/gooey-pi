@@ -1,3 +1,4 @@
+import type { SessionServiceOptions } from '../sessions'
 import { compactText } from '../../../src/lib/text'
 import type { Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
@@ -154,6 +155,23 @@ export function createBucketedMetadataParser(ingestRecord: BucketedRecordIngest)
       if (value.type !== 'session' && value.type !== 'thinking_level_change' && value.type !== 'message') ingestRecord(state, value)
     },
     snapshot: bucketedMetadataFromAccumulator,
+  }
+}
+
+/** The one-level bucketed layouts share discovery, path authority, and watcher wiring. */
+export function bucketedSessionServiceOptions(
+  harness: 'omp' | 'pi',
+  sessionRoot: string,
+  metadataReader: NonNullable<SessionServiceOptions['metadataReader']>,
+  transcriptReader: TranscriptFileReader,
+  renameFile: NonNullable<SessionServiceOptions['renameFile']>,
+): SessionServiceOptions {
+  return {
+    harness, sessionRoot, metadataReader, transcriptReader, renameFile,
+    catalogIo: createBucketedCatalogIo(),
+    catalogNameTimestamp: timestampFromBucketedSessionName,
+    isSessionPathAuthorized: isBucketedSessionPath,
+    recursiveWatch: true,
   }
 }
 

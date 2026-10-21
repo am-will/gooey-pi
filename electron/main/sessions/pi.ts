@@ -5,13 +5,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
-import type { SessionCatalogIo } from './catalog'
 import {
   createBranchSummaryTranscriptReader,
-  createBucketedCatalogIo,
+  bucketedSessionServiceOptions,
   createBucketedMetadataParser,
-  isBucketedSessionPath,
-  timestampFromBucketedSessionName,
 } from './bucketed'
 import {
   createIncrementalMetadataReader,
@@ -39,14 +36,6 @@ import type { TranscriptFileReader } from './transcript'
 export function piSessionRoot(): string {
   return join(homedir(), '.pi', 'agent', 'sessions')
 }
-
-export const piTimestampFromSessionName = timestampFromBucketedSessionName
-
-export function createPiCatalogIo(): SessionCatalogIo {
-  return createBucketedCatalogIo()
-}
-
-export const isPiSessionPath = isBucketedSessionPath
 
 const piMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change') {
@@ -116,17 +105,5 @@ export const readPiTranscript: TranscriptFileReader = createBranchSummaryTranscr
  * service with a null CLI path: pi has no `prime-agent list` live overlay.
  */
 export function piSessionServiceOptions(sessionRoot = piSessionRoot()): SessionServiceOptions {
-  return {
-    harness: 'pi',
-    sessionRoot,
-    catalogIo: createPiCatalogIo(),
-    catalogNameTimestamp: piTimestampFromSessionName,
-    metadataReader: createPiSessionMetadataReader(),
-    transcriptReader: readPiTranscript,
-    isSessionPathAuthorized: isPiSessionPath,
-    // Session files sit one bucket directory below the root; bounded one-level
-    // watchers keep catalog refresh behavior identical across platforms.
-    recursiveWatch: true,
-    renameFile: appendPiSessionInfo,
-  }
+  return bucketedSessionServiceOptions('pi', sessionRoot, createPiSessionMetadataReader(), readPiTranscript, appendPiSessionInfo)
 }

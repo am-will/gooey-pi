@@ -4,13 +4,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
-import type { SessionCatalogIo } from './catalog'
 import {
   createBranchSummaryTranscriptReader,
-  createBucketedCatalogIo,
+  bucketedSessionServiceOptions,
   createBucketedMetadataParser,
-  isBucketedSessionPath,
-  timestampFromBucketedSessionName,
 } from './bucketed'
 import {
   createIncrementalMetadataReader,
@@ -37,14 +34,6 @@ export const OMP_TITLE_SLOT_BYTES = 256
 export function ompSessionRoot(): string {
   return join(homedir(), '.omp', 'agent', 'sessions')
 }
-
-export const ompTimestampFromSessionName = timestampFromBucketedSessionName
-
-export function createOmpCatalogIo(): SessionCatalogIo {
-  return createBucketedCatalogIo()
-}
-
-export const isOmpSessionPath = isBucketedSessionPath
 
 const ompMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change' && typeof value.model === 'string') {
@@ -142,17 +131,5 @@ export const readOmpTranscript: TranscriptFileReader = createBranchSummaryTransc
  * service with a null CLI path: OMP has no `prime-agent list` live overlay.
  */
 export function ompSessionServiceOptions(sessionRoot = ompSessionRoot()): SessionServiceOptions {
-  return {
-    harness: 'omp',
-    sessionRoot,
-    catalogIo: createOmpCatalogIo(),
-    catalogNameTimestamp: ompTimestampFromSessionName,
-    metadataReader: createOmpSessionMetadataReader(),
-    transcriptReader: readOmpTranscript,
-    isSessionPathAuthorized: isOmpSessionPath,
-    // Session files sit one bucket directory below the root; bounded one-level
-    // watchers keep catalog refresh behavior identical across platforms.
-    recursiveWatch: true,
-    renameFile: writeOmpTitleSlot,
-  }
+  return bucketedSessionServiceOptions('omp', sessionRoot, createOmpSessionMetadataReader(), readOmpTranscript, writeOmpTitleSlot)
 }

@@ -1,3 +1,4 @@
+import { isBucketedSessionPath, timestampFromBucketedSessionName } from '../../electron/main/sessions/bucketed'
 import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,10 +8,8 @@ import { SessionService, type SessionWatchFactory } from '../../electron/main/se
 import { METADATA_VERIFY_TAIL_BYTES } from '../../electron/main/sessions/metadata'
 import {
   createOmpSessionMetadataReader,
-  isOmpSessionPath,
   OMP_TITLE_SLOT_BYTES,
   ompSessionServiceOptions,
-  ompTimestampFromSessionName,
   writeOmpTitleSlot,
 } from '../../electron/main/sessions/omp'
 import { JsonStateStore } from '../../electron/main/store'
@@ -69,10 +68,10 @@ const NAME_C = '2026-08-10T12-30-15-250Z_019fdf24-0000-7000-8000-000000000002.js
 
 describe('OMP session file names', () => {
   it('derives ordering timestamps from the ISO file-name prefix, with or without a bucket prefix', () => {
-    expect(ompTimestampFromSessionName(NAME_A)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
-    expect(ompTimestampFromSessionName(`-tmp/${NAME_C}`)).toBe(Date.parse('2026-08-10T12:30:15.250Z'))
-    expect(ompTimestampFromSessionName('legacy.jsonl')).toBeUndefined()
-    expect(ompTimestampFromSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName(NAME_A)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
+    expect(timestampFromBucketedSessionName(`-tmp/${NAME_C}`)).toBe(Date.parse('2026-08-10T12:30:15.250Z'))
+    expect(timestampFromBucketedSessionName('legacy.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
   })
 })
 
@@ -253,11 +252,11 @@ describe('OMP session path authorization', () => {
   })
 
   it('validates candidate shapes without touching the filesystem', () => {
-    expect(isOmpSessionPath('/root', `/root/-bucket/${NAME_A}`)).toBe(true)
-    expect(isOmpSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
-    expect(isOmpSessionPath('/root', `/root/-bucket/deep/${NAME_A}`)).toBe(false)
-    expect(isOmpSessionPath('/root', `/elsewhere/-bucket/${NAME_A}`)).toBe(false)
-    expect(isOmpSessionPath('/root', '/root/-bucket/session.txt')).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/-bucket/${NAME_A}`)).toBe(true)
+    expect(isBucketedSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/-bucket/deep/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/elsewhere/-bucket/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', '/root/-bucket/session.txt')).toBe(false)
   })
 })
 
