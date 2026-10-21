@@ -30,7 +30,8 @@ describe('isolated recurrence evaluation', () => {
   })
 
   it('exhausts a bounded minutely rule before the cursor', async () => {
-    expect(await evaluator().next({ ...daily, dtstartLocal: '1970-01-01T00:00:00', rrule: 'FREQ=MINUTELY;COUNT=100000' }, new Date('2030-01-01T00:00:00Z'))).toBeNull()
+    // Prove the 100,000-candidate result independently of machine speed; the default deadline is tested separately.
+    expect(await evaluator({ computeTimeoutMs: 5_000 }).next({ ...daily, dtstartLocal: '1970-01-01T00:00:00', rrule: 'FREQ=MINUTELY;COUNT=100000' }, new Date('2030-01-01T00:00:00Z'))).toBeNull()
   })
 
   it('enforces the default 500ms compute budget in the real worker', async () => {
