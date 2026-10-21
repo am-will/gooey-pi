@@ -16,6 +16,7 @@ const electronMocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => electronMocks)
 
+import type { AppSettings } from '../../src/types/api'
 import { registerIpc, type IpcRegistration } from '../../electron/main/ipc'
 import { OmpModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-omp'
 
@@ -59,7 +60,7 @@ interface Harness {
 }
 
 function buildServices() {
-  const settingsState = { ompApprovalMode: 'inherit', disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
+  const settingsState: Pick<AppSettings, 'ompApprovalMode' | 'disabledProviders' | 'disabledModels' | 'ompDisabledProviders' | 'ompDisabledModels' | 'piDisabledProviders' | 'piDisabledModels'> = { ompApprovalMode: 'inherit', disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
   const catalog = (from: string, disabled: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()) => {
     const models = [
       { key: 'anthropic/claude', provider: 'anthropic', id: 'claude' },
@@ -407,6 +408,21 @@ describe('harness-aware IPC routing', () => {
   it('does not register MCP-specific authentication or credential cleanup channels', () => {
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:start-mcp-oauth', expect.any(Function))
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:logout-mcp', expect.any(Function))
+  })
+
+  it('applies visibility after a delayed catalog refresh settles', async () => {
+    const original = harness.services.omp.catalog.catalog.getMockImplementation()
+    if (!original) throw new Error('Missing fixture catalog')
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    harness.services.omp.catalog.catalog.mockImplementationOnce(async (force, disabled, models) => {
+      await gate
+      return original(force, disabled, models)
+    })
+    const pending = harness.invoke('providers:catalog', true, 'omp')
+    await harness.services.settings.update({ ompDisabledModels: ['openai/gpt'] })
+    release()
+    await expect(pending).resolves.toMatchObject({ models: expect.arrayContaining([{ key: 'openai/gpt', provider: 'openai', id: 'gpt', enabled: false }]) })
   })
 
   it('serializes visibility read-modify-write operations across concurrent toggles', async () => {
