@@ -239,7 +239,7 @@ export default function App() {
     terminalOpen, view,
   })
   const sidebarVisible = settingsState.sidebarOpen && !layout.sidebarSuppressed
-  const childHistory = useChildWorkspace({ bridge, parent: activeSession, harness: activeHarness, visible: view === 'session', compact: layout.compactLayout, setSidebarOpen: settingsState.setSidebarOpen })
+  const childHistory = useChildWorkspace({ bridge, parent: activeSession, harness: activeHarness, visible: view === 'session', rosterVisible: sidebarVisible, compact: layout.compactLayout, setSidebarOpen: settingsState.setSidebarOpen })
   const inspectorVisible = settingsState.inspectorOpen && !layout.inspectorSuppressed && !childHistory.isOpen
   const extension = useExtensionUi({
     bridge, askUserTimeoutMs: settingsState.settings.askUserTimeoutMs, activeRuntimeId: workspace.runtime?.runtimeId, runtimeSessionsRef: workspace.runtimeSessionsRef,

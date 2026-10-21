@@ -15,11 +15,12 @@ function LoadingChildPane() {
 }
 
 /** Child inspection owns its reads and selection; the parent workspace is never activated or replaced. */
-export function useChildWorkspace({ bridge, parent, harness, visible, compact, setSidebarOpen }: {
+export function useChildWorkspace({ bridge, parent, harness, visible, rosterVisible, compact, setSidebarOpen }: {
   bridge: PrimeWorkApi | null
   parent?: SessionRecord
   harness: HarnessId
   visible: boolean
+  rosterVisible: boolean
   compact: boolean
   setSidebarOpen(open: boolean): void
 }) {
@@ -29,8 +30,10 @@ export function useChildWorkspace({ bridge, parent, harness, visible, compact, s
   const [selection, setSelection] = useState<{ parentFile: string; child: ChildSession }>()
   const [revision, setRevision] = useState(0)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const selected = harness === 'omp' && selection?.parentFile === parentFile ? selection : undefined
+  const observeRoster = rosterVisible || selected !== undefined
   useEffect(() => {
-    if (!parentFile || harness !== 'omp' || !api) return
+    if (!parentFile || harness !== 'omp' || !api || !observeRoster) return
     let alive = true
     let pending = false
     const refresh = async () => {
@@ -48,7 +51,7 @@ export function useChildWorkspace({ bridge, parent, harness, visible, compact, s
     const onVisible = () => { if (document.visibilityState !== 'hidden') void refresh() }
     document.addEventListener('visibilitychange', onVisible)
     return () => { alive = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
-  }, [api, harness, parentFile, revision])
+  }, [api, harness, observeRoster, parentFile, revision])
   const open = useCallback((child: ChildSession, trigger: HTMLButtonElement) => {
     if (!parentFile || harness !== 'omp') return
     triggerRef.current = trigger
@@ -59,7 +62,6 @@ export function useChildWorkspace({ bridge, parent, harness, visible, compact, s
     setSelection(undefined)
     if (triggerRef.current?.isConnected) triggerRef.current.focus()
   }, [])
-  const selected = harness === 'omp' && selection?.parentFile === parentFile ? selection : undefined
   const currentRoster = rosterState?.parentFile === parentFile ? rosterState : undefined
   const result = currentRoster && 'result' in currentRoster ? currentRoster.result : undefined
   const child = selected && (result?.supported ? result.children.find((item) => item.id === selected.child.id) : undefined) || selected?.child

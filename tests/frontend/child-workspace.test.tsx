@@ -15,8 +15,8 @@ let host: HTMLDivElement
 let state: ReturnType<typeof useChildWorkspace>
 beforeEach(() => { host = document.createElement('div'); document.body.append(host); root = createRoot(host); vi.useFakeTimers() })
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers() })
-function Probe({ bridge, harness = 'omp', visible = true }: { bridge: PrimeWorkApi; harness?: HarnessId; visible?: boolean }) {
-  state = useChildWorkspace({ bridge, parent, harness, visible, compact: false, setSidebarOpen: () => undefined })
+function Probe({ bridge, harness = 'omp', visible = true, rosterVisible = true }: { bridge: PrimeWorkApi; harness?: HarnessId; visible?: boolean; rosterVisible?: boolean }) {
+  state = useChildWorkspace({ bridge, parent, harness, visible, rosterVisible, compact: false, setSidebarOpen: () => undefined })
   return state.roster ? <ChildSessionRows roster={state.roster} /> : null
 }
 
@@ -46,4 +46,18 @@ it('ignores in-flight roster responses after switching away and stops polling', 
 it('bounds ancestry even if roster relationships contain a cycle', () => {
   const second = { ...child, id: 'second', parentId: child.id }
   expect(childDepth({ ...child, parentId: second.id }, [{ ...child, parentId: second.id }, second])).toBe(1)
+})
+
+it('polls only while the roster or its selected child is visible', async () => {
+  const list = vi.fn().mockResolvedValue({ supported: true, children: [child], truncated: false })
+  const bridge = { subagents: { list, history: vi.fn().mockResolvedValue({ messages: [], newerCursor: 'tail', reset: false, truncated: false }) } } as unknown as PrimeWorkApi
+  await act(async () => root.render(<Probe bridge={bridge} rosterVisible={false} />))
+  await act(async () => vi.advanceTimersByTime(9_000))
+  expect(list).not.toHaveBeenCalled()
+  await act(async () => root.render(<Probe bridge={bridge} />))
+  await act(async () => host.querySelector<HTMLButtonElement>('.child-session-row')!.click())
+  await act(async () => root.render(<Probe bridge={bridge} rosterVisible={false} />))
+  const viewedCalls = list.mock.calls.length
+  await act(async () => vi.advanceTimersByTime(3_000))
+  expect(list).toHaveBeenCalledTimes(viewedCalls + 1)
 })
