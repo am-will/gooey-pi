@@ -8,7 +8,7 @@
 // launch -> drive -> capture -> tear down. It never touches your real
 // ~/.prime / ~/.omp / ~/.pi state or an app instance it did not start.
 //
-// Requires a display. On a headless machine wrap the command in `xvfb-run -a`.
+// Linux requires an X display. On headless Linux, wrap the command in `xvfb-run -a`.
 //
 // Usage:
 //   node control.mjs doctor [--out DIR]
@@ -20,7 +20,7 @@
 import { _electron as electron } from '@playwright/test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, posix, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -47,6 +47,36 @@ function makeOutDir(explicit, name) {
   return base
 }
 
+/** Preserve display/system startup variables; all app and harness storage stays in the fixture. */
+export function verificationEnvironment(home, fixtureRoot, parent = process.env, platform = process.platform) {
+  const paths = platform === 'win32' ? win32 : posix
+  /** @type {Record<string, string>} */
+  const env = {
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: paths.join(fixtureRoot, 'app-data'),
+    LOCALAPPDATA: paths.join(fixtureRoot, 'local-app-data'),
+    XDG_CONFIG_HOME: paths.join(fixtureRoot, 'config'),
+    XDG_DATA_HOME: paths.join(fixtureRoot, 'data'),
+    XDG_CACHE_HOME: paths.join(fixtureRoot, 'cache'),
+    TMPDIR: fixtureRoot, TEMP: fixtureRoot, TMP: fixtureRoot,
+    LANG: 'en_US.UTF-8', LC_ALL: 'C',
+    PRIME_WORK_E2E_HIDE_WINDOWS: '0',
+  }
+  for (const key of ['DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', '__CF_USER_TEXT_ENCODING', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT']) {
+    if (parent[key]) env[key] = parent[key]
+  }
+  if (platform === 'win32') {
+    const system = parent.SystemRoot || parent.WINDIR || 'C:\\Windows'
+    env.PATH = `${paths.join(system, 'System32')};${system}`
+    env.HOMEDRIVE = win32.parse(home).root.replace(/[\\/]$/, '')
+    env.HOMEPATH = home.slice(env.HOMEDRIVE.length)
+  } else {
+    env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+  }
+  return env
+}
+
 async function launch() {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'gooeypi-verify-fixture-'))
   const home = join(fixtureRoot, 'home')
@@ -54,8 +84,8 @@ async function launch() {
   mkdirSync(home, { recursive: true })
   mkdirSync(userData, { recursive: true })
 
-  const env = { ...process.env, HOME: home, PRIME_WORK_E2E_HIDE_WINDOWS: '0' }
-  if (!env.DISPLAY) throw new Error('No DISPLAY set. Run under `xvfb-run -a` or an X server.')
+  const env = verificationEnvironment(home, fixtureRoot)
+  if (process.platform === 'linux' && !env.DISPLAY) throw new Error('No DISPLAY set. Run under `xvfb-run -a` or an X server.')
 
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${userData}`],
@@ -208,4 +238,4 @@ async function main() {
   await teardown(session)
 }
 
-main()
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) void main()

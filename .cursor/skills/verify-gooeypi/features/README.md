@@ -8,13 +8,16 @@ map lists others.
 
 ## Baseline preconditions
 
-- The app is built (`out/main/index.js` exists); if not, run `npm run build`.
-- `node -v` is `v24.15.0` (load nvm first if not: `. "$HOME/.nvm/nvm.sh"; nvm use`).
-- A display is available; on a headless machine prefix commands with `xvfb-run -a`.
+- Run `npm run build` after source changes before each verification session.
+  The driver runs the built bundle and does not rebuild it.
+- Select the toolchain in the [validation guide](../../../../docs/validation.md#supported-toolchain).
+- Linux needs an X display. Use `xvfb-run -a` on headless Linux. macOS and
+  Windows use their native desktop session.
 - Drives run against a throwaway `HOME` + Electron `--user-data-dir`, so the real
-  `~/.prime` / `~/.omp` / `~/.pi` state is never touched.
+  `~/.prime` / `~/.omp` / `~/.pi` state is isolated. The environment also
+  replaces XDG and Windows profile paths and omits inherited harness overrides.
 - The driver dismisses the `No Pi family harness detected` modal automatically
-  (a fresh `HOME` has no harness).
+  when it appears. A system-wide harness may still be detected.
 - Never drive an app instance this verification run did not start.
 
 ## Driving conventions
