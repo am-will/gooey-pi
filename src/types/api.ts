@@ -1,8 +1,9 @@
 import type { HarnessId, HarnessStatus } from './api/harness'
-import type { PrimeThinkingLevel, PrimeServiceTier, PrimeModelDescriptor, PrimeModelCatalog, ProviderAuthEvent } from './api/models'
 import type { CheckoutStrategy, CheckoutCatalog, CheckoutAction, CheckoutChangeResult, GitStatus, GitDiff } from './api/git'
+import type { PrimeModelDescriptor, PrimeThinkingLevel, PrimeModelCatalog, ProviderAuthEvent } from './api/models'
 import type { ProjectRecord, ProjectFileListing, ProjectScripts } from './api/projects'
 import type { SessionRecord, TranscriptMessage, PromptDeliveryIntent, SessionChangeEvent } from './api/sessions'
+import type { RuntimeInfo, PrimeEventEnvelope } from './api/runtime'
 import type { PluginCatalog, ExtensionInstallInput, McpConnectionInput, McpStateInput, CapabilityMutationInput } from './api/plugins'
 import type { AgentBrowserState, AgentBrowserPointerEvent, AgentBrowserActivityEvent } from './api/browser'
 import type { NativeHeartbeatRecord, AutomationScheduleRecord, ScheduleTiming, SchedulePreview, ScheduleInput, SchedulePatch, ScheduleRunRecord, ScheduleChangeEvent } from './api/schedules'
@@ -76,50 +77,6 @@ export interface AppUpdateState {
 
 
 
-export interface PrimeContextUsage {
-  tokens: number | null
-  contextWindow: number
-  percent: number | null
-}
-
-export interface SessionUsageTokens {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  total: number
-}
-
-/** Cumulative cost and token totals for the in-context session, as reported by get_session_stats. */
-export interface SessionUsage {
-  /** USD cost summed from catalog pricing; null when the harness reports none. */
-  cost: number | null
-  tokens?: SessionUsageTokens
-}
-
-export interface RuntimeInfo {
-  /** Outstanding harness dialogs that can be restored after a renderer reload. */
-  pendingExtensionUi?: Record<string, unknown>[]
-  runtimeId: string
-  harness: HarnessId
-  sessionId?: string
-  sessionFile?: string
-  cwd: string
-  isStreaming: boolean
-  sessionActions?: SessionActionSnapshot
-  isCompacting?: boolean
-  model?: { provider?: string; id?: string; name?: string } | null
-  /** Renderer-local notice; never persisted or used to update the model picker. */
-  executingModel?: { provider?: string; id: string; label: string; isFallback: true } | null
-  thinkingLevel?: string
-  availableThinkingLevels?: PrimeThinkingLevel[]
-  fastModeSupported?: boolean
-  imageInputSupported?: boolean
-  fastModeAvailable?: boolean
-  serviceTier?: PrimeServiceTier
-  contextUsage?: PrimeContextUsage
-  sessionUsage?: SessionUsage
-}
 
 
 
@@ -135,10 +92,14 @@ export interface RuntimeInfo {
 
 
 
-export interface PrimeEventEnvelope {
-  runtimeId: string
-  event: Record<string, unknown>
-}
+
+
+
+
+
+
+
+
 
 
 
@@ -214,16 +175,7 @@ export interface PetDefinition {
 
 
 
-export interface SessionActionSnapshot {
-  queuedCount: number
-  steering: string[]
-  followUps: string[]
-  active?: {
-    kind: 'turn' | 'session_command'
-    phase: 'preparing' | 'committing' | 'running'
-    label?: string
-  }
-}
+
 
 export const INTERFACE_FONT_SCALES = [105, 110, 115] as const
 export type InterfaceFontScale = typeof INTERFACE_FONT_SCALES[number]
@@ -535,3 +487,5 @@ export * from './api/projects'
 export * from './api/git'
 
 export * from './api/sessions'
+
+export * from './api/runtime'
