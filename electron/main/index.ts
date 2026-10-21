@@ -832,7 +832,6 @@ async function bootstrap(): Promise<void> {
     run: (task) => scheduledRuns[task.harness].run(task),
   })
   automation = schedules
-  await schedules.start()
   const scheduleBridge = new AgentScheduleBridge({
     service: schedules,
     harness: 'prime',
@@ -1032,11 +1031,13 @@ async function bootstrap(): Promise<void> {
   })
   backgroundMode.start()
   const window = await ensureWindow()
+  if (shutdownStarted) return
   if (packagedSmokeMarkerFile) {
     await runPackagedSmoke(window, packagedSmokeMarkerFile)
     return
   }
   updates.start()
+  await schedules.start()
 }
 
 /**
