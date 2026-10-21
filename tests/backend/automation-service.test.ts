@@ -455,6 +455,25 @@ describe('AutomationService', () => {
     } finally { await service.stop() }
   })
 
+  it('checks the wall clock promptly after sleep instead of waiting for the original long delay', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let now = new Date('2030-01-01T00:00:00Z')
+    let dispatched: () => void = () => undefined
+    const entered = new Promise<void>((resolve) => { dispatched = resolve })
+    const run = vi.fn(async () => { dispatched(); return {} })
+    const service = new AutomationService(store(), {
+      validateTarget: async () => undefined, validateExecution: async () => undefined, run, now: () => now,
+    })
+    try {
+      await service.create({ prompt: 'Wake task', target, timing: onceAt('2030-01-01T01:00:00Z'), execution })
+      await service.start()
+      now = new Date('2030-01-01T01:00:00Z')
+      await vi.advanceTimersByTimeAsync(15_000)
+      await entered
+      expect(run).toHaveBeenCalledOnce()
+    } finally { await service.stop(); vi.useRealTimers() }
+  })
+
   it('records missed occurrences as skipped without dispatching them', async () => {
     const stateStore = store()
     let now = new Date('2030-01-01T00:00:00Z')

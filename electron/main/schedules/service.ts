@@ -22,6 +22,7 @@ import { BoundedRecurrenceEvaluator, RecurrenceEvaluationError, type ScheduleRec
 const MAX_CONCURRENT_RUNS = 2
 const MAX_REPORTED_MISSED_OCCURRENCES = 10_000
 const FAILURE_RETRY_MS = 1_000
+const WALL_CLOCK_RECHECK_MS = 15_000
 const DUE_GRACE_MS = 60_000
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
 
@@ -386,7 +387,7 @@ export class AutomationService {
       .filter(Number.isFinite)
       .reduce<number | undefined>((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined)
     if (next === undefined) return
-    const delay = Math.max(this.retryNotBefore - this.now().getTime(), 0, Math.min(2_147_483_647, next - this.now().getTime()))
+    const delay = Math.max(this.retryNotBefore - this.now().getTime(), 0, Math.min(WALL_CLOCK_RECHECK_MS, next - this.now().getTime()))
     this.timer = setTimeout(() => {
       this.timer = null
       void this.processDue()
