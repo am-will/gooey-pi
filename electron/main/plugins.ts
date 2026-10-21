@@ -7,7 +7,6 @@ import { HARNESSES } from './harness'
 import { createAdmissionQueue, createSingleFlight } from './lib/async'
 import { resolveExecutable, type ExecutableSource } from './process-utils'
 import { isRecord, requireString } from './validation'
-import { discoverPlugins } from './plugins/catalog'
 import { isPackageDisabled, packageSource } from './plugins/package-entries'
 import { readAtMost } from './plugins/file-io'
 import { acquireSettingsLock, prepareProjectSettingsPath, removeMcpDefinition, settingsFingerprint, updateMcpSettings, updateMcpState, updatePackageState, validateCapabilityMutation, validateMcpConnection, validateMcpStateInput } from './plugins/mcp'
@@ -15,7 +14,7 @@ import type { ProjectSettingsPath } from './plugins/mcp'
 import { executeOmpPluginAction, executeOmpPluginInstall, executePackageInstall, executePackageRemove, executePiPluginInstall, executePiPluginRemove, validatePackageSource } from './plugins/package-execution'
 import { installOmpExtension, validateExtensionInstallInput } from './plugins/extension-installation'
 
-type PluginDiscovery = typeof discoverPlugins
+type PluginDiscovery = typeof import('./plugins/catalog').discoverPlugins
 
 interface PluginServiceOptions {
   harness?: HarnessId
@@ -112,7 +111,7 @@ export class PluginService {
   ) {
     this.harness = options.harness ?? 'prime'
     this.agentDir = options.agentDir ?? HARNESSES[this.harness].agentDir(homedir())
-    this.discoverCatalog = options.discover ?? discoverPlugins
+    this.discoverCatalog = options.discover ?? (async (...args) => (await import('./plugins/catalog')).discoverPlugins(...args))
     const builtInSkills = options.builtInSkills
     this.builtInSkills = typeof builtInSkills === 'function'
       ? builtInSkills
