@@ -115,6 +115,36 @@ describe('context usage projection', () => {
     expect(projection.current()?.tokens).toBe(43_100)
   })
 
+  it('does not mistake a prior response snapshot for output from the next request', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_100))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(3_000))
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(1_500))
+    // Growth covers the earlier response, not the newer one, even though a
+    // request rebase removed the earlier response from the live overlay.
+    projection.applySnapshot(usage(43_100), requestedAt)
+    expect(projection.current()?.tokens).toBe(44_600)
+  })
+
+  it('forgets pre-compaction activity when checking what a delayed snapshot includes', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(150_000))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantEnd(10_000))
+    projection.handleEvent({ type: 'compaction_start' })
+    projection.handleEvent({ type: 'compaction_end' })
+    projection.applySnapshot(usage(40_000))
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(3_000))
+    projection.applySnapshot(usage(43_000), requestedAt)
+    expect(projection.current()?.tokens).toBe(43_000)
+  })
+
   it('bakes live output at a run boundary and forgets everything on reset', () => {
     const projection = new ContextUsageProjection()
     projection.applySnapshot(usage(40_000))
