@@ -4,6 +4,7 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App'
+import { detectRendererPlatform } from '../../src/lib/platform-shortcuts'
 import { useBrowserAnnotations, type BrowserAnnotationsApi } from '../../src/hooks/useBrowserAnnotations'
 import type { InspectorProps } from '../../src/components/Inspector'
 
@@ -68,7 +69,8 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-const toggleSidebar = async () => act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true })) })
+const primaryModifier = () => detectRendererPlatform() === 'darwin' ? { metaKey: true } : { ctrlKey: true }
+const toggleSidebar = async () => act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ...primaryModifier() })) })
 
 const renderApp = async () => {
   // Resolve the lazy inspector chunk up front so its Suspense boundary settles on mount.
@@ -174,7 +176,9 @@ it('keeps the full-page view element stable during unrelated shell updates', asy
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.sidebar__primary button')].find((button) => button.textContent?.includes('Activity'))!.click())
   expect(observed.activityRenders).toBeGreaterThan(0)
   const before = observed.activityRenders
-  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true })))
-  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...primaryModifier() })))
+  expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
+  await act(async () => document.body.querySelector<HTMLInputElement>('.command-palette input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  expect(document.body.querySelector('[role="dialog"]')).toBeNull()
   expect(observed.activityRenders).toBe(before)
 })
