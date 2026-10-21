@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowLeft,
+  Archive,
   CalendarClock,
   Check,
   CheckCircle2,
@@ -24,6 +25,7 @@ import type {
   AutomationScheduleRecord,
   HarnessId,
   NativeHeartbeatRecord,
+  PrimeImplementation,
   PrimeModelDescriptor,
   PrimeThinkingLevel,
   ProjectRecord,
@@ -39,7 +41,12 @@ import type {
 import { PRIME_THINKING_LEVELS } from '@/types/api'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { archivableScheduleSessions } from '@/lib/schedule-archive'
 import { errorMessage } from '@/lib/errors'
+import { RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '@/lib/prime-compat'
+import { useI18n, type MessageKey } from '@/lib/i18n'
+import { sessionTitleText } from '@/lib/session-title'
+import { CREATED_BY_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTION_THINKING_KEYS, RUN_STATUS_KEYS, RUN_TRIGGER_KEYS } from '@/lib/schedule-labels'
 import { EmptyState, Modal, Segmented } from '@/components/ui'
 
 type ScheduleFilter = 'active' | 'paused' | 'attention' | 'all'
@@ -67,6 +74,8 @@ type ScheduleForm = {
 
 interface ScheduledPageProps {
   harness: HarnessId
+  /** Rust Prime cannot pause or resume native heartbeats from GooeyPi; it can still stop them. */
+  primeImplementation?: PrimeImplementation
   schedules: AutomationScheduleRecord[]
   nativeHeartbeats: NativeHeartbeatRecord[]
   projects: ProjectRecord[]
@@ -84,29 +93,67 @@ interface ScheduledPageProps {
   onDelete(id: string): Promise<void>
   onRunNow(id: string): Promise<void>
   onPreview(timing: ScheduleTiming): Promise<SchedulePreview>
+  onArchiveSessions?(sessions: SessionRecord[]): Promise<void>
   onOpenSession(sessionFile: string): void
   onManageHeartbeat(id: string, action: 'pause' | 'resume' | 'stop'): Promise<void>
 }
 
+// Module-level helpers below only build display text, so they receive `t` from
+// the component instead of calling useI18n() outside a component body.
+type Translate = ReturnType<typeof useI18n>['t']
+
 const DEVICE_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 const WEEKDAYS = [
-  { value: 'MO', label: 'M', long: 'Monday' },
-  { value: 'TU', label: 'T', long: 'Tuesday' },
-  { value: 'WE', label: 'W', long: 'Wednesday' },
-  { value: 'TH', label: 'T', long: 'Thursday' },
-  { value: 'FR', label: 'F', long: 'Friday' },
-  { value: 'SA', label: 'S', long: 'Saturday' },
-  { value: 'SU', label: 'S', long: 'Sunday' },
-] as const
+  { value: 'MO', label: 'schedule.weekday.short.monday', long: 'schedule.weekday.monday' },
+  { value: 'TU', label: 'schedule.weekday.short.tuesday', long: 'schedule.weekday.tuesday' },
+  { value: 'WE', label: 'schedule.weekday.short.wednesday', long: 'schedule.weekday.wednesday' },
+  { value: 'TH', label: 'schedule.weekday.short.thursday', long: 'schedule.weekday.thursday' },
+  { value: 'FR', label: 'schedule.weekday.short.friday', long: 'schedule.weekday.friday' },
+  { value: 'SA', label: 'schedule.weekday.short.saturday', long: 'schedule.weekday.saturday' },
+  { value: 'SU', label: 'schedule.weekday.short.sunday', long: 'schedule.weekday.sunday' },
+] as const satisfies ReadonlyArray<{ value: string; label: MessageKey; long: MessageKey }>
 const DAY_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'] as const
 const THINKING_LEVELS: readonly PrimeThinkingLevel[] = PRIME_THINKING_LEVELS
-const FREQUENCIES: Array<{ value: Frequency; label: string }> = [
-  { value: 'hourly', label: 'Hourly' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'advanced', label: 'Advanced' },
+const THINKING_LEVEL_KEYS = {
+  off: 'schedule.thinking.off',
+  minimal: 'schedule.thinking.minimal',
+  low: 'schedule.thinking.low',
+  medium: 'schedule.thinking.medium',
+  high: 'schedule.thinking.high',
+  xhigh: 'schedule.thinking.xhigh',
+  max: 'schedule.thinking.max',
+} as const satisfies Record<PrimeThinkingLevel, MessageKey>
+const FREQUENCIES: Array<{ value: Frequency; label: MessageKey }> = [
+  { value: 'hourly', label: 'schedule.frequency.hourly' },
+  { value: 'daily', label: 'schedule.frequency.daily' },
+  { value: 'weekly', label: 'schedule.frequency.weekly' },
+  { value: 'monthly', label: 'schedule.frequency.monthly' },
+  { value: 'advanced', label: 'schedule.frequency.advanced' },
 ]
+const EMPTY_TITLE_KEYS: Record<ScheduleFilter, MessageKey> = {
+  active: 'schedule.empty.active',
+  paused: 'schedule.empty.paused',
+  attention: 'schedule.empty.attention',
+  all: 'schedule.empty.all',
+}
+// The cadence pairs a singular phrasing ("Every day") with a counted one
+// ("Every 2 days"); English pluralises with an "s", Japanese does not, so the
+// two phrasings stay separate keys instead of one plural message.
+type CadenceUnit = 'hour' | 'day' | 'week' | 'month' | 'cycle'
+const CADENCE_UNIT_KEYS: Record<CadenceUnit, MessageKey> = {
+  hour: 'schedule.timing.everyHour',
+  day: 'schedule.timing.everyDay',
+  week: 'schedule.timing.everyWeek',
+  month: 'schedule.timing.everyMonth',
+  cycle: 'schedule.timing.everyCycle',
+}
+const CADENCE_INTERVAL_KEYS: Record<CadenceUnit, MessageKey> = {
+  hour: 'schedule.timing.everyHours',
+  day: 'schedule.timing.everyDays',
+  week: 'schedule.timing.everyWeeks',
+  month: 'schedule.timing.everyMonths',
+  cycle: 'schedule.timing.everyCycles',
+}
 
 const pad = (value: number) => String(value).padStart(2, '0')
 
@@ -245,8 +292,9 @@ function executionFromForm(form: ScheduleForm): ScheduleExecution {
   return { model: form.model, thinking: form.thinking, speed: form.fast ? 'fast' : 'normal' }
 }
 
-function formatDateTime(value?: string) {
-  if (!value) return 'Not scheduled'
+// Date order, month names, and clock style follow the device's regional format.
+function formatDateTime(t: Translate, value?: string) {
+  if (!value) return t('schedule.notScheduled')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat(undefined, {
@@ -258,22 +306,24 @@ function formatDateTime(value?: string) {
   }).format(date)
 }
 
-function formatRunDate(value?: string) {
-  if (!value) return 'Pending'
+function formatRunDate(t: Translate, value?: string) {
+  if (!value) return t('schedule.pending')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(date)
 }
 
-function timingLabel(timing: ScheduleTiming) {
-  if (timing.kind === 'once') return `Once · ${formatDateTime(timing.at)}`
+function timingLabel(t: Translate, timing: ScheduleTiming) {
+  if (timing.kind === 'once') return t('schedule.timing.once', { time: formatDateTime(t, timing.at) })
   const parts = rruleParts(timing.rrule)
   const frequency = parts.get('FREQ')?.toLowerCase()
   const interval = Number(parts.get('INTERVAL') ?? '1')
-  const singular = frequency === 'daily' ? 'day' : frequency === 'weekly' ? 'week' : frequency === 'monthly' ? 'month' : frequency === 'hourly' ? 'hour' : 'cycle'
-  const cadence = interval > 1 ? `Every ${interval} ${singular}s` : `Every ${singular}`
+  const unit: CadenceUnit = frequency === 'daily' ? 'day' : frequency === 'weekly' ? 'week' : frequency === 'monthly' ? 'month' : frequency === 'hourly' ? 'hour' : 'cycle'
+  const cadence = interval > 1
+    ? t(CADENCE_INTERVAL_KEYS[unit], { interval })
+    : t(CADENCE_UNIT_KEYS[unit])
   const days = parts.get('BYDAY')
-  return `${cadence}${days ? ` · ${days}` : ''} at ${timing.dtstartLocal.slice(11, 16)} ${timing.timeZone}`
+  return `${cadence}${days ? ` · ${days}` : ''} ${t('schedule.timing.at', { time: timing.dtstartLocal.slice(11, 16), timeZone: timing.timeZone })}`
 }
 
 function needsAttention(item: AutomationScheduleRecord) {
@@ -281,8 +331,8 @@ function needsAttention(item: AutomationScheduleRecord) {
   return item.status === 'blocked' || latest?.status === 'failed' || latest?.status === 'interrupted'
 }
 
-function statusLabel(item: AutomationScheduleRecord) {
-  return needsAttention(item) ? 'Needs attention' : item.status
+function statusLabel(t: Translate, item: AutomationScheduleRecord) {
+  return needsAttention(item) ? t('schedule.status.attention') : t(DEFINITION_STATUS_KEYS[item.status])
 }
 
 function statusIcon(item: AutomationScheduleRecord, size = 16) {
@@ -302,9 +352,10 @@ function runIcon(status: ScheduleRunRecord['status']) {
 
 
 export function ScheduledPage({
-  harness, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId,
-  onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat,
+  harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId,
+  onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat, onArchiveSessions,
 }: ScheduledPageProps) {
+  const { t } = useI18n()
   const [filter, setFilter] = useState<ScheduleFilter>('active')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editor, setEditor] = useState<{ mode: EditorMode; scheduleId?: string } | null>(null)
@@ -319,6 +370,7 @@ export function ScheduledPage({
   const [actionError, setActionError] = useState('')
   const [actionNotice, setActionNotice] = useState('')
   const previewRequest = useRef(0)
+  const heartbeatPauseUnavailable = primeImplementation === 'rust' ? RUST_PRIME_HEARTBEAT_PAUSE_DETAIL : undefined
 
   const authorizedProjects = useMemo(() => projects.filter(isAuthorized), [projects])
   const projectMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects])
@@ -380,7 +432,7 @@ export function ScheduledPage({
   }
   const closeEditor = () => {
     if (saving) return
-    if (JSON.stringify(form) !== baseline && !window.confirm('Discard your unsaved schedule changes?')) return
+    if (JSON.stringify(form) !== baseline && !window.confirm(t('schedule.confirm.discard'))) return
     setEditor(null); setFormError('')
   }
   const setProject = (projectId: string) => {
@@ -398,15 +450,15 @@ export function ScheduledPage({
     }))
   }
   const validate = () => {
-    if (!form.title.trim()) return 'Give this schedule a title.'
-    if (!form.prompt.trim()) return `Add a prompt for ${HARNESS_SHORT_NAMES[harness]} to run.`
-    if (!form.model || !availableModels.some((model) => model.key === form.model)) return 'Choose an available model.'
-    if (!form.projectId || !authorizedProjects.some((project) => project.id === form.projectId)) return 'Choose an authorized project.'
-    if (form.targetKind === 'session' && !eligibleSessions.some((session) => session.id === form.sessionId)) return 'Choose an authorized session.'
+    if (!form.title.trim()) return t('schedule.error.title')
+    if (!form.prompt.trim()) return t('schedule.error.prompt', { harness: HARNESS_SHORT_NAMES[harness] })
+    if (!form.model || !availableModels.some((model) => model.key === form.model)) return t('schedule.error.model')
+    if (!form.projectId || !authorizedProjects.some((project) => project.id === form.projectId)) return t('schedule.error.project')
+    if (form.targetKind === 'session' && !eligibleSessions.some((session) => session.id === form.sessionId)) return t('schedule.error.session')
     if (!currentTiming) {
-      if (form.timingKind === 'recurring' && !validTimeZone(form.timeZone.trim())) return 'Enter a valid IANA timezone.'
-      if (form.frequency === 'weekly' && !form.weekdays.length) return 'Choose at least one weekday.'
-      return form.frequency === 'advanced' ? 'Enter a valid RRULE containing FREQ.' : 'Choose a valid date and time.'
+      if (form.timingKind === 'recurring' && !validTimeZone(form.timeZone.trim())) return t('schedule.error.timeZone')
+      if (form.frequency === 'weekly' && !form.weekdays.length) return t('schedule.error.weekday')
+      return form.frequency === 'advanced' ? t('schedule.error.rrule') : t('schedule.error.dateTime')
     }
     return ''
   }
@@ -435,75 +487,75 @@ export function ScheduledPage({
     finally { setAction(null) }
   }
   const deleteSchedule = (item: AutomationScheduleRecord) => {
-    if (!window.confirm(`Delete “${item.title}”? Run history for this schedule will no longer be available here.`)) return
-    void perform(`delete:${item.id}`, () => onDelete(item.id), 'Schedule deleted.', () => setSelectedId(null))
+    if (!window.confirm(t('schedule.confirm.delete', { title: item.title }))) return
+    void perform(`delete:${item.id}`, () => onDelete(item.id), t('schedule.notice.deleted'), () => setSelectedId(null))
   }
 
   const editorModal = editor ? (
-    <Modal title={editor.mode === 'create' ? 'Create schedule' : 'Edit schedule'} onClose={closeEditor} footer={(
+    <Modal title={editor.mode === 'create' ? t('schedule.editor.create') : t('schedule.editor.editTitle')} onClose={closeEditor} footer={(
       <>
-        <span className="schedule-editor__save-status" aria-live="polite">{saving ? 'Saving without closing your draft…' : ''}</span>
-        <button type="button" className="button" disabled={saving} onClick={closeEditor}>Cancel</button>
+        <span className="schedule-editor__save-status" aria-live="polite">{saving ? t('schedule.editor.savingDraft') : ''}</span>
+        <button type="button" className="button" disabled={saving} onClick={closeEditor}>{t('common.cancel')}</button>
         <button type="submit" form="schedule-editor-form" className="button button--primary" disabled={saving}>
-          {saving ? 'Saving…' : editor.mode === 'create' ? 'Create schedule' : 'Save changes'}
+          {saving ? t('schedule.editor.saving') : editor.mode === 'create' ? t('schedule.editor.create') : t('schedule.editor.saveChanges')}
         </button>
       </>
     )}>
       <form id="schedule-editor-form" className="schedule-editor" onSubmit={(event) => void save(event)}>
         <div className="schedule-editor__lead">
           <Sparkles size={15} />
-          <p>{HARNESS_SHORT_NAMES[harness]} runs this prompt unattended. You can always pause it or open the session produced by a run.</p>
+          <p>{t('schedule.editor.lead', { harness: HARNESS_SHORT_NAMES[harness] })}</p>
         </div>
         <div className="schedule-editor__copy">
-          <label className="field"><span>Title</span><input autoFocus required value={form.title} disabled={saving} placeholder="Morning issue triage" onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} /></label>
-          <label className="field"><span>Prompt</span><textarea required rows={4} value={form.prompt} disabled={saving} placeholder="Review new high-priority issues, identify blockers, and propose owners…" onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} /></label>
+          <label className="field"><span>{t('schedule.editor.title')}</span><input autoFocus required value={form.title} disabled={saving} placeholder={t('schedule.editor.titlePlaceholder')} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} /></label>
+          <label className="field"><span>{t('schedule.editor.prompt')}</span><textarea required rows={4} value={form.prompt} disabled={saving} placeholder={t('schedule.editor.promptPlaceholder')} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} /></label>
         </div>
         <div className="schedule-editor__grid">
           <fieldset className="schedule-fieldset">
-            <legend><FolderKanban size={14} /> Destination</legend>
+            <legend><FolderKanban size={14} /> {t('schedule.editor.destination')}</legend>
             <div className="schedule-radio-grid">
-              <label className={form.targetKind === 'project' ? 'is-selected' : ''}><input type="radio" name="target" checked={form.targetKind === 'project'} onChange={() => setForm((current) => ({ ...current, targetKind: 'project' }))} /><span><strong>New session</strong><small>Start fresh in a project</small></span></label>
-              <label className={form.targetKind === 'session' ? 'is-selected' : ''}><input type="radio" name="target" checked={form.targetKind === 'session'} onChange={() => setForm((current) => ({ ...current, targetKind: 'session' }))} /><span><strong>Existing session</strong><small>Continue a thread</small></span></label>
+              <label className={form.targetKind === 'project' ? 'is-selected' : ''}><input type="radio" name="target" checked={form.targetKind === 'project'} onChange={() => setForm((current) => ({ ...current, targetKind: 'project' }))} /><span><strong>{t('schedule.target.newSession')}</strong><small>{t('schedule.target.newSessionHint')}</small></span></label>
+              <label className={form.targetKind === 'session' ? 'is-selected' : ''}><input type="radio" name="target" checked={form.targetKind === 'session'} onChange={() => setForm((current) => ({ ...current, targetKind: 'session' }))} /><span><strong>{t('schedule.target.existingSession')}</strong><small>{t('schedule.target.existingSessionHint')}</small></span></label>
             </div>
-            <label className="field"><span>Authorized project</span><select value={form.projectId} disabled={saving || !authorizedProjects.length} onChange={(event) => setProject(event.target.value)}><option value="">Choose a project</option>{authorizedProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-            {form.targetKind === 'session' ? <label className="field"><span>Session</span><select value={form.sessionId} disabled={saving || !eligibleSessions.length} onChange={(event) => setForm((current) => ({ ...current, sessionId: event.target.value }))}><option value="">Choose a session</option>{eligibleSessions.map((session) => <option key={session.id} value={session.id}>{session.title}</option>)}</select></label> : null}
-            {!authorizedProjects.length ? <p className="schedule-field-note schedule-field-note--warning"><AlertTriangle size={13} /> Add or authorize a project before scheduling work.</p> : <p className="schedule-field-note">{selectedProject?.primaryFolder}</p>}
+            <label className="field"><span>{t('schedule.editor.authorizedProject')}</span><select value={form.projectId} disabled={saving || !authorizedProjects.length} onChange={(event) => setProject(event.target.value)}><option value="">{t('schedule.editor.chooseProject')}</option>{authorizedProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+            {form.targetKind === 'session' ? <label className="field"><span>{t('schedule.editor.session')}</span><select value={form.sessionId} disabled={saving || !eligibleSessions.length} onChange={(event) => setForm((current) => ({ ...current, sessionId: event.target.value }))}><option value="">{t('schedule.editor.chooseSession')}</option>{eligibleSessions.map((session) => <option key={session.id} value={session.id}>{sessionTitleText(session.title, t)}</option>)}</select></label> : null}
+            {!authorizedProjects.length ? <p className="schedule-field-note schedule-field-note--warning"><AlertTriangle size={13} /> {t('schedule.editor.noProject')}</p> : <p className="schedule-field-note">{selectedProject?.primaryFolder}</p>}
           </fieldset>
 
           <fieldset className="schedule-fieldset">
-            <legend><CalendarClock size={14} /> Timing</legend>
+            <legend><CalendarClock size={14} /> {t('schedule.timing.title')}</legend>
             <div className="schedule-radio-grid schedule-radio-grid--timing">
-              <label className={form.timingKind === 'once' ? 'is-selected' : ''}><input type="radio" name="timing" checked={form.timingKind === 'once'} onChange={() => setForm((current) => ({ ...current, timingKind: 'once' }))} /><span><strong>Once</strong><small>One future run</small></span></label>
-              <label className={form.timingKind === 'recurring' ? 'is-selected' : ''}><input type="radio" name="timing" checked={form.timingKind === 'recurring'} onChange={() => setForm((current) => ({ ...current, timingKind: 'recurring' }))} /><span><strong>Recurring</strong><small>Repeat on a cadence</small></span></label>
+              <label className={form.timingKind === 'once' ? 'is-selected' : ''}><input type="radio" name="timing" checked={form.timingKind === 'once'} onChange={() => setForm((current) => ({ ...current, timingKind: 'once' }))} /><span><strong>{t('schedule.editor.once')}</strong><small>{t('schedule.editor.onceHint')}</small></span></label>
+              <label className={form.timingKind === 'recurring' ? 'is-selected' : ''}><input type="radio" name="timing" checked={form.timingKind === 'recurring'} onChange={() => setForm((current) => ({ ...current, timingKind: 'recurring' }))} /><span><strong>{t('schedule.editor.recurring')}</strong><small>{t('schedule.editor.recurringHint')}</small></span></label>
             </div>
             {form.timingKind === 'recurring' ? <>
-              <div className="schedule-frequency" role="group" aria-label="Recurrence frequency">{FREQUENCIES.map((option) => <button key={option.value} type="button" className={form.frequency === option.value ? 'is-active' : ''} aria-pressed={form.frequency === option.value} onClick={() => setForm((current) => ({ ...current, frequency: option.value }))}>{option.label}</button>)}</div>
+              <div className="schedule-frequency" role="group" aria-label={t('schedule.frequency.aria')}>{FREQUENCIES.map((option) => <button key={option.value} type="button" className={form.frequency === option.value ? 'is-active' : ''} aria-pressed={form.frequency === option.value} onClick={() => setForm((current) => ({ ...current, frequency: option.value }))}>{t(option.label)}</button>)}</div>
               {form.frequency !== 'advanced' ? <div className="schedule-inline-fields">
-                <label className="field"><span>Every</span><input type="number" min="1" max="999" value={form.interval} onChange={(event) => setForm((current) => ({ ...current, interval: event.target.value }))} /></label>
-                <span>{form.frequency === 'hourly' ? 'hour(s)' : form.frequency === 'daily' ? 'day(s)' : form.frequency === 'weekly' ? 'week(s)' : 'month(s)'}</span>
+                <label className="field"><span>{t('schedule.editor.every')}</span><input type="number" min="1" max="999" value={form.interval} onChange={(event) => setForm((current) => ({ ...current, interval: event.target.value }))} /></label>
+                <span>{form.frequency === 'hourly' ? t('schedule.editor.unitHours') : form.frequency === 'daily' ? t('schedule.editor.unitDays') : form.frequency === 'weekly' ? t('schedule.editor.unitWeeks') : t('schedule.editor.unitMonths')}</span>
               </div> : <label className="field"><span>RRULE</span><textarea className="schedule-rrule" rows={3} spellCheck={false} value={form.advancedRrule} placeholder="FREQ=WEEKLY;BYDAY=MO,WE,FR" onChange={(event) => setForm((current) => ({ ...current, advancedRrule: event.target.value }))} /></label>}
-              {form.frequency === 'weekly' ? <fieldset className="weekday-fieldset"><legend>On days</legend><div className="weekday-chips">{WEEKDAYS.map((day) => { const active = form.weekdays.includes(day.value); return <label key={day.value} className={active ? 'is-active' : ''} title={day.long}><input type="checkbox" checked={active} onChange={() => setForm((current) => ({ ...current, weekdays: active ? current.weekdays.filter((value) => value !== day.value) : [...current.weekdays, day.value] }))} /><span>{day.label}</span></label> })}</div></fieldset> : null}
+              {form.frequency === 'weekly' ? <fieldset className="weekday-fieldset"><legend>{t('schedule.editor.onDays')}</legend><div className="weekday-chips">{WEEKDAYS.map((day) => { const active = form.weekdays.includes(day.value); return <label key={day.value} className={active ? 'is-active' : ''} title={t(day.long)}><input type="checkbox" checked={active} onChange={() => setForm((current) => ({ ...current, weekdays: active ? current.weekdays.filter((value) => value !== day.value) : [...current.weekdays, day.value] }))} /><span>{t(day.label)}</span></label> })}</div></fieldset> : null}
             </> : null}
             <div className="schedule-date-fields">
-              <label className="field"><span>{form.timingKind === 'once' ? 'Date' : 'Starts'}</span><input type="date" value={form.date} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} /></label>
-              <label className="field"><span>Local time</span><input type="time" value={form.time} onChange={(event) => setForm((current) => ({ ...current, time: event.target.value }))} /></label>
+              <label className="field"><span>{form.timingKind === 'once' ? t('schedule.editor.date') : t('schedule.editor.starts')}</span><input type="date" value={form.date} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} /></label>
+              <label className="field"><span>{t('schedule.editor.localTime')}</span><input type="time" value={form.time} onChange={(event) => setForm((current) => ({ ...current, time: event.target.value }))} /></label>
             </div>
-            {form.timingKind === 'recurring' ? <label className="field"><span>IANA timezone</span><input list="schedule-time-zones" value={form.timeZone} spellCheck={false} onChange={(event) => setForm((current) => ({ ...current, timeZone: event.target.value }))} /><datalist id="schedule-time-zones"><option value={DEVICE_TIME_ZONE} /><option value="UTC" /><option value="America/Los_Angeles" /><option value="America/New_York" /><option value="Europe/London" /><option value="Asia/Tokyo" /></datalist></label> : <p className="schedule-field-note">Uses this device’s timezone: {DEVICE_TIME_ZONE}</p>}
+            {form.timingKind === 'recurring' ? <label className="field"><span>{t('schedule.editor.timeZone')}</span><input list="schedule-time-zones" value={form.timeZone} spellCheck={false} onChange={(event) => setForm((current) => ({ ...current, timeZone: event.target.value }))} /><datalist id="schedule-time-zones"><option value={DEVICE_TIME_ZONE} /><option value="UTC" /><option value="America/Los_Angeles" /><option value="America/New_York" /><option value="Europe/London" /><option value="Asia/Tokyo" /></datalist></label> : <p className="schedule-field-note">{t('schedule.editor.deviceTimeZone', { timeZone: DEVICE_TIME_ZONE })}</p>}
           </fieldset>
         </div>
 
         <fieldset className="schedule-fieldset schedule-fieldset--execution">
-          <legend><Gauge size={14} /> Execution</legend>
+          <legend><Gauge size={14} /> {t('schedule.execution.title')}</legend>
           <div className="schedule-execution-grid">
-            <label className="field"><span>Model</span><select value={form.model} onChange={(event) => selectModel(event.target.value)}>{!form.model ? <option value="" disabled>No model available</option> : null}{form.model && !models.some((model) => model.key === form.model && model.enabled !== false && model.available) ? <option value={form.model}>{form.model} (unavailable)</option> : null}{availableModels.map((model) => <option key={model.key} value={model.key}>{model.name} · {model.provider}</option>)}</select></label>
-            <label className="field"><span>Reasoning</span><select value={form.thinking} onChange={(event) => setForm((current) => ({ ...current, thinking: event.target.value as ScheduleForm['thinking'] }))}><option value="auto">Auto</option>{THINKING_LEVELS.filter((level) => !selectedModel || selectedModel.availableThinkingLevels.includes(level) || level === form.thinking).map((level) => <option key={level} value={level}>{level === 'xhigh' ? 'Extra high' : level[0].toUpperCase() + level.slice(1)}</option>)}</select></label>
-            <label className={`schedule-fast-toggle ${selectedModel && !selectedModel.fastModeSupported ? 'is-disabled' : ''}`}><input type="checkbox" checked={form.fast} disabled={Boolean(selectedModel && !selectedModel.fastModeSupported)} onChange={(event) => setForm((current) => ({ ...current, fast: event.target.checked }))} /><span><Play size={13} /><strong>Fast</strong><small>{selectedModel && !selectedModel.fastModeSupported ? 'Unavailable for model' : 'Prioritize latency'}</small></span></label>
+            <label className="field"><span>{t('schedule.model.label')}</span><select value={form.model} onChange={(event) => selectModel(event.target.value)}>{!form.model ? <option value="" disabled>{t('schedule.editor.noModel')}</option> : null}{form.model && !models.some((model) => model.key === form.model && model.enabled !== false && model.available) ? <option value={form.model}>{t('schedule.editor.modelUnavailable', { model: form.model })}</option> : null}{availableModels.map((model) => <option key={model.key} value={model.key}>{model.name} · {model.provider}</option>)}</select></label>
+            <label className="field"><span>{t('schedule.reasoning.label')}</span><select value={form.thinking} onChange={(event) => setForm((current) => ({ ...current, thinking: event.target.value as ScheduleForm['thinking'] }))}><option value="auto">{t('schedule.thinking.auto')}</option>{THINKING_LEVELS.filter((level) => !selectedModel || selectedModel.availableThinkingLevels.includes(level) || level === form.thinking).map((level) => <option key={level} value={level}>{t(THINKING_LEVEL_KEYS[level])}</option>)}</select></label>
+            <label className={`schedule-fast-toggle ${selectedModel && !selectedModel.fastModeSupported ? 'is-disabled' : ''}`}><input type="checkbox" checked={form.fast} disabled={Boolean(selectedModel && !selectedModel.fastModeSupported)} onChange={(event) => setForm((current) => ({ ...current, fast: event.target.checked }))} /><span><Play size={13} /><strong>{t('schedule.editor.fast')}</strong><small>{selectedModel && !selectedModel.fastModeSupported ? t('schedule.editor.fastUnavailable') : t('schedule.editor.fastHint')}</small></span></label>
           </div>
         </fieldset>
 
-        <section className="schedule-preview" aria-live="polite" aria-label="Upcoming schedule preview">
-          <div><span><Clock3 size={14} /> Next occurrences</span>{previewing ? <small>Checking server…</small> : null}</div>
-          {previewError ? <p className="schedule-preview__error">Preview unavailable: {previewError}</p> : preview?.occurrences.length ? <ol>{preview.occurrences.slice(0, 5).map((occurrence) => <li key={occurrence}><i /><span>{formatDateTime(occurrence)}</span><small>{formatRelative(occurrence)}</small></li>)}</ol> : <p>{currentTiming ? 'No future occurrences returned.' : 'Complete the timing fields to preview runs.'}</p>}
+        <section className="schedule-preview" aria-live="polite" aria-label={t('schedule.preview.title')}>
+          <div><span><Clock3 size={14} /> {t('schedule.preview.next')}</span>{previewing ? <small>{t('schedule.preview.checking')}</small> : null}</div>
+          {previewError ? <p className="schedule-preview__error">{t('schedule.preview.unavailable', { error: previewError })}</p> : preview?.occurrences.length ? <ol>{preview.occurrences.slice(0, 5).map((occurrence) => <li key={occurrence}><i /><span>{formatDateTime(t, occurrence)}</span><small>{formatRelative(occurrence)}</small></li>)}</ol> : <p>{currentTiming ? t('schedule.preview.none') : t('schedule.preview.incomplete')}</p>}
         </section>
         {formError ? <p className="page-inline-error" role="alert">{formError}</p> : null}
       </form>
@@ -513,44 +565,47 @@ export function ScheduledPage({
   if (selected) {
     const project = projectMap.get(selected.target.projectId)
     const targetSession = selected.target.kind === 'session' ? sessionMap.get(selected.target.sessionId) : undefined
+    const finishedSessions = archivableScheduleSessions(selected, sessions)
     const recentRuns = [...selected.runs].sort((a, b) => b.queuedAt.localeCompare(a.queuedAt)).slice(0, 8)
     const busy = Boolean(action)
     return (
       <div className="page scroll-area"><div className="page-container schedule-page schedule-page--detail">
-        <button type="button" className="schedule-back" onClick={() => { setSelectedId(null); setActionError(''); setActionNotice('') }}><ArrowLeft size={15} /> All schedules</button>
+        <button type="button" className="schedule-back" onClick={() => { setSelectedId(null); setActionError(''); setActionNotice('') }}><ArrowLeft size={15} /> {t('schedule.detail.all')}</button>
         <header className="schedule-detail__header">
           <div className={`schedule-detail__mark schedule-detail__mark--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusIcon(selected, 18)}</div>
-          <div><span className={`schedule-state schedule-state--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusLabel(selected)}</span><h1>{selected.title}</h1><p>Revision {selected.revision} · Updated {formatRelative(selected.updatedAt)}</p></div>
+          <div><span className={`schedule-state schedule-state--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusLabel(t, selected)}</span><h1>{selected.title}</h1><p>{t('schedule.detail.revision', { revision: selected.revision, updated: formatRelative(selected.updatedAt) })}</p></div>
         </header>
-        <div className="schedule-detail__actions" aria-label="Schedule actions">
-          <button type="button" className="button button--primary" disabled={busy || selected.status === 'completed'} onClick={() => void perform(`run:${selected.id}`, () => onRunNow(selected.id), 'Run queued.')}><Play size={13} />{action === `run:${selected.id}` ? 'Queuing…' : 'Run now'}</button>
-          <button type="button" className="button" disabled={busy} onClick={() => openEdit(selected)}><Pencil size={13} /> Edit</button>
-          {selected.status === 'active' || selected.status === 'blocked' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`pause:${selected.id}`, () => onPause(selected.id), 'Schedule paused.')}><Pause size={13} />{action === `pause:${selected.id}` ? 'Pausing…' : 'Pause'}</button> : selected.status === 'paused' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`resume:${selected.id}`, () => onResume(selected.id), 'Schedule resumed.')}><RotateCw size={13} />{action === `resume:${selected.id}` ? 'Resuming…' : 'Resume'}</button> : null}
-          <button type="button" className="button schedule-delete" disabled={busy} onClick={() => deleteSchedule(selected)}><Trash2 size={13} /> Delete</button>
+        <div className="schedule-detail__actions" aria-label={t('schedule.actions.aria')}>
+          <button type="button" className="button button--primary" disabled={busy || selected.status === 'completed'} onClick={() => void perform(`run:${selected.id}`, () => onRunNow(selected.id), t('schedule.notice.runQueued'))}><Play size={13} />{action === `run:${selected.id}` ? t('schedule.action.queuing') : t('schedule.action.runNow')}</button>
+          <button type="button" className="button" disabled={busy} onClick={() => openEdit(selected)}><Pencil size={13} /> {t('common.edit')}</button>
+          {selected.status === 'active' || selected.status === 'blocked' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`pause:${selected.id}`, () => onPause(selected.id), t('schedule.notice.paused'))}><Pause size={13} />{action === `pause:${selected.id}` ? t('schedule.action.pausing') : t('schedule.action.pause')}</button> : selected.status === 'paused' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`resume:${selected.id}`, () => onResume(selected.id), t('schedule.notice.resumed'))}><RotateCw size={13} />{action === `resume:${selected.id}` ? t('schedule.action.resuming') : t('schedule.action.resume')}</button> : null}
+          <button type="button" className="button schedule-delete" disabled={busy} onClick={() => deleteSchedule(selected)}><Trash2 size={13} /> {t('common.delete')}</button>
         </div>
-        {error ? <p className="page-inline-error" role="alert">Schedule catalog unavailable: {error}</p> : null}
+        {error ? <p className="page-inline-error" role="alert">{t('schedule.error.catalog', { error })}</p> : null}
         {actionError ? <p className="page-inline-error" role="alert">{actionError}</p> : null}
         {actionNotice ? <p className="schedule-action-notice" role="status"><CheckCircle2 size={14} />{actionNotice}</p> : null}
-        {selected.blockedReason ? <div className="schedule-blocked" role="status"><AlertTriangle size={16} /><div><strong>Schedule needs attention</strong><p>{selected.blockedReason}</p></div></div> : null}
+        {selected.blockedReason ? <div className="schedule-blocked" role="status"><AlertTriangle size={16} /><div><strong>{t('schedule.detail.needsAttention')}</strong><p>{selected.blockedReason}</p></div></div> : null}
 
         <div className="schedule-detail__grid">
-          <section className="schedule-detail__card schedule-detail__card--prompt"><span className="schedule-detail__eyebrow">Instruction</span><p>{selected.prompt}</p></section>
-          <section className="schedule-detail__card"><span className="schedule-detail__eyebrow">Delivery</span><dl><div><dt>Target</dt><dd>{targetSession?.title ?? project?.name ?? 'Unavailable target'}</dd></div><div><dt>Mode</dt><dd>{selected.target.kind === 'session' ? 'Existing session' : 'New session'}</dd></div><div><dt>Created by</dt><dd>{selected.createdBy}</dd></div></dl></section>
-          <section className="schedule-detail__card"><span className="schedule-detail__eyebrow">Cadence</span><dl><div><dt>Timing</dt><dd>{timingLabel(selected.timing)}</dd></div><div><dt>Next run</dt><dd>{selected.nextRunAt ? `${formatDateTime(selected.nextRunAt)} · ${formatRelative(selected.nextRunAt)}` : 'None scheduled'}</dd></div>{selected.timing.kind === 'rrule' ? <div><dt>Rule</dt><dd><code>{selected.timing.rrule}</code></dd></div> : null}</dl></section>
-          <section className="schedule-detail__card"><span className="schedule-detail__eyebrow">Execution</span><dl><div><dt>Model</dt><dd>{models.find((model) => model.key === selected.execution.model)?.name ?? selected.execution.model}</dd></div><div><dt>Reasoning</dt><dd>{selected.execution.thinking}</dd></div><div><dt>Speed</dt><dd>{selected.execution.speed}</dd></div></dl></section>
+          <section className="schedule-detail__card schedule-detail__card--prompt"><span className="schedule-detail__eyebrow">{t('schedule.detail.instruction')}</span><p>{selected.prompt}</p></section>
+          <section className="schedule-detail__card"><span className="schedule-detail__eyebrow">{t('schedule.detail.delivery')}</span><dl><div><dt>{t('schedule.detail.target')}</dt><dd>{targetSession?.title ?? project?.name ?? t('schedule.target.unavailable')}</dd></div><div><dt>{t('schedule.detail.mode')}</dt><dd>{selected.target.kind === 'session' ? t('schedule.target.existingSession') : t('schedule.target.newSession')}</dd></div><div><dt>{t('schedule.detail.createdBy')}</dt><dd>{t(CREATED_BY_KEYS[selected.createdBy])}</dd></div></dl></section>
+          <section className="schedule-detail__card"><span className="schedule-detail__eyebrow">{t('schedule.detail.cadence')}</span><dl><div><dt>{t('schedule.timing.title')}</dt><dd>{timingLabel(t, selected.timing)}</dd></div><div><dt>{t('schedule.detail.nextRun')}</dt><dd>{selected.nextRunAt ? `${formatDateTime(t, selected.nextRunAt)} · ${formatRelative(selected.nextRunAt)}` : t('schedule.detail.noneScheduled')}</dd></div>{selected.timing.kind === 'rrule' ? <div><dt>{t('schedule.detail.rule')}</dt><dd><code>{selected.timing.rrule}</code></dd></div> : null}</dl></section>
+          <section className="schedule-detail__card"><span className="schedule-detail__eyebrow">{t('schedule.execution.title')}</span><dl><div><dt>{t('schedule.model.label')}</dt><dd>{models.find((model) => model.key === selected.execution.model)?.name ?? selected.execution.model}</dd></div><div><dt>{t('schedule.reasoning.label')}</dt><dd>{t(EXECUTION_THINKING_KEYS[selected.execution.thinking])}</dd></div><div><dt>{t('schedule.detail.speed')}</dt><dd>{t(EXECUTION_SPEED_KEYS[selected.execution.speed])}</dd></div></dl></section>
         </div>
 
         <section className="schedule-history">
-          <header><div><History size={15} /><h2>Run history</h2></div><span>{selected.runs.length} total · latest 8</span></header>
+          <header><div><History size={15} /><h2>{t('schedule.history.title')}</h2></div><span>{t('schedule.history.summary', { count: selected.runs.length })}</span>{onArchiveSessions && finishedSessions.length > 0 ? <button type="button" className="button" disabled={busy} onClick={() => {
+            if (window.confirm(t('schedule.history.archiveConfirm', { count: finishedSessions.length }))) void perform(`archive:${selected.id}`, () => onArchiveSessions(finishedSessions), '')
+          }}><Archive size={13} />{action === `archive:${selected.id}` ? t('schedule.history.archiving') : t('schedule.history.archiveFinished', { count: finishedSessions.length })}</button> : null}</header>
           {recentRuns.length ? <div className="schedule-history__list">{recentRuns.map((run) => {
-            const runSession = run.sessionId ? sessionMap.get(run.sessionId) : undefined
+            const runSession = sessions.find((session) => session.filePath === run.sessionFile) ?? (run.sessionId ? sessionMap.get(run.sessionId) : undefined)
             return <article key={run.id} className={`schedule-run schedule-run--${run.status}`}>
               <div className="schedule-run__icon">{runIcon(run.status)}</div>
-              <div className="schedule-run__main"><div><strong>{run.status}</strong><span>{run.trigger}</span></div><p>{run.error ?? `Scheduled for ${formatRunDate(run.scheduledFor)}`}</p></div>
-              <time dateTime={run.queuedAt}>{formatRunDate(run.finishedAt ?? run.startedAt ?? run.queuedAt)}</time>
-              {run.sessionFile ? <button type="button" className="schedule-session-link" onClick={() => onOpenSession(run.sessionFile!)}>Open {runSession?.title ?? 'session'} <ChevronRight size={13} /></button> : <span className="schedule-run__no-session">No session</span>}
+              <div className="schedule-run__main"><div><strong>{t(RUN_STATUS_KEYS[run.status])}</strong><span>{t(RUN_TRIGGER_KEYS[run.trigger])}</span>{runSession?.archived ? <span>{t('schedule.history.archived')}</span> : null}</div><p>{run.error ?? t('schedule.history.scheduledFor', { date: formatRunDate(t, run.scheduledFor) })}</p></div>
+              <time dateTime={run.queuedAt}>{formatRunDate(t, run.finishedAt ?? run.startedAt ?? run.queuedAt)}</time>
+              {run.sessionFile ? <button type="button" className="schedule-session-link" onClick={() => onOpenSession(run.sessionFile!)}>{t('schedule.open', { title: runSession?.title ?? t('schedule.history.sessionFallback') })} <ChevronRight size={13} /></button> : <span className="schedule-run__no-session">{t('schedule.history.noSession')}</span>}
             </article>
-          })}</div> : <div className="schedule-history__empty"><History size={20} /><p>No runs yet. Run it now or wait for the first occurrence.</p></div>}
+          })}</div> : <div className="schedule-history__empty"><History size={20} /><p>{t('schedule.history.empty')}</p></div>}
         </section>
         {editorModal}
       </div></div>
@@ -559,31 +614,32 @@ export function ScheduledPage({
 
   return (
     <div className="page scroll-area"><div className="page-container schedule-page">
-      <header className="page-header schedule-page__header"><div><span className="schedule-page__kicker"><span /> Automation desk</span><h1>Scheduled</h1><p>Unattended {HARNESS_SHORT_NAMES[harness]} work, with every run accounted for.</p></div><button type="button" className="button button--primary" onClick={openCreate}><Plus size={14} /> New schedule</button></header>
-      <div className="schedule-ledger-summary" aria-label="Schedule summary">
-        <span><i className="is-active" /> <strong>{counts.active}</strong> active</span>
-        <span><i className="is-paused" /> <strong>{counts.paused}</strong> paused</span>
-        <span><i className="is-attention" /> <strong>{counts.attention}</strong> need attention</span>
+      <header className="page-header schedule-page__header"><div><span className="schedule-page__kicker"><span /> {t('schedule.page.kicker')}</span><h1>{t('nav.scheduled')}</h1><p>{t('schedule.page.subtitle', { harness: HARNESS_SHORT_NAMES[harness] })}</p></div><button type="button" className="button button--primary" onClick={openCreate}><Plus size={14} /> {t('schedule.page.new')}</button></header>
+      <div className="schedule-ledger-summary" aria-label={t('schedule.summary.aria')}>
+        <span><i className="is-active" /> <strong>{counts.active}</strong> {t('schedule.summary.active')}</span>
+        <span><i className="is-paused" /> <strong>{counts.paused}</strong> {t('schedule.summary.paused')}</span>
+        <span><i className="is-attention" /> <strong>{counts.attention}</strong> {t('schedule.summary.attention')}</span>
       </div>
-      <div className="page-tools schedule-tools"><Segmented value={filter} label="Schedule filter" onChange={(value) => setFilter(value as ScheduleFilter)} options={[{ value: 'active', label: 'Active' }, { value: 'paused', label: 'Paused' }, { value: 'attention', label: 'Needs attention' }, { value: 'all', label: 'All' }]} /><span>{visible.length} {visible.length === 1 ? 'schedule' : 'schedules'}</span></div>
-      {error ? <p className="page-inline-error" role="alert">Schedule catalog unavailable: {error}</p> : null}
+      <div className="page-tools schedule-tools"><Segmented value={filter} label={t('schedule.filter.aria')} onChange={(value) => setFilter(value as ScheduleFilter)} options={[{ value: 'active', label: t('schedule.filter.active') }, { value: 'paused', label: t('schedule.filter.paused') }, { value: 'attention', label: t('schedule.status.attention') }, { value: 'all', label: t('common.all') }]} /><span>{t('schedule.count', { count: visible.length })}</span></div>
+      {error ? <p className="page-inline-error" role="alert">{t('schedule.error.catalog', { error })}</p> : null}
       {actionError ? <p className="page-inline-error" role="alert">{actionError}</p> : null}
       {visible.length ? <div className="schedule-ledger">{visible.map((item) => {
         const project = projectMap.get(item.target.projectId)
         const targetSession = item.target.kind === 'session' ? sessionMap.get(item.target.sessionId) : undefined
-        return <button type="button" key={item.id} className="schedule-row" onClick={() => { setSelectedId(item.id); setActionError(''); setActionNotice('') }} aria-label={`Open ${item.title}`}>
+        return <button type="button" key={item.id} className="schedule-row" onClick={() => { setSelectedId(item.id); setActionError(''); setActionNotice('') }} aria-label={t('schedule.open', { title: item.title })}>
           <span className={`schedule-row__status schedule-row__status--${needsAttention(item) ? 'attention' : item.status}`}>{statusIcon(item)}</span>
-          <span className="schedule-row__main"><span><strong>{item.title}</strong><i className={`schedule-state schedule-state--${needsAttention(item) ? 'attention' : item.status}`}>{statusLabel(item)}</i></span><small>{item.prompt}</small><span className="schedule-row__tags"><span><FolderKanban size={11} />{targetSession?.title ?? project?.name ?? 'Unavailable target'}</span><span><Repeat2 size={11} />{timingLabel(item.timing)}</span><span><Gauge size={11} />{models.find((model) => model.key === item.execution.model)?.name ?? item.execution.model}</span></span></span>
-          <span className="schedule-row__next"><small>Next</small><strong>{item.nextRunAt ? formatDateTime(item.nextRunAt) : '—'}</strong><span>{item.nextRunAt ? formatRelative(item.nextRunAt) : 'No future run'}</span></span>
+          <span className="schedule-row__main"><span><strong>{item.title}</strong><i className={`schedule-state schedule-state--${needsAttention(item) ? 'attention' : item.status}`}>{statusLabel(t, item)}</i></span><small>{item.prompt}</small><span className="schedule-row__tags"><span><FolderKanban size={11} />{targetSession?.title ?? project?.name ?? t('schedule.target.unavailable')}</span><span><Repeat2 size={11} />{timingLabel(t, item.timing)}</span><span><Gauge size={11} />{models.find((model) => model.key === item.execution.model)?.name ?? item.execution.model}</span></span></span>
+          <span className="schedule-row__next"><small>{t('schedule.row.next')}</small><strong>{item.nextRunAt ? formatDateTime(t, item.nextRunAt) : '—'}</strong><span>{item.nextRunAt ? formatRelative(item.nextRunAt) : t('schedule.row.noFutureRun')}</span></span>
           <ChevronRight className="schedule-row__chevron" size={16} />
         </button>
-      })}</div> : <EmptyState icon={<CalendarClock size={24} />} title={filter === 'all' ? 'No scheduled work' : `No ${filter === 'attention' ? 'schedules need attention' : `${filter} schedules`}`} action={schedules.length ? undefined : <button type="button" className="button button--primary" onClick={openCreate}><Plus size={13} /> Create schedule</button>}> {schedules.length ? 'Choose another filter to see the rest of your automation ledger.' : `Create a schedule and ${HARNESS_SHORT_NAMES[harness]} will bring every result back here.`}</EmptyState>}
+      })}</div> : <EmptyState icon={<CalendarClock size={24} />} title={t(EMPTY_TITLE_KEYS[filter])} action={schedules.length ? undefined : <button type="button" className="button button--primary" onClick={openCreate}><Plus size={13} /> {t('schedule.editor.create')}</button>}> {schedules.length ? t('schedule.empty.filterHint') : t('schedule.empty.createHint', { harness: HARNESS_SHORT_NAMES[harness] })}</EmptyState>}
       {nativeHeartbeats.length ? <section className="native-heartbeats" aria-labelledby="native-heartbeats-title">
         <div className="native-heartbeats__header"><div><span className="schedule-page__kicker">Prime Agent</span><h2 id="native-heartbeats-title">Agent heartbeats</h2></div><small>Auto-discovered; the owning runtime is authoritative</small></div>
+        {heartbeatPauseUnavailable ? <p className="native-heartbeats__note">{heartbeatPauseUnavailable}</p> : null}
         <div className="native-heartbeats__list">{nativeHeartbeats.map((heartbeat) => <article key={heartbeat.id} className="native-heartbeat">
           <span className={`schedule-row__status schedule-row__status--${heartbeat.status}`}><CalendarClock size={15} /></span>
           <div className="native-heartbeat__main"><span><strong>{heartbeat.label || (heartbeat.source === 'heartbeat' ? 'Thread heartbeat' : 'Agent heartbeat')}</strong><i className={`schedule-state schedule-state--${heartbeat.status}`}>{heartbeat.status}</i></span><p>{heartbeat.prompt}</p><small>{heartbeat.schedule}{heartbeat.nextRunAt ? ` · next ${formatRelative(heartbeat.nextRunAt)}` : ''}</small></div>
-          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action)} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'Heartbeat paused.')}>Pause</button> : <button type="button" className="button" disabled={Boolean(action)} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'Heartbeat resumed.')}>Resume</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'stop'), 'Heartbeat stopped.')}>Stop</button></div>
+          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'Heartbeat paused.')}>Pause</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'Heartbeat resumed.')}>Resume</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'stop'), 'Heartbeat stopped.')}>Stop</button></div>
         </article>)}</div>
       </section> : null}
       {editorModal}

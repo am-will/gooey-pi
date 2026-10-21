@@ -1,6 +1,7 @@
 import { Brain, Check, ChevronDown, Search } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { PrimeModelDescriptor, PrimeProviderDescriptor } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
 
 interface ModelPickerProps {
   value: string
@@ -15,6 +16,7 @@ interface ModelGroup {
 }
 
 export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, providers, onChange }: ModelPickerProps) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   // null, not a string sentinel: harness catalogs are user-authored, so a
@@ -107,14 +109,15 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
   }
 
   const resultCount = visibleModels.length
+  const selectedName = selected?.name ?? t('modelPicker.noModel')
   return (
     <div className="model-picker" ref={rootRef}>
       <button
         ref={triggerRef}
         type="button"
         className="permissions-chip model-picker__trigger"
-        aria-label={`Model: ${selected?.name ?? 'No model available'}`}
-        title={selected?.name ?? 'No model available'}
+        aria-label={t('modelPicker.triggerAria', { model: selectedName })}
+        title={selectedName}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
@@ -128,7 +131,7 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
         }}
       >
         <Brain size={14} />
-        <span>{selected?.name ?? 'No model available'}</span>
+        <span>{selectedName}</span>
         <ChevronDown size={11} aria-hidden="true" />
       </button>
       {open ? (
@@ -153,23 +156,23 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
               ref={searchRef}
               type="search"
               role="combobox"
-              aria-label="Search models"
+              aria-label={t('modelPicker.search')}
               aria-autocomplete="list"
               aria-expanded="true"
               aria-controls={listId}
               aria-activedescendant={activeKey ? `${listId}-${activeKey}` : undefined}
-              placeholder="Search models"
+              placeholder={t('modelPicker.search')}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={onSearchKeyDown}
             />
             <span className="model-picker__count" aria-live="polite">
               <span aria-hidden="true">{resultCount}</span>
-              <span className="sr-only">{resultCount} {resultCount === 1 ? 'model' : 'models'} listed</span>
+              <span className="sr-only">{t('modelPicker.listed', { count: resultCount })}</span>
             </span>
           </div>
-          <div className="model-picker__providers" role="group" aria-label="Filter models by provider">
-            <button type="button" className={providerFilter === null ? 'is-active' : ''} aria-pressed={providerFilter === null} onClick={() => setProviderFilter(null)}>All</button>
+          <div className="model-picker__providers" role="group" aria-label={t('modelPicker.filterByProvider')}>
+            <button type="button" className={providerFilter === null ? 'is-active' : ''} aria-pressed={providerFilter === null} onClick={() => setProviderFilter(null)}>{t('common.all')}</button>
             {groups.map(({ provider }) => (
               <button
                 type="button"
@@ -180,12 +183,12 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
               >{provider.name}</button>
             ))}
           </div>
-          <div className="model-picker__results" id={listId} role="listbox" aria-label="Models">
+          <div className="model-picker__results" id={listId} role="listbox" aria-label={t('modelPicker.models')}>
             {visibleGroups.map(({ provider, models }) => (
               <div className="model-picker__group" role="group" aria-label={provider.name} key={provider.id}>
                 <div className="model-picker__group-heading">
                   <span>{provider.name}</span>
-                  <small>{provider.configured ? `${models.length} model${models.length === 1 ? '' : 's'}` : 'Not connected'}</small>
+                  <small>{provider.configured ? t('modelPicker.groupCount', { count: models.length }) : t('modelPicker.notConnected')}</small>
                 </div>
                 {models.map((candidate) => {
                   const isSelected = candidate.key === value
@@ -208,13 +211,13 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
                         <strong>{candidate.name}</strong>
                         {candidate.id !== candidate.name ? <small>{candidate.id}</small> : null}
                       </span>
-                      {!candidate.available ? <span className="model-picker__availability">Connect</span> : null}
+                      {!candidate.available ? <span className="model-picker__availability">{t('modelPicker.connect')}</span> : null}
                     </button>
                   )
                 })}
               </div>
             ))}
-            {!resultCount ? <div className="model-picker__empty">{query.trim() ? 'No models match this search.' : 'No models for this provider.'}</div> : null}
+            {!resultCount ? <div className="model-picker__empty">{query.trim() ? t('modelPicker.noMatch') : t('modelPicker.noModelsForProvider')}</div> : null}
           </div>
         </div>
       ) : null}

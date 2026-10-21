@@ -313,6 +313,16 @@ describe('Composer terminal context attachment', () => {
     expect(onSend.mock.calls[0][0]).toContain('--- Selected text ---\nnpm test\n1 failed')
     expect(onSend.mock.calls[0][0]).not.toContain('Terminal buffer')
   })
+
+  it('refuses /compact with a terminal selection instead of sending terminal output as its instructions', async () => {
+    const { onSend } = renderComposer({ terminalSelection: selection, getTerminalContext: () => terminalContext })
+    await setDraft('/compact')
+    await clickSend()
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('/compact does not accept attachments or @ mentions. Remove them and try again.')
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('/compact')
+  })
 })
 
 describe('Composer sendSignal', () => {

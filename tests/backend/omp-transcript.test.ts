@@ -1,8 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OMP_TITLE_SLOT_BYTES, readOmpTranscript } from '../../electron/main/sessions/omp'
+import { Transcript } from '../../src/components/Transcript'
+import { replayPrimeEvents } from '../../src/lib/events/reduce'
+import type { TranscriptMessage } from '../../src/types/api'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) })
@@ -100,9 +105,23 @@ describe('OMP transcript system entries', () => {
       ['aa000003', 'assistant'],
     ])
     expect(transcript[1]).toMatchObject({
+      kind: 'notice',
       timestamp: '2026-08-08T02:14:00.000Z',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }],
     })
+  })
+
+  it('renders a persisted fallback notice exactly like its live counterpart', async () => {
+    const render = (messages: TranscriptMessage[]) => renderToStaticMarkup(createElement(Transcript, {
+      messages, git: { isRepo: false, files: [] }, onOpenChanges: () => undefined, onSuggestion: () => undefined,
+    }))
+    const live = replayPrimeEvents([], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
+    const persisted = await readOmpTranscript(ompSessionFile([
+      JSON.stringify({ type: 'model_change', id: 'aa000001', parentId: null, timestamp: '2026-08-08T02:14:00.000Z', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }),
+    ]), false)
+
+    expect(render(persisted)).toContain('activity-line--note')
+    expect(render(persisted)).toBe(render(live))
   })
 
   it('renders branch_summary entries as readable system messages in branch position', async () => {
@@ -116,9 +135,22 @@ describe('OMP transcript system entries', () => {
     expect(transcript.map((message) => message.role)).toEqual(['user', 'system', 'user'])
     expect(transcript[1]).toMatchObject({
       id: 'aa000002',
+      kind: 'notice',
       timestamp: '2026-08-08T02:14:00.000Z',
       parts: [{ type: 'text', text: 'The abandoned branch explored an alternative fix.' }],
     })
+  })
+
+  it('renders no row for a branch_summary without text but keeps walking through it', async () => {
+    const file = ompSessionFile([
+      userEntry('aa000001', null, 'before the branch'),
+      JSON.stringify({ type: 'branch_summary', id: 'aa000002', parentId: 'aa000001', timestamp: '2026-08-08T02:14:00.000Z' }),
+      JSON.stringify({ type: 'branch_summary', id: 'aa000003', parentId: 'aa000002', timestamp: '2026-08-08T02:14:01.000Z', summary: ' \n' }),
+      userEntry('aa000004', 'aa000003', 'after the branch'),
+    ])
+
+    const transcript = await readOmpTranscript(file, false)
+    expect(transcript.map((message) => message.id)).toEqual(['aa000001', 'aa000004'])
   })
 
   it('renders compaction entries and displayed custom messages, skipping undisplayed ones', async () => {

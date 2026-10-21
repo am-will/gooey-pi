@@ -11,7 +11,12 @@ import {
   flattenVisibleTree,
   collectDirectoryIds,
 } from '../../src/components/inspector/FilesPanel'
-import type { GitStatus, ProjectFileEntry, ProjectRecord } from '../../src/types/api'
+import {
+  type GitStatus,
+  PROJECT_FILE_LISTING_LIMIT,
+  type ProjectFileEntry,
+  type ProjectRecord,
+} from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -101,6 +106,19 @@ describe('FilesPanel tree building logic', () => {
     ).toEqual([
       { name: 'AgentProgress.tsx', type: 'file', depth: 3 },
       { name: 'ChatPanel.tsx', type: 'file', depth: 3 },
+    ])
+  })
+
+  it('sorts names case-insensitively with numeric segments in natural order', () => {
+    const entries: ProjectFileEntry[] = [
+      { path: 'file10.txt', type: 'file' },
+      { path: 'file2.txt', type: 'file' },
+      { path: 'File1.txt', type: 'file' },
+    ]
+    expect(buildTreeFromEntries(entries, '/root', 0).map((node) => node.name)).toEqual([
+      'File1.txt',
+      'file2.txt',
+      'file10.txt',
     ])
   })
 
@@ -221,6 +239,43 @@ describe('FilesPanel tree building logic', () => {
 })
 
 describe('FilesPanel component', () => {
+  it('loads folders on expansion and searches paths in unopened folders', async () => {
+    const listFiles = vi.fn(async (path: string, _harness?: string, mode?: 'children') => ({
+      entries: mode !== 'children' ? sampleEntries : path === sampleProject.primaryFolder
+        ? [{ path: 'src', type: 'directory' as const }, { path: 'README.md', type: 'file' as const }]
+        : [{ path: 'components', type: 'directory' as const }],
+      skipped: 0,
+    }))
+    Object.defineProperty(window, 'prime', { configurable: true, value: { projects: { listFiles } } })
+    await act(async () => root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />))
+    expect(listFiles).toHaveBeenCalledTimes(1)
+    expect(container.textContent).not.toContain('AgentProgress.tsx')
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    expect(listFiles).toHaveBeenLastCalledWith(`${sampleProject.primaryFolder}/src`, 'prime', 'children')
+    expect(container.querySelectorAll('.file-tree__item').length).toBe(3)
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    expect(listFiles).toHaveBeenCalledTimes(2)
+    await enter(container.querySelector<HTMLInputElement>('.files-search input')!, 'Progress')
+    expect(listFiles).toHaveBeenLastCalledWith(sampleProject.primaryFolder, 'prime', undefined)
+    expect(container.textContent).toContain('AgentProgress.tsx')
+    expect(container.textContent).not.toContain('ChatPanel.tsx')
+  })
+
+  it('discards a directory response after switching projects', async () => {
+    let resolveDirectory: (value: { entries: ProjectFileEntry[]; skipped: number }) => void = () => undefined
+    const listFiles = vi.fn(async (path: string) => path.endsWith('/src')
+      ? new Promise<{ entries: ProjectFileEntry[]; skipped: number }>((resolve) => { resolveDirectory = resolve })
+      : { entries: [{ path: 'src', type: 'directory' as const }], skipped: 0 })
+    Object.defineProperty(window, 'prime', { configurable: true, value: { projects: { listFiles } } })
+    await act(async () => root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />))
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    const next = { ...sampleProject, id: 'next', primaryFolder: '/workspace/next', folders: ['/workspace/next'] }
+    await act(async () => root.render(<FilesPanel project={next} git={emptyGit} onReveal={vi.fn()} />))
+    await act(async () => resolveDirectory({ entries: [{ path: 'stale.txt', type: 'file' }], skipped: 0 }))
+    expect(container.textContent).not.toContain('stale.txt')
+  })
+
   it('renders empty state when no project is provided', async () => {
     await act(async () => {
       root.render(<FilesPanel git={emptyGit} onReveal={vi.fn()} />)
@@ -245,7 +300,7 @@ describe('FilesPanel component', () => {
       await Promise.resolve()
     })
 
-    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'prime')
+    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'prime', 'children')
 
     // Root button should show project name
     const treeRoot = container.querySelector('.tree-root')
@@ -356,7 +411,7 @@ describe('FilesPanel component', () => {
     const expandAllBtn = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Expand all folders"]',
     )
-    act(() => {
+    await act(async () => {
       expandAllBtn?.click()
     })
 
@@ -417,6 +472,71 @@ describe('FilesPanel component', () => {
     expect(container.textContent).toContain('2 folders could not be read and were skipped.')
   })
 
+  it('displays a truncation notice when the listing was capped', async () => {
+    const listFiles = vi.fn(async () => ({
+      entries: [{ path: 'App.tsx', type: 'file' as const }],
+      skipped: 0,
+      truncated: true,
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.file-tree__skipped')?.textContent).toBe(
+      `Large project: the file list stops after ${PROJECT_FILE_LISTING_LIMIT.toLocaleString('en-US')} entries, so some deeper paths are not shown or searchable.`,
+    )
+  })
+
+  it('describes the truncation limit per folder when any project folder was capped', async () => {
+    const multiProject: ProjectRecord = {
+      ...sampleProject,
+      folders: ['/workspace/frontend', '/workspace/backend'],
+    }
+    const listFiles = vi.fn(async (root: string) => ({
+      entries: [{ path: 'index.ts', type: 'file' as const }],
+      skipped: 0,
+      truncated: root.includes('backend'),
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={multiProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.file-tree__skipped')?.textContent).toContain(
+      `stops after ${PROJECT_FILE_LISTING_LIMIT.toLocaleString('en-US')} entries per project folder,`,
+    )
+  })
+
+  it('does not display a truncation notice for a complete listing', async () => {
+    const listFiles = vi.fn(async () => ({
+      entries: sampleEntries,
+      skipped: 0,
+      truncated: false,
+    }))
+    Object.defineProperty(window, 'prime', {
+      configurable: true,
+      value: { projects: { listFiles } },
+    })
+
+    await act(async () => {
+      root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />)
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).not.toContain('Large project')
+  })
+
   it('handles collapse all and expand all toolbar actions', async () => {
     const listFiles = vi.fn(async () => ({
       entries: sampleEntries,
@@ -438,7 +558,7 @@ describe('FilesPanel component', () => {
     )
     expect(expandAllBtn).toBeTruthy()
 
-    act(() => {
+    await act(async () => {
       expandAllBtn?.click()
     })
 
@@ -561,7 +681,7 @@ describe('FilesPanel component', () => {
       await Promise.resolve()
     })
 
-    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'pi')
+    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'pi', 'children')
     expect(container.textContent).toContain('test-project')
     expect(container.textContent).toContain('src')
     expect(container.textContent).toContain('package.json')

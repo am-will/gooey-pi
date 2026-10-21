@@ -2,8 +2,9 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from '../../src/components/Sidebar'
+import { I18nProvider, loadLocale } from '../../src/lib/i18n'
 import { sessionAttentionSignature } from '../../src/app/session-attention'
 import type { ProjectRecord, SessionRecord } from '../../src/types/api'
 
@@ -20,6 +21,8 @@ const session: SessionRecord = {
 
 let container: HTMLDivElement
 let root: Root
+
+beforeAll(async () => { await loadLocale('zh-CN') })
 
 beforeEach(() => {
   container = document.createElement('div')
@@ -270,46 +273,81 @@ describe('sidebar project context menu', () => {
   })
 })
 
-describe('sidebar archive confirmation', () => {
-  it('requires a second click and cancels when clicking elsewhere', async () => {
+describe('sidebar archive', () => {
+  const archiveProps = (onArchiveSession: (session: SessionRecord) => Promise<void>) => ({
+    projects: [project],
+    sessions: [session],
+    activeView: 'session' as const,
+    onSelectProject: noop,
+    onSelectSession: noop,
+    onNavigate: noop,
+    onNewSession: noop,
+    onAddProject: noop,
+    onRemoveProject: noop,
+    onClose: noop,
+    onOpenPalette: noop,
+    onRenameSession: async () => undefined,
+    onArchiveSession,
+  })
+
+  it('archives an idle chat with a single click', async () => {
     const onArchiveSession = vi.fn(async () => undefined)
-    await act(async () => {
-      root.render(
-        <Sidebar
-          projects={[project]}
-          sessions={[session]}
-          activeView="session"
-          onSelectProject={noop}
-          onSelectSession={noop}
-          onNavigate={noop}
-          onNewSession={noop}
-          onAddProject={noop}
-          onRemoveProject={noop}
-          onClose={noop}
-          onOpenPalette={noop}
-          onRenameSession={async () => undefined}
-          onArchiveSession={onArchiveSession}
-        />,
-      )
-    })
+    await act(async () => { root.render(<Sidebar {...archiveProps(onArchiveSession)} />) })
 
     const archive = container.querySelector('[aria-label="Archive Session"]')
     expect(archive).not.toBeNull()
     expect(archive?.getAttribute('title')).toBe('Archive Session')
     await press(archive!)
-    expect(onArchiveSession).not.toHaveBeenCalled()
-    expect(container.querySelector('[aria-label="Confirm archive Session"]')).not.toBeNull()
 
-    await act(async () => document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
-    expect(container.querySelector('[aria-label="Confirm archive Session"]')).toBeNull()
-    expect(container.querySelector('[aria-label="Archive Session"]')).not.toBeNull()
-
-    const restarted = container.querySelector('[aria-label="Archive Session"]')
-    await press(restarted!)
-    const confirm = container.querySelector('[aria-label="Confirm archive Session"]')
-    await press(confirm!)
     expect(onArchiveSession).toHaveBeenCalledOnce()
     expect(onArchiveSession).toHaveBeenCalledWith(session)
+    expect(container.querySelector('[aria-label="Confirm archive Session"]')).toBeNull()
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('confirms before archiving a chat that is still working', async () => {
+    const onArchiveSession = vi.fn(async () => undefined)
+    await act(async () => {
+      root.render(<Sidebar {...archiveProps(onArchiveSession)} sessions={[{ ...session, status: 'running' as const }]} />)
+    })
+
+    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    expect(onArchiveSession).not.toHaveBeenCalled()
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('is still working')
+    const modalButton = (name: string) => [...document.body.querySelectorAll<HTMLButtonElement>('.modal__footer button')].find((button) => button.textContent === name)!
+    await press(modalButton('Cancel'))
+    expect(onArchiveSession).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+
+    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    await press(modalButton('Archive'))
+    expect(onArchiveSession).toHaveBeenCalledOnce()
+    expect(onArchiveSession).toHaveBeenCalledWith({ ...session, status: 'running' })
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('localises the confirmation for a chat that is still working', async () => {
+    const onArchiveSession = vi.fn(async () => undefined)
+    await act(async () => {
+      root.render(
+        <I18nProvider preference="zh-CN">
+          <Sidebar {...archiveProps(onArchiveSession)} sessions={[{ ...session, status: 'running' as const }]} />
+        </I18nProvider>,
+      )
+    })
+
+    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('归档进行中的聊天')
+    expect(dialog?.textContent).toContain('「Session」还在工作中')
+    expect(dialog?.textContent).toContain('设置 › 已归档的聊天')
+
+    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('.modal__footer button')].find((button) => button.textContent === '归档')!
+    await press(confirm)
+    expect(onArchiveSession).toHaveBeenCalledOnce()
+    expect(onArchiveSession).toHaveBeenCalledWith({ ...session, status: 'running' })
   })
 })
 
@@ -339,5 +377,57 @@ describe('sidebar session notifications', () => {
     await act(async () => { root.render(<Sidebar {...props} clearedAttention={{ [failedSession.id]: signature }} />) })
     expect(container.querySelector('.session-row-wrap')?.classList.contains('has-attention')).toBe(false)
     expect(container.querySelector('.session-status-mark--failed')?.getAttribute('title')).toBe('Failed — notification cleared')
+  })
+})
+
+
+describe('sidebar session visibility', () => {
+  async function renderSessions(count: number) {
+    const sessions = Array.from({ length: count }, (_, index) => ({ ...session, id: `s-${index}`, filePath: `/sessions/s-${index}.jsonl`, title: `Thread ${index}` }))
+    await act(async () => root.render(<Sidebar projects={[project]} sessions={sessions} activeView="session"
+      onSelectProject={noop} onSelectSession={noop} onNavigate={noop} onNewSession={noop} onAddProject={noop} onRemoveProject={noop}
+      onClose={noop} onOpenPalette={noop} onRenameSession={async () => undefined} onArchiveSession={async () => undefined} />))
+  }
+
+  it('starts expanded, toggles all projects, and keeps search matches visibly expanded', async () => {
+    await renderSessions(1)
+    expect(container.querySelector('.session-row')).not.toBeNull()
+    await press(container.querySelector('[aria-label="Collapse all projects"]')!)
+    expect(container.querySelector('.session-row')).toBeNull()
+    await press(container.querySelector('[aria-label="Expand all projects"]')!)
+    expect(container.querySelector('.session-row')).not.toBeNull()
+    await press(container.querySelector('[aria-label="Collapse all projects"]')!)
+    await press(container.querySelector('button[title="Search"]')!)
+    const input = container.querySelector('input')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Thread')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('.session-row')).not.toBeNull()
+    expect(container.querySelector('.project-row__collapse')?.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector<HTMLButtonElement>('.project-row__collapse')?.disabled).toBe(true)
+  })
+
+  it('keeps session options in the viewport and dismisses their stale position on scroll', async () => {
+    await renderSessions(1)
+    const button = container.querySelector<HTMLButtonElement>('.session-row__more')!
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({ bottom: window.innerHeight - 5, right: 230 } as DOMRect)
+    await press(button)
+    const menu = container.querySelector<HTMLElement>('.session-row__menu')!
+    expect(menu.style.position).toBe('fixed')
+    expect(Number.parseFloat(menu.style.top)).toBeLessThanOrEqual(window.innerHeight - 80)
+    await act(async () => document.dispatchEvent(new Event('scroll')))
+    expect(container.querySelector('.session-row__menu')).toBeNull()
+  })
+
+  it('reveals seven more sessions at a time and can return to the initial batch', async () => {
+    await renderSessions(22)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(7)
+    await press([...container.querySelectorAll('button')].find((item) => item.textContent === '+15 more sessions')!)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(14)
+    await press([...container.querySelectorAll('button')].find((item) => item.textContent === '+8 more sessions')!)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(21)
+    await press([...container.querySelectorAll('button')].find((item) => item.textContent === 'Show less')!)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(7)
   })
 })

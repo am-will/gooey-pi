@@ -1,21 +1,31 @@
 import { watch, type Dirent, type Stats } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
-import type { HarnessId, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
+import { dirname, join, resolve, sep } from 'node:path'
+import type { HarnessId, PrimeImplementation, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
+import { RUST_PRIME_AGENT_NAME } from '../../src/lib/prime-compat'
 import { queueDaemonFollowUp } from './agent-daemon'
 import { comparePaths, createAdmissionQueue, createSingleFlight, type AdmissionQueue } from './lib/async'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
 import { SessionMetadataCatalog, type SessionCatalogIo, type SessionNameTimestamp } from './sessions/catalog'
-import { createSessionMetadataReader, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
+import { createSessionMetadataReader, type JsonRecord, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
 import { readTranscript } from './sessions/transcript'
+import { PrimeSessionArchive } from './sessions/prime-archive'
 import type { JsonStateStore } from './store'
 import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString } from './validation'
 
 interface RuntimeSessionState { isStreaming: boolean; isCompacting?: boolean }
 
 interface RuntimeSessionSnapshot extends RuntimeSessionState { sessionFile?: string }
+
+/** The part of a harness's runtime manager that its session service reads and drives. */
+export interface SessionRuntimeManager {
+  getForSession(filePath: string): RuntimeSessionState | undefined
+  list(): readonly RuntimeSessionSnapshot[]
+  stopForSession(filePath: string): Promise<void>
+  renameForSession(filePath: string, title: string): Promise<boolean>
+}
 
 const MAX_SESSION_FILES = 5_000
 const MAX_SESSION_WATCH_DIRECTORIES = 512
@@ -45,6 +55,18 @@ const watchSessionDirectory: SessionWatchFactory = (path, options, listener) => 
 
 const authorizePrimeSessionPath: SessionPathAuthorizer = (root, path) => isPathWithin(root, path) && path.endsWith('.jsonl')
 
+/** Worker states of a live catalog row whose daemon worker is up and holds the session; 'stopping' and 'failed' workers are going away. */
+const RESIDENT_WORKER_STATES: ReadonlySet<unknown> = new Set(['starting', 'ready', 'recovering'])
+
+const RUST_PRIME_RENAME_NEEDS_RUNTIME = `Send this session a message in GooeyPi, then rename it. ${RUST_PRIME_AGENT_NAME} renames a session that is not running by starting a background worker for it, which would keep GooeyPi from reopening the session.`
+
+/** The daemon address of a live catalog row, checked before it reaches argv or the daemon socket. */
+function liveActiveSessionId(live: JsonRecord): string {
+  const activeSessionId = requireId(live.activeSessionId ?? live.id, 'activeSessionId')
+  if (activeSessionId.startsWith('-')) throw new Error('Prime Agent returned an invalid active session identifier')
+  return activeSessionId
+}
+
 export interface SessionServiceOptions {
   /** Harness stamped on every record and change event this service emits; defaults to 'prime'. */
   harness?: HarnessId
@@ -70,6 +92,8 @@ export interface SessionServiceOptions {
    * to accept `set_session_name` and no CLI fallback exists.
    */
   renameFile?: (filePath: string, title: string) => boolean
+  /** The discovered Prime build, which decides how a session with no runtime is renamed; unset keeps the TypeScript behavior. */
+  primeImplementation?: () => PrimeImplementation | undefined
   maxConcurrentTranscriptReads?: number
   maxPendingTranscriptReads?: number
 }
@@ -90,6 +114,8 @@ export class SessionService {
   private readonly isSessionPathAuthorized: SessionPathAuthorizer
   private readonly watchDirectory: SessionWatchFactory
   private readonly renameFile: ((filePath: string, title: string) => boolean) | undefined
+  private readonly primeImplementation: () => PrimeImplementation | undefined
+  private readonly nativeArchive: PrimeSessionArchive
   private readonly changeListeners = new Set<(event: SessionChangeEvent) => void>()
   private sessionWatcher: SessionWatcher | null = null
   private readonly bucketWatchers = new Map<string, SessionWatcher>()
@@ -104,7 +130,7 @@ export class SessionService {
   constructor(
     private readonly store: JsonStateStore,
     private readonly primeAgentPath: ExecutableSource,
-    maxSessionFiles = MAX_SESSION_FILES,
+    private readonly maxSessionFiles = MAX_SESSION_FILES,
     options: SessionServiceOptions = {},
   ) {
     const transcriptLimit = options.maxConcurrentTranscriptReads ?? MAX_CONCURRENT_TRANSCRIPT_READS
@@ -133,6 +159,16 @@ export class SessionService {
       options.catalogNameTimestamp,
     )
     this.renameFile = options.renameFile
+    this.primeImplementation = options.primeImplementation ?? (() => undefined)
+    this.nativeArchive = new PrimeSessionArchive(
+      () => this.sessionRoot,
+      () => this.harness === 'prime' && this.primeImplementation() === 'rust',
+      new SessionMetadataCatalog(
+        () => join(dirname(this.sessionRoot), 'sessions-archive'), null, maxSessionFiles,
+        (filePath, knownStat) => this.readMetadata(filePath, knownStat),
+      ),
+      this.watchDirectory,
+    )
   }
 
   bindRuntimeHooks(hooks: {
@@ -145,6 +181,15 @@ export class SessionService {
     this.listRuntimeSessions = hooks.all ?? null
     this.stopRuntimeForSession = hooks.stop
     this.renameRuntimeSession = hooks.rename
+  }
+
+  bindRuntimeManager(manager: SessionRuntimeManager): void {
+    this.bindRuntimeHooks({
+      get: (filePath) => manager.getForSession(filePath),
+      all: () => manager.list(),
+      stop: (filePath) => manager.stopForSession(filePath),
+      rename: (filePath, title) => manager.renameForSession(filePath, title),
+    })
   }
 
   onDidChange(listener: (event: SessionChangeEvent) => void): () => void {
@@ -168,7 +213,14 @@ export class SessionService {
     // recursive delivery varies by platform and an event may still be queued.
     // Force advances the scan revision while retaining metadata-level caches.
     if (force) this.catalog.invalidateLiveCatalog()
-    const sessions = await this.catalog.all()
+    let sessions = await this.catalog.all()
+    if (this.nativeArchive.enabled()) {
+      if (force) this.nativeArchive.catalog.invalidateLiveCatalog()
+      if (this.changeListeners.size) this.nativeArchive.watch(() => this.queueSessionChange(null))
+      sessions = [...new Map([...sessions, ...await this.nativeArchive.catalog.all()].map((session) => [session.filePath, session])).values()]
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || comparePaths(left.filePath, right.filePath))
+        .slice(0, this.maxSessionFiles)
+    }
     const archived = new Set(this.store.getArchivedSessions().map((path) => resolve(path)))
     // One runtime snapshot per list call; each session then resolves in O(1).
     const runtimeBySession = this.snapshotRuntimeSessions()
@@ -180,8 +232,8 @@ export class SessionService {
       const runtime = runtimeBySession
         ? runtimeBySession.get(resolve(metadata.filePath))
         : this.runtimeForSession(metadata.filePath)
-      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting ? 'running' : 'idle'
-      const { sessionName: _sessionName, ...record } = metadata
+      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting || metadata.hasRunningRlmChildren ? 'running' : 'idle'
+      const { sessionName: _sessionName, hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
       records.push({ ...record, harness: this.harness, archived: isArchived })
     }
     return records.sort((a, b) => Date.parse(b.lastUserMessageAt ?? b.createdAt) - Date.parse(a.lastUserMessageAt ?? a.createdAt) || comparePaths(a.filePath, b.filePath))
@@ -235,8 +287,7 @@ export class SessionService {
     // up to MAX_SESSION_FILES * 4 serial realpath calls.
     const active = (await this.catalog.liveSessions()).get(safePath)
     if (active?.lifecycle !== 'live' || active.isSessionActive !== true) return false
-    const activeSessionId = requireId(active.activeSessionId ?? active.id, 'activeSessionId')
-    if (activeSessionId.startsWith('-')) throw new Error('Prime Agent returned an invalid active session identifier')
+    const activeSessionId = liveActiveSessionId(active)
 
     const status = await runProcess(primeAgentPath, ['status', '--json'], { timeoutMs: 15_000, maxBytes: 1024 * 1024 })
     if (status.code !== 0 || status.timedOut || status.outputExceeded) throw new Error('GooeyPi could not inspect the Prime Agent daemon')
@@ -257,9 +308,24 @@ export class SessionService {
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
     // OMP/pi services are constructed with a null CLI path (electron/main/index.ts).
     if (!primeAgentPath) return this.renameFile?.(safePath, safeTitle) ?? false
-    const metadata = await this.readMetadata(safePath)
-    const result = await runProcess(primeAgentPath, ['rename', metadata.id, safeTitle, '--json'], { timeoutMs: 30_000 })
+    const selector = this.primeImplementation() === 'rust'
+      ? await this.residentWorkerSelector(safePath)
+      : (await this.readMetadata(safePath)).id
+    const result = await runProcess(primeAgentPath, ['rename', selector, safeTitle, '--json'], { timeoutMs: 30_000 })
     return result.code === 0
+  }
+
+  /**
+   * Rust Prime renames a session that no worker holds by waking a daemon
+   * worker for it, and that worker's runtime lease then refuses GooeyPi's
+   * --resume until it idles out (90 minutes by default). The CLI rename is
+   * used only when a resident worker already holds the session, and it is
+   * addressed to that worker.
+   */
+  private async residentWorkerSelector(safePath: string): Promise<string> {
+    const live = (await this.catalog.liveSessions()).get(safePath)
+    if (!live || !RESIDENT_WORKER_STATES.has(live.workerState)) throw new Error(RUST_PRIME_RENAME_NEEDS_RUNTIME)
+    return liveActiveSessionId(live)
   }
 
   async archive(filePath: unknown, archivedValue: unknown = true): Promise<boolean> {
@@ -275,14 +341,16 @@ export class SessionService {
 
   async requireSessionPath(value: unknown): Promise<string> {
     const requested = requireString(value, 'filePath', { min: 1, max: 4096 })
-    const root = await realpath(this.sessionRoot)
     const path = await realpath(requested)
+    if (await this.nativeArchive.authorizes(path)) return path
+    const root = await realpath(this.sessionRoot)
     if (!this.isSessionPathAuthorized(root, path)) throw new TypeError('Session path is outside the Prime session directory')
     return path
   }
 
   private startWatcher(): void {
     if (this.sessionWatcher || this.watcherRetry || !this.changeListeners.size) return
+    this.nativeArchive.watch(() => this.queueSessionChange(null))
     try {
       // A missing session root (harness never used on this machine) throws
       // here and lands in the retry below, which watches once the root appears.
@@ -310,11 +378,16 @@ export class SessionService {
     this.watcherRetry = setTimeout(() => {
       this.watcherRetry = null
       this.startWatcher()
+      // Nothing reported what was written while the root was unwatched: a
+      // harness can create its session root and write a session within one
+      // retry interval, so the catalog rescans once the watcher attaches.
+      if (this.sessionWatcher) this.queueSessionChange(null)
     }, 1_000)
     this.watcherRetry.unref()
   }
 
   private stopWatcher(): void {
+    this.nativeArchive.close()
     this.sessionWatcher?.close()
     this.sessionWatcher = null
     this.closeBucketWatchers()

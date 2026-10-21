@@ -1,5 +1,6 @@
 import { supportsFastMode } from 'prime-agent-ai'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '../../src/types/api'
+import { harnessVersion } from './lib/harness-version'
 import { catalogLimitWarnings, limitCatalogRelations, type ModelCatalogProvider } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
@@ -7,12 +8,13 @@ import { requireString } from './validation'
 
 /**
  * Shared model-catalog machinery for the harnesses whose catalog comes from an
- * external CLI (OMP's `omp models --json`, pi's RPC probe) instead of
- * in-process npm modules. Everything here is harness-agnostic: caching,
- * single-flight refresh, stale-catalog degradation, untrusted-entry validation,
- * provider derivation, and the version probe. Subclasses supply only how raw
- * model entries are fetched, how one entry maps to a descriptor, and how the
- * CLI reports its version.
+ * external CLI (OMP's `omp models --json`, the RPC probe pi and Rust Prime
+ * answer) instead of in-process npm modules. Everything here is
+ * harness-agnostic: caching, single-flight refresh, invalidation,
+ * stale-catalog degradation, untrusted-entry validation, provider derivation,
+ * and the version probe. Subclasses supply how raw model entries are fetched
+ * and how one entry maps to a descriptor, and may replace the default
+ * provider rows.
  */
 const CATALOG_TTL_MS = 30_000
 export { MAX_CATALOG_PROVIDERS } from './model-catalog'
@@ -103,6 +105,8 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
   private cachedExecutable: string | null = null
   private catalogRefresh: { executable: string; promise: Promise<PrimeModelCatalog> } | null = null
   private cachedVersion: { executable: string; value: string } | null = null
+  /** Bumped by invalidate(); a refresh that began under an older generation never fills the cache. */
+  private generation = 0
 
   constructor(private readonly executable: ExecutableSource, options: CliModelCatalogOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CATALOG_TIMEOUT_MS
@@ -119,8 +123,6 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
   protected abstract fetchModelEntries(executable: string): Promise<unknown[]>
   /** Maps one untrusted raw entry to a descriptor, or null when it is malformed. */
   protected abstract toModelDescriptor(value: unknown): PrimeModelDescriptor | null
-  /** Extracts the version from the `--version` stdout, or null when unrecognized. */
-  protected abstract parseVersion(stdout: string): string | null
   /** Environment for the `--version` probe; undefined inherits the runProcess default. */
   protected versionEnvironment(): NodeJS.ProcessEnv | undefined { return undefined }
 
@@ -136,7 +138,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     // Single-flight: concurrent callers share one CLI run instead of spawning
     // duplicate subprocesses; the in-flight promise is cleared in finally.
     if (!this.catalogRefresh || this.catalogRefresh.executable !== executable) {
-      const promise = this.refreshCatalog(executable).finally(() => {
+      const promise = this.refreshCatalog(executable, this.generation).finally(() => {
         if (this.catalogRefresh?.promise === promise) this.catalogRefresh = null
       })
       this.catalogRefresh = { executable, promise }
@@ -173,6 +175,32 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     return (await this.catalog()).models.find((model) => model.provider === provider && model.id === modelId)
   }
 
+  /**
+   * Makes the next read run the CLI again, for example after its credentials
+   * changed. A refresh already in flight still answers its own callers but no
+   * longer fills the cache. The last loaded catalog stays the fallback for a
+   * refresh that fails.
+   */
+  invalidate(): void {
+    this.generation += 1
+    this.cachedAt = 0
+    this.catalogRefresh = null
+  }
+
+  /** Provider rows for the providers a refresh returned models for; by default each one's credentials belong to the CLI. */
+  protected providerDescriptors(providerIds: readonly string[]): PrimeProviderDescriptor[] {
+    return providerIds.map((id) => ({
+      id,
+      name: id.slice(0, 200),
+      authMethod: 'external',
+      configured: true,
+      authLabel: this.credentialsLabel,
+      modelCount: 0,
+      availableModelCount: 0,
+      enabled: true,
+    }))
+  }
+
   /** Reads `models` off an untrusted catalog container, rejecting any other shape. */
   protected requireModelEntries(container: unknown): unknown[] {
     if (typeof container !== 'object' || container === null || Array.isArray(container) || !Array.isArray((container as Record<string, unknown>).models)) {
@@ -181,7 +209,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     return (container as Record<string, unknown>).models as unknown[]
   }
 
-  private async refreshCatalog(executable: string): Promise<PrimeModelCatalog> {
+  private async refreshCatalog(executable: string, generation: number): Promise<PrimeModelCatalog> {
     const [rawModels, version] = await Promise.all([
       this.fetchModelEntries(executable),
       this.resolveVersion(executable),
@@ -198,17 +226,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
       validModels.push(model)
     }
 
-    const providerIds = [...new Set(validModels.map((model) => model.provider))]
-    const relation = limitCatalogRelations(validModels, providerIds.map((id): PrimeProviderDescriptor => ({
-      id,
-      name: id.slice(0, 200),
-      authMethod: 'external',
-      configured: true,
-      authLabel: this.credentialsLabel,
-      modelCount: 0,
-      availableModelCount: 0,
-      enabled: true,
-    })))
+    const relation = limitCatalogRelations(validModels, this.providerDescriptors([...new Set(validModels.map((model) => model.provider))]))
 
     const warnings = [
       ...catalogLimitWarnings(this.harnessLabel, relation, { uniqueModels: true }),
@@ -224,7 +242,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
       providers: relation.providers,
       warning: warnings.length ? warnings.join(' ') : undefined,
     }
-    if (this.cachedExecutable === executable) {
+    if (this.cachedExecutable === executable && this.generation === generation) {
       this.cachedCatalog = catalog
       this.cachedAt = Date.now()
     }
@@ -246,7 +264,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
         env: this.versionEnvironment(),
       })
       version = result.code === 0 && !result.timedOut && !result.outputExceeded
-        ? this.parseVersion(result.stdout.trim())
+        ? harnessVersion(result.stdout)
         : null
     } catch { /* Retry on the next catalog refresh. */ }
     if (version && this.cachedExecutable === executable) this.cachedVersion = { executable, value: version }

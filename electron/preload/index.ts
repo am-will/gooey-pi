@@ -40,6 +40,7 @@ const api: PrimeWorkApi = {
     popupMenu: (menu, x, y) => invoke('app:popup-menu', menu, x, y),
     setTitleBarTheme: (theme) => invoke('app:set-title-bar-theme', theme),
     onOpenSettings: (callback) => subscribeSignal('app:open-settings', callback),
+    onHarnessesChanged: (callback) => subscribeSignal('app:harnesses-changed', callback),
   },
   updates: {
     getState: () => invoke('updates:get-state'),
@@ -49,7 +50,7 @@ const api: PrimeWorkApi = {
   },
   projects: {
     list: (harness) => invoke('projects:list', harness),
-    listFiles: (root, harness) => invoke('projects:list-files', root, harness),
+    listFiles: (root, harness, mode) => invoke('projects:list-files', root, harness, mode),
     listCheckouts: (projectId, harness) => invoke('projects:list-checkouts', projectId, harness),
     executeCheckout: (projectId, action, harness) => invoke('projects:execute-checkout', projectId, action, harness),
     add: (harness) => invoke('projects:add', harness),

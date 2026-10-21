@@ -18,10 +18,10 @@
 .composer:focus-within { border-color: color-mix(in srgb, var(--border-strong) 65%, var(--focus)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 30%, transparent); }
 .composer--image-dragging { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 28%, transparent); }
 .composer-drop-feedback { position: absolute; z-index: 80; inset: 5px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed color-mix(in srgb, var(--focus) 72%, var(--border)); border-radius: 10px; color: var(--text); background: color-mix(in srgb, var(--surface-raised) 91%, transparent); backdrop-filter: blur(4px); font-size: 12px; font-weight: 620; pointer-events: none; }
-.composer-input { position: relative; width: 100%; min-height: 55px; max-height: 150px; flex: 1; }
+.composer-input { position: relative; width: 100%; min-height: 55px; max-height: min(40vh, 320px); flex: 1; }
 /* The native control is the sole text renderer so its glyphs, wrapping, selection,
    caret, and platform scrollbar always share one authoritative content box. */
-.composer-input > textarea { width: 100%; height: 100%; min-height: 55px; max-height: 150px; display: block; padding: 6px 9px; border: 0; resize: none; outline: 0; color: var(--text); background: transparent; caret-color: var(--text); font: inherit; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; }
+.composer-input > textarea { width: 100%; height: auto; field-sizing: content; min-height: 55px; max-height: min(40vh, 320px); display: block; padding: 6px 9px; border: 0; resize: none; outline: 0; color: var(--text); background: transparent; caret-color: var(--text); font: inherit; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word; overflow-y: auto; }
 .composer-input > textarea::placeholder { color: var(--text-tertiary); }
 .composer-attachments { display: flex; align-items: center; gap: 6px; padding: 1px 6px 7px; overflow-x: auto; }
 .composer-attachment { max-width: 190px; height: 34px; display: flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 3px 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); }
@@ -94,7 +94,9 @@
 .select-control--compact { height: 26px; border-radius: 999px; }
 .model-fallback-chip { max-width: 210px; height: 26px; display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 0 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border)); border-radius: 999px; color: var(--warning); background: var(--warning-soft); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .permissions-chip { height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); background: var(--surface-subtle); font-size: 10.5px; }
-.worktree-picker, .model-picker { position: relative; min-width: 0; flex: 0 1 auto; }
+/* No position: relative here, so the checkout menu sizes against .composer__footer.
+   Only the model picker, below, anchors its popover to its trigger. */
+.worktree-picker, .model-picker { min-width: 0; flex: 0 1 auto; }
 .worktree-picker__trigger, .model-picker__trigger { max-width: 150px; cursor: pointer; }
 .worktree-picker__trigger:hover:not(:disabled), .worktree-picker__trigger[aria-expanded="true"], .model-picker__trigger:hover:not(:disabled), .model-picker__trigger[aria-expanded="true"] { color: var(--text); background: var(--surface-hover); }
 .worktree-picker__trigger:disabled, .model-picker__trigger:disabled { opacity: .65; cursor: default; }
@@ -112,6 +114,7 @@
 .worktree-picker__empty, .model-picker__empty { display: block; padding: 8px; color: var(--text-tertiary); font-size: 10.5px; }
 /* Model-picker specifics: everything above is shared with the checkout picker
    so both composer popovers keep one control vocabulary. */
+.model-picker { position: relative; }
 .model-picker__popover { right: auto; left: 0; width: min(420px, calc(100vw - 48px)); }
 .model-picker__search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; margin-bottom: 6px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-tertiary); background: var(--surface-subtle); }
 .model-picker__search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 14%, transparent); }

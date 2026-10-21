@@ -12,11 +12,21 @@ const git = (cwd: string, ...args: string[]) => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
   if (result.status !== 0) throw new Error(result.stderr)
 }
-const repository = (prefix = 'prime-work-git-') => {
-  const cwd = mkdtempSync(join(tmpdir(), prefix)); dirs.push(cwd)
+const initRepository = (cwd: string) => {
   git(cwd, 'init', '-q'); git(cwd, 'config', 'user.name', 'Prime Work Test'); git(cwd, 'config', 'user.email', 'test@example.com')
   writeFileSync(join(cwd, 'file.txt'), 'base\n'); git(cwd, 'add', 'file.txt'); git(cwd, 'commit', '-qm', 'base')
+}
+const repository = (prefix = 'prime-work-git-') => {
+  const cwd = mkdtempSync(join(tmpdir(), prefix)); dirs.push(cwd)
+  initRepository(cwd)
   return cwd
+}
+/** An untracked repository inside cwd, such as an agent-cloned checkout. */
+const untrackedNestedRepository = (cwd: string, name: string) => {
+  const nested = join(cwd, name)
+  mkdirSync(nested)
+  initRepository(nested)
+  return nested
 }
 
 describe('GitService', () => {
@@ -113,6 +123,55 @@ describe('GitService', () => {
     expect(await service.unstage(nested, ['packages/app/nested.txt'])).toBe(true)
     expect(await service.restore(nested, ['packages/app/nested.txt'])).toBe(true)
     expect(readFileSync(join(nested, 'nested.txt'), 'utf8')).toBe('base\n')
+  })
+
+  it('lists an untracked nested repository without the porcelain directory marker', async () => {
+    const cwd = repository('prime-work-git-untracked-repo-')
+    const service = new GitService(async () => cwd)
+    const embed = untrackedNestedRepository(cwd, 'embed')
+    writeFileSync(join(cwd, 'file.txt'), 'base\nchanged\n')
+    // Even with --untracked-files=all, git reports a nested repository as one record with a trailing '/'.
+    const raw = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], { cwd, encoding: 'utf8' }).stdout
+    expect(raw.split('\0')).toContain('?? embed/')
+
+    const status = await service.status(cwd)
+    expect(status.error).toBeUndefined()
+    expect(status.files).toContainEqual(expect.objectContaining({ path: 'embed', status: '??', staged: false }))
+    await expect(service.diff(cwd, 'embed', false)).resolves.toMatchObject({ path: 'embed', text: '' })
+    expect(await service.restore(cwd, ['file.txt'])).toBe(true)
+    expect(readFileSync(join(cwd, 'file.txt'), 'utf8')).toBe('base\n')
+    // git clean -f never deletes a nested repository, so undoing its entry leaves it in place.
+    expect(await service.restore(cwd, ['embed'])).toBe(true)
+    expect(existsSync(join(embed, 'file.txt'))).toBe(true)
+  })
+
+  it('leaves untracked nested repositories out of staging instead of recording a gitlink', async () => {
+    const cwd = repository('prime-work-git-stage-nested-')
+    const service = new GitService(async () => cwd)
+    untrackedNestedRepository(cwd, 'embed')
+    writeFileSync(join(cwd, 'file.txt'), 'base\nchanged\n')
+
+    expect(await service.stage(cwd, ['file.txt', 'embed'])).toBe(true)
+    await expect(service.stage(cwd, ['embed'])).rejects.toThrow(/embed is a nested Git repository/i)
+    expect(spawnSync('git', ['diff', '--cached', '--name-only'], { cwd, encoding: 'utf8' }).stdout).toBe('file.txt\n')
+    expect(spawnSync('git', ['ls-files', '--stage'], { cwd, encoding: 'utf8' }).stdout).not.toMatch(/^160000 /m)
+  })
+
+  it('stages a new commit in an already tracked submodule', async () => {
+    const cwd = repository('prime-work-git-stage-submodule-')
+    const source = repository('prime-work-git-submodule-source-')
+    git(cwd, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'module')
+    git(cwd, 'commit', '-qm', 'track submodule')
+    const submodule = join(cwd, 'module')
+    writeFileSync(join(submodule, 'file.txt'), 'submodule change\n')
+    git(submodule, 'add', 'file.txt')
+    git(submodule, '-c', 'user.name=Prime Work Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'advance submodule')
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: submodule, encoding: 'utf8' }).stdout.trim()
+    const service = new GitService(async () => cwd)
+
+    expect(await service.stage(cwd, ['module'])).toBe(true)
+    expect(spawnSync('git', ['ls-files', '--stage', '--', 'module'], { cwd, encoding: 'utf8' }).stdout).toBe(`160000 ${head} 0\tmodule\n`)
+    expect(spawnSync('git', ['diff', '--cached', '--name-only'], { cwd, encoding: 'utf8' }).stdout).toBe('module\n')
   })
 
   it('unstages files on an unborn HEAD without changing working content', async () => {

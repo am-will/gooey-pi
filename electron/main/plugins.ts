@@ -21,6 +21,8 @@ interface PluginServiceOptions {
   agentDir?: string
   discover?: PluginDiscovery
   builtInSkills?: SkillRecord[] | (() => SkillRecord[] | Promise<SkillRecord[]>)
+  /** Replaces a record's availability when it returns one, e.g. for what the installed harness build cannot load. */
+  capabilityAvailability?: (record: SkillRecord) => SkillRecord['availability'] | undefined
 }
 
 interface PiMcpAdapterState {
@@ -99,6 +101,7 @@ export class PluginService {
   private readonly agentDir: string
   private readonly discoverCatalog: PluginDiscovery
   private readonly builtInSkills: () => SkillRecord[] | Promise<SkillRecord[]>
+  private readonly capabilityAvailability: NonNullable<PluginServiceOptions['capabilityAvailability']>
   private readonly harness: HarnessId
 
   constructor(
@@ -113,6 +116,7 @@ export class PluginService {
     this.builtInSkills = typeof builtInSkills === 'function'
       ? builtInSkills
       : () => builtInSkills ?? []
+    this.capabilityAvailability = options.capabilityAvailability ?? (() => undefined)
   }
 
   private queueSettingsMutation(mutate: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> {
@@ -156,6 +160,10 @@ export class PluginService {
       .map((item) => this.harness === 'pi' && !piMcpState?.enabled && item.kind === 'mcp' && item.availability?.available !== false
         ? { ...item, availability: { available: false, detail: PI_MCP_ADAPTER_REQUIRED_DETAIL } }
         : item)
+      .map((item) => {
+        const availability = this.capabilityAvailability(item)
+        return availability ? { ...item, availability } : item
+      })
     const knownPaths = combined.flatMap((item) => item.path ? [item.path] : []).slice(0, MAX_KNOWN_PATHS_PER_OWNER)
     // Delete-then-set keeps insertion order as LRU order for owner eviction.
     this.knownPathsByOwner.delete(ownerKey)

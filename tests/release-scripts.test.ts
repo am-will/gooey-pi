@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -2165,6 +2165,69 @@ describe('vendored supply-chain pins', () => {
       '!**/node_modules/@earendil-works/pi-tui/**',
       '!**/node_modules/koffi/**',
     ])
+  })
+})
+
+describe('vendor patch verification', () => {
+  const vendorPatchNames = () => readdirSync('vendor/patches').filter((name) => name.endsWith('.patch'))
+
+  // The verifier sees only these user-level Git files (keyed by name under XDG_CONFIG_HOME/git),
+  // so the developer's own config cannot mask a regression.
+  const expectVerifiedUnderUserGit = (files: Record<string, string>) => {
+    const configHome = mkdtempSync(join(tmpdir(), 'gooeypi-user-git-'))
+    try {
+      mkdirSync(join(configHome, 'git'))
+      for (const [name, content] of Object.entries(files)) writeFileSync(join(configHome, 'git', name), content)
+      const result = spawnSync(process.execPath, ['scripts/release/verify-vendor-patches.mjs'], {
+        encoding: 'utf8',
+        env: { ...process.env, XDG_CONFIG_HOME: configHome, GIT_CONFIG_GLOBAL: join(configHome, 'git', 'config'), GIT_CONFIG_NOSYSTEM: '1' },
+      })
+      expect(result.status, result.stderr).toBe(0)
+      for (const patch of vendorPatchNames()) expect(result.stdout).toContain(`${patch.replace(/\.patch$/, '.tgz')}: content verified`)
+    } finally {
+      rmSync(configHome, { recursive: true, force: true })
+    }
+  }
+
+  test('reproduces the reviewed archives when the user Git config enables core.autocrlf', () => {
+    expectVerifiedUnderUserGit({ config: '[core]\n\tautocrlf = true\n' })
+  }, 60_000)
+
+  test('reproduces the reviewed archives when the default user gitattributes file forces CRLF', () => {
+    expectVerifiedUnderUserGit({ attributes: '* text=auto eol=crlf\n' })
+  }, 60_000)
+
+  test('checks the vendor patches out without line ending conversion', () => {
+    const patches = vendorPatchNames().map((name) => `vendor/patches/${name}`)
+    expect(patches.length).toBeGreaterThan(0)
+    for (const patch of patches) {
+      const result = spawnSync('git', ['check-attr', 'text', '--', patch], { encoding: 'utf8' })
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout.trim()).toBe(`${patch}: text: unset`)
+    }
+  })
+
+  test('rejects a CRLF patch checkout with a re-checkout hint instead of rewriting it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gooeypi-crlf-patch-'))
+    const release = join(root, 'scripts', 'release')
+    const patch = 'prime-agent-0.7.0-gooeypi.1.patch'
+    mkdirSync(release, { recursive: true })
+    mkdirSync(join(root, 'vendor', 'patches'), { recursive: true })
+    try {
+      // The copied verifier resolves vendor/ from its own location; its helpers still load from the repository.
+      copyFileSync('scripts/release/verify-vendor-patches.mjs', join(release, 'verify-vendor-patches.mjs'))
+      copyFileSync('scripts/release/dependency-pins.json', join(release, 'dependency-pins.json'))
+      writeFileSync(join(release, 'lib.mjs'), `export * from ${JSON.stringify(new URL('../scripts/release/lib.mjs', import.meta.url).href)}\n`)
+      copyFileSync('vendor/prime-agent-0.7.0.tgz', join(root, 'vendor', 'prime-agent-0.7.0.tgz'))
+      writeFileSync(join(root, 'vendor', 'patches', patch), readFileSync(join('vendor', 'patches', patch), 'utf8').replaceAll('\n', '\r\n'))
+
+      const result = spawnSync(process.execPath, [join(release, 'verify-vendor-patches.mjs')], { encoding: 'utf8' })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain(`Vendor patch has CRLF line endings from a converted checkout: vendor/patches/${patch}`)
+      expect(result.stderr).toContain('git checkout -- vendor/patches')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

@@ -220,7 +220,7 @@ describe('BrowserPanel annotation mode', () => {
 
     await toggleAnnotate()
 
-    expect(container.querySelector('.annotation-notice')?.textContent).toContain('at most 20 annotations')
+    expect(container.querySelector('.annotation-notice')?.textContent).toBe('You can attach at most 20 annotations. Remove one from the composer attachment to add more.')
     expect(container.querySelector('.annotation-hint')).toBeNull()
     expect(executed.filter((code) => code.includes('__primeAnnotator.start()')).length).toBe(injectedBefore)
   })

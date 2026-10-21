@@ -91,6 +91,8 @@ GooeyPi checks common install locations automatically. If a harness is missing, 
 
 GitHub Releases provides a DMG and ZIP for macOS, common Linux package formats plus AppImage, and a Windows installer and ZIP.
 
+macOS 14 Sonoma or later is required. Release verification checks the application's declared minimum and the deployment targets of its native modules.
+
 Harness provider credentials stay with the harness. Optional voice keys are encrypted with the operating system's secure storage, and local `whisper.cpp` dictation needs no API key.
 
 ## Star History
@@ -165,6 +167,8 @@ Remote pages open in a separate browser profile with Node access disabled. Proje
 For suspected vulnerabilities, follow the [security policy](.github/SECURITY.md) and do not post sensitive details publicly. See [docs/security.md](docs/security.md) for the full technical security model.
 
 ## Development checks
+
+For custom model endpoints, see [Connect an OpenAI-compatible model endpoint](docs/openai-compatible-providers.md). The [remote-hosts design](docs/remote-hosts-design.md) describes the proposed SSH architecture and decisions needed before implementation.
 
 Run these before submitting a code change:
 

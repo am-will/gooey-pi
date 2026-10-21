@@ -134,12 +134,34 @@ describe('/compact dispatch', () => {
     expect(fixtureState.messages().filter((message) => message.role === 'user')).toHaveLength(0)
   })
 
+  it('takes a compaction skipped for lack of history as delivered', async () => {
+    // The runtime answers a refusal this way and shows the skip itself, so
+    // nothing is reported as failed and the composer keeps no draft.
+    const fixtureState = fixture({ runtime: runtime() })
+    fixtureState.command.mockResolvedValueOnce({ type: 'response', command: 'compact', success: true, data: { skipped: true, message: 'Already compacted' } })
+
+    await expect(fixtureState.actions.sendPrompt('/compact')).resolves.toBeUndefined()
+
+    expect(fixtureState.messages()).toEqual([])
+    expect(fixtureState.reportError).not.toHaveBeenCalled()
+  })
+
   it('passes custom instructions to compact', async () => {
     const fixtureState = fixture({ runtime: runtime() })
 
     await fixtureState.actions.sendPrompt('/compact focus on auth')
 
     expect(fixtureState.command).toHaveBeenCalledWith('idle-runtime', { type: 'compact', customInstructions: 'focus on auth' })
+  })
+
+  it('compacts with instructions typed on the next line instead of sending a prompt', async () => {
+    const fixtureState = fixture({ runtime: runtime() })
+
+    await fixtureState.actions.sendPrompt('/compact\nkeep the plan')
+
+    expect(fixtureState.command).toHaveBeenCalledOnce()
+    expect(fixtureState.command).toHaveBeenCalledWith('idle-runtime', { type: 'compact', customInstructions: 'keep the plan' })
+    expect(fixtureState.messages().filter((message) => message.role === 'user')).toHaveLength(0)
   })
 
   it('queues compact for an owned streaming runtime', async () => {

@@ -1,11 +1,13 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
+import { isCompactionReason } from '../../../src/lib/compaction-reason'
 import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { strictJsonLines } from '../jsonl'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
 import { parseGooeyPiAgentMessage } from '../collaboration/message-envelope'
+import { providerErrorDetail } from '../agent-rpc/limits'
 
 const MAX_TRANSCRIPT_GRAPH_BYTES = 16 * 1024 * 1024
 const MAX_TRANSCRIPT_GRAPH_RECORDS = 10_000
@@ -70,9 +72,17 @@ function roleOf(message: JsonRecord): TranscriptMessage['role'] {
   switch (message.role) {
     case 'user': return 'user'
     case 'assistant': return 'assistant'
-    case 'system': return 'system'
     default: return 'tool'
   }
+}
+
+/**
+ * Pi 1.3 persists its model-facing system prompt and tool loadout as `system`
+ * messages, at session start and whenever the loadout changes. Like Pi's own
+ * views, the transcript renders none of them, whatever the dialect admits.
+ */
+function isSystemPromptSnapshot(entry: JsonRecord): boolean {
+  return entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'system'
 }
 
 function boundedArgs(value: unknown): unknown {
@@ -128,6 +138,12 @@ function partsFromMessage(message: JsonRecord): MessagePart[] {
     }]
   }
   return parts.length ? parts : [{ type: 'text', text: '' }]
+}
+
+/** The system row naming the provider error an assistant message ended with; undefined for any other message. */
+function providerErrorRow(message: JsonRecord, id: string, timestamp: TranscriptMessage['timestamp']): TranscriptMessage | undefined {
+  const error = providerErrorDetail(message)
+  return error === undefined ? undefined : { id: `${id}:error`, role: 'system', timestamp, parts: [{ type: 'text', text: error }] }
 }
 
 function boundedTranscript(transcript: TranscriptMessage[]): TranscriptMessage[] {
@@ -202,7 +218,8 @@ function boundedTranscript(transcript: TranscriptMessage[]): TranscriptMessage[]
  * `isRenderable` selects which records enter the retained graph (and can be
  * selected as the active leaf); `renderEntry` renders retained record types the
  * shared walk does not handle itself (anything other than `message`,
- * `compaction`, and `custom_message`).
+ * `compaction`, and `custom_message`). The walk skips system prompt snapshots
+ * before asking the dialect.
  */
 export interface TranscriptDialect {
   isRenderable(entry: JsonRecord): boolean
@@ -245,7 +262,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       if (oldestEdge === undefined) break
       parentEdges.delete(oldestEdge)
     }
-    if (!dialect.isRenderable(entry)) continue
+    if (isSystemPromptSnapshot(entry) || !dialect.isRenderable(entry)) continue
     const existing = entries.get(entry.id)
     if (existing) {
       graphBytes -= existing.bytes
@@ -305,9 +322,20 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
     registerToolCalls(activeAssistant.parts.length, added)
     activeAssistant.parts.push(...added)
   }
+  // A provider error ended its turn only when the next record is a user
+  // message or the end of the session. A retry, a compaction or any later
+  // output in between means the agent recovered from it.
+  let failedTurn: TranscriptMessage | undefined
   for (const { id, entry } of branch) {
     const safeId = boundedString(id, 1_024)
+    if (failedTurn) {
+      if (entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'user') transcript.push(failedTurn)
+      failedTurn = undefined
+    }
     if (entry.type === 'compaction') {
+      // Pi, OMP and both Prime builds persist no trigger with a completed
+      // compaction, so the row names no reason; only a Prime
+      // compaction_outcome row below records one.
       const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
       const tokensBefore = typeof entry.tokensBefore === 'number' && Number.isFinite(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined
       const summary = typeof entry.summary === 'string' ? boundedString(entry.summary, MAX_PART_TEXT_CHARS) : undefined
@@ -330,9 +358,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
       const customType = typeof entry.customType === 'string' ? boundedString(entry.customType, 200) : 'activity'
       if (customType === 'compaction_outcome') {
         const outcome = details?.outcome === 'cancelled' ? 'cancelled' : details?.outcome === 'skipped' ? 'skipped' : 'failed'
-        const reason = details?.reason === 'manual' || details?.reason === 'threshold' || details?.reason === 'overflow' || details?.reason === 'requested'
-          ? details.reason
-          : undefined
+        const reason = isCompactionReason(details?.reason) ? details.reason : undefined
         const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
         const text = boundedString(textFromContent(entry.content), MAX_PART_TEXT_CHARS)
         transcript.push({
@@ -428,6 +454,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
         activeAssistant = { id: safeId, role, timestamp, startedAt: timestamp, completedAt, parts }
         transcript.push(activeAssistant)
       }
+      failedTurn = providerErrorRow(message, safeId, completedAt)
       continue
     }
     const item: TranscriptMessage = { id: safeId, role, timestamp, parts }
@@ -435,6 +462,8 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
     activeAssistant = undefined
   }
   if (isStreaming && activeAssistant) { activeAssistant.streaming = true; activeAssistant.completedAt = undefined }
+  // While the session still streams, the agent may yet retry the failed call.
+  else if (failedTurn) transcript.push(failedTurn)
   return boundedTranscript(transcript)
 }
 

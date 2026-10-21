@@ -15,6 +15,8 @@ const session = (): SessionRecord => ({
   depth: 0,
 })
 
+const dialogRequest = { type: 'extension_ui_request', id: 'question-1', method: 'confirm', title: 'Continue?', message: 'Proceed' }
+
 const catalogSnapshot = (record: SessionRecord, status = record.status): SessionRecord => {
   const { eventRevision: _eventRevision, statusEventRevision: _statusEventRevision, ...snapshot } = record
   return { ...snapshot, status }
@@ -31,8 +33,8 @@ describe('session lifecycle attention', () => {
   })
 
   it('gives repeated background waits and completions distinct attention revisions', () => {
-    const waiting = applySessionLifecycleEvent(session(), { type: 'extension_ui_request' }, false, 1)
-    const waitingAgain = applySessionLifecycleEvent(waiting, { type: 'extension_ui_request' }, false, 1)
+    const waiting = applySessionLifecycleEvent(session(), dialogRequest, false, 1)
+    const waitingAgain = applySessionLifecycleEvent(waiting, dialogRequest, false, 1)
     const completed = applySessionLifecycleEvent(waitingAgain, { type: 'agent_end' }, false, 1)
     const completedAgain = applySessionLifecycleEvent(completed, { type: 'agent_end' }, false, 1)
 
@@ -41,6 +43,15 @@ describe('session lifecycle attention', () => {
     expect(sessionAttentionSignature(completed)).toBe('complete:3')
     expect(sessionAttentionSignature(completedAgain)).toBe('complete:4')
     expect(Date.parse(waitingAgain.updatedAt)).toBeGreaterThan(Date.parse(waiting.updatedAt))
+  })
+
+  it('ends a run that agent_end closes and an error follows as failed', () => {
+    const completed = applySessionLifecycleEvent(session(), { type: 'agent_end' }, false, 1)
+    const failed = applySessionLifecycleEvent(completed, { type: 'error', error: '529 overloaded', synthetic: true }, false, 2)
+
+    expect(completed.status).toBe('complete')
+    expect(failed).toMatchObject({ status: 'failed', eventRevision: 2 })
+    expect(sessionAttentionSignature(failed)).toBe('failed:2')
   })
 
   it('advances lifecycle revision without changing attention for failures', () => {
@@ -83,6 +94,19 @@ describe('session lifecycle attention', () => {
     expect(activityNotificationSignature({ ...completed, archived: true })).toBeUndefined()
   })
 
+  it('waits only on extension UI dialogs, not on fire-and-forget frames', () => {
+    const running = applySessionLifecycleEvent(session(), { type: 'agent_start' }, false, 1)
+    for (const frame of [
+      { type: 'extension_ui_request', id: 'notify-1', method: 'notify', message: 'Indexed the project' },
+      { type: 'extension_ui_request', id: 'status-1', method: 'setStatus', statusKey: 'lsp', statusText: 'ready' },
+      { type: 'extension_ui_request', id: 'title-1', method: 'setTitle', title: 'Refactor the parser' },
+      { type: 'extension_ui_request', id: 'cancel-1', method: 'cancel', targetId: 'question-1' },
+    ]) {
+      expect(applySessionLifecycleEvent(running, frame, false, 2)).toBe(running)
+    }
+    expect(applySessionLifecycleEvent(running, dialogRequest, false, 2)).toMatchObject({ status: 'waiting', unread: true })
+  })
+
   it('ignores desktop rate-limit drops: the agent is still running', () => {
     const running = applySessionLifecycleEvent(session(), { type: 'agent_start' }, true, 1)
     const afterLimit = applySessionLifecycleEvent(running, { type: 'transport_limit', kind: 'count' }, true, 2)
@@ -95,12 +119,21 @@ describe('session lifecycle attention', () => {
     expect(running.status).toBe('running')
     expect(completed).toMatchObject({ status: 'complete', unread: false, eventRevision: 2 })
   })
+
+  it('leaves a finished turn alone while the harness compacts between turns', () => {
+    const completed = applySessionLifecycleEvent(session(), { type: 'agent_end' }, false, 1)
+    const compacting = applySessionLifecycleEvent(completed, { type: 'compaction_start', reason: 'idle' }, false, 2)
+    const compacted = applySessionLifecycleEvent(compacting, { type: 'compaction_end', reason: 'idle', willRetry: false }, false, 3)
+    expect(compacting).toBe(completed)
+    expect(compacted).toBe(completed)
+    expect(sessionAttentionSignature(compacted)).toBe('complete:1')
+  })
 })
 
 describe('catalog merges over live session state', () => {
   it.each([
     ['running', { type: 'agent_start' }],
-    ['waiting', { type: 'extension_ui_request' }],
+    ['waiting', dialogRequest],
     ['complete', { type: 'agent_end' }],
     ['failed', { type: 'transport_error' }],
   ] as const)('does not downgrade renderer-owned %s state with a stale idle catalog record', (expectedStatus, event) => {
@@ -241,7 +274,7 @@ describe('catalog merges over live session state', () => {
   })
 
   it('keeps a waiting badge while its extension-UI request is still open', () => {
-    const waiting = applySessionLifecycleEvent(session(), { type: 'extension_ui_request' }, false, 1)
+    const waiting = applySessionLifecycleEvent(session(), dialogRequest, false, 1)
     expect(sessionAttentionSignature(waiting)).toBe('waiting:1')
 
     const diskRecord: SessionRecord = { ...session(), status: 'running', updatedAt: '2025-01-01T00:00:05.000Z' }

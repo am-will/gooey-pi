@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import type { PromptImage } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
 
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 export const MAX_COMPOSER_FILE_COUNT = 8
@@ -35,6 +36,7 @@ function isFileDrag(event: DragEvent<HTMLElement>): boolean {
 }
 
 export function useComposerImages({ shortName }: UseComposerImagesOptions) {
+  const { t } = useI18n()
   const [images, setImages] = useState<ComposerImage[]>([])
   const [unsupportedFiles, setUnsupportedFiles] = useState<ComposerUnsupportedFile[]>([])
   const [error, setError] = useState('')
@@ -65,7 +67,7 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
     if (files.length === 0) return
     const startingErrorRevision = errorRevisionRef.current
     if (imagesRef.current.length + unsupportedFilesRef.current.length + reservedCountRef.current + files.length > MAX_COMPOSER_FILE_COUNT) {
-      updateError(`You can attach up to ${MAX_COMPOSER_FILE_COUNT} files.`)
+      updateError(t('composer.error.tooManyFiles', { count: MAX_COMPOSER_FILE_COUNT }))
       return
     }
 
@@ -74,7 +76,7 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
     if (otherFiles.length > 0) {
       const added = otherFiles.map((file, index): ComposerUnsupportedFile => ({
         id: crypto.randomUUID(),
-        name: file.name || `Attached file ${index + 1}`,
+        name: file.name || t('composer.attachment.unnamedFile', { index: index + 1 }),
         size: file.size,
         mimeType: file.type.toLowerCase() || 'application/octet-stream',
       }))
@@ -88,7 +90,7 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
     const sourceBytes = imageFiles.reduce((sum, file) => sum + file.size, 0)
     const currentBytes = imagesRef.current.reduce((sum, image) => sum + image.size, 0)
     if (currentBytes + reservedBytesRef.current + sourceBytes > MAX_COMPOSER_IMAGE_SOURCE_BYTES) {
-      updateError('These images are too large to send. Attach smaller images (about 1.3 MB total).')
+      updateError(t('composer.error.imagesTooLarge'))
       return
     }
 
@@ -99,7 +101,7 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
     try {
       const added = await Promise.all(imageFiles.map(async (file, index): Promise<ComposerImage> => ({
         id: crypto.randomUUID(),
-        name: file.name || `Attached image ${index + 1}`,
+        name: file.name || t('composer.attachment.unnamedImage', { index: index + 1 }),
         size: file.size,
         type: 'image',
         mimeType: file.type.toLowerCase(),
@@ -111,14 +113,14 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
       setImages(next)
       if (errorRevisionRef.current === startingErrorRevision) setError('')
     } catch {
-      if (mountedRef.current) updateError(`${shortName} could not read the image.`)
+      if (mountedRef.current) updateError(t('composer.error.imageRead', { name: shortName }))
     } finally {
       reservedCountRef.current -= imageFiles.length
       reservedBytesRef.current -= sourceBytes
       pendingBatchesRef.current -= 1
       if (mountedRef.current && pendingBatchesRef.current === 0) setProcessing(false)
     }
-  }, [shortName, updateError])
+  }, [shortName, t, updateError])
 
   const clear = useCallback(() => {
     imagesRef.current = []

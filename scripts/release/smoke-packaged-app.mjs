@@ -12,8 +12,9 @@ import { findUnpackedDirectory, packagedExecutablePath } from './verify-cross-pl
  * report renderer readiness through the documented `--packaged-smoke` marker
  * before a single bounded deadline elapses. The structural verifier proves the
  * package's shape; this proves the package actually boots main, preload and the
- * trusted renderer. Contract values are asserted against
- * electron/main/packaged-smoke.ts by tests/packaged-smoke.test.ts.
+ * trusted renderer, and that main mirrored Prime's schedule skill out of the
+ * bundle. Contract values are asserted against electron/main/packaged-smoke.ts
+ * by tests/packaged-smoke.test.ts.
  */
 export const PACKAGED_SMOKE_FLAG = '--packaged-smoke='
 export const PACKAGED_SMOKE_READY_EVENT = 'gooeypi-packaged-smoke-ready'
@@ -22,6 +23,8 @@ export const MAX_DIAGNOSTICS_BYTES = 64 * 1024
 export const SMOKE_TIMEOUT_MS = 45_000
 /** How long helpers that inherited stdio may hold the pipes open after the application process exits. */
 export const SMOKE_EXIT_GRACE_MS = 5_000
+/** Prime runs the schedule skill from this user-data mirror, and a failed mirror only logs before falling back to the signed bundle. */
+export const MIRRORED_SCHEDULE_SKILL = join('bundled-skills', 'prime-work-schedules', 'SKILL.md')
 
 /** Headless CI runners have no display, so the Linux executable runs under Xvfb. */
 export function launchCommand(executable, args, { platform = process.platform, display = process.env.DISPLAY } = {}) {
@@ -165,10 +168,12 @@ export async function smokePackagedApp(target, architecture, { timeoutMs = SMOKE
     const executable = packagedExecutablePath(unpacked, target)
     workspace = mkdtempSync(join(tmpdir(), 'gooeypi-packaged-smoke-'))
     const markerPath = join(workspace, 'ready.json')
-    launch = await runPackagedApp(executable, smokeArguments(markerPath, join(workspace, 'user-data')), { cwd: unpacked, timeoutMs, exitGraceMs })
+    const userData = join(workspace, 'user-data')
+    launch = await runPackagedApp(executable, smokeArguments(markerPath, userData), { cwd: unpacked, timeoutMs, exitGraceMs })
     if (launch.timedOut) throw new Error(`Packaged application did not report renderer readiness within ${timeoutMs}ms`)
     if (launch.code !== 0) throw new Error(`Packaged application exited with code ${launch.code ?? 'null'} (signal ${launch.signal ?? 'none'})`)
     const marker = readMarker(markerPath)
+    if (!existsSync(join(userData, MIRRORED_SCHEDULE_SKILL))) throw new Error(`Packaged application did not mirror its bundled schedule skill to ${MIRRORED_SCHEDULE_SKILL} in user data`)
     console.log(`Smoked ${target}/${architecture} packaged application: ${executable} reported ${marker.event} for ${marker.url} (version ${marker.version}).`)
     return marker
   } catch (error) {

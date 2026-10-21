@@ -1,0 +1,127 @@
+import { loadLocale } from '../../src/lib/i18n'
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { applyCompactionEvent } from '../../src/lib/events/compaction'
+import { fallbackNoticeText } from '../../src/lib/events/model-fallback'
+import { I18nProvider, translate, type MessageKey } from '../../src/lib/i18n'
+import { PI_MCP_ADAPTER_REQUIRED_DETAIL } from '../../src/lib/mcp-policy'
+import { isUntitledSessionTitle, sessionTitleText, UNTITLED_SESSION_TITLE } from '../../src/lib/session-title'
+import { ActivityMessage } from '../../src/components/transcript/messages'
+import { PluginsPage } from '../../src/pages/PluginsPage'
+import type { SkillRecord } from '../../src/types/api'
+
+// Some interface copy reaches the renderer as data rather than as a literal: the
+// main process stores a session's placeholder title, it reports capability
+// availability details as fixed English sentences, and it writes provider
+// fallback notices while reading a session log. All three are mapped back onto
+// catalog keys for display, which is what these cases pin.
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const japanese = (key: MessageKey, values?: Record<string, string | number>) => translate('ja', key, values)
+
+beforeAll(async () => { await Promise.all([loadLocale('ja'), loadLocale('zh-CN')]) })
+
+describe('copy that arrives as data', () => {
+  it('treats the session placeholder as a sentinel and localises only its display', () => {
+    expect(isUntitledSessionTitle(UNTITLED_SESSION_TITLE)).toBe(true)
+    expect(isUntitledSessionTitle('Ship the settings page')).toBe(false)
+    expect(isUntitledSessionTitle(undefined)).toBe(false)
+    expect(sessionTitleText(UNTITLED_SESSION_TITLE, japanese)).toBe('名称未設定のセッション')
+    // Real titles stay untouched because they are user data.
+    expect(sessionTitleText('Ship the settings page', japanese)).toBe('Ship the settings page')
+  })
+
+  describe('capability availability details', () => {
+    let container: HTMLDivElement
+    let root: Root
+    beforeEach(() => {
+      container = document.createElement('div')
+      document.body.appendChild(container)
+      root = createRoot(container)
+    })
+    afterEach(() => { act(() => root.unmount()); container.remove() })
+
+    it('shows a known main-process detail in the interface language and passes unknown ones through', async () => {
+      const known: SkillRecord = {
+        id: 'mcp-pi-core', name: 'Pi MCP', description: 'Model context servers.', kind: 'mcp', location: 'user', enabled: false,
+        availability: { available: false, detail: PI_MCP_ADAPTER_REQUIRED_DETAIL },
+      }
+      const unknown: SkillRecord = {
+        id: 'mcp-vendor', name: 'Vendor MCP', description: 'Vendor servers.', kind: 'mcp', location: 'user', enabled: false,
+        availability: { available: false, detail: 'Install the vendor driver before enabling this server.' },
+      }
+      await act(async () => {
+        root.render(<I18nProvider preference="ja"><PluginsPage
+          harness="omp" skills={[known, unknown]} warnings={[]} loading={false}
+          askUserEnabled={true} onSetAskUserEnabled={async () => undefined}
+          browserEnabled={true} onSetBrowserEnabled={async () => undefined}
+          computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined}
+          onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })}
+          onInstallExtension={async () => ({ ok: true, output: '' })}
+          onSetMcpSupport={async () => ({ ok: true, output: '' })}
+          onConnectMcp={async () => ({ ok: true, output: '' })}
+          onSetMcpEnabled={async () => ({ ok: true, output: '' })}
+        /></I18nProvider>)
+      })
+
+      const text = container.textContent ?? ''
+      expect(text).toContain(translate('ja', 'plugins.warning.piMcpAdapterRequired'))
+      expect(text).not.toContain(PI_MCP_ADAPTER_REQUIRED_DETAIL)
+      // Harness-owned or vendor-generated detail text is shown verbatim.
+      expect(text).toContain('Install the vendor driver before enabling this server.')
+    })
+  })
+
+  describe('provider fallback notices', () => {
+    let container: HTMLDivElement
+    let root: Root
+    beforeEach(() => {
+      container = document.createElement('div')
+      document.body.appendChild(container)
+      root = createRoot(container)
+    })
+    afterEach(() => { act(() => root.unmount()); container.remove() })
+
+    it('retranslates an app compaction fallback when the interface language changes', async () => {
+      const event = { type: 'custom_message', customType: 'compaction_outcome', details: { outcome: 'failed' } }
+      const message = applyCompactionEvent([], event)?.[0]
+      if (!message) throw new Error('Expected the compaction notice')
+      expect(message.parts[0]).toMatchObject({ errorKind: 'incomplete' })
+      await act(async () => { root.render(<I18nProvider preference="ja"><ActivityMessage message={message} /></I18nProvider>) })
+      await act(async () => { container.querySelector<HTMLButtonElement>('.activity-tool__summary')!.click() })
+      expect(container.textContent).toContain(translate('ja', 'transcript.compactionIncomplete'))
+      await act(async () => { root.render(<I18nProvider preference="en"><ActivityMessage message={message} /></I18nProvider>) })
+      expect(container.textContent).toContain('Context compaction did not complete.')
+      expect(container.textContent).not.toContain(translate('ja', 'transcript.compactionIncomplete'))
+      const harnessNotice = applyCompactionEvent([], { ...event, content: 'Harness-owned detail' })?.[0]
+      expect(harnessNotice?.parts[0]).toMatchObject({ error: 'Harness-owned detail', errorKind: undefined })
+    })
+
+    it('shows the notice in the interface language on the row the transcript renders', async () => {
+      const text = fallbackNoticeText('Sonnet 4', 'Opus 4')
+      // The production path: `Transcript` hands a system row to `ActivityMessage`,
+      // which does not render it as a `text` part. Rendering `WorkTimeline`
+      // directly would not reach the row this test is about.
+      await act(async () => {
+        root.render(<I18nProvider preference="ja"><ActivityMessage
+          message={{ id: 'fallback-1', role: 'system', timestamp: 1, kind: 'notice', parts: [{ type: 'text', text, notice: { kind: 'provider-fallback', label: 'Sonnet 4', from: 'Opus 4' } }] }}
+        /></I18nProvider>)
+      })
+
+      const rendered = container.textContent ?? ''
+      expect(rendered).toContain(translate('ja', 'transcript.fallbackSwitchedFrom', { label: 'Sonnet 4', from: 'Opus 4' }))
+      expect(rendered).not.toContain(text)
+      await act(async () => {
+        root.render(<I18nProvider preference="en"><ActivityMessage message={{
+          id: 'fallback-1', role: 'system', kind: 'notice', timestamp: 1,
+          parts: [{ type: 'text', text, notice: { kind: 'provider-fallback', label: 'Sonnet 4', from: 'Opus 4' } }],
+        }} /></I18nProvider>)
+      })
+      expect(container.textContent).toContain(text)
+      expect(container.textContent).not.toContain(translate('ja', 'transcript.fallbackSwitchedFrom', { label: 'Sonnet 4', from: 'Opus 4' }))
+
+    })
+  })
+})

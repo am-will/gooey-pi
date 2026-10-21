@@ -4,11 +4,15 @@ import { requestFailureMessage } from '@/app/workspace'
 import { clearComposerDraft } from '@/lib/composer-draft'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
-import { parseMcpAuthenticationCommand } from '@/lib/mcp-policy'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
+import { parseCompactCommand, parseMcpCommand } from '@/lib/slash-commands'
+import { deliverToStartedSession } from '@/lib/started-session-delivery'
+import { isSystemReport } from '@/lib/system-rows'
+import { formattingLocaleTag, resolveLocale, translate } from '@/lib/i18n'
+import { isUntitledSessionTitle } from '@/lib/session-title'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, HarnessId, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -45,14 +49,13 @@ export interface WorkspaceActionsDeps {
   reportError(error: unknown): void
 }
 
-export type McpCommand = { type: 'open' } | { type: 'authenticate'; server?: string }
-
 interface StartedSessionIndexInput {
   bridge: PrimeWorkApi
   harness: ProjectRecord['harness']
   sessionFile: string | undefined
   setSessions: Dispatch<SetStateAction<SessionRecord[]>>
   fallbackTitle?: string
+  /** False once the merged catalog would no longer be the one on screen. */
   isCurrent?(): boolean
 }
 
@@ -65,7 +68,7 @@ export async function indexStartedSession({ bridge, harness, sessionFile, setSes
   const indexedSession = catalog.find((session) => session.filePath === sessionFile)
   if (isCurrent && !isCurrent()) return indexedSession
   setSessions((current) => mergeSessionCatalog(current, catalog, sessionFile, new Map(), 0).map((session) => (
-    fallbackTitle && session.filePath === sessionFile && session.title === 'Untitled session'
+    fallbackTitle && session.filePath === sessionFile && isUntitledSessionTitle(session.title)
       ? { ...session, title: fallbackTitle }
       : session
   )))
@@ -92,31 +95,12 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
   // Both persistence and the forced read are best-effort because a delivered
   // prompt must never be reported as failed solely due to title bookkeeping.
   if (!isCurrent || isCurrent()) {
-    setSessions((current) => current.map((session) => session.filePath === sessionFile && session.title === 'Untitled session'
+    setSessions((current) => current.map((session) => session.filePath === sessionFile && isUntitledSessionTitle(session.title)
       ? { ...session, title }
       : session))
   }
   await bridge.agent.command(runtimeId, { type: 'set_session_name', name: title }).catch(() => undefined)
   await indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle: title, isCurrent }).catch(() => undefined)
-}
-
-export function parseCompactCommand(prompt: string): { customInstructions?: string } | undefined {
-  const trimmed = prompt.trim()
-  if (trimmed === '/compact') return {}
-  if (trimmed.startsWith('/compact ')) {
-    const customInstructions = trimmed.slice(9).trim()
-    return customInstructions ? { customInstructions } : {}
-  }
-  return undefined
-}
-
-export function parseMcpCommand(prompt: string, harness: HarnessId): McpCommand | undefined {
-  const value = prompt.trim()
-  if (harness === 'prime' && value === '/mcp') return { type: 'open' }
-  const authentication = parseMcpAuthenticationCommand(value, harness)
-  return authentication
-    ? authentication.server ? { type: 'authenticate', server: authentication.server } : { type: 'authenticate' }
-    : undefined
 }
 
 /**
@@ -198,7 +182,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     clearSessionAttention(session)
     setSessions((items) => items.map((item) => item.id === session.id ? { ...item, unread: false } : item))
     const project = findProjectForSession(projects, session)
-    if (!project) { reportError('This session is not contained by an available project.'); return }
+    if (!project) { reportError(translate(formattingLocaleTag(), 'error.sessionNotInProject')); return }
     const generation = workspace.activateWorkspace(project, session)
     setView('session')
     try { await workspace.reconcileRuntime(generation) }
@@ -224,30 +208,34 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const { bridge, settingsState, setSessions, setToast, reportError } = getDeps()
     if (!bridge) return
     try {
-      if (!await bridge.sessions.rename(session.filePath, title)) throw new Error(`${HARNESS_AGENT_NAMES[settingsState.settings.activeHarness]} could not rename this session.`)
-      setSessions((items) => items.map((item) => item.id === session.id ? { ...item, title } : item)); setToast('Session renamed.')
+      if (!await bridge.sessions.rename(session.filePath, title)) throw new Error(translate(formattingLocaleTag(), 'error.sessionRenameFailed', { name: HARNESS_AGENT_NAMES[settingsState.settings.activeHarness] }))
+      setSessions((items) => items.map((item) => item.id === session.id ? { ...item, title } : item)); setToast(translate(formattingLocaleTag(), 'toast.sessionRenamed'))
     } catch (error) { reportError(error) }
   }
-  const setSessionArchived = async (session: SessionRecord, archived: boolean) => {
-    const { bridge, workspace, setSessions, setToast, resetBrowserView, closeTerminalForSession, clearSessionAttention, reportError } = getDeps()
-    if (!bridge) return
+  const setSessionsArchived = async (targets: SessionRecord[], archived: boolean) => {
+    const { bridge, workspace, settingsState, setSessions, setToast, resetBrowserView, closeTerminalForSession, clearSessionAttention, reportError } = getDeps()
+    if (!bridge || targets.length === 0) return
     try {
-      await bridge.sessions.archive(session.filePath, archived)
-      if (archived) {
-        clearSessionAttention(session)
-        closeTerminalForSession(session.filePath)
+      for (const session of targets) {
+        if (!await bridge.sessions.archive(session.filePath, archived)) throw new Error(`${HARNESS_AGENT_NAMES[settingsState.settings.activeHarness]} could not update this session's archive state.`)
+        if (archived) {
+          clearSessionAttention(session)
+          closeTerminalForSession(session.filePath)
+        }
+        setSessions((items) => items.map((item) => item.id === session.id ? { ...item, archived, unread: archived ? false : item.unread } : item))
+        if (archived && workspace.workspaceRef.current.session?.id === session.id) {
+          resetBrowserView()
+          newSession()
+        }
       }
-      setSessions((items) => items.map((item) => item.id === session.id ? { ...item, archived, unread: archived ? false : item.unread } : item))
-      if (archived && workspace.workspaceRef.current.session?.id === session.id) {
-        resetBrowserView()
-        newSession()
-      }
-      setToast(archived ? 'Session archived.' : 'Session restored.')
-    } catch (error) { reportError(error) }
+      const locale = resolveLocale(settingsState.settings.locale)
+      setToast(archived ? translate(locale, 'archive.doneToast') : translate(locale, 'archive.restoredToast'))
+    } catch (error) { reportError(error); throw error }
   }
+  const setSessionArchived = (session: SessionRecord, archived: boolean) => setSessionsArchived([session], archived).catch(() => undefined)
   const addProject = async () => {
     const { bridge, workspace, setProjects, setView, setToast, settingsState, reportError } = getDeps()
-    if (!bridge) { setToast('Project picker is available in the desktop app.'); return }
+    if (!bridge) { setToast(translate(formattingLocaleTag(), 'toast.projectPickerDesktopOnly')); return }
     try {
       const project = await bridge.projects.add(settingsState.settings.activeHarness)
       if (project) { setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]); workspace.activateWorkspace(project); setView('session') }
@@ -256,22 +244,22 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   const removeProject = async (project: ProjectRecord) => {
     const { bridge, projects, sessions, workspace, setProjects, setToast, reportError } = getDeps()
     try {
-      if (bridge && !await bridge.projects.remove(project.id, project.harness)) throw new Error('This project could not be removed.')
+      if (bridge && !await bridge.projects.remove(project.id, project.harness)) throw new Error(translate(formattingLocaleTag(), 'error.projectRemoveFailed'))
       setProjects((items) => items.filter((item) => item.id !== project.id))
       if (workspace.workspaceRef.current.project?.id === project.id) {
         const fallback = projects.find((item) => item.id !== project.id)
         const session = fallback ? sessions.find((candidate) => !candidate.archived && projectContainsPath(fallback, candidate.projectPath)) : undefined
         workspace.activateWorkspace(fallback, session)
       }
-      setToast('Project removed. Files and saved sessions were kept.')
+      setToast(translate(formattingLocaleTag(), 'toast.projectRemoved'))
     } catch (error) { reportError(error) }
   }
   const togglePinProject = async (project: ProjectRecord) => {
     const { bridge, setProjects, setToast, reportError } = getDeps()
-    if (project.inferred) { setToast('Add this project before pinning it.'); return }
-    if (!bridge) { setToast('Project pinning is available in the desktop app.'); return }
+    if (project.inferred) { setToast(translate(formattingLocaleTag(), 'toast.addProjectBeforePin')); return }
+    if (!bridge) { setToast(translate(formattingLocaleTag(), 'toast.projectPinningDesktopOnly')); return }
     try {
-      if (!await bridge.projects.setPinned(project.id, !project.pinned, project.harness)) throw new Error('This project could not be pinned.')
+      if (!await bridge.projects.setPinned(project.id, !project.pinned, project.harness)) throw new Error(translate(formattingLocaleTag(), 'error.projectPinFailed'))
       setProjects((items) => items.map((item) => item.id === project.id ? { ...item, pinned: !project.pinned } : item))
     } catch (error) { reportError(error) }
   }
@@ -291,16 +279,20 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const mcpCommand = parseMcpCommand(prompt, commandHarness)
     if (mcpCommand?.type === 'open' && images.length === 0) {
       setView('plugins')
-      setToast('Manage MCP integrations in Capabilities.')
+      setToast(translate(formattingLocaleTag(), 'toast.manageMcpInCapabilities'))
       return
     }
     if (mcpCommand?.type === 'authenticate') {
-      const target = mcpCommand.server ? ` to sign in to ${mcpCommand.server}` : ' to authenticate network MCP servers'
-      setToast(`Network MCP authentication is managed outside GooeyPi. Use ${HARNESS_AGENT_NAMES[commandHarness]} directly${target}.`)
+      // Authentication is harness-owned, so the toast names the harness and the
+      // exact follow-up only when the user named a server.
+      const agentName = HARNESS_AGENT_NAMES[commandHarness]
+      setToast(mcpCommand.server
+        ? translate(formattingLocaleTag(), 'mcpPolicy.authSignIn', { name: agentName, server: mcpCommand.server })
+        : translate(formattingLocaleTag(), 'mcpPolicy.authNetwork', { name: agentName }))
       return
     }
     if (compactCommand && images.length > 0) {
-      reportError('/compact does not accept attachments. Remove the attachment and try again.')
+      reportError(translate(formattingLocaleTag(), 'error.compactAttachments'))
       return
     }
     const currentWorkspace = workspace.workspaceRef.current
@@ -320,7 +312,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         // Compacting mid-turn would abort the running turn, so it waits for the
         // idle flush like any queued prompt.
         if (!queuedFlushPromptId) workspace.queuePrompt(prompt, 'queue')
-        if (intent === 'steer') setToast('Compaction will run when the current turn finishes.')
+        if (intent === 'steer') setToast(translate(formattingLocaleTag(), 'toast.compactionQueued'))
         return
       }
       if (intent === 'queue' && images.length === 0) {
@@ -347,7 +339,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             // silently vanishing steer reads as "sent but ignored".
             workspace.setMessages((items) => [
               ...items,
-              { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: `Steer was not delivered: ${requestFailureMessage(error)} Your draft was restored.` }] },
+              { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: translate(formattingLocaleTag(), 'error.steerNotDelivered', { message: requestFailureMessage(error) }) }] },
             ])
           }
           reportError(error)
@@ -359,6 +351,11 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       setSubmitting(true)
       const admitted = workspace.workspaceRef.current
       const generation = admitted.generation
+      const isCurrent = () => workspace.workspaceRef.current.generation === generation
+      // A new chat keeps no session file after its first prompt starts a
+      // runtime, so its own runtime is what ties it to a conversation.
+      const admittedOwner = workspace.runtimeOwnerRef.current
+      const admittedRuntimeId = admittedOwner?.generation === generation ? admittedOwner.runtimeId : undefined
       let startedPrompt = false
       let queuedPromptId: string | undefined
       const sentAt = Date.now()
@@ -372,14 +369,14 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         return bridge.sessions.followUp(sessionFile, prompt, intent)
       }
       try {
-        if (!admitted.project || !admitted.cwd) { reportError('Add a project before starting a session.'); return }
+        if (!admitted.project || !admitted.cwd) { reportError(translate(formattingLocaleTag(), 'error.addProjectBeforeSession')); return }
         // The harness comes from the workspace's own project, never global
         // settings: a prompt landing between a harness switch and the
         // bootstrap effect's workspace reset would otherwise start the new
         // harness against the old workspace's cwd and session.
         const activeHarness = admitted.project.harness
         if (images.length > 0 && !provider.selectedModel?.input.includes('image')) {
-          reportError('This model does not accept images. Remove the attachment or choose a vision model.')
+          reportError(translate(formattingLocaleTag(), 'error.modelNoImages'))
           return
         }
         if (!workspace.prepareForPrompt(generation)) return
@@ -387,7 +384,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           if (userMessageAppended) return
           // The workspace may have switched while a command was in flight;
           // an optimistic append would land in the wrong transcript.
-          if (workspace.workspaceRef.current.generation !== generation) return
+          if (!isCurrent()) return
           userMessageAppended = true
           workspace.setMessages((items) => [...items, userMessage])
           if (admitted.sessionFile) setSessions((items) => items.map((session) => session.filePath === admitted.sessionFile ? { ...session, lastUserMessageAt: sentAtIso } : session))
@@ -400,35 +397,51 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           demoTimerRef.current.push(window.setTimeout(() => workspace.setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, streaming: false, completedAt: Date.now(), parts: [...item.parts, { type: 'toolResult', name: 'Inspect project', text: 'Project context loaded' }, { type: 'text', text: 'I’ve reviewed the project context and prepared the workspace. Connect the desktop bridge to run this request with Prime Agent.' }] } : item)), 1_250))
           return
         }
-        await grantProject(admitted.project)
-        if (workspace.workspaceRef.current.generation !== generation) return
-        const selected = workspace.workspaceRef.current
+        // A new chat that has not started a runtime has no conversation to
+        // return to, so a switch before its runtime starts still delivers it
+        // to the admitted project. Any other message stays queued, or is
+        // refused back to its sender, for a retry in its own conversation.
+        const stillDeliverable = () => {
+          if (isCurrent() || (!admitted.sessionFile && !admittedRuntimeId)) return true
+          if (queuedFlushPromptId) return false
+          throw new Error('The workspace changed before it was sent.')
+        }
+        const granted = await grantProject(admitted.project)
+        if (!stillDeliverable()) return
+        const selected = isCurrent() ? workspace.workspaceRef.current : { ...admitted, project: granted, cwd: workspaceCwd(granted, admitted.session) }
         if (!selected.cwd) throw new Error('The selected workspace has no working directory.')
         const liveRuntimes = (await bridge.agent.list()).filter((candidate) => candidate.harness === activeHarness)
-        if (workspace.workspaceRef.current.generation !== generation) return
+        if (!stillDeliverable()) return
         const owner = workspace.runtimeOwnerRef.current
         const tracked = workspace.runtimeIdRef.current ? liveRuntimes.find((item) => item.runtimeId === workspace.runtimeIdRef.current) : undefined
         const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
-        let activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
+        const activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
         const selectedSession = selected.sessionFile ? sessions.find((session) => session.filePath === selected.sessionFile) : undefined
         if (compactCommand && !activeRuntime) {
-          if (!selected.sessionFile) { setToast('Nothing to compact yet.'); return }
+          if (!selected.sessionFile) { setToast(translate(formattingLocaleTag(), 'toast.nothingToCompact')); return }
           if (selectedSession?.status === 'running') {
-            setToast('Compaction is unavailable while this session is running outside GooeyPi.')
+            setToast(translate(formattingLocaleTag(), 'toast.compactionUnavailableExternal'))
             return
           }
         }
         if ((intent === 'queue' || compactCommand) && images.length === 0 && (activeRuntime?.isStreaming || selectedSession?.status === 'running')) {
           if (!queuedFlushPromptId) queuedPromptId = workspace.queuePrompt(prompt, compactCommand ? 'queue' : intent)
-          if (compactCommand && intent === 'steer') setToast('Compaction will run when the current turn finishes.')
+          if (compactCommand && intent === 'steer') setToast(translate(formattingLocaleTag(), 'toast.compactionQueued'))
           return
         }
-        let startedRuntime = false
-        let startedSessionNeedsTitle = false
+        const promptRequest = { type: 'prompt', message: prompt, streamingBehavior: streamingBehaviorForIntent(intent), ...(images.length ? { images } : {}) }
+        const compactRequest = compactCommand && { type: 'compact', ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}) }
+        const showPrompt = (runtime: RuntimeInfo) => {
+          if (!isCurrent()) return
+          startedPrompt = true
+          appendUserMessage()
+          workspace.setRuntime({ ...runtime, isStreaming: true })
+          workspace.setMessages((items) => [...items, { id: `assistant-${Date.now()}`, role: 'assistant', timestamp: Date.now(), streaming: true, parts: [] }])
+        }
         if (!activeRuntime) {
           workspace.attachRuntime(undefined, generation)
           if (images.length > 0 && selected.sessionFile && selectedSession?.status === 'running') {
-            throw new Error('Image attachments cannot be queued while this session is active outside GooeyPi. Wait for it to finish, then try again.')
+            throw new Error(translate(formattingLocaleTag(), 'error.imagesExternalSession'))
           }
           if (images.length === 0 && selected.sessionFile && selectedSession?.status === 'running'
             && await followUpExternalSession(selected.sessionFile)) {
@@ -436,9 +449,10 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             completeQueuedFlush()
             return
           }
+          let startedRuntime: RuntimeInfo
           try {
             if (!provider.model) throw new Error(`No model is available for ${HARNESS_AGENT_NAMES[activeHarness]}. Enable or connect a provider, then try again.`)
-            activeRuntime = await bridge.agent.start({ cwd: selected.cwd, sessionPath: selected.sessionFile, model: provider.model, thinking: provider.effort, fast: provider.fast, harness: activeHarness })
+            startedRuntime = await bridge.agent.start({ cwd: selected.cwd, sessionPath: selected.sessionFile, model: provider.model, thinking: provider.effort, fast: provider.fast, harness: activeHarness })
           } catch (startError) {
             if (images.length === 0 && selected.sessionFile && await followUpExternalSession(selected.sessionFile)) {
               if (intent === 'steer') appendUserMessage()
@@ -447,31 +461,30 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             }
             throw startError
           }
-          startedRuntime = true
-          if (workspace.workspaceRef.current.generation !== generation) { await bridge.agent.stop(activeRuntime.runtimeId).catch(() => false); return }
-          const indexedSession = await indexStartedSession({
+          // The forced re-list returns the whole harness catalog, so it may
+          // only merge while that harness is still the one on screen.
+          const catalogIsCurrent = () => getDeps().settingsState.settings.activeHarness === activeHarness
+          await deliverToStartedSession({
             bridge,
-            harness: activeHarness,
-            sessionFile: activeRuntime.sessionFile,
-            setSessions,
-            isCurrent: () => workspace.workspaceRef.current.generation === generation,
+            runtime: startedRuntime,
+            cwd: selected.cwd,
+            sessionFile: selected.sessionFile,
+            agentName: HARNESS_AGENT_NAMES[activeHarness],
+            request: compactRequest || promptRequest,
+            runtimeSessions: workspace.runtimeSessionsRef.current,
+            indexSession: () => indexStartedSession({ bridge, harness: activeHarness, sessionFile: startedRuntime.sessionFile, setSessions, isCurrent: catalogIsCurrent }),
+            titleSession: compactCommand ? undefined : () => titleStartedSession({ bridge, harness: activeHarness, runtimeId: startedRuntime.runtimeId, sessionFile: startedRuntime.sessionFile, prompt, setSessions, isCurrent: catalogIsCurrent }),
+            present: () => {
+              workspace.attachRuntime(startedRuntime, generation)
+              if (!compactCommand) showPrompt(startedRuntime)
+            },
           })
-          if (workspace.workspaceRef.current.generation !== generation) {
-            await bridge.agent.stop(activeRuntime.runtimeId).catch(() => false)
-            return
-          }
-          startedSessionNeedsTitle = !indexedSession || indexedSession.title === 'Untitled session'
-        }
-        if (activeRuntime.cwd !== selected.cwd || (selected.sessionFile && activeRuntime.sessionFile !== selected.sessionFile)) {
-          if (startedRuntime) await bridge.agent.stop(activeRuntime.runtimeId).catch(() => false)
-          throw new Error(`${HARNESS_AGENT_NAMES[activeHarness]} returned a runtime for a different workspace or session.`)
+          completeQueuedFlush()
+          return
         }
         workspace.attachRuntime(activeRuntime, generation)
-        if (compactCommand) {
-          await bridge.agent.command(activeRuntime.runtimeId, {
-            type: 'compact',
-            ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}),
-          })
+        if (compactRequest) {
+          await bridge.agent.command(activeRuntime.runtimeId, compactRequest)
           completeQueuedFlush()
         } else if (activeRuntime.isStreaming) {
           // Follow-ups are daemon-owned. Steers get a renderer-only pending
@@ -490,28 +503,9 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           }
           completeQueuedFlush()
         } else {
-          startedPrompt = true
-          appendUserMessage()
-          workspace.setRuntime({ ...activeRuntime, isStreaming: true })
-          workspace.setMessages((items) => [...items, { id: `assistant-${Date.now()}`, role: 'assistant', timestamp: Date.now(), streaming: true, parts: [] }])
-          await bridge.agent.command(activeRuntime.runtimeId, {
-            type: 'prompt',
-            message: prompt,
-            streamingBehavior: streamingBehaviorForIntent(intent),
-            ...(images.length ? { images } : {}),
-          })
+          showPrompt(activeRuntime)
+          await bridge.agent.command(activeRuntime.runtimeId, promptRequest)
           completeQueuedFlush()
-          if (startedRuntime && startedSessionNeedsTitle) {
-            void titleStartedSession({
-              bridge,
-              harness: activeHarness,
-              runtimeId: activeRuntime.runtimeId,
-              sessionFile: activeRuntime.sessionFile,
-              prompt,
-              setSessions,
-              isCurrent: () => workspace.workspaceRef.current.generation === generation,
-            })
-          }
         }
       } catch (error) {
         if (queuedFlushPromptId) {
@@ -521,20 +515,26 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           }
         }
         if (queuedPromptId) workspace.removeQueuedPrompt(queuedPromptId)
-        if (workspace.workspaceRef.current.generation !== generation) return
         const failure = requestFailureMessage(error)
+        if (!isCurrent()) {
+          // The admitting transcript is gone; a row would land in whichever
+          // session is visible now, so name the target in a toast instead.
+          const startedSession = admittedRuntimeId ? sessions.find((item) => item.filePath === workspace.runtimeSessionsRef.current.get(admittedRuntimeId)) : undefined
+          setToast(`Your message for “${admitted.session?.title ?? startedSession?.title ?? sessionTitleFromPrompt(prompt)}” was not delivered. ${failure}`)
+          throw error
+        }
         if (startedPrompt) workspace.setRuntime((current) => current ? { ...current, isStreaming: false } : current)
         workspace.setMessages((items) => {
           const finalized = startedPrompt
             ? items.flatMap((item) => item.streaming && item.role === 'assistant' && item.parts.length === 0 ? [] : [{ ...item, streaming: false }])
             : items
-          return finalized.at(-1)?.role === 'system' ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
+          return isSystemReport(finalized.at(-1)) ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
         })
         throw error
       } finally { setSubmitting(false) }
     })
     if (!admittedSubmission) {
-      const error = new Error('Another message is still being admitted. Try steering again.')
+      const error = new Error(translate(formattingLocaleTag(), 'error.messageStillAdmitting'))
       reportError(error)
       throw error
     }
@@ -567,16 +567,16 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
 
   const installSkill = async (source: string) => {
     const { bridge, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: 'Package installation is available in the desktop app.' }
+    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.packageInstallDesktopOnly') }
     try { return await bridge.plugins.install(source, settingsState.settings.activeHarness) } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
   }
   const installExtension = async (input: ExtensionInstallInput) => {
     const { activeProject, bridge, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: 'Extension installation is available in the desktop app.' }
+    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.extensionInstallDesktopOnly') }
     try {
       let installation = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: 'Open a project before adding a project extension.' }
+        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.extensionNeedsProject') }
         const project = await grantProject(activeProject)
         installation = { ...input, projectPath: project.primaryFolder }
       }
@@ -587,7 +587,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
   const setMcpSupport = async (enabled: boolean) => {
     const { bridge, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: 'MCP support can only be changed in the desktop app.' }
+    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpSupportDesktopOnly') }
     try {
       const response = await bridge.plugins.setMcpSupport(enabled, settingsState.settings.activeHarness)
       if (response.ok) await pluginSkills.refresh()
@@ -596,11 +596,11 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
   const connectMcp = async (input: McpConnectionInput) => {
     const { bridge, activeProject, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: 'MCP connections are available in the desktop app.' }
+    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpConnectDesktopOnly') }
     try {
       let connection = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: 'Open a project before adding a project MCP server.' }
+        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpAddNeedsProject') }
         const project = await grantProject(activeProject); connection = { ...input, projectPath: project.primaryFolder }
       }
       const response = await bridge.plugins.connectMcp(connection, settingsState.settings.activeHarness)
@@ -610,11 +610,11 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
   const setMcpEnabled = async (input: McpStateInput) => {
     const { bridge, activeProject, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: 'MCP connections are available in the desktop app.' }
+    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpConnectDesktopOnly') }
     try {
       let update = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: 'Open a project before changing a project MCP server.' }
+        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpChangeNeedsProject') }
         const project = await grantProject(activeProject); update = { ...input, projectPath: project.primaryFolder }
       }
       const response = await bridge.plugins.setMcpEnabled(update, settingsState.settings.activeHarness)
@@ -624,11 +624,11 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
   const mutateCapability = async (input: CapabilityMutationInput) => {
     const { bridge, activeProject, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: 'Capabilities can only be changed in the desktop app.' }
+    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.capabilitiesDesktopOnly') }
     try {
       let update = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: 'Open a project before changing a project capability.' }
+        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.capabilityNeedsProject') }
         const project = await grantProject(activeProject); update = { ...input, projectPath: project.primaryFolder }
       }
       const response = await bridge.plugins.mutateCapability(update, settingsState.settings.activeHarness)
@@ -638,22 +638,22 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
   const createSchedule = async (input: ScheduleInput) => {
     const { bridge, refreshSchedules, reportError, settingsState } = getDeps()
-    if (!bridge) throw new Error('Scheduled tasks are available in the desktop app.')
+    if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.schedulesDesktopOnly'))
     try { await bridge.schedules.create(input, settingsState.settings.activeHarness); await refreshSchedules() } catch (error) { reportError(error); throw error }
   }
   const updateSchedule = async (id: string, patch: SchedulePatch) => {
     const { bridge, refreshSchedules, reportError } = getDeps()
-    if (!bridge) throw new Error('Scheduled tasks are available in the desktop app.')
+    if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.schedulesDesktopOnly'))
     try { await bridge.schedules.update(id, patch); await refreshSchedules() } catch (error) { reportError(error); throw error }
   }
   const mutateSchedule = async (operation: () => Promise<unknown>) => {
     const { bridge, refreshSchedules, reportError } = getDeps()
-    if (!bridge) throw new Error('Scheduled tasks are available in the desktop app.')
+    if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.schedulesDesktopOnly'))
     try { await operation(); await refreshSchedules() } catch (error) { reportError(error); throw error }
   }
   const manageHeartbeat = async (id: string, action: 'pause' | 'resume' | 'stop') => {
     const { bridge, refreshHeartbeats, reportError } = getDeps()
-    if (!bridge) throw new Error('Heartbeats are available in the desktop app.')
+    if (!bridge) throw new Error(translate(formattingLocaleTag(), 'error.heartbeatsDesktopOnly'))
     try { await bridge.heartbeats.manage(id, action); await refreshHeartbeats() } catch (error) { reportError(error); throw error }
   }
   const openScheduledSession = (sessionFile: string) => {
@@ -683,7 +683,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
 
   return {
     grantProject, persistPanel, toggleSidebar, toggleInspector, toggleTerminal,
-    selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived,
+    selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived, setSessionsArchived,
     addProject, removeProject, togglePinProject, setProjectSortMode, sendPrompt, stopRuntime, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability,
     createSchedule, updateSchedule, mutateSchedule, manageHeartbeat, openScheduledSession,
     openBrowser, openChanges,

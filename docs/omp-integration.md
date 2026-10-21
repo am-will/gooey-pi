@@ -56,7 +56,9 @@ The OMP argv contract (`--mode rpc`, `--cwd`, `--resume`, `--model`, `--thinking
 
 | OMP emits | Forwarded as |
 |---|---|
-| `auto_compaction_start` / `auto_compaction_end` | `compaction_start` / `compaction_end` |
+| `auto_compaction_start` | `compaction_start`, fields unchanged (`reason`, `action`) |
+| `auto_compaction_end` | `compaction_end`. `skipped: true` (a benign no-op) adds `errorSeverity: 'warning'`, so the row reads as skipped. An end with no `result`, not `aborted` and no `errorMessage` (a shake pass that rewrote history in place) adds `completed: true`, so the row reads as done. OMP ends carry no `reason`; `RpcRuntime` stamps the reason of the preceding `compaction_start` onto any end that lacks one |
+| nothing, for a manual `compact` | OMP 18 answers `compact` with the result alone (`summary`, `shortSummary`, `firstKeptEntryId`, `tokensBefore`, `details`) and, since it runs RPC commands one at a time, answers the watchdog's `get_state` polls only after it. `RpcRuntime` publishes the lifecycle from the answer: a synthetic `compaction_start` and `compaction_end` (reason `manual`) carrying the result, or the error. A refusal (`Nothing to compact (session too small)`, `... too small or already rolled over)`, `Already compacted`; `OMP_RPC_ADAPTER.compactRefusal`) ends as a skipped compaction and answers as a successful command |
 | `agent_end` with `isTerminal === false` | swallowed as a turn boundary (not finalized) |
 | `retry_fallback_applied` / `retry_fallback_succeeded` | unchanged; renderer renders a transcript notice from `applied` and a composer "Running on" chip from both; the persisted counterpart is the JSONL `model_change` entry with `resolvedModelIsFallback: true` |
 | `ready`, `available_commands_update`, `config_update`, `session_info_update`, `notice`, etc. | passed through (renderer reducer ignores unknown types) |

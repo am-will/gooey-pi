@@ -55,6 +55,7 @@
     "@earendil-works/pi-agent-core": "file:vendor/prime-agent-core-0.7.0.tgz",
     "@earendil-works/pi-ai": "$prime-agent-ai",
     "@earendil-works/pi-tui": "file:vendor/prime-agent-tui-0.7.0.tgz",
+    "basic-ftp": "^6.2.3",
     "extract-zip": "npm:@electron-internal/extract-zip@1.0.5"
   },
   "devDependencies": {
@@ -102,6 +103,7 @@
       "!**/node_modules/koffi/**"
     ],
     "mac": {
+      "minimumSystemVersion": "14.0.0",
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",

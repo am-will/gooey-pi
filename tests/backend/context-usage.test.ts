@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { LiveContextUsageTracker, withLiveContextUsage } from '../../electron/main/agent-rpc/context-usage'
+import { ContextUsageProjection, LiveContextUsageTracker, withLiveContextUsage } from '../../electron/main/agent-rpc/context-usage'
+
+const usage = (tokens: number) => ({ tokens, contextWindow: 100_000, percent: tokens / 1_000 })
+const assistantEnd = (output: number) => ({ type: 'message_end', message: { role: 'assistant', usage: { output } } })
+const assistantStart = { type: 'message_start', message: { role: 'assistant' } }
+const userStart = { type: 'message_start', message: { role: 'user', content: 'go' } }
 
 describe('live context usage tracking', () => {
   it('uses reported output usage and falls back to streaming character estimates', () => {
@@ -76,5 +81,125 @@ describe('live context usage projection', () => {
   it('preserves unknown post-compaction usage', () => {
     const unknown = { tokens: null, contextWindow: 100_000, percent: null } as const
     expect(withLiveContextUsage(unknown, 1_000, 0)).toBe(unknown)
+  })
+})
+
+describe('context usage projection', () => {
+  it('keeps output live until a snapshot that includes it arrives', () => {
+    const projection = new ContextUsageProjection()
+    expect(projection.current()).toBeUndefined()
+    projection.applySnapshot(usage(40_000))
+    expect(projection.handleEvent(userStart)).toBe(true)
+    expect(projection.generation).toBe(1)
+
+    expect(projection.handleEvent(assistantEnd(200))).toBe(true)
+    expect(projection.current()?.tokens).toBe(40_200)
+    // A fast stats answer that predates persistence keeps the output live.
+    projection.applySnapshot(usage(40_000), projection.activityTokens)
+    expect(projection.current()?.tokens).toBe(40_200)
+    // A snapshot that grew by at least the output already counts it.
+    projection.applySnapshot(usage(40_300), projection.activityTokens)
+    expect(projection.current()?.tokens).toBe(40_300)
+  })
+
+  it('does not add output again when a stats request captures it after being sent', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_100))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantStart)
+    // The request was sent at the user-message boundary, but the harness only
+    // processes it after the following assistant output has been persisted.
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantEnd(3_000))
+    projection.applySnapshot(usage(43_100), requestedAt)
+    expect(projection.current()?.tokens).toBe(43_100)
+  })
+
+  it('does not mistake a prior response snapshot for output from the next request', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_100))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(3_000))
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(1_500))
+    // Growth covers the earlier response, not the newer one, even though a
+    // request rebase removed the earlier response from the live overlay.
+    projection.applySnapshot(usage(43_100), requestedAt)
+    expect(projection.current()?.tokens).toBe(44_600)
+  })
+
+  it('forgets pre-compaction activity when checking what a delayed snapshot includes', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(150_000))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantEnd(10_000))
+    projection.handleEvent({ type: 'compaction_start' })
+    projection.handleEvent({ type: 'compaction_end' })
+    projection.applySnapshot(usage(40_000))
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(3_000))
+    projection.applySnapshot(usage(43_000), requestedAt)
+    expect(projection.current()?.tokens).toBe(43_000)
+  })
+
+  it('bakes live output at a run boundary and forgets everything on reset', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_000))
+    projection.handleEvent(assistantEnd(500))
+    projection.bake()
+    expect(projection.current()?.tokens).toBe(40_500)
+    projection.applySnapshot(usage(40_400), projection.activityTokens)
+    expect(projection.current()?.tokens).toBe(40_400)
+
+    projection.reset()
+    expect(projection.current()).toBeUndefined()
+    expect(projection.activityTokens).toBe(0)
+    expect(projection.generation).toBe(1)
+  })
+
+  it('projects only the response in flight when snapshots omit the latest output', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(20_000))
+    projection.handleEvent(userStart)
+    // Prompt-only snapshots (OMP) count a response's output only once the next prompt replays it.
+    let prompt = 20_000
+    for (let turn = 0; turn < 15; turn += 1) {
+      projection.handleEvent(assistantStart)
+      projection.handleEvent(assistantEnd(3_000))
+      projection.applySnapshot(usage(prompt), projection.activityTokens)
+      expect(projection.current()?.tokens).toBe(prompt + 3_000)
+      projection.applySnapshot(usage(prompt + 800), projection.activityTokens)
+      expect(projection.current()?.tokens).toBe(prompt + 800 + 3_000)
+      prompt += 600 + 800
+    }
+  })
+
+  it('leaves snapshots that already count completed output untouched at the next request', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_000))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantEnd(500))
+    projection.applySnapshot(usage(40_500), projection.activityTokens)
+    expect(projection.handleEvent(assistantStart)).toBe(false)
+    expect(projection.current()?.tokens).toBe(40_500)
+  })
+
+  it('drops live output at compaction and invalidates stats requested before it ends', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(150_000))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantEnd(3_000))
+    expect(projection.current()?.tokens).toBe(153_000)
+
+    expect(projection.handleEvent({ type: 'compaction_start', reason: 'threshold' })).toBe(true)
+    expect(projection.current()?.tokens).toBe(150_000)
+    const generation = projection.generation
+    projection.handleEvent({ type: 'compaction_end', aborted: false, willRetry: false })
+    expect(projection.generation).toBe(generation + 1)
+    projection.applySnapshot(usage(40_000))
+    expect(projection.current()?.tokens).toBe(40_000)
   })
 })

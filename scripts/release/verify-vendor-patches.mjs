@@ -8,6 +8,7 @@ import { resolveCommandInvocation } from './lib.mjs'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const VENDOR = join(ROOT, 'vendor')
+const EMPTY_CONFIG_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null'
 export const PACKAGES = [
   {
     base: 'prime-agent-0.7.0.tgz',
@@ -71,12 +72,16 @@ function verifyVendorPatches() {
     const patchPath = join(VENDOR, spec.patch)
     if (sha512Sri(basePath) !== basePinIntegrity(spec.base)) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
 
+    // Older checkouts may retain converted patches despite the current -text attributes.
+    if (readFileSync(patchPath).includes(0x0d)) {
+      throw new Error(`Vendor patch has CRLF line endings from a converted checkout: vendor/${spec.patch}. Delete vendor/patches/*.patch and run git checkout -- vendor/patches`)
+    }
     const work = mkdtempSync(join(tmpdir(), 'gooeypi-vendor-patch-'))
     try {
       const reviewed = join(work, 'reviewed')
       mkdirSync(reviewed)
       run('tar', ['-xzf', basePath, '-C', work], ROOT)
-      run('git', ['apply', patchPath], work)
+      run('git', ['-c', 'core.autocrlf=false', '-c', `core.attributesFile=${EMPTY_CONFIG_PATH}`, 'apply', patchPath], work)
       run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
       assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
       console.log(`${spec.output}: content verified against ${spec.patch}`)

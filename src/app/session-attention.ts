@@ -1,3 +1,5 @@
+import { isRequestedCompactionReason } from '@/lib/compaction-reason'
+import { parseExtensionUiRequest } from '@/lib/extension-ui'
 import type { SessionRecord, SessionStatus } from '@/types/api'
 
 interface SessionLifecycleChange {
@@ -7,10 +9,15 @@ interface SessionLifecycleChange {
 
 export function sessionLifecycleChange(event: Record<string, unknown>): SessionLifecycleChange | undefined {
   const type = typeof event.type === 'string' ? event.type : ''
-  if (type === 'extension_ui_request') return { status: 'waiting', markUnread: true }
+  // Harnesses also send notify, status, title and cancel frames as
+  // extension_ui_request; only a dialog waits on the user.
+  if (parseExtensionUiRequest(event)) return { status: 'waiting', markUnread: true }
   if (type === 'agent_start' || type === 'turn_start') return { status: 'running', markUnread: false }
+  // Idle compaction is harness maintenance between turns: it must not look
+  // like new work or re-raise the finished turn's attention.
+  if ((type === 'compaction_start' || type === 'compaction_end') && event.reason === 'idle') return undefined
   if (type === 'compaction_start') return { status: 'running', markUnread: false }
-  if (type === 'compaction_end' && event.willRetry !== true && (event.reason === 'manual' || event.reason === 'requested')) return { status: 'complete', markUnread: false }
+  if (type === 'compaction_end' && event.willRetry !== true && isRequestedCompactionReason(event.reason)) return { status: 'complete', markUnread: false }
   // A provider auto-retry continues the turn that the preceding agent_end
   // seemed to finish; a failed auto_retry_end is the turn's real terminal.
   if (type === 'auto_retry_start') return { status: 'running', markUnread: false }

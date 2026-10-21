@@ -16,9 +16,23 @@ export interface QueuedRpcWrite {
   cancel(): 'cancelled' | 'flushed'
 }
 
+/** A write to a child that closed its stdin fails with a broken pipe. */
+export const isBrokenPipe = (error: unknown): boolean => {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'EPIPE' || code === 'ECONNRESET'
+}
+
+/**
+ * A child usually closes stdin because it is exiting, and its close event
+ * (exit code and stderr tail) says why far better than the pipe error does.
+ * A write that broke the pipe waits this long for that close before failing.
+ */
+const EXIT_REPORT_GRACE_MS = 2_000
+
 /** Owns JSONL frame decoding and serialized, byte-bounded writes for one RPC child. */
 export class FramedRpcTransport {
   private readonly decoder: StrictJsonlDecoder
+  private readonly closed: Promise<void>
   private frameFailed = false
   private recentStderr = ''
   private writeQueue: Promise<void> = Promise.resolve()
@@ -31,6 +45,9 @@ export class FramedRpcTransport {
     private readonly isAvailable: () => boolean,
     private readonly writeDeadlineMs = 30_000,
   ) {
+    // Registered before the runtime's own close listener, so the exit report
+    // has settled pending requests before a held broken write is released.
+    this.closed = new Promise((resolve) => { child.once('close', () => resolve()) })
     this.decoder = new StrictJsonlDecoder(onLine, RPC_READ_FRAME_LIMIT_BYTES)
     this.child.stdout.on('data', (chunk: Buffer) => {
       try { this.decoder.push(chunk) } catch (error) {
@@ -82,8 +99,9 @@ export class FramedRpcTransport {
         settled = true
         state = 'settled'
         clearTimeout(deadline)
-        if (error) rejectWrite(error)
-        else resolveWrite()
+        if (!error) resolveWrite()
+        else if (isBrokenPipe(error)) void this.exitReportOrGrace().then(() => rejectWrite(error))
+        else rejectWrite(error)
       }
       // A child that stops reading stdin must fail the transport rather than
       // pin the write queue (and its byte budget) forever.
@@ -108,6 +126,10 @@ export class FramedRpcTransport {
         return 'flushed'
       },
     }
+  }
+
+  private exitReportOrGrace(): Promise<void> {
+    return Promise.race([this.closed, new Promise<void>((resolve) => { setTimeout(resolve, EXIT_REPORT_GRACE_MS).unref() })])
   }
 
   endInput(): void { this.child.stdin.end() }

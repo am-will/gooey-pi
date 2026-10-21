@@ -5,6 +5,7 @@ import { ChangesCard } from './ChangesCard'
 import { ErrorBoundary } from './ErrorBoundary'
 import { MarkdownText } from './MarkdownText'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { useI18n } from '@/lib/i18n'
 import { OmpMark, PiMark, PrimeMark } from './ui'
 import { ActivityMessage, AgentMessage, AssistantMessage, GoalMessage, SteerReadMarker, UserMessage } from './transcript/messages'
 import { useTranscriptScroll } from './transcript/scroll'
@@ -62,6 +63,7 @@ function AssistantMark({ harness, size = 24 }: { harness: HarnessId; size?: numb
 }
 
 function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: { message: TranscriptMessage; harness: HarnessId; showReasoning: boolean; showTools: boolean }) {
+  const { t } = useI18n()
   const visibleActivity = message.parts.some((part) => part.type === 'thinking' && showReasoning || (part.type === 'toolCall' || part.type === 'toolResult') && showTools || part.type === 'agentMessage')
   return (
     <article className="message message--assistant">
@@ -71,7 +73,7 @@ function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: 
           ? <WorkDisclosure message={message} parts={message.parts} showReasoning={showReasoning} showTools={showTools} running />
           : <>
             {message.parts.map((part, index) => part.type === 'text' ? <MarkdownText key={index} text={part.text} /> : null)}
-            <div className="streaming-state" aria-live="polite"><ThinkingDots /> {HARNESS_SHORT_NAMES[harness]} is working <LiveElapsed since={message.startedAt ?? message.timestamp} /></div>
+            <div className="streaming-state" aria-live="polite"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })} <LiveElapsed since={message.startedAt ?? message.timestamp} /></div>
           </>}
       </div>
     </article>
@@ -81,8 +83,9 @@ function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: 
 
 
 export function Transcript({ messages, git, harness = 'prime', loading, active = false, showReasoning = true, showTools = true, onOpenChanges, onSuggestion, suggestionsDisabled, showPinnedChanges = true, bottomDockHasChanges = false, queuedMessageCount = 0, onOpenSessionReference }: TranscriptProps) {
+  const { t } = useI18n()
   const groupedMessages = useMemo(() => coalesceAssistantTurns(messages), [messages])
-  const { announcement, hiddenCount, scrollRef, showEarlier, updatePinnedState, visibleMessages } = useTranscriptScroll(groupedMessages)
+  const { announcement, hiddenCount, scrollRef, showEarlier, updatePinnedState, visibleMessages } = useTranscriptScroll(groupedMessages, HARNESS_SHORT_NAMES[harness])
   const activeAssistantId = useMemo(() => active && groupedMessages.at(-1)?.role === 'assistant' ? groupedMessages.at(-1)?.id : undefined, [active, groupedMessages])
   const transcriptClasses = [
     'transcript',
@@ -96,19 +99,19 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
     <div ref={scrollRef} className={transcriptClasses} aria-busy={loading} onScroll={updatePinnedState}>
       <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
       <div className="transcript__inner">
-        {loading ? <div className="transcript-loading"><LoaderCircle className="spin" size={16} /> Loading session…</div> : null}
+        {loading ? <div className="transcript-loading"><LoaderCircle className="spin" size={16} /> {t('transcript.loadingSession')}</div> : null}
         {!loading && messages.length === 0 ? <div className="session-welcome">
           <AssistantMark harness={harness} size={34} />
-          <h1>What should we work on?</h1>
-          <p>{HARNESS_SHORT_NAMES[harness]} can inspect this project, edit files, run tools, and keep working across sessions.</p>
+          <h1>{t('transcript.welcome.title')}</h1>
+          <p>{t('transcript.welcome.description', { harness: HARNESS_SHORT_NAMES[harness] })}</p>
           <div className="prompt-suggestions">
-            <button type="button" disabled={suggestionsDisabled} onClick={() => onSuggestion('Summarize this project')}>Summarize this project</button>
-            <button type="button" disabled={suggestionsDisabled} onClick={() => onSuggestion('Find a useful next task')}>Find a useful next task</button>
-            <button type="button" disabled={suggestionsDisabled} onClick={() => onSuggestion('Run the test suite')}>Run the test suite</button>
+            <button type="button" disabled={suggestionsDisabled} onClick={() => onSuggestion(t('transcript.suggestion.summarize'))}>{t('transcript.suggestion.summarize')}</button>
+            <button type="button" disabled={suggestionsDisabled} onClick={() => onSuggestion(t('transcript.suggestion.nextTask'))}>{t('transcript.suggestion.nextTask')}</button>
+            <button type="button" disabled={suggestionsDisabled} onClick={() => onSuggestion(t('transcript.suggestion.tests'))}>{t('transcript.suggestion.tests')}</button>
           </div>
         </div> : null}
-        {hiddenCount > 0 ? <button type="button" className="transcript__show-earlier" onClick={showEarlier}>Show {Math.min(250, hiddenCount)} earlier messages</button> : null}
-        {visibleMessages.map((message) => <ErrorBoundary key={message.id} fallback={<div className="message message--render-failure" role="note">This message could not be displayed.</div>}>
+        {hiddenCount > 0 ? <button type="button" className="transcript__show-earlier" onClick={showEarlier}>{t('transcript.showEarlier', { count: Math.min(250, hiddenCount) })}</button> : null}
+        {visibleMessages.map((message) => <ErrorBoundary key={message.id} fallback={<div className="message message--render-failure" role="note">{t('transcript.renderFailure')}</div>}>
           {message.kind === 'steer-read-marker' ? <SteerReadMarker message={message} />
             : message.role === 'user' ? <UserMessage message={message} onOpenSessionReference={onOpenSessionReference} />
             : message.role === 'assistant' ? message.streaming || message.id === activeAssistantId
@@ -120,7 +123,7 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
             : <div className={`message message--${message.role}`}>{message.parts.map((part, partIndex) => part.type === 'text' ? <span key={partIndex}>{part.text}</span> : null)}</div>}
         </ErrorBoundary>)}
         {active && !activeAssistantId ? <article className="message message--assistant transcript-active-placeholder" aria-live="polite">
-          <div className="assistant-mark"><AssistantMark harness={harness} /></div><div className="streaming-state"><ThinkingDots /> {HARNESS_SHORT_NAMES[harness]} is working</div>
+          <div className="assistant-mark"><AssistantMark harness={harness} /></div><div className="streaming-state"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}</div>
         </article> : null}
         <div />
       </div>

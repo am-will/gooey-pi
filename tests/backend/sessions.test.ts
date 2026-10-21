@@ -72,6 +72,85 @@ describe('live session metadata', () => {
     expect(active.status).toBe('running')
     expect(legacy.status).toBe('running')
   })
+
+  it('keeps an idle parent running while its RLM children are working', () => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, { lifecycle: 'live', isSessionActive: false, isStreaming: false, hasRunningRlmChildren: true })
+    expect(record.status).toBe('running')
+    applyLiveMetadata(record, { lifecycle: 'live', isSessionActive: false, isStreaming: false, hasRunningRlmChildren: false })
+    expect(record.status).toBe('idle')
+  })
+
+  it('uses Rust Prime 0.10 hasRunningSubagents when the parent itself is inactive', () => {
+    const record = liveMetadata()
+    // v0.10.0 crates/pa-types/src/daemon/agent_roster.rs, subagents-running fixture.
+    applyLiveMetadata(record, { activeSessionId: 'a1', lifecycle: 'live', activity: 'working', isSessionActive: false, hasRunningSubagents: true })
+    expect(record.status).toBe('running')
+    expect(record.hasRunningRlmChildren).toBe(true)
+    applyLiveMetadata(record, { lifecycle: 'live', activity: 'idle', isSessionActive: false, hasRunningSubagents: false })
+    expect(record.status).toBe('idle')
+  })
+
+  it('preserves the working-child status when the GooeyPi parent runtime is idle', async () => {
+    const { root, project, service } = setup(undefined, {
+      metadataReader: async (path) => ({ ...metadata(path, project, 'parent'), status: 'running', hasRunningRlmChildren: true }),
+    })
+    writeSession(join(root, 'parent.jsonl'), project, 'parent')
+    service.bindRuntimeHooks({ get: () => ({ isStreaming: false }), stop: async () => {}, rename: async () => false })
+    const [parent] = await service.list()
+    expect(parent.status).toBe('running')
+    expect(parent).not.toHaveProperty('hasRunningRlmChildren')
+  })
+})
+
+describe('Rust Prime native archives', () => {
+  it('lists and authorizes the released sessions-archive layout for explicit resume', async () => {
+    const { root, project, service } = setup(undefined, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const file = join(archive, 'archived.jsonl')
+    writeSession(file, project, 'native-archived')
+
+    expect(await service.list()).toEqual([expect.objectContaining({ id: 'native-archived', filePath: realpathSync(file), archived: false })])
+    await expect(service.requireSessionPath(file)).resolves.toBe(realpathSync(file))
+    expect(await service.read(file)).toEqual([expect.objectContaining({ role: 'user' })])
+    const outside = join(root, '..', 'unrelated.jsonl')
+    writeSession(outside, project, 'outside')
+    await expect(service.requireSessionPath(outside)).rejects.toThrow('outside')
+  })
+
+  it('keeps native disk archives separate from GooeyPi archives and respects the shared discovery limit', async () => {
+    const { root, project, service } = setup(1, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const old = join(archive, 'old.jsonl')
+    writeSession(old, project, 'old')
+    writeSession(join(root, 'new.jsonl'), project, 'new', '2026-10-21T00:00:00.000Z')
+    expect((await service.list()).map((session) => session.id)).toEqual(['new'])
+  })
+
+  it('keeps TypeScript Prime scoped to its original session directory', async () => {
+    const { root, project, service } = setup(undefined, { primeImplementation: () => 'typescript' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const file = join(archive, 'archived.jsonl')
+    writeSession(file, project, 'archived')
+    expect(await service.list()).toEqual([])
+    await expect(service.requireSessionPath(file)).rejects.toThrow('outside')
+  })
+
+  it('publishes changes to native archived transcripts and closes its watcher', async () => {
+    const { root, project, service } = setup(undefined, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const changed = vi.fn()
+    const unsubscribe = service.onDidChange(changed)
+    try {
+      writeSession(join(archive, 'archived.jsonl'), project, 'archived')
+      await waitUntil(() => changed.mock.calls.length > 0)
+      expect((await service.list()).map((session) => session.id)).toEqual(['archived'])
+    } finally { unsubscribe() }
+  })
 })
 
 describe('session discovery work bounds', () => {
@@ -1261,6 +1340,26 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect((await service.list())[0]?.archived).toBe(false)
   })
 
+  it('binds the runtime hooks to a runtime manager', async () => {
+    const { root, project, service } = setup()
+    const file = join(root, 'managed.jsonl')
+    writeSession(file, project, 'managed')
+    const safePath = await service.requireSessionPath(file)
+    const manager = {
+      getForSession: vi.fn(() => undefined),
+      list: vi.fn(() => [{ sessionFile: safePath, isStreaming: true }]),
+      stopForSession: vi.fn(async () => undefined),
+      renameForSession: vi.fn(async () => true),
+    }
+    service.bindRuntimeManager(manager)
+
+    expect((await service.list())[0]?.status).toBe('running')
+    await expect(service.rename(file, 'Managed title')).resolves.toBe(true)
+    expect(manager.renameForSession).toHaveBeenCalledWith(safePath, 'Managed title')
+    await service.archive(file)
+    expect(manager.stopForSession).toHaveBeenCalledWith(safePath)
+  })
+
   it('calls renameFile only when the runtime hook returns false and the CLI path is null', async () => {
     const renameFile = vi.fn(() => true)
     const { root, project, service } = setup(undefined, { renameFile })
@@ -1303,5 +1402,71 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 
     await expect(service.rename(file, 'Prime title')).resolves.toBe(false)
     expect(renameFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('SessionService rename on Rust Prime', () => {
+  /**
+   * A session with no GooeyPi runtime and a prime-agent CLI whose live list
+   * serves `liveRow` (when given) for that session. Every argv is recorded.
+   */
+  function renameFixture(implementation: 'typescript' | 'rust', liveRow?: Record<string, unknown>) {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-rust-rename-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const file = join(root, 'saved.jsonl')
+    writeSession(file, project, 'saved-session')
+    const log = join(dir, 'argv.jsonl')
+    const executable = join(dir, 'prime-agent.cjs')
+    const sessions = liveRow ? [{ ...liveRow, sessionFile: file }] : []
+    writeFileSync(executable, `#!/usr/bin/env node
+const args = process.argv.slice(2)
+require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n')
+if (args[0] === 'list') process.stdout.write(JSON.stringify({ sessions: ${JSON.stringify(sessions)} }))
+else if (args[0] !== 'rename') process.exit(2)
+`)
+    chmodSync(executable, 0o755)
+    const service = new SessionService(new JsonStateStore(join(dir, 'state.json')), executable, undefined, { primeImplementation: () => implementation })
+    Object.defineProperty(service, 'sessionRoot', { value: root })
+    const runtimeRename = vi.fn(async () => false)
+    service.bindRuntimeHooks({ get: () => undefined, stop: async () => undefined, rename: runtimeRename })
+    const renames = () => existsSync(log)
+      ? readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]).filter(([command]) => command === 'rename')
+      : []
+    return { file, service, runtimeRename, renames }
+  }
+
+  it.each([
+    ['no live row', undefined],
+    ['a saved session with no worker', { id: 'saved-session', lifecycle: 'live', isSessionActive: false }],
+    ['a worker that is stopping', { id: 'worker-1', activeSessionId: 'worker-1', lifecycle: 'live', workerState: 'stopping' }],
+  ])('refuses to wake a daemon worker for %s', async (_case, liveRow) => {
+    const { file, service, renames } = renameFixture('rust', liveRow)
+
+    await expect(service.rename(file, 'Renamed offline')).rejects.toThrow('Send this session a message in GooeyPi, then rename it.')
+    expect(renames()).toEqual([])
+  })
+
+  it('renames through the resident worker that already holds the session', async () => {
+    const { file, service, renames } = renameFixture('rust', { id: 'worker-1', activeSessionId: 'worker-1', lifecycle: 'live', workerState: 'ready' })
+
+    await expect(service.rename(file, 'Renamed resident')).resolves.toBe(true)
+    expect(renames()).toEqual([['rename', 'worker-1', 'Renamed resident', '--json']])
+  })
+
+  it('keeps the TypeScript Prime CLI rename by session id', async () => {
+    const { file, service, renames } = renameFixture('typescript')
+
+    await expect(service.rename(file, 'Renamed by id')).resolves.toBe(true)
+    expect(renames()).toEqual([['rename', 'saved-session', 'Renamed by id', '--json']])
+  })
+
+  it('renames an attached runtime through set_session_name without the CLI', async () => {
+    const { file, service, runtimeRename, renames } = renameFixture('rust')
+    runtimeRename.mockResolvedValue(true)
+
+    await expect(service.rename(file, 'Renamed live')).resolves.toBe(true)
+    expect(runtimeRename).toHaveBeenCalledWith(realpathSync(file), 'Renamed live')
+    expect(renames()).toEqual([])
   })
 })

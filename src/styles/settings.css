@@ -107,6 +107,7 @@
 .runtime-card strong { font-size: 12px; font-weight: 540; }
 .runtime-card small { overflow: hidden; color: var(--text-tertiary); font: 9.5px/1.4 "SFMono-Regular", Menlo, monospace; white-space: nowrap; text-overflow: ellipsis; }
 .runtime-card code { font-size: 9.5px; }
+.runtime-card small.runtime-card__limits { margin-top: 3px; color: var(--warning); font-family: inherit; font-size: 10.5px; white-space: normal; }
 .info-row { display: flex; align-items: flex-start; gap: 9px; padding: 15px 0; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
 .info-row > div { display: flex; flex-direction: column; }
 .info-row strong { color: var(--text); font-size: 12px; font-weight: 540; }

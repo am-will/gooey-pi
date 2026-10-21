@@ -82,6 +82,14 @@ describe('SettingsService.update', () => {
     expect(service.get()).toEqual(next)
   })
 
+  it('accepts and persists every supported locale preference', async () => {
+    const service = makeService()
+    for (const locale of ['system', 'en', 'zh-CN', 'ja'] as const) {
+      await expect(service.update({ locale })).resolves.toMatchObject({ locale })
+      expect(service.get().locale).toBe(locale)
+    }
+  })
+
   it('leaves unrelated settings untouched on a partial patch', async () => {
     const service = makeService()
     const before = service.get()
@@ -191,4 +199,15 @@ describe('SettingsService.update', () => {
     expect(onDidUpdate).toHaveBeenCalledWith(before, next)
     expect(next.keepRunningInBackground).toBe(true)
   })
+})
+
+
+it('keeps the existing two-minute questionnaire timeout and validates custom visible time', async () => {
+  const service = makeService()
+  expect(service.get().askUserTimeoutMs).toBe(120_000)
+  expect((await service.update({ askUserTimeoutMs: 0 })).askUserTimeoutMs).toBe(0)
+  expect((await service.update({ askUserTimeoutMs: 300_000 })).askUserTimeoutMs).toBe(300_000)
+  for (const invalid of [-1, 1.5, '120000', 1_800_001]) {
+    await expect(service.update({ askUserTimeoutMs: invalid })).rejects.toThrow()
+  }
 })

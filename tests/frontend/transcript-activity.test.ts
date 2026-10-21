@@ -12,9 +12,12 @@ describe('transcript activity presentation', () => {
   it('maps tool names to recognizable activity icons', () => {
     expect(classifyTool('ask_user')).toBe('question')
     expect(classifyTool('bash')).toBe('terminal')
+    expect(classifyTool('ipython')).toBe('terminal')
+    expect(classifyTool('eval')).toBe('terminal')
     expect(classifyTool('web_search')).toBe('web')
     expect(classifyTool('git status')).toBe('git')
     expect(classifyTool('read_file')).toBe('file')
     expect(classifyTool('custom_mcp_tool')).toBe('mcp')
+    expect(classifyTool('retrieval')).toBe('mcp')
   })
 })

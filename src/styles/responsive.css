@@ -19,9 +19,9 @@
 
 @media (max-width: 720px) {
   .conversation-bottom-dock { right: 9px; bottom: 8px; left: 9px; width: auto; }
-  .transcript.has-docked-changes { padding-bottom: 250px; }
-  .transcript.has-queued-messages { padding-bottom: 325px; }
-  .transcript.has-docked-changes.has-queued-messages { padding-bottom: 405px; }
+  .transcript.has-docked-changes { padding-bottom: max(250px, calc(var(--dock-h, 0px) + 26px)); }
+  .transcript.has-queued-messages { padding-bottom: max(325px, calc(var(--dock-h, 0px) + 26px)); }
+  .transcript.has-docked-changes.has-queued-messages { padding-bottom: max(405px, calc(var(--dock-h, 0px) + 26px)); }
 }
 
 @media (max-width: 1180px) {
@@ -61,7 +61,7 @@
   .inspector { top: 52px; left: 0; width: 100vw; max-width: none; }
   .inspector__tabs { height: 45px; padding-left: 6px; overflow-x: auto; }
   .inspector__tabs > button:not(.icon-button) { min-width: 60px; min-height: 44px; padding-inline: 5px; }
-  .transcript { padding-top: 20px; padding-bottom: 184px; }
+  .transcript { padding-top: 20px; padding-bottom: max(184px, calc(var(--dock-h, 0px) + 26px)); }
   .transcript__inner { padding-inline: 15px; }
   .message--assistant { grid-template-columns: 24px minmax(0, 1fr); gap: 9px; }
   .message__content, .user-bubble { font-size: 13.5px; }

@@ -9,7 +9,7 @@ Use this capability for durable, user-visible tasks. GooeyPi must be running.
 
 - `current_project`: each run creates a fresh top-level session in this project.
 - `current_session`: each run returns to this thread and keeps its context.
-- Use `rlm_heartbeat` instead for short-lived agent-internal checks such as watching a test command.
+- Use `rlm_heartbeat` instead for short-lived agent-internal checks such as watching a test command. On Prime Agent 0.10 or later inside GooeyPi, `rlm_heartbeat` jobs never run, so use `prime_work_schedules.create_once(..., target="current_session")` for those checks instead.
 
 Call from IPython:
 

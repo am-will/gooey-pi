@@ -276,6 +276,20 @@ describe('Prime Agent discovery candidates', () => {
   })
 })
 
+describe('Windows Rust Prime discovery', () => {
+  it('finds the official payload without invoking its command shim', () => {
+    const home = 'C:\\Users\\Ada'
+    const candidates = harnessExecutableCandidates(HARNESSES.prime, { Path: 'C:\\Windows' }, 'win32', undefined, home)
+    expect(candidates).toContain('C:\\Users\\Ada\\.local\\share\\prime-agent\\prime-agent.exe')
+    expect(harnessExecutableCandidates(HARNESSES.prime, { PRIME_AGENT_RUST_PREFIX: 'D:\\Prime', Path: 'C:\\Windows' }, 'win32', undefined, home))
+      .toContain('D:\\Prime\\share\\prime-agent\\prime-agent.exe')
+    expect(harnessExecutableCandidates(HARNESSES.prime, { PRIME_AGENT_RUST_PREFIX: 'relative', Path: 'C:\\Windows' }, 'win32', undefined, home))
+      .not.toContain('relative\\share\\prime-agent\\prime-agent.exe')
+    expect(harnessExecutableCandidates(HARNESSES.prime, { PRIME_WORK_E2E_HIDE_WINDOWS: '1', Path: 'C:\\Windows' }, 'win32', undefined, home))
+      .not.toContain('C:\\Users\\Ada\\.local\\share\\prime-agent\\prime-agent.exe')
+  })
+})
+
 describe('OMP discovery candidates', () => {
   it('uses native executable names for every supported desktop platform', () => {
     expect(HARNESSES.omp.executableName('darwin')).toBe('omp')

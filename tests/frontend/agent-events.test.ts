@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_EVENT_QUEUE_LIMIT, admitAgentEvent, contextUsageFromEvent, sessionUsageFromEvent, type PendingAgentEvent } from '../../src/app/agent-events'
-import { replayPrimeEvents } from '../../src/lib/events'
+import { applyPrimeEvent, replayPrimeEvents } from '../../src/lib/events'
 import { contextDialLabel, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
+import type { TranscriptMessage } from '../../src/types/api'
 
 describe('context usage events', () => {
   it('accepts bounded authoritative usage and preserves post-compaction unknowns', () => {
@@ -96,6 +97,7 @@ describe('provider fallback events', () => {
     expect(messages[0]?.parts).toEqual([{ type: 'text', text: 'before', partId: expect.any(String) }])
     expect(messages[1]).toMatchObject({
       role: 'system',
+      kind: 'notice',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback (original: anthropic/claude-opus)' }],
     })
     expect(messages[2]?.parts).toEqual([{ type: 'text', text: 'after', partId: expect.any(String) }])
@@ -120,8 +122,19 @@ describe('provider fallback events', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({
       role: 'system',
+      kind: 'notice',
       parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback (original: anthropic/claude-opus)' }],
     })
+  })
+
+  it('deduplicates a replayed fallback against the persisted notice it lands on', () => {
+    const persisted: TranscriptMessage = {
+      id: 'aa000002', role: 'system', kind: 'notice', timestamp: '2026-08-08T02:14:00.000Z',
+      parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }],
+    }
+    const messages = replayPrimeEvents([persisted], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
+
+    expect(messages).toEqual([persisted])
   })
 
   it('ignores unrelated model events without finalizing streaming', () => {
@@ -140,5 +153,75 @@ describe('provider fallback events', () => {
       streaming: true,
       parts: [{ type: 'text', text: 'beforeafter', partId: expect.any(String) }],
     })
+  })
+})
+
+describe('turn errors', () => {
+  const failedRun = [{ type: 'agent_start' }, { type: 'agent_end' }, { type: 'error', error: '529 overloaded_error: Overloaded', synthetic: true }]
+  const texts = (messages: ReturnType<typeof replayPrimeEvents>) => messages.map((message) => [message.role, message.parts.flatMap((part) => part.type === 'text' ? [part.text] : [])])
+
+  it('replaces the empty-turn fallback with the error that ended the run', () => {
+    const batched = replayPrimeEvents([], failedRun)
+    const sequential = failedRun.reduce(applyPrimeEvent, [] as ReturnType<typeof replayPrimeEvents>)
+
+    for (const messages of [batched, sequential]) {
+      expect(texts(messages)).toEqual([['assistant', []], ['system', ['529 overloaded_error: Overloaded']]])
+      expect(messages[0]?.streaming).toBe(false)
+    }
+  })
+
+  it('still reports an error or exit that follows a neutral system row', () => {
+    const fallback = { type: 'retry_fallback_applied', from: 'anthropic/claude-opus', to: 'anthropic/claude-sonnet', role: 'fallback' }
+    const marker: TranscriptMessage = { id: 'steer-read-user-1', role: 'system', kind: 'steer-read-marker', parts: [{ type: 'text', text: 'Steer read here' }] }
+    const exitText = 'The agent stopped unexpectedly (exit code 1). Send the message again to restart it.'
+
+    expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, fallback, { type: 'error', error: 'later failure' }])).at(-1)).toEqual(['system', ['later failure']])
+    expect(texts(replayPrimeEvents([], [fallback, { type: 'runtime_exit', code: 1 }])).at(-1)).toEqual(['system', [exitText]])
+    expect(texts(replayPrimeEvents([marker], [{ type: 'transport_error', error: 'pipe closed' }])).at(-1)).toEqual(['system', ['pipe closed']])
+  })
+
+  it('keeps the fallback when an extension or the transport fails after the turn', () => {
+    for (const type of ['extension_error', 'transport_error']) {
+      expect(texts(replayPrimeEvents([], [{ type: 'agent_start' }, { type: 'agent_end' }, { type, error: 'later failure' }])))
+        .toEqual([['assistant', ['Completed without a text response.']], ['system', ['later failure']]])
+    }
+  })
+})
+
+describe('tool failures', () => {
+  const start = { type: 'tool_execution_start', toolCallId: 'call_bad1', toolName: 'bash', args: { command: 'ls' } }
+  const end = (isError?: boolean) => ({
+    type: 'tool_execution_end', toolCallId: 'call_bad1', toolName: 'bash',
+    result: { content: [{ type: 'text', text: 'Tool bash not found' }] }, ...(isError === undefined ? {} : { isError }),
+  })
+  const resultMessage = (isError: boolean, toolCallId = 'call_bad1') => ({
+    type: 'message_end',
+    message: { role: 'toolResult', toolCallId, toolName: 'bash', content: [{ type: 'text', text: 'Tool bash not found' }], isError },
+  })
+  const tools = (events: Array<Record<string, unknown>>) => {
+    const run = [{ type: 'agent_start' }, ...events]
+    const shape = (messages: ReturnType<typeof replayPrimeEvents>) => messages.flatMap((message) => message.parts.map((part) => part.type === 'toolResult' ? `result:${part.isError}` : part.type))
+    const batched = shape(replayPrimeEvents([], run))
+    expect(shape(run.reduce(applyPrimeEvent, [] as ReturnType<typeof replayPrimeEvents>))).toEqual(batched)
+    return batched
+  }
+
+  it('marks the tool failed from its toolResult message when tool_execution_end omits isError', () => {
+    expect(tools([start, end(), resultMessage(true)])).toEqual(['toolCall', 'result:true'])
+  })
+
+  it('keeps the flag tool_execution_end reported', () => {
+    expect(tools([start, end(true), resultMessage(true)])).toEqual(['toolCall', 'result:true'])
+    expect(tools([start, end(true), resultMessage(false)])).toEqual(['toolCall', 'result:true'])
+    expect(tools([start, end(false), resultMessage(false)])).toEqual(['toolCall', 'result:false'])
+  })
+
+  it('leaves a finished turn alone when a toolResult message arrives after it', () => {
+    expect(tools([start, end(false), { type: 'agent_end' }, resultMessage(true)])).toEqual(['toolCall', 'result:false'])
+  })
+
+  it('ignores a toolResult message for a call it never saw', () => {
+    expect(tools([start, end(), resultMessage(true, 'call_other')])).toEqual(['toolCall', 'result:false'])
+    expect(tools([resultMessage(true)])).toEqual([])
   })
 })

@@ -65,7 +65,7 @@ beforeEach(() => {
     },
     projects: {
       list: vi.fn(async () => projects),
-      listFiles: vi.fn(async () => ({ entries: [], skipped: 0 })),
+      listFiles: vi.fn(async () => ({ entries: [], skipped: 0, truncated: false })),
       listWorktrees: vi.fn(async () => []),
       openWorktree: vi.fn(async () => projects[0]),
       createWorktree: vi.fn(async () => projects[0]),

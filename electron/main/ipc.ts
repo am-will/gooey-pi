@@ -96,6 +96,12 @@ export interface IpcRegistration {
   revoke(webContentsId: number): void
   dispose(): void
   /**
+   * Signals that the main process re-detected the harnesses on its own (a
+   * Prime start recovery). The renderer then reloads harness status the way
+   * Settings' Refresh does.
+   */
+  notifyHarnessesChanged(): void
+  /**
    * Resolves on the renderer bootstrap's first `app:get-meta` invoke, which
    * only reaches its handler once `verify` has admitted an authorized sender on
    * the trusted main frame. Nothing else observes it, so no verification work
@@ -234,7 +240,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('updates:download-and-install', () => services.updates.downloadAndInstall())
 
   handle('projects:list', (_event, harness) => projectsFor(requireHarness(harness)).list())
-  handle('projects:list-files', (_event, root, harness) => projectsFor(requireHarness(harness)).listFiles(root))
+  handle('projects:list-files', (_event, root, harness, mode) => projectsFor(requireHarness(harness)).listFiles(root, mode))
   handle('projects:list-checkouts', (_event, projectId, harness) => checkoutsFor(requireHarness(harness)).list(projectId))
   handle('projects:execute-checkout', (_event, projectId, action, harness) => checkoutsFor(requireHarness(harness)).execute(projectId, action))
   handle('projects:add', (_event, harness) => projectsFor(requireHarness(harness)).add())
@@ -443,53 +449,32 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('schedules:delete', (_event, id) => services.schedules.delete(id))
   handle('schedules:run-now', (_event, id) => services.schedules.runNow(id))
 
-  const forwardSessionChange = (change: SessionChangeEvent): void => {
+  /** Sends a main-process event to every authorized renderer still showing the trusted app. */
+  const broadcast = (channel: string, ...payload: unknown[]): void => {
     for (const [id, contents] of authorized) {
       if (contents.isDestroyed()) { authorized.delete(id); continue }
       if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('sessions:changed', change)
+        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send(channel, ...payload)
     }
   }
+  const forwardSessionChange = (change: SessionChangeEvent): void => broadcast('sessions:changed', change)
   const unsubscribeSessionChanges = services.sessions.onDidChange(forwardSessionChange)
   const unsubscribeOmpSessionChanges = services.omp.sessions.onDidChange(forwardSessionChange)
   const unsubscribePiSessionChanges = services.pi.sessions.onDidChange(forwardSessionChange)
-  const scheduleSubscription = services.schedules.onDidChange((change) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('schedules:changed', change)
-    }
-  })
+  const scheduleSubscription = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
   const unsubscribeScheduleChanges = typeof scheduleSubscription === 'function' ? scheduleSubscription : () => undefined
-  const browserSubscription = services.browser.onDidChange((state) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('browser:changed', state)
-    }
-  })
+  const browserSubscription = services.browser.onDidChange((state) => broadcast('browser:changed', state))
   const unsubscribeBrowserChanges = typeof browserSubscription === 'function' ? browserSubscription : () => undefined
-  const pointerSubscription = services.browser.onPointer((event) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('browser:pointer', event)
-    }
-  })
+  const pointerSubscription = services.browser.onPointer((event) => broadcast('browser:pointer', event))
   const unsubscribeBrowserPointer = typeof pointerSubscription === 'function' ? pointerSubscription : () => undefined
-  const activitySubscription = services.browser.onActivity((event) => {
-    for (const [id, contents] of authorized) {
-      if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send('browser:activity', event)
-    }
-  })
+  const activitySubscription = services.browser.onActivity((event) => broadcast('browser:activity', event))
   const unsubscribeBrowserActivity = typeof activitySubscription === 'function' ? activitySubscription : () => undefined
 
   const registration: IpcRegistration = {
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
     revoke(webContentsId) { authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
+    notifyHarnessesChanged() { broadcast('app:harnesses-changed') },
     dispose() {
       if (closed) return
       closed = true
