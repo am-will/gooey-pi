@@ -1297,6 +1297,15 @@ describe('PluginService MCP connections', () => {
     expect(() => readFileSync(join(lockPath, 'owner.json'))).toThrow()
   })
 
+  it('leaves ownerless native lock directories intact instead of inferring stale ownership', async () => {
+    const settings = join(temp(), 'settings.json')
+    const lock = `${settings}.lock`
+    mkdirSync(lock)
+    await expect(acquireSettingsLock(settings)).rejects.toThrow('settings are busy')
+    expect(lstatSync(lock).isDirectory()).toBe(true)
+    expect(readdirSync(lock)).toEqual([])
+  })
+
   it('recovers only branded abandoned same-process locks and preserves an active owner', async () => {
     const settings = join(temp(), 'settings.json')
     const lock = `${settings}.lock`

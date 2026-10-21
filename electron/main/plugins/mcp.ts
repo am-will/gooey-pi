@@ -57,7 +57,7 @@ function parseSettingsLockOwner(value: unknown): SettingsLockOwner | null {
 }
 
 function sameSettingsLockOwner(left: SettingsLockOwner | null, right: SettingsLockOwner): boolean {
-  return left?.version === right.version && left.pid === right.pid && left.token === right.token && left.createdAt === right.createdAt
+  return left?.version === right.version && left.application === right.application && left.pid === right.pid && left.token === right.token && left.createdAt === right.createdAt
 }
 
 async function readSettingsForUpdate(path: string, agentName = 'Agent'): Promise<{ settings: Record<string, unknown>; fingerprint: string; source: string | null }> {
