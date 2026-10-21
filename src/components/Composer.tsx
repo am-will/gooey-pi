@@ -1,8 +1,8 @@
-import { useDismissableLayer } from '@/hooks/useDismissableLayer'
+import { useComposerSuggestions } from '@/hooks/useComposerSuggestions'
 import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
-import { ArrowUp, AtSign, ChevronDown, Clock3, Command, Edit3, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
+import { ArrowUp, ChevronDown, Clock3, Edit3, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
@@ -27,10 +27,9 @@ import type {
   VoiceTranscriptionProvider,
 } from '@/types/api'
 import { composePrompt } from '@/lib/composer-prompt'
-import { activeMention, findSessionMentions, mentionLabelKey } from '@/lib/session-mentions'
 import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
-import { useI18n, type MessageKey } from '@/lib/i18n'
+import { useI18n } from '@/lib/i18n'
 import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
@@ -96,20 +95,6 @@ interface ComposerProps {
   draftKey?: string
 }
 
-// Slash-command and reasoning copy is display text only: these tables hold
-// MessageKeys so translation happens inside the component at render time.
-const commands: ReadonlyArray<{ command: string; detail: MessageKey }> = [
-  { command: '/review', detail: 'composer.command.review' },
-  { command: '/plan', detail: 'composer.command.plan' },
-  { command: '/compact', detail: 'composer.command.compact' },
-  { command: '/status', detail: 'composer.command.status' },
-]
-
-const primeCommands: ReadonlyArray<{ command: string; detail: MessageKey }> = [
-  ...commands,
-  { command: '/mcp', detail: 'composer.command.mcp' },
-]
-
 const EMPTY_ANNOTATIONS: BrowserAnnotation[] = []
 const noop = () => undefined
 
@@ -162,21 +147,13 @@ export const Composer = memo(function Composer({
   const agentName = HARNESS_AGENT_NAMES[harness]
   const shortName = HARNESS_SHORT_NAMES[harness]
   const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
-  const [caret, setCaret] = useState<{ value: string; position: number } | null>(null)
-  const caretPos = caret?.value === value ? Math.min(caret.position, value.length) : value.length
-  const [menu, setMenu] = useState<'add' | 'mention' | 'command' | null>(null)
-  const [sessionReferenceIds, setSessionReferenceIds] = useState<ReadonlyMap<string, string>>(() => new Map())
-  const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [annotationsOpen, setAnnotationsOpen] = useState(false)
   const [terminalSelectionOpen, setTerminalSelectionOpen] = useState(false)
   const imageAttachments = useComposerImages({ shortName })
   const { images, imagesRef, unsupportedFiles, unsupportedFilesRef, error: attachmentError, setError: setAttachmentError, processing: processingImages } = imageAttachments
   const dictation = useDictation(voice, transcriptionProvider, setAttachmentError)
-  const menuId = useId()
-  const menuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
-  const acceptedMentionRef = useRef<{ start: number; text: string } | null>(null)
   const submittingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageStatusId = useId()
@@ -185,6 +162,7 @@ export const Composer = memo(function Composer({
   const mountedRef = useRef(true)
   const restoredDraftRef = useRef(false)
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills])
+  const { menu, setMenu, sessionReferenceIds, activeSuggestion, setActiveSuggestion, menuId, menuRef, suggestions, setCaret, insertAtCaret, handleSuggestionKey } = useComposerSuggestions({ value, setValue, textareaRef, sessions, enabledSkills, harness, onChooseFiles: () => fileInputRef.current?.click() })
 
   useEffect(() => {
     if (!draftKey || restoredDraftRef.current) return
@@ -201,27 +179,6 @@ export const Composer = memo(function Composer({
   }, [draftKey, effort, fast, model, value])
 
   useEffect(() => {
-    const mentionMatch = activeMention(value, caretPos)
-    const mentionStart = mentionMatch?.start ?? -1
-    const acceptedMention = acceptedMentionRef.current
-    const suppressAcceptedMention = Boolean(
-      mentionMatch
-      && acceptedMention
-      && mentionStart === acceptedMention.start
-      && value.slice(acceptedMention.start, acceptedMention.start + acceptedMention.text.length) === acceptedMention.text,
-    )
-    if (acceptedMention && value.slice(acceptedMention.start, acceptedMention.start + acceptedMention.text.length) !== acceptedMention.text) acceptedMentionRef.current = null
-    setMenu(value.startsWith('/') && !value.includes(' ') ? 'command' : mentionMatch && !suppressAcceptedMention ? 'mention' : null)
-  }, [caretPos, value])
-  useEffect(() => {
-    setSessionReferenceIds((current) => {
-      if (!current.size) return current
-      const mentionedTitles = new Set(findSessionMentions(value, sessions, current).map(({ session }) => mentionLabelKey(session.title)))
-      const next = new Map([...current].filter(([title]) => mentionedTitles.has(title)))
-      return next.size === current.size ? current : next
-    })
-  }, [sessions, value])
-  useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
@@ -234,7 +191,7 @@ export const Composer = memo(function Composer({
     if (!terminalSelection?.text) setTerminalSelectionOpen(false)
   }, [terminalSelection?.text])
 
-  useDismissableLayer(Boolean(menu), (target) => target instanceof Node && Boolean(menuRef.current?.contains(target) || target instanceof Element && target.closest('[data-composer-menu-trigger]')), () => setMenu(null))
+
 
 
   // Ctrl/Cmd+Enter in the annotation popover bumps sendSignal to submit the
@@ -329,89 +286,6 @@ export const Composer = memo(function Composer({
     else requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
-  const insertAtCaret = (textarea: HTMLTextAreaElement, text: string) => {
-    const start = textarea.selectionStart ?? textarea.value.length
-    const end = textarea.selectionEnd ?? textarea.value.length
-    textarea.setRangeText(text, start, end, 'end')
-    setValue(textarea.value)
-    setCaret({ value: textarea.value, position: textarea.selectionStart })
-  }
-  const insert = (text: string) => {
-    const textarea = textareaRef.current
-    if (textarea) insertAtCaret(textarea, text)
-    else setValue((current) => `${current}${text}`)
-    setMenu(null)
-    textarea?.focus()
-  }
-  const insertMention = (label: string, session?: SessionRecord) => {
-    const textarea = textareaRef.current
-    const match = activeMention(value, caretPos)
-    if (!match) { insert(`@${label} `); return }
-    const start = match.start + 1
-    const mentionStart = start - 1
-    const acceptedText = `@${label} `
-    if (textarea) {
-      textarea.setRangeText(`${label} `, start, caretPos, 'end')
-      acceptedMentionRef.current = { start: mentionStart, text: acceptedText }
-      setValue(textarea.value)
-      setCaret({ value: textarea.value, position: textarea.selectionStart })
-    } else {
-      acceptedMentionRef.current = { start: mentionStart, text: acceptedText }
-      setValue(`${value.slice(0, start)}${label} ${value.slice(caretPos)}`)
-    }
-    if (session) {
-      const key = mentionLabelKey(session.title)
-      setSessionReferenceIds((current) => new Map(current).set(key, session.id))
-    }
-    setMenu(null)
-    textarea?.focus()
-  }
-
-  const mentionQuery = activeMention(value, caretPos)?.query.toLocaleLowerCase().trim() ?? ''
-
-  const suggestions =
-    menu === 'command'
-      ? (harness === 'prime' ? primeCommands : commands)
-          .filter((item) => item.command.startsWith(value))
-          .map((item) => ({
-            key: item.command,
-            label: item.command,
-            detail: t(item.detail),
-            icon: <Command size={14} />,
-            choose: () => {
-              setValue(`${item.command} `)
-              setMenu(null)
-              textareaRef.current?.focus()
-            },
-          }))
-      : menu === 'mention'
-        ? [
-            ...sessions.filter((session) => session.title.toLocaleLowerCase().includes(mentionQuery)).slice(0, 6).map((session) => ({
-              key: `session:${session.harness}:${session.id}`,
-              label: `@${session.title}`,
-              detail: t('composer.suggestion.session', { harness: session.harness.toUpperCase(), status: session.status }),
-              icon: <MessageCirclePlus size={14} />,
-              choose: () => insertMention(session.title, session),
-            })),
-            ...enabledSkills.filter((skill) => skill.name.toLocaleLowerCase().includes(mentionQuery)).slice(0, 6).map((skill) => ({
-              key: `skill:${skill.id}`,
-              label: `@${skill.name}`,
-              detail: skill.description,
-              icon: <AtSign size={14} />,
-              choose: () => insertMention(skill.name),
-            })),
-          ].slice(0, 8)
-        : menu === 'add'
-          ? [
-              { key: 'files', label: t('composer.add.files'), detail: t('composer.add.filesDetail'), icon: <Paperclip size={14} />, choose: () => { setMenu(null); fileInputRef.current?.click() } },
-              { key: 'mention', label: t('composer.add.mention'), detail: t('composer.add.mentionDetail'), icon: <AtSign size={14} />, choose: () => insert('@') },
-            ]
-          : []
-
-  useEffect(() => {
-    setActiveSuggestion(0)
-  }, [menu, value, suggestions.length])
-  const chooseSuggestion = (index: number) => suggestions[index]?.choose()
   const contextPercent = contextUsage?.percent === null || contextUsage?.percent === undefined ? null : Math.min(100, Math.max(0, contextUsage.percent))
   const contextLabel = contextDialLabel(contextUsage, sessionUsage)
   const contextDisplayPercent = contextPercent === null ? null : Math.min(99, Math.round(contextPercent))
@@ -491,17 +365,7 @@ export const Composer = memo(function Composer({
               void imageAttachments.ingest(files)
             }}
             onKeyDown={(event) => {
-              if (event.key === 'Backspace') acceptedMentionRef.current = null
-              if (menu && suggestions.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-                event.preventDefault()
-                setActiveSuggestion((current) => (event.key === 'ArrowDown' ? (current + 1) % suggestions.length : (current - 1 + suggestions.length) % suggestions.length))
-                return
-              }
-              if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && !event.nativeEvent.isComposing && menu && suggestions.length) {
-                event.preventDefault()
-                chooseSuggestion(activeSuggestion)
-                return
-              }
+              if (handleSuggestionKey(event)) return
               const intent = messageActionForKey(
                 {
                   key: event.key,
@@ -517,10 +381,7 @@ export const Composer = memo(function Composer({
                 event.preventDefault()
                 void submit(intent)
               }
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                setMenu(null)
-              }
+
             }}
           />
         </div>
