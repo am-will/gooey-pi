@@ -50,3 +50,31 @@ cp .cursor/rules/pstack-models.mdc ~/.cursor/rules/pstack-models.mdc
 ```
 
 Re-run `/setup-pstack` to change role models. Only write Task `model` slugs that are available in the current session.
+
+## Architecture and boundaries
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [documentation index](docs/README.md)
+for service ownership, isolation, and localization. Main-process services own
+filesystem, subprocess, credential, and project authorization. Keep the sandboxed
+preload bridge allowlisted and validate untrusted requests in the main process.
+Read [docs/security.md](docs/security.md) before changing those boundaries.
+
+Interface copy comes from `src/lib/locales/english.ts` through `src/lib/i18n.tsx`.
+Update the Japanese and Simplified Chinese catalogs with interface changes;
+English is the fallback. Do not make translated text the only stable test selector.
+
+## Verification and commits
+
+Use [docs/validation.md](docs/validation.md) for exact toolchain and gate commands.
+After selecting Node, run `npm run toolchain:bootstrap` before `npm ci` in a fresh
+checkout. Run focused checks for each change and the required aggregate checks
+before delivery. Build fresh output before Electron UI verification, and record
+commands, revision, and results. Do not report old artifacts as current evidence.
+
+Development shares the installed application's user data and single-instance
+lock. Follow the isolated development guidance in CONTRIBUTING.md when testing
+state changes. Keep author and committer email set to `freeme62410@gmail.com` or
+`am.will.ryan@gmail.com`; verify both identities on committed work.
+
+Repository engineering and security guidance takes precedence over vendored
+workflow suggestions. Skills do not authorize changes outside the user's scope.
