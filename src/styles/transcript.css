@@ -177,3 +177,6 @@
 .goal-message__chevron { flex: 0 0 auto; margin-left: auto; color: var(--annotation); }
 .goal-message__content { padding: 11px 13px 12px 37px; border-top: 1px solid color-mix(in srgb, var(--annotation) 22%, var(--border)); background: color-mix(in srgb, var(--annotation) 5%, var(--canvas)); }
 .goal-message__content .prose { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.55; }
+
+.branch-summary > summary { color: var(--text-secondary); font-size: 12px; cursor: pointer; padding-block: 6px; }
+.branch-summary[open] > summary { margin-bottom: 8px; }

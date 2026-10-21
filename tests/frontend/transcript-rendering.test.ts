@@ -372,6 +372,14 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('message--system')
   })
 
+  it('keeps branch summaries collapsed and distinguishable from provider notices', () => {
+    const html = render([{ id: 'branch', role: 'system', kind: 'notice', notice: { kind: 'branch-summary' }, parts: [{ type: 'text', text: 'Earlier branch work' }] }])
+    expect(html).toContain('<details class="branch-summary">')
+    expect(html).toContain('<summary>Branch summary</summary>')
+    expect(html).toContain('Earlier branch work')
+    expect(html).not.toContain('<details open')
+  })
+
   it('renders a notice as a neutral activity line that shows its text', () => {
     const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }])
     expect(html).toContain('message--activity')

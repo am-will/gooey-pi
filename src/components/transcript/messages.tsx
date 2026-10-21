@@ -289,6 +289,14 @@ export const ActivityMessage = memo(function ActivityMessage({ message, harness 
     part.type === 'toolResult' && sourceParts[index - 1]?.type !== 'toolCall' ? [{ type: 'toolCall' as const, id: `${message.id}-${index}`, name: part.name ?? 'Tool' }, part] : [part],
   )
   const timeline = <WorkTimeline parts={parts} showReasoning showTools />
+  if (message.notice?.kind === 'branch-summary') {
+    return <div className="message message--activity" role="note">
+      <details className="branch-summary">
+        <summary>Branch summary</summary>
+        {timeline}
+      </details>
+    </div>
+  }
   // An article cannot take the note role, so a notice renders as a div, like the steer-read marker.
   return message.kind === 'notice'
     ? <div className="message message--activity" role="note">{timeline}</div>
