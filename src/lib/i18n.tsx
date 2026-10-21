@@ -1,8 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { LocalePreference } from '@/types/api'
 import { englishCatalog } from './locales/english'
-import { japaneseCatalog } from './locales/japanese'
-import { simplifiedChineseCatalog } from './locales/simplified-chinese'
 import type { Message, MessageKey } from './locales/types'
 
 type MessageValues = Record<string, string | number>
@@ -10,16 +8,27 @@ type MessageValues = Record<string, string | number>
 // The catalogs are data modules under `src/lib/locales`; they are re-exported
 // here so every consumer keeps one import site for interface copy and only this
 // module needs React.
-export { englishCatalog, japaneseCatalog, simplifiedChineseCatalog }
+export { englishCatalog }
 export type { Message, MessageKey }
 
 /** Locales this build can render; `en` is the base and the fallback for all. */
 export type ResolvedLocale = 'en' | 'zh-CN' | 'ja'
 
 /** Localised catalogs keyed by resolved locale; English is the base and fallback. */
-const catalogs: Partial<Record<ResolvedLocale, Partial<Record<MessageKey, Message>>>> = {
-  'zh-CN': simplifiedChineseCatalog,
-  ja: japaneseCatalog,
+const catalogs: Partial<Record<ResolvedLocale, Partial<Record<MessageKey, Message>>>> = {}
+const loadingCatalogs = new Map<ResolvedLocale, Promise<void>>()
+
+/** English renders immediately while another language loads once on demand. */
+export function loadLocale(locale: ResolvedLocale): Promise<void> {
+  if (locale === 'en' || catalogs[locale]) return Promise.resolve()
+  const pending = loadingCatalogs.get(locale)
+  if (pending) return pending
+  const load = locale === 'ja'
+    ? import('./locales/japanese').then(({ japaneseCatalog }) => { catalogs.ja = japaneseCatalog })
+    : import('./locales/simplified-chinese').then(({ simplifiedChineseCatalog }) => { catalogs['zh-CN'] = simplifiedChineseCatalog })
+  const result = load.finally(() => { loadingCatalogs.delete(locale) })
+  loadingCatalogs.set(locale, result)
+  return result
 }
 
 /** Every locale this build can render; `englishCatalog` is the fallback for all. */
@@ -111,13 +120,19 @@ export function setFormattingLocaleForTests(locale: ResolvedLocale): void {
  */
 export function useLocaleTranslator(preference: LocalePreference): I18nContextValue {
   const locale = resolveLocale(preference)
+  const [catalogRevision, setCatalogRevision] = useState(0)
+  useEffect(() => {
+    let active = true
+    void loadLocale(locale).then(() => { if (active) setCatalogRevision((revision) => revision + 1) }, () => undefined)
+    return () => { active = false }
+  }, [locale])
   // Written during render on purpose. Plain modules read the mirror while the
   // same render pass builds their output, so moving this into an effect would
   // keep the previous language for a frame; and because the mirror is not state,
   // that stale frame would not re-render on its own. A discarded concurrent render
   // can only leave a locale that the next committed render overwrites again.
   formattingLocale = locale
-  return useMemo<I18nContextValue>(() => ({ locale, t: (key, values) => translate(locale, key, values) }), [locale])
+  return useMemo<I18nContextValue>(() => ({ locale, t: (key, values) => translate(locale, key, values) }), [locale, catalogRevision])
 }
 
 export function I18nProvider({ preference, children }: { preference: LocalePreference; children: ReactNode }) {

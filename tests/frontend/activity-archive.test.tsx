@@ -1,8 +1,9 @@
+import { loadLocale } from '../../src/lib/i18n'
 // @vitest-environment jsdom
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { activityNotificationSignature, sessionShowsCompanionNotification } from '../../src/app/session-attention'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
 import { createWorkspaceActions, type WorkspaceActionsDeps } from '../../src/hooks/useWorkspaceActions'
@@ -42,6 +43,8 @@ afterEach(async () => {
   container.remove()
   vi.restoreAllMocks()
 })
+
+beforeAll(async () => { await Promise.all([loadLocale('ja'), loadLocale('zh-CN')]) })
 
 describe('archived activity cleanup', () => {
   it('never renders archived chats in Activity', async () => {

@@ -1,7 +1,8 @@
+import { loadLocale } from '../../src/lib/i18n'
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { fallbackNoticeFromText, fallbackNoticeText } from '../../src/lib/events/model-fallback'
 import { I18nProvider, translate, type MessageKey } from '../../src/lib/i18n'
 import { PI_MCP_ADAPTER_REQUIRED_DETAIL } from '../../src/lib/mcp-policy'
@@ -18,6 +19,8 @@ import type { SkillRecord } from '../../src/types/api'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const japanese = (key: MessageKey, values?: Record<string, string | number>) => translate('ja', key, values)
+
+beforeAll(async () => { await Promise.all([loadLocale('ja'), loadLocale('zh-CN')]) })
 
 describe('copy that arrives as data', () => {
   it('treats the session placeholder as a sentinel and localises only its display', () => {

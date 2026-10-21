@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { formatSessionCost } from '../../src/lib/format-cost'
-import { formatRelative } from '../../src/lib/data'
-import { englishCatalog, formattingLocaleTag, japaneseCatalog, resolveLocale, setFormattingLocaleForTests, simplifiedChineseCatalog, translate } from '../../src/lib/i18n'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { englishCatalog, loadLocale, resolveLocale, translate } from '../../src/lib/i18n'
+
+import { japaneseCatalog } from '../../src/lib/locales/japanese'
+import { simplifiedChineseCatalog } from '../../src/lib/locales/simplified-chinese'
+
+beforeAll(async () => { await Promise.all([loadLocale('ja'), loadLocale('zh-CN')]) })
 
 /**
  * The Simplified Chinese surfaces translated today: the navigation shell, the

@@ -1,13 +1,16 @@
+import { loadLocale } from '../../src/lib/i18n'
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
 import { I18nProvider } from '../../src/lib/i18n'
 import { AppearanceSettings } from '../../src/pages/settings/AppearanceSettings'
 import type { LocalePreference } from '../../src/types/api'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+beforeAll(async () => { await Promise.all([loadLocale('ja'), loadLocale('zh-CN')]) })
 
 describe('AppearanceSettings', () => {
   let container: HTMLDivElement
