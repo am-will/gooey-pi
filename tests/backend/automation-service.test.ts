@@ -73,6 +73,33 @@ describe('AutomationService', () => {
     expect(service.list()).toEqual([])
   })
 
+  it.each(['edit', 'delete'] as const)('does not resume over an asynchronous %s while recurrence is being evaluated', async (action) => {
+    const engine = recurrence()
+    const service = new AutomationService(store(), {
+      recurrence: () => engine, validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => ({}), now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const task = await service.create({ prompt: 'Review', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const paused = await service.pause(task.id)
+    let release!: () => void
+    let entered!: () => void
+    const admission = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const originalNext = engine.next.bind(engine)
+    vi.spyOn(engine, 'next').mockImplementationOnce(async (...args) => { entered(); await gate; return originalNext(...args) })
+    const resuming = service.resume(task.id)
+    const rejected = expect(resuming).rejects.toThrow(action === 'edit' ? 'changed' : 'not found')
+    try {
+      await admission
+      if (action === 'delete') await service.delete(task.id)
+      else await service.update(task.id, { revision: paused.revision, title: 'Newer edit' })
+      release()
+      await rejected
+      if (action === 'edit') expect(service.get(task.id)).toMatchObject({ status: 'paused', title: 'Newer edit', nextRunAt: undefined })
+      else expect(service.list()).toEqual([])
+    } finally { release(); await service.stop() }
+  })
+
   it('keeps an edited paused schedule paused until explicitly resumed', async () => {
     const service = new AutomationService(store(), {
       validateTarget: async () => undefined, validateExecution: async () => undefined,
