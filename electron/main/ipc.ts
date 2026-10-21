@@ -18,7 +18,7 @@ import type { TerminalService } from './terminal'
 import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
-import { requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -264,6 +264,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   })
   handle('sessions:rename', async (_event, filePath, title) => (await sessionsForPath(filePath)).service.rename(filePath, title))
   handle('sessions:archive', async (_event, filePath, archived) => {
+    requireBoolean(archived, 'archived')
     const routed = await sessionsForPath(filePath)
     const result = await routed.service.archive(filePath, archived)
     if (archived === true) {
@@ -449,6 +450,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
         services.omp.agents.requestRuntimeEnvironmentRefresh(),
         services.pi.agents.requestRuntimeEnvironmentRefresh(),
       ])
+    } else if (settings.ompApprovalMode !== previous.ompApprovalMode) {
+      await services.omp.agents.requestRuntimeEnvironmentRefresh()
     }
     return settings
   })
