@@ -332,6 +332,15 @@ export class AgentRpcManager {
     return runtime.stop()
   }
 
+  /** Main-owned OMP roster query; never accepts renderer commands or child paths. */
+  async readOmpSubagents(filePath: string): Promise<unknown> {
+    if (this.adapter.id !== 'omp') return undefined
+    const info = this.getForSession(filePath)
+    if (!info) return undefined
+    const response = await this.requireRuntime(info.runtimeId).command({ type: 'get_subagents' })
+    return response.success === true ? response.data : undefined
+  }
+
   list(): RuntimeInfo[] { return [...this.runtimes.values()].map((runtime) => runtime.snapshot()) }
 
   /** Cheap ownership probe for IPC routing; requireRuntime keeps the authoritative not-found error. */
