@@ -1,15 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, join, posix, resolve, win32 } from 'node:path'
-import { lstat, readFile, realpath } from 'node:fs/promises'
-import type { BigIntStats } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import { dialog, type BrowserWindow } from 'electron'
-import { homedir } from 'node:os'
 import { sortProjects } from '../../src/lib/project-order'
 import type { GitWorktree, HarnessId, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
 import { listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
 import { aggregateSessionProjectStats, persistedProjectRecord } from './projects/records'
+import { defaultFolderIdentityFilesystem, folderIdentitiesEqual, FolderIdentityVerifier, type FolderIdentityFilesystem, type VerifiedFolderIdentity } from './projects/folder-identity'
+export { isBroadProjectRoot, type FolderIdentityFilesystem } from './projects/folder-identity'
 import { listProjectFiles } from './project-files'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
 import { isPathWithin, rejectUnknownKeys, requireAbsolutePath, requireBoolean, requireExistingDirectory, requireExistingPath, requireId, requireInteger, requireRecord, requireString } from './validation'
@@ -18,31 +18,6 @@ const MAX_CONCURRENT_BRANCH_LOOKUPS = 4
 
 function inferredId(path: string): string {
   return `inferred-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`
-}
-
-/** Filesystem roots too broad to grant: volume/share roots, home, and home ancestors. */
-export function isBroadProjectRoot(
-  pathValue: string,
-  options: { platform?: NodeJS.Platform; homePath?: string } = {},
-): boolean {
-  const platform = options.platform ?? process.platform
-  const pathApi = platform === 'win32' ? win32 : posix
-  const comparable = (path: string): string => {
-    const normalized = pathApi.resolve(path)
-    return platform === 'win32' ? normalized.toLowerCase() : normalized
-  }
-  const path = comparable(pathValue)
-  const root = comparable(pathApi.parse(path).root)
-  const home = comparable(options.homePath ?? homedir())
-  // Node's win32 parser treats an extended-length UNC namespace as the root;
-  // identify its server/share boundary explicitly as well.
-  const extendedUncShareRoot = platform === 'win32' && /^\\\\\?\\unc\\[^\\]+\\[^\\]+\\?$/i.test(path)
-  return path === root || path === home || home.startsWith(`${path}${pathApi.sep}`) || extendedUncShareRoot
-}
-
-interface VerifiedFolderIdentity {
-  path: string
-  identity: FolderIdentity
 }
 
 interface FolderIdentityRefresh {
@@ -65,45 +40,6 @@ interface AuthorizationContext {
   discoveredSessionRoots: Array<{ canonical: string; identity: FolderIdentity }>
 }
 
-export interface FolderIdentityFilesystem {
-  lstat(path: string): Promise<BigIntStats>
-  realpath(path: string): Promise<string>
-}
-
-const defaultFolderIdentityFilesystem: FolderIdentityFilesystem = {
-  lstat: (path) => lstat(path, { bigint: true }),
-  realpath,
-}
-
-function folderIdentitiesEqual(left: FolderIdentity, right: FolderIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs
-}
-
-/**
- * Device numbers can change when the same filesystem is remounted. Inode plus
- * birth time remains stable across that event and still rejects replacement.
- * Legacy grants lack birth time, so they may upgrade once when the canonical
- * path keeps its inode and the current filesystem proves that the directory
- * predates the grant. Exact device/inode matching is only enough on filesystems
- * that cannot provide a birth time.
- */
-function isSameFolderIdentity(expected: FolderIdentity, current: FolderIdentity, grantedAt?: string): boolean {
-  if (expected.ino !== current.ino) return false
-  if (expected.birthtimeNs !== undefined) {
-    if (current.birthtimeNs !== undefined) return expected.birthtimeNs === current.birthtimeNs
-    return expected.dev === current.dev
-  }
-  if (current.birthtimeNs === undefined) return expected.dev === current.dev
-  if (grantedAt === undefined) return false
-  const grantedAtMs = Date.parse(grantedAt)
-  if (!Number.isFinite(grantedAtMs)) return false
-  try {
-    // The object must predate the grant. A small allowance covers filesystems
-    // whose birth time and the desktop clock have different precision.
-    return BigInt(current.birthtimeNs) <= BigInt(Math.ceil(grantedAtMs + 5_000)) * 1_000_000n
-  } catch { return false }
-}
-
 /**
  * One ProjectService instance exists per harness. Instances share the one
  * desktop state store but each sees, creates, and authorizes only records of
@@ -121,7 +57,7 @@ export class ProjectService {
   private readonly pendingRemovalIds = new Set<string>()
   private authorizationRevision = 0
   private authorizationRefresh: { revision: number; promise: Promise<AuthorizationContext> } | undefined
-  private canonicalHomeRoot: Promise<string> | undefined
+  private readonly folderIdentity: FolderIdentityVerifier
   private sessionProvider: () => Promise<SessionRecord[]> = async () => []
   private branchProvider: (cwd: string) => Promise<string | undefined> = async () => undefined
   private stopProjectProcesses: (roots: string[]) => Promise<void> = async () => undefined
@@ -131,42 +67,11 @@ export class ProjectService {
     private readonly windowProvider: () => BrowserWindow | null,
     private readonly harness: HarnessId = 'prime',
     private readonly identityFilesystem: FolderIdentityFilesystem = defaultFolderIdentityFilesystem,
-  ) {}
+  ) { this.folderIdentity = new FolderIdentityVerifier(identityFilesystem) }
 
   /** Persisted projects visible to this instance: exactly its own harness's records. */
   private ownProjects(projects: readonly PersistedProject[]): PersistedProject[] {
     return projects.filter((project) => project.harness === this.harness)
-  }
-
-  private async captureFolderIdentity(pathValue: string): Promise<{ path: string; identity: FolderIdentity }> {
-    const configured = resolve(requireString(pathValue, 'project folder', { min: 1, max: 4096 }))
-    const configuredInfo = await this.identityFilesystem.lstat(configured)
-    if (!configuredInfo.isDirectory() || configuredInfo.isSymbolicLink()) throw new TypeError('Project folder must be a stable directory')
-    const path = await this.identityFilesystem.realpath(configured)
-    const canonicalInfo = await this.identityFilesystem.lstat(path)
-    if (!canonicalInfo.isDirectory() || canonicalInfo.isSymbolicLink()) throw new TypeError('Project folder must be a stable directory')
-    const toIdentity = (info: BigIntStats): FolderIdentity => ({
-      dev: info.dev.toString(),
-      ino: info.ino.toString(),
-      birthtimeNs: info.birthtimeNs > 0n ? info.birthtimeNs.toString() : undefined,
-    })
-    const configuredIdentity = toIdentity(configuredInfo)
-    const canonicalIdentity = toIdentity(canonicalInfo)
-    if (!folderIdentitiesEqual(configuredIdentity, canonicalIdentity)) throw new TypeError('Project folder identity changed while it was being verified')
-    return { path, identity: canonicalIdentity }
-  }
-
-  private async isBroadRoot(path: string): Promise<boolean> {
-    this.canonicalHomeRoot ??= this.identityFilesystem.realpath(resolve(homedir())).catch(() => resolve(homedir()))
-    return isBroadProjectRoot(path, { homePath: await this.canonicalHomeRoot })
-  }
-
-  private async verifyFolderIdentity(pathValue: string, expected?: FolderIdentity, grantedAt?: string): Promise<VerifiedFolderIdentity | undefined> {
-    if (!expected) return undefined
-    try {
-      const current = await this.captureFolderIdentity(pathValue)
-      return isSameFolderIdentity(expected, current.identity, grantedAt) ? current : undefined
-    } catch { return undefined }
   }
 
   /**
@@ -212,7 +117,7 @@ export class ProjectService {
     let canonical = configured
     try { canonical = await requireExistingDirectory(configured, 'project folder') } catch { /* Keep stale lexical path visible. */ }
     const expected = project.folderIdentities?.[configured] ?? project.folderIdentities?.[canonical]
-    const verified = await this.verifyFolderIdentity(configured, expected, project.createdAt)
+    const verified = await this.folderIdentity.verify(configured, expected, project.createdAt)
     return { configured, canonical, expected, verified }
   }
 
@@ -235,8 +140,8 @@ export class ProjectService {
       const identities: Record<string, FolderIdentity> = {}
       for (const folder of project.folders) {
         try {
-          const current = await this.captureFolderIdentity(folder)
-          if (await this.isBroadRoot(current.path)) continue
+          const current = await this.folderIdentity.capture(folder)
+          if (await this.folderIdentity.isBroadRoot(current.path)) continue
           identities[current.path] = current.identity
         } catch { /* Stale and symlinked legacy grants remain unauthorized. */ }
       }
@@ -267,9 +172,9 @@ export class ProjectService {
       try {
         const canonical = await requireExistingDirectory(projectPath, 'session project path')
         if (seen.has(canonical) || represented.has(canonical) || dismissed.has(canonical)) continue
-        if (await this.isBroadRoot(canonical)) continue
+        if (await this.folderIdentity.isBroadRoot(canonical)) continue
         seen.add(canonical)
-        const { identity } = await this.captureFolderIdentity(canonical)
+        const { identity } = await this.folderIdentity.capture(canonical)
         discovered.push({ canonical, identity })
       } catch {
         // Stale, unreadable, or non-directory session paths remain unauthorized
@@ -383,7 +288,7 @@ export class ProjectService {
         represented.add(configured)
         represented.add(canonical)
         const authorizationPath = verified?.path ?? canonical
-        if (await this.isBroadRoot(authorizationPath)) {
+        if (await this.folderIdentity.isBroadRoot(authorizationPath)) {
           nextQuarantinedBroadRoots.add(authorizationPath)
           continue
         }
@@ -513,7 +418,7 @@ export class ProjectService {
     const requested = resolve(requireString(pathValue, 'worktree path', { min: 1, max: 4096 }))
     const linked = (await listGitWorktrees(parentCwd)).find((worktree) => resolve(worktree.path) === requested)
     if (!linked) throw new TypeError('worktree path is not linked to the authorized Git repository')
-    const { path, identity } = await this.captureFolderIdentity(linked.path)
+    const { path, identity } = await this.folderIdentity.capture(linked.path)
     return this.persistWorktree(parentCwd, path, identity, id)
   }
 
@@ -529,7 +434,7 @@ export class ProjectService {
     const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return undefined
     const targetPath = resolve(requireString(result.filePath, 'worktree path', { min: 1, max: 4096 }))
-    if (await this.isBroadRoot(targetPath)) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
+    if (await this.folderIdentity.isBroadRoot(targetPath)) throw new TypeError('Broad filesystem roots cannot be added as worktrees')
     return targetPath
   }
 
@@ -539,7 +444,7 @@ export class ProjectService {
    * enriched record. `knownSessions` reuses an already-loaded session list.
    */
   private async grantProjectFolder(path: string, identity: FolderIdentity, knownSessions?: readonly SessionRecord[]): Promise<ProjectRecord> {
-    if (await this.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
+    if (await this.folderIdentity.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
     this.removalRoots.delete(path)
     const now = new Date().toISOString()
     const project = await this.store.update((state): PersistedProject => {
@@ -574,7 +479,7 @@ export class ProjectService {
   }
 
   private async persistWorktree(parentCwd: string, path: string, identity: FolderIdentity, expectedParentId: string): Promise<ProjectRecord> {
-    if (await this.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
+    if (await this.folderIdentity.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
     this.removalRoots.delete(path)
     const now = new Date().toISOString()
     let parentId: string | undefined
@@ -629,13 +534,13 @@ export class ProjectService {
       ? await dialog.showOpenDialog(parent, { title: 'Add project folder', properties: ['openDirectory', 'createDirectory'] })
       : await dialog.showOpenDialog({ title: 'Add project folder', properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || result.filePaths.length !== 1) return null
-    const { path, identity } = await this.captureFolderIdentity(result.filePaths[0])
+    const { path, identity } = await this.folderIdentity.capture(result.filePaths[0])
     return this.grantProjectFolder(path, identity)
   }
 
   async grantInferred(pathValue: unknown): Promise<ProjectRecord> {
-    const { path, identity } = await this.captureFolderIdentity(requireAbsolutePath(pathValue, 'project path'))
-    if (await this.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be inferred as projects')
+    const { path, identity } = await this.folderIdentity.capture(requireAbsolutePath(pathValue, 'project path'))
+    if (await this.folderIdentity.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be inferred as projects')
     this.removalRoots.delete(path)
     const sessions = await this.sessionProvider()
     let discovered = false
@@ -694,7 +599,7 @@ export class ProjectService {
           for (const pathValue of [...new Set(sessions.map((session) => session.projectPath).filter((p): p is string => Boolean(p)))]) {
             try {
               const path = await requireExistingDirectory(pathValue, 'session project path')
-              if (inferredId(path) === id && !(await this.isBroadRoot(path))) {
+              if (inferredId(path) === id && !(await this.folderIdentity.isBroadRoot(path))) {
                 inferredPath = path
                 this.removalRoots.add(path)
                 this.readOnlyRoots.delete(path)
@@ -826,7 +731,7 @@ export class ProjectService {
           map.delete(configured)
           continue
         }
-        const verified = await this.verifyFolderIdentity(configured, expected)
+        const verified = await this.folderIdentity.verify(configured, expected)
         if (!verified) continue
         if (isReadOnlyMap && dismissed.has(verified.path) && !ownPersistedFolders.has(configured)) {
           map.delete(configured)

@@ -779,11 +779,9 @@ describe('ProjectService file listing', () => {
         return realpath(path)
       },
     })
-    const captureFolderIdentity = (service as unknown as {
-      captureFolderIdentity(path: string): Promise<unknown>
-    }).captureFolderIdentity.bind(service)
-
-    await expect(captureFolderIdentity(root)).rejects.toThrow(/identity changed while it was being verified/)
+    await store.ready()
+    electronMocks.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [root] })
+    await expect(service.add()).rejects.toThrow(/identity changed while it was being verified/)
   })
 
   it('keeps a fingerprinted grant across a filesystem device renumber', async () => {
