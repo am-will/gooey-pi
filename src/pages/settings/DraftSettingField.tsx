@@ -46,8 +46,12 @@ export function DraftSettingField({
     dispatch({ type: 'sync', value: committedValue })
   }, [committedValue, dispatch])
 
-  const commit = useCallback(() => {
-    if (inFlight.current) return inFlight.current
+  const commit = useCallback(function commit(): Promise<void> {
+    if (inFlight.current) {
+      const { pending, revision } = stateRef.current
+      if (!pending || pending.revision === revision) return inFlight.current
+      return inFlight.current.then(() => commit())
+    }
     const current = stateRef.current
     const validationError = validate(current.value)
     if (validationError) {
@@ -59,7 +63,7 @@ export function DraftSettingField({
     const value = normalize(current.value)
     const id = ++nextCommitId.current
     dispatch({ type: 'commit', id, value })
-    const operation = Promise.resolve(onCommit(value))
+    const operation = Promise.resolve().then(async () => onCommit(value))
       .then(() => { dispatch({ type: 'resolve', id }) })
       .catch((error: unknown) => { dispatch({ type: 'reject', id, error: errorMessage(error) }) })
       .finally(() => {
