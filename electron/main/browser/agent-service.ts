@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AgentBrowserTabRecord } from '../../../src/types/api'
 import { canonicalSessionPath } from '../session-paths'
 import { requireRecord, requireString } from '../validation'
-import { ACTION_TIMEOUT_MS, guardGuestCall, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
+import { ACTION_TIMEOUT_MS, guardGuestCall, guardGuestDeadline, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
 
 /** The user's own Preview webview, adoptable by the active thread's agent. */
 export const PREVIEW_TAB_ID = 'preview'
@@ -521,7 +521,7 @@ export class AgentBrowserService {
       try {
         await this.dispatchInput(guest, 'Input.insertText', { text })
       } catch {
-        await guest.insertText(text)
+        await guardGuestDeadline(guest.insertText(text), this.actionTimeoutMs)
       }
       if (params.submit === true) {
         await delay(50)
@@ -760,12 +760,11 @@ export class AgentBrowserService {
   }
 
   private async loadAndSettle(guest: WebContents, url: string): Promise<void> {
-    const loaded = this.waitForLoad(guest)
-    await guest.loadURL(url).catch((error: unknown) => {
+    await guardGuestDeadline(guest.loadURL(url), this.actionTimeoutMs).catch((error: unknown) => {
       // ERR_ABORTED covers in-flight replacement navigations; anything else is real.
       if (!String(error).includes('ERR_ABORTED')) throw new Error(`Navigation failed: ${String(error).slice(0, 300)}`)
     })
-    await loaded
+    await this.waitForLoad(guest)
   }
 
   private waitForLoad(guest: WebContents, timeoutMs = this.loadTimeoutMs): Promise<void> {
@@ -874,7 +873,7 @@ export class AgentBrowserService {
    */
   private async dispatchInput(guest: WebContents, method: string, params: Record<string, unknown>): Promise<void> {
     if (!guest.debugger.isAttached()) guest.debugger.attach('1.3')
-    await guest.debugger.sendCommand(method, params)
+    await guardGuestDeadline(guest.debugger.sendCommand(method, params), this.actionTimeoutMs)
   }
 
   private async sendKey(guest: WebContents, key: CdpKey, modifiers: string[]): Promise<void> {
