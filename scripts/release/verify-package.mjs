@@ -17,6 +17,7 @@ import {
   requireReleaseArtifacts,
 } from './lib.mjs'
 import { assertPackageSizeBudgets, collectPackageSizeMetrics, describeSizeMetrics } from './size-budgets.mjs'
+import { assertMacOSBundleMinimum, assertMacOSDeploymentTargets } from './macos-compatibility.mjs'
 
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: 'utf8' })
@@ -82,12 +83,14 @@ function assertPackagedMicrophoneEntitlements(app, productName) {
   }
 }
 
-async function verifyApp({ app, artifact, mode, expectedTeam }) {
+async function verifyApp({ app, artifact, mode, expectedTeam, minimumSystemVersion }) {
   const productName = basename(app, '.app')
   const resources = join(app, 'Contents', 'Resources')
   const executable = join(app, 'Contents', 'MacOS', productName)
   const asar = join(resources, 'app.asar')
   const looseApp = join(resources, 'app')
+  assertMacOSBundleMinimum(run('/usr/libexec/PlistBuddy', ['-c', 'Print :LSMinimumSystemVersion', join(app, 'Contents', 'Info.plist')]).trim(), minimumSystemVersion)
+  assertMacOSDeploymentTargets(run('otool', ['-l', executable]), minimumSystemVersion, executable)
   assertPackagedExtensions(resources)
   if (!existsSync(asar)) throw new Error(`${basename(artifact)} application must contain Resources/app.asar`)
   if (existsSync(looseApp)) throw new Error(`${basename(artifact)} contains forbidden loose Resources/app`)
@@ -97,7 +100,10 @@ async function verifyApp({ app, artifact, mode, expectedTeam }) {
   assertExactArchitectures(appArchitectures, artifactArchitectures(artifact), basename(artifact))
   const unpacked = join(resources, 'app.asar.unpacked')
   if (!existsSync(unpacked)) throw new Error(`${basename(artifact)} application must contain Resources/app.asar.unpacked`)
-  assertUnpackedNativeLayout(unpacked, appArchitectures, (path) => parseArchitectures(run('lipo', ['-archs', path])))
+  assertUnpackedNativeLayout(unpacked, appArchitectures, (path) => {
+    assertMacOSDeploymentTargets(run('otool', ['-l', path]), minimumSystemVersion, path)
+    return parseArchitectures(run('lipo', ['-archs', path]))
+  })
   assertFuses(await getCurrentFuseWire(executable))
 
   if (mode === 'public') {
@@ -179,10 +185,10 @@ export async function verifyPackage({ mode, releaseDirectory = resolve('release'
   const artifactFiles = findFiles(releaseDirectory, (path, stat) => stat.isFile() && (path.endsWith('.dmg') || path.endsWith('.zip')))
   const artifacts = requireReleaseArtifacts(artifactFiles)
   assertRequestedArchitecture(artifacts, arch)
-  const dmgMetrics = await verifyDmg(artifacts.dmg, { mode, expectedTeam }, artifacts)
-  const zipMetrics = await verifyZip(artifacts.zip, { mode, expectedTeam }, artifacts)
-
   const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+  const minimumSystemVersion = packageJson.build.mac.minimumSystemVersion
+  const dmgMetrics = await verifyDmg(artifacts.dmg, { mode, expectedTeam, minimumSystemVersion }, artifacts)
+  const zipMetrics = await verifyZip(artifacts.zip, { mode, expectedTeam, minimumSystemVersion }, artifacts)
   console.log(
     `Verified ${mode} DMG and ZIP for GooeyPi ${packageJson.version}: archive integrity, contained application, exact native unpack allowlist and architectures, Electron fuses, and package size budgets (DMG payload: ${describeSizeMetrics(dmgMetrics)}; ZIP payload: ${describeSizeMetrics(zipMetrics)})${mode === 'public' ? ', signatures, microphone entitlements, notarization staples, and Gatekeeper' : ''}.`,
   )
