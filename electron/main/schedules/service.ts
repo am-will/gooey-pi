@@ -71,21 +71,12 @@ function parseExecution(value: unknown): ScheduleExecution {
 }
 
 function parseTiming(value: unknown, now: Date): ScheduleTiming {
-  const timing = requireRecord(value, 'timing')
-  if (timing.kind === 'once') {
-    rejectUnknownKeys(timing, ['kind', 'at'], 'timing')
-    return validateScheduleTiming({ kind: 'once', at: requireString(timing.at, 'timing.at', { min: 1, max: 64, trim: true }) }, { now })
+  const timing = { ...requireRecord(value, 'timing') }
+  for (const key of ['at', 'dtstartLocal', 'timeZone', 'rrule'] as const) {
+    const field = timing[key]
+    if (typeof field === 'string') timing[key] = field.trim()
   }
-  if (timing.kind === 'rrule') {
-    rejectUnknownKeys(timing, ['kind', 'dtstartLocal', 'timeZone', 'rrule'], 'timing')
-    return validateScheduleTiming({
-      kind: 'rrule',
-      dtstartLocal: requireString(timing.dtstartLocal, 'timing.dtstartLocal', { min: 1, max: 64, trim: true }),
-      timeZone: requireString(timing.timeZone, 'timing.timeZone', { min: 1, max: 128, trim: true }),
-      rrule: requireString(timing.rrule, 'timing.rrule', { min: 1, max: 2_048, trim: true }),
-    }, { now })
-  }
-  throw new TypeError('Invalid schedule timing')
+  return validateScheduleTiming(timing, { now })
 }
 
 function parseInput(value: unknown, now: Date): Omit<ScheduleInput, 'createdBy'> {
