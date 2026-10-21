@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DEFAULT_SETTINGS } from '@/lib/data'
+import { DEFAULT_SETTINGS } from '@/lib/default-settings'
 import {
   confirmedPanelSettings,
   PANEL_SETTING_KEYS,
