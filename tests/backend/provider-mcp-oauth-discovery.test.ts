@@ -2,10 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
+import type { ProviderAuthEvent } from '../../src/types/api'
 import { PrimeProviderService } from '../../electron/main/providers'
 
 const dirs: string[] = []
+const services: PrimeProviderService[] = []
 afterEach(() => {
+  for (const provider of services.splice(0)) provider.cancelAll()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   vi.unstubAllGlobals()
 })
@@ -47,5 +53,70 @@ describe('provider login flow bookkeeping', () => {
     expect(() => providerService.respondOAuth('', 'prompt-1', 'value')).toThrow('flowId is too short')
     expect(() => providerService.cancelOAuth(7)).toThrow('flowId must be a string')
     expect(() => providerService.cancelAll()).not.toThrow()
+  })
+})
+
+async function oauthFixture() {
+  const openExternal = vi.fn(async () => undefined)
+  const provider = service({ openExternal })
+  services.push(provider)
+  const events: ProviderAuthEvent[] = []
+  provider.setEventSink((event) => events.push(event))
+  vi.spyOn(provider, 'catalog').mockResolvedValue({ primeVersion: 'test', refreshedAt: '', models: [], providers: [{ id: 'test-oauth', name: 'Test', authMethod: 'oauth', configured: false, modelCount: 0, availableModelCount: 0, enabled: true }] })
+  let callbacks: OAuthLoginCallbacks | undefined
+  const internals = provider as unknown as { authStorage: { login(id: string, callbacks: OAuthLoginCallbacks): Promise<void> } }
+  internals.authStorage.login = async (_id, value) => {
+    callbacks = value
+    await new Promise<void>((_resolve, reject) => { value.signal?.addEventListener('abort', () => reject(value.signal?.reason), { once: true }) })
+  }
+  const { flowId } = await provider.startOAuth('test-oauth')
+  if (!callbacks) throw new Error('Login did not receive callbacks')
+  return { provider, callbacks, flowId, events, openExternal }
+}
+
+describe('provider OAuth flow', () => {
+  it.each(['file:///tmp/auth', 'javascript:alert(1)', 'https://user:password@example.test/auth'])('checks authorization URL %s before opening or emitting it', async (url) => {
+    const { callbacks, events, openExternal } = await oauthFixture()
+    expect(() => callbacks.onAuth({ url })).toThrow()
+    expect(events).toEqual([])
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('checks liveness again if an authorization event cancels its flow', async () => {
+    const { provider, callbacks, flowId, openExternal } = await oauthFixture()
+    provider.setEventSink((event) => { if (event.type === 'auth') provider.cancelOAuth(flowId) })
+    callbacks.onAuth({ url: 'https://example.test/auth' })
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('validates prompt identity, required responses, selection options and overlapping input', async () => {
+    const { provider, callbacks, flowId, events } = await oauthFixture()
+    const answer = callbacks.onPrompt({ message: 'Authorization code', allowEmpty: false })
+    const prompt = events.find((event) => event.type === 'prompt')
+    if (!prompt || prompt.type !== 'prompt') throw new Error('Missing prompt')
+    expect(provider.respondOAuth(flowId, 'wrong-prompt', 'code')).toBe(false)
+    expect(() => provider.respondOAuth(flowId, prompt.promptId, ' ')).toThrow('required')
+    await expect(callbacks.onPrompt({ message: 'Overlapping prompt' })).rejects.toThrow('overlapping')
+    expect(provider.respondOAuth(flowId, prompt.promptId, 'code')).toBe(true)
+    await expect(answer).resolves.toBe('code')
+    if (!callbacks.onSelect) throw new Error('Missing select callback')
+    const selection = callbacks.onSelect({ message: 'Select account', options: [{ id: 'one', label: 'One' }] })
+    const select = events.find((event) => event.type === 'select')
+    if (!select || select.type !== 'select') throw new Error('Missing selection')
+    expect(() => provider.respondOAuth(flowId, select.promptId, 'other')).toThrow('Invalid provider login selection')
+    expect(provider.respondOAuth(flowId, select.promptId, 'one')).toBe(true)
+    await expect(selection).resolves.toBe('one')
+  })
+
+  it('times out pending input and immediately frees the provider flow slot', async () => {
+    vi.useFakeTimers()
+    const { provider, callbacks, flowId, events } = await oauthFixture()
+    const prompt = callbacks.onPrompt({ message: 'Code' })
+    const rejected = expect(prompt).rejects.toThrow('timed out')
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    await rejected
+    expect(provider.cancelOAuth(flowId)).toBe(false)
+    expect(events.filter((event) => event.type === 'cancelled')).toHaveLength(1)
+    await expect(provider.startOAuth('test-oauth')).resolves.toHaveProperty('flowId')
   })
 })
