@@ -217,7 +217,7 @@ export default function App() {
     && session.id !== activeSession?.id
     && session.projectPath === activeCwd), [activeCwd, activeSession?.id, sessions])
   // Views mount per opened workspace, not per session id; the transcript also outlives a project grant.
-  const workspaceViewKey = `${activeProject?.id ?? 'no-project'}:${workspace.viewKey}`
+  const workspaceViewKey = `${activeHarness}:${workspace.viewKey}`
   const activeTerminalSessionPath = workspace.runtime?.sessionFile ?? activeSession?.filePath
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionMount[]>([])
   const [terminalDrawerRevision, setTerminalDrawerRevision] = useState(0)
