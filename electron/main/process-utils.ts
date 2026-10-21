@@ -622,7 +622,6 @@ export function runProcess(file: string, args: readonly string[], options: {
     child.stderr?.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; collect(stderr, chunk) })
 
     const finish = (): void => {
-      activeChildren.delete(child)
       clearTimeout(timer)
       if (limitKillTimer) clearTimeout(limitKillTimer)
       if (drainTimer) clearTimeout(drainTimer)
@@ -638,7 +637,7 @@ export function runProcess(file: string, args: readonly string[], options: {
     // uncaught 'error' events that crash the main process.
     const failPipe = (error: Error): void => {
       if (settled) return
-      terminateChild(child, 'SIGTERM')
+      terminateChild(child, 'SIGKILL')
       fail(error)
     }
     child.stdout?.on('error', failPipe)

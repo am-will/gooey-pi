@@ -610,7 +610,7 @@ describe('runProcess stdio pipe failures', () => {
       const pipeError = new Error('read EPIPE')
       child.stdout.emit('error', pipeError)
       await expect(pending).rejects.toThrow('read EPIPE')
-      expect(child.killed).toContain('SIGTERM')
+      expect(child.killed).toContain('SIGKILL')
       // A late close event must not settle the promise a second time.
       child.emit('close', null, 'SIGKILL')
       expect(uncaught).toEqual([])
