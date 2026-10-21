@@ -349,8 +349,8 @@ export class SessionService {
   }
 
   private startWatcher(): void {
-    this.nativeArchive.watch(() => this.queueSessionChange(null))
     if (this.sessionWatcher || this.watcherRetry || !this.changeListeners.size) return
+    this.nativeArchive.watch(() => this.queueSessionChange(null))
     try {
       // A missing session root (harness never used on this machine) throws
       // here and lands in the retry below, which watches once the root appears.

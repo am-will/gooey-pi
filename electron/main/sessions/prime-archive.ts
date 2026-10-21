@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { SessionWatchFactory, SessionWatcher } from '../sessions'
 import { isPathWithin } from '../validation'
-import { SessionMetadataCatalog } from './catalog'
+import type { SessionMetadataCatalog } from './catalog'
 
 /** Rust Prime 0.10 retires JSONL files into a sibling directory; explicit --resume paths still open them. */
 export class PrimeSessionArchive {
