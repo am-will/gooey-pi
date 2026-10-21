@@ -2,7 +2,9 @@ import { EventEmitter } from 'node:events'
 import type { BrowserWindow, BrowserWindowConstructorOptions } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({ BrowserWindow: class {}, Menu: {}, nativeTheme: {}, screen: {}, protocol: {}, ipcMain: {}, shell: {} }))
+const dialogs = vi.hoisted(() => ({ showMessageBox: vi.fn(async () => ({ response: 0 })) }))
+
+vi.mock('electron', () => ({ dialog: dialogs, BrowserWindow: class {}, Menu: {}, nativeTheme: {}, screen: {}, protocol: {}, ipcMain: {}, shell: {} }))
 
 import { MainWindowController } from '../../electron/main/main-window'
 
@@ -21,6 +23,7 @@ class TestWindow extends EventEmitter {
 }
 
 function fixture() {
+  dialogs.showMessageBox.mockClear()
   const created: TestWindow[] = []
   const context = {
     shuttingDown: false, shutdownApproved: false, confirmingShutdown: false, keepHidden: false,
@@ -38,6 +41,21 @@ function fixture() {
 }
 
 describe('main window controller', () => {
+  it('revokes a crashed renderer and reloads at most once after reporting it', async () => {
+    const { controller, context, created } = fixture()
+    const opening = controller.ensure()
+    const window = created[0]
+    window.finishLoad()
+    await opening
+    window.webContents.emit('render-process-gone', {}, { reason: 'crashed' })
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledTimes(2))
+    expect(context.ipc.revoke).toHaveBeenCalledWith(42)
+    expect(dialogs.showMessageBox).toHaveBeenCalledOnce()
+    window.webContents.emit('render-process-gone', {}, { reason: 'crashed' })
+    await vi.waitFor(() => expect(dialogs.showMessageBox).toHaveBeenCalledTimes(2))
+    expect(window.loadURL).toHaveBeenCalledTimes(2)
+  })
+
   it('coalesces creation and waits for both renderer load and ready-to-show', async () => {
     const { controller, context, created } = fixture()
     const opening = controller.ensure()

@@ -1,4 +1,5 @@
-import { BrowserWindow, Menu, nativeTheme, screen, type Rectangle, type BrowserWindowConstructorOptions, type Input, type WebContents } from 'electron'
+import { BrowserWindow, dialog, Menu, nativeTheme, screen, type Rectangle, type BrowserWindowConstructorOptions, type Input, type WebContents } from 'electron'
+import { rendererRecovery } from './renderer-recovery'
 import { mainWindowBounds } from './window-bounds'
 import { bindRendererNavigation } from './renderer-navigation'
 import { hardenRenderer } from './renderer-security'
@@ -167,7 +168,21 @@ export class MainWindowController {
       killTerminals: async (ownerId) => { await this.context.killTerminals(ownerId) },
       log: this.context.log,
     })
-    renderer.on('render-process-gone', () => this.context.ipc?.revoke(rendererId))
+    let alreadyRecovered = false
+    renderer.on('render-process-gone', (_event, details) => {
+      this.context.ipc?.revoke(rendererId)
+      if (this.context.shuttingDown || window.isDestroyed() || this.window !== window) return
+      const recovery = rendererRecovery(details.reason, alreadyRecovered)
+      if (recovery.kind === 'ignore') return
+      if (recovery.kind === 'reload') alreadyRecovered = true
+      void Promise.resolve().then(() => dialog.showMessageBox(window, {
+        type: 'warning', message: recovery.message, detail: recovery.detail,
+        buttons: [recovery.kind === 'reload' ? 'Reload window' : 'OK'], noLink: true,
+      })).then(async () => {
+        if (recovery.kind !== 'reload' || this.context.shuttingDown || window.isDestroyed() || this.window !== window) return
+        await loadInitialRenderer(window, this.context.rendererUrl)
+      }).catch((error: unknown) => this.context.log(`GooeyPi could not recover its app view: ${error instanceof Error ? error.message : String(error)}`))
+    })
     let rendererLoaded = false
     let readyToShow = false
     window.once('ready-to-show', () => {
