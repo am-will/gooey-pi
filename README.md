@@ -168,6 +168,8 @@ For suspected vulnerabilities, follow the [security policy](.github/SECURITY.md)
 
 ## Development checks
 
+For custom model endpoints, see [Connect an OpenAI-compatible model endpoint](docs/openai-compatible-providers.md). The [remote-hosts design](docs/remote-hosts-design.md) describes the proposed SSH architecture and decisions needed before implementation.
+
 Run these before submitting a code change:
 
 ```bash
