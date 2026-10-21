@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthStorage } from 'prime-agent'
 import { MAX_CATALOG_PROVIDERS, PrimeProviderService, resolveAvailableModelKeys } from '../../electron/main/providers'
-import type { PrimeModelCatalog } from '../../src/types/api'
+import type { PrimeImplementation, PrimeModelCatalog } from '../../src/types/api'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -481,6 +481,22 @@ describe('Prime CLI credentials', () => {
     expect(offered).toBe(0)
     await providerService.logout('prime-inference')
     expect(readFileSync(configPath, 'utf8')).toBe(config)
+  })
+
+  it('stops using the Prime CLI login after the discovered build changes to Rust', async () => {
+    const { configPath, config } = primeCliHome()
+    let implementation: PrimeImplementation = 'typescript'
+    // Node rejects the RPC argv, exercising the real failed-probe provider fallback.
+    const providerService = new PrimeProviderService({ implementation: () => implementation, executable: process.execPath })
+    expect((await primeInference(providerService)).provider).toMatchObject({ authSource: 'prime_cli' })
+
+    implementation = 'rust'
+    expect((await primeInference(providerService)).provider).toMatchObject({ configured: false, authSource: undefined })
+    await providerService.logout('prime-inference')
+    expect(readFileSync(configPath, 'utf8')).toBe(config)
+
+    implementation = 'typescript'
+    expect((await primeInference(providerService)).provider).toMatchObject({ authSource: 'prime_cli' })
   })
 
   it.each([true, false])('honors a key stored in auth.json (Prime CLI credentials %s)', async (primeCliCredentials) => {
