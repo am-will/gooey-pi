@@ -218,6 +218,44 @@ const processExists = (pid: number): boolean => {
 }
 
 describe('agent RPC command frame bounds', () => {
+  it.each(['workspace lease', 'runtime admission'] as const)('revokes a project start suspended at %s without affecting sibling roots', async (stage) => {
+    const project = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const sibling = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(project.executable)
+    let releaseGate!: () => void
+    let entered!: () => void
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve })
+    const admissionEntered = new Promise<void>((resolve) => { entered = resolve })
+    const releaseLease = vi.fn()
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(({ cwd }) => ({ CLAIM: cwd }))
+    manager.setRuntimeEndListener(ended)
+    manager.setWorkspaceUseProvider(async (cwd) => {
+      if (cwd === project.cwd) {
+        entered()
+        if (stage === 'workspace lease') await gate
+      }
+      return { release: releaseLease }
+    })
+    if (stage === 'runtime admission') (manager as unknown as { runtimeAdmission: Promise<void> }).runtimeAdmission = gate
+    const starting = manager.start({ cwd: project.cwd }).then((info) => ({ info }), (error: unknown) => ({ error }))
+    await admissionEntered
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    await manager.stopForProjectRoots([project.cwd])
+    releaseGate()
+    const outcome = await starting
+    expect(outcome).toMatchObject({ error: expect.objectContaining({ message: expect.stringContaining('Project') }) })
+    expect(manager.list()).toEqual([])
+    expect(releaseLease).toHaveBeenCalledOnce()
+    expect(ended).toHaveBeenCalledExactlyOnceWith({ CLAIM: project.cwd }, undefined)
+    const outside = await manager.start({ cwd: sibling.cwd })
+    expect(outside.cwd).toBe(sibling.cwd)
+    expect(manager.list().map((info) => info.runtimeId)).toEqual([outside.runtimeId])
+    // Removal cancels the overlapping admission, rather than permanently denying a re-granted root.
+    const fresh = await manager.start({ cwd: project.cwd })
+    expect(fresh.cwd).toBe(project.cwd)
+  })
+
   it('holds repository use for the lifetime of a runtime', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
     const manager = managerFor(fake.executable)
