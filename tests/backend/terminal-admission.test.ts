@@ -1,4 +1,4 @@
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { accessSync, constants, copyFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WebContents } from 'electron'
@@ -275,5 +275,36 @@ describe('terminal output backpressure', () => {
     terminal.emitExit()
     await vi.advanceTimersByTimeAsync(100)
     expect(terminal.resume).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('terminal authorization boundaries', () => {
+  it('refuses relative, missing, unapproved shells and renderer-supplied environment options', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    const unapproved = join(cwd, 'unapproved-shell'); copyFileSync(shell, unapproved)
+    await expect(service.create(owner(), { cwd, shell: 'sh' })).rejects.toThrow(/absolute path/)
+    await expect(service.create(owner(), { cwd, shell: join(cwd, 'missing') })).rejects.toThrow(/not executable/)
+    await expect(service.create(owner(), { cwd, shell: unapproved })).rejects.toThrow(/approved|listed/)
+    await expect(service.create(owner(), { cwd, env: { NODE_OPTIONS: 'untrusted' } })).rejects.toThrow(/not supported/)
+    expect(native.spawn).not.toHaveBeenCalled()
+  })
+
+  it('keeps resize, session/context changes and termination isolated to their renderer owner', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    const renderer = owner()
+    const other = owner(200)
+    const { terminalId } = await service.create(renderer, { cwd })
+    expect(() => service.resize(other, terminalId, 80, 24)).toThrow(/not found/)
+    expect(() => service.setActiveContext(other, terminalId, { label: 'x', content: 'x', truncated: false })).toThrow(/not found/)
+    expect(() => service.clearActiveContext(other, terminalId)).toThrow(/not found/)
+    await expect(service.bindSession(other, terminalId, '/session.jsonl')).rejects.toThrow(/not found/)
+    await expect(service.kill(other, terminalId)).resolves.toBe(false)
+    expect(native.spawn.mock.results[0].value.kill).not.toHaveBeenCalled()
+    await expect(service.kill(renderer, terminalId)).resolves.toBe(true)
   })
 })
