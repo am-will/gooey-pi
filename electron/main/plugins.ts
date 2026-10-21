@@ -95,7 +95,6 @@ export function beginPluginDiscoveryShutdown(): void {
 }
 
 export class PluginService {
-  private lastProjectPath: string | undefined
   private readonly knownPathsByOwner = new Map<string, Set<string>>()
   private settingsMutation = Promise.resolve()
   private catalogRevision = 0
@@ -140,7 +139,6 @@ export class PluginService {
   }
 
   private async discover(safeProjectPath: string | undefined, ownerKey: string, revision: number): Promise<PluginCatalog> {
-    if (safeProjectPath) this.lastProjectPath = safeProjectPath
     const [result, builtInSkills, piMcpState] = await Promise.all([
       this.discoverCatalog(this.agentDir, safeProjectPath, resolveExecutable(this.agentPath), this.harness),
       this.builtInSkills(),
@@ -229,7 +227,6 @@ export class PluginService {
     const safeProjectPath = input.scope === 'project'
       ? await this.authorizeProject(input.projectPath!)
       : undefined
-    if (safeProjectPath) this.lastProjectPath = safeProjectPath
     if (this.harness === 'omp') {
       try { return await installOmpExtension(input, this.agentDir, safeProjectPath) }
       finally { this.catalogRevision += 1 }
@@ -293,41 +290,31 @@ export class PluginService {
     let settingsTarget: string | ProjectSettingsPath
     if (input.scope === 'project') {
       const projectPath = await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
-      this.lastProjectPath = projectPath
       settingsTarget = await prepareProjectSettingsPath(projectPath, {
-        segments: [this.harness === 'omp' ? '.omp' : '.pi'], filename: 'mcp.json',
+        segments: HARNESSES[this.harness].projectAgentSegments, filename: 'mcp.json',
       })
     } else {
       settingsTarget = join(this.agentDir, 'mcp.json')
     }
 
     const options = this.harness === 'omp' ? {
-      agentName: 'OMP',
+      agentName: HARNESSES[this.harness].agentName,
       harness: this.harness,
       schema: 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json',
     } : {
-      agentName: 'Pi',
+      agentName: HARNESSES[this.harness].agentName,
       harness: this.harness,
       includeType: false,
       successMessage: `Saved MCP server definition “${input.name}”. Start a new Pi session to load it through pi-mcp-adapter.`,
     }
-    const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
-    const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
-    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
-      const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
-      try {
-        const piAdmissionFailure = await this.piMcpAdmissionFailure()
-        if (piAdmissionFailure) return piAdmissionFailure
-        return await updateMcpSettings(
+    return this.lockedMcpConfigMutation(settingsTarget, async () => {
+      return updateMcpSettings(
           settingsTarget,
           input,
           (path) => this.settingsFingerprint(path),
           options,
         )
-      } finally {
-        await releaseSettings()
-      }
-    }))
+    })
   }
 
   async setMcpEnabled(inputValue: unknown): Promise<ProcessOutcome> {
@@ -338,31 +325,21 @@ export class PluginService {
     let settingsTarget: string | ProjectSettingsPath
     if (input.scope === 'project') {
       const projectPath = await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
-      this.lastProjectPath = projectPath
       settingsTarget = await prepareProjectSettingsPath(projectPath, {
-        segments: [this.harness === 'omp' ? '.omp' : '.pi'], filename: 'mcp.json',
+        segments: HARNESSES[this.harness].projectAgentSegments, filename: 'mcp.json',
       })
     } else {
       settingsTarget = join(this.agentDir, 'mcp.json')
     }
     const agentName = HARNESSES[this.harness].agentName
-    const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
-    const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
-    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
-      const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
-      try {
-        const piAdmissionFailure = await this.piMcpAdmissionFailure()
-        if (piAdmissionFailure) return piAdmissionFailure
-        return await updateMcpState(
+    return this.lockedMcpConfigMutation(settingsTarget, async () => {
+      return updateMcpState(
           settingsTarget,
           input,
           (path) => this.settingsFingerprint(path),
           { agentName, harness: this.harness },
         )
-      } finally {
-        await releaseSettings()
-      }
-    }))
+    })
   }
 
   async mutateCapability(inputValue: unknown): Promise<ProcessOutcome> {
@@ -377,7 +354,6 @@ export class PluginService {
     const safeProjectPath = input.scope === 'project'
       ? await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
       : undefined
-    if (safeProjectPath) this.lastProjectPath = safeProjectPath
     const projectSettings = safeProjectPath
       ? await prepareProjectSettingsPath(safeProjectPath, this.harness === 'prime'
           ? undefined
@@ -420,6 +396,18 @@ export class PluginService {
     ))
   }
 
+  private lockedMcpConfigMutation(target: string | ProjectSettingsPath, mutate: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> {
+    const path = typeof target === 'string' ? target : target.path
+    const verify = typeof target === 'string' ? undefined : target.verify
+    return this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
+      const release = await acquireSettingsLock(`${path}.gooeypi`, verify)
+      try {
+        const admissionFailure = await this.piMcpAdmissionFailure()
+        return admissionFailure ?? await mutate()
+      } finally { await release() }
+    }))
+  }
+
   /** Pi core has no MCP. Do not write adapter configuration until its package is actually installed. */
   private async piMcpAdapterState(): Promise<PiMcpAdapterState | undefined> {
     try {
@@ -450,23 +438,6 @@ export class PluginService {
     if (this.harness !== 'pi') return await operation()
     const release = await acquireSettingsLock(join(this.agentDir, PI_MCP_ADMISSION_LOCK))
     try { return await operation() } finally { await release() }
-  }
-
-  refresh(): Promise<PluginCatalog> {
-    const projectPath = this.lastProjectPath
-    if (!projectPath) return this.listCanonical()
-    // Re-authorize on every refresh: the remembered project may have been
-    // removed (or replaced) since the scope was last used.
-    return this.authorizeProject(projectPath).then(
-      (safeProjectPath) => this.listCanonical(safeProjectPath),
-      (error) => {
-        // Surface the failure once, then forget the stale scope so later
-        // refreshes fall back to the user catalog.
-        if (this.lastProjectPath === projectPath) this.lastProjectPath = undefined
-        this.knownPathsByOwner.delete(`project:${projectPath}`)
-        throw error
-      },
-    )
   }
 
   /** Revokes a removed project's revealable paths. */
