@@ -10,7 +10,7 @@ import { canonicalSessionPath } from '../session-paths'
 import { requireString } from '../validation'
 import { ACTION_TIMEOUT_MS, guardGuestCall, guardGuestDeadline, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
 
-import { AGENT_WORLD_ID, cursorMarkerScript, evaluateScript, readPageScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
+import { evaluateScript, readPageScript, scrollByScript } from './page-scripts'
 
 /**
  * Toolbar navigation and post-attach restoration are fire-and-forget because
@@ -406,12 +406,12 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       const info = await this.pageIO.pageInfo(guest)
       // Show the agent its own pointer in the capture so it can calibrate.
-      if (tab.pointer) await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: cursorMarkerScript(tab.pointer.x, tab.pointer.y) }]), this.actionTimeoutMs).catch(() => undefined)
+      if (tab.pointer) await this.pageIO.updateCursorMarker(guest, tab.pointer)
       let image: Electron.NativeImage
       try {
         image = await guardGuestCall(guest, guest.capturePage(undefined, { stayHidden: true, stayAwake: true }), this.actionTimeoutMs)
       } finally {
-        if (tab.pointer) void guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: removeCursorMarkerScript() }]), this.actionTimeoutMs).catch(() => undefined)
+        if (tab.pointer) void this.pageIO.updateCursorMarker(guest, null)
       }
       const size = image.getSize()
       if (!size.width || !size.height) throw new Error('The browser tab has no visible content to capture yet')

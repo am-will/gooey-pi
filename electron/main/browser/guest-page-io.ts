@@ -1,7 +1,7 @@
 import type { WebContents } from 'electron'
 import { requireRecord } from '../validation'
 import { guardGuestCall } from './guest-call-guard'
-import { AGENT_WORLD_ID, elementAtPointScript, pageInfoScript, refPointScript } from './page-scripts'
+import { AGENT_WORLD_ID, cursorMarkerScript, elementAtPointScript, pageInfoScript, refPointScript, removeCursorMarkerScript } from './page-scripts'
 
 interface PageInfo {
   url: string
@@ -22,6 +22,13 @@ function parseScriptJson(payload: unknown, label: string): Record<string, unknow
 /** Owns bounded reads and point validation for approved browser guests. */
 export class GuestPageIO {
   constructor(private readonly actionTimeoutMs: number) {}
+
+  async updateCursorMarker(guest: WebContents, point: { x: number; y: number } | null): Promise<void> {
+    try {
+      const code = point ? cursorMarkerScript(point.x, point.y) : removeCursorMarkerScript()
+      await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code }]), this.actionTimeoutMs)
+    } catch { /* The marker is optional; a failed overlay must not prevent a screenshot. */ }
+  }
 
   async runPageScript(guest: WebContents, script: string, label: string): Promise<Record<string, unknown>> {
     return parseScriptJson(await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: script }]), this.actionTimeoutMs), label)
