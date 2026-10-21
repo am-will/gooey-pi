@@ -319,6 +319,32 @@ describe('AutomationService', () => {
     expect(run).toHaveBeenCalledOnce()
   })
 
+  it('does not advance an occurrence when persisting its queued run fails', async () => {
+    const stateStore = store()
+    let now = new Date('2030-01-01T00:00:00Z')
+    const run = vi.fn(async () => ({}))
+    const service = new AutomationService(stateStore, {
+      validateTarget: async () => undefined, validateExecution: async () => undefined, run, now: () => now,
+    })
+    const task = await service.create({ prompt: 'Atomic claim', target, timing: onceAt('2030-01-01T00:00:00.010Z'), execution })
+    await service.start()
+    const originalUpdate = stateStore.update.bind(stateStore)
+    const writes = vi.spyOn(stateStore, 'update').mockImplementation((mutator) => originalUpdate((state) => {
+      const result = mutator(state)
+      if (state.schedules.some((candidate) => candidate.runs.some((record) => record.status === 'queued'))) throw new Error('Queued record write failed')
+      return result
+    }))
+    let observed: () => void = () => undefined
+    const failed = new Promise<void>((resolve) => { observed = resolve })
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => { void service.stop(); observed() })
+    try {
+      now = new Date('2030-01-01T00:00:00.010Z')
+      await failed
+      expect(service.get(task.id)).toMatchObject({ status: 'active', nextRunAt: task.nextRunAt, runs: [] })
+      expect(run).not.toHaveBeenCalled()
+    } finally { writes.mockRestore(); logged.mockRestore(); await service.stop() }
+  })
+
   it('records missed occurrences as skipped without dispatching them', async () => {
     const stateStore = store()
     let now = new Date('2030-01-01T00:00:00Z')

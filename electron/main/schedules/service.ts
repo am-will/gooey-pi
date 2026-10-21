@@ -421,33 +421,41 @@ export class AutomationService {
   private async claimAndEnqueue(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
     const scheduledFor = snapshot.nextRunAt
     if (!scheduledFor) return
-    let claimed: AutomationScheduleRecord | undefined
-    await this.store.update((state) => {
+    const next = nextScheduleOccurrence(snapshot.timing, new Date(Date.parse(scheduledFor) + 1))
+    const run = this.createRun(snapshot, 'scheduled', scheduledFor)
+    const claimed = await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
-      if (task?.status !== 'active' || task.nextRunAt !== scheduledFor) return
-      const next = nextScheduleOccurrence(task.timing, new Date(Date.parse(scheduledFor) + 1))
+      if (task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return undefined
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
       task.updatedAt = now.toISOString()
-      claimed = cloneTask(task)
+      this.pushRun(task, run)
+      return cloneTask(task)
     })
-    if (claimed) await this.enqueue(claimed, 'scheduled', scheduledFor)
+    if (claimed) this.queuePersistedRun(claimed, run)
+  }
+
+  private createRun(task: AutomationScheduleRecord, trigger: 'scheduled' | 'manual', scheduledFor: string): ScheduleRunRecord {
+    return {
+      id: randomUUID(), taskId: task.id, taskRevision: task.revision, trigger, scheduledFor,
+      queuedAt: this.now().toISOString(), status: 'queued', execution: structuredClone(task.execution),
+    }
+  }
+
+  private queuePersistedRun(task: AutomationScheduleRecord, run: ScheduleRunRecord): void {
+    this.pending.push({ task: cloneTask(task), runId: run.id })
+    this.changed({ taskId: task.id, reason: 'run' })
+    this.drain()
   }
 
   private async enqueue(task: AutomationScheduleRecord, trigger: 'scheduled' | 'manual', scheduledFor: string): Promise<ScheduleRunRecord> {
-    const now = this.now().toISOString()
-    const run: ScheduleRunRecord = {
-      id: randomUUID(), taskId: task.id, taskRevision: task.revision, trigger, scheduledFor,
-      queuedAt: now, status: 'queued', execution: structuredClone(task.execution),
-    }
+    const run = this.createRun(task, trigger, scheduledFor)
     await this.store.update((state) => {
       const current = state.schedules.find((candidate) => candidate.id === task.id)
       if (!current) throw new Error('Scheduled task was deleted before its run could start')
       this.pushRun(current, run)
     })
-    this.pending.push({ task: cloneTask(task), runId: run.id })
-    this.changed({ taskId: task.id, reason: 'run' })
-    this.drain()
+    this.queuePersistedRun(task, run)
     return structuredClone(run)
   }
 
