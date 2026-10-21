@@ -97,6 +97,15 @@ describe('GitService', () => {
     } finally { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous }
   })
 
+  it('restores both names of a staged rename back to HEAD', async () => {
+    const cwd = repository('gooeypi-git-restore-rename-')
+    git(cwd, 'mv', 'file.txt', 'renamed.txt')
+    await expect(new GitService(async () => cwd).restore(cwd, ['renamed.txt'])).resolves.toBe(true)
+    expect(readFileSync(join(cwd, 'file.txt'), 'utf8')).toBe('base\n')
+    expect(existsSync(join(cwd, 'renamed.txt'))).toBe(false)
+    expect(spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }).stdout).toBe('')
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')
