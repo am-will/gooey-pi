@@ -1389,4 +1389,10 @@ export const englishCatalog = {
   'inspector.files.truncated': 'Large project: the file list stops after {count} entries{scope}, so some deeper paths are not shown or searchable.',
   'inspector.files.perFolder': ' per project folder',
 
+  'children.toolInput': 'Input',
+  'children.toolOutput': 'Output',
+  'children.waitingTool': 'Waiting for tool output.',
+  'children.assistant': 'Child agent',
+  'children.thinking': 'Thinking summary',
+
 } as const satisfies Record<string, Message>

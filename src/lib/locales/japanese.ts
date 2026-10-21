@@ -1362,4 +1362,10 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'inspector.files.truncated': '大きなプロジェクトのため、ファイル一覧は {count} 件{scope}で停止します。深い階層の一部は表示や検索の対象外になります。',
   'inspector.files.perFolder': '（プロジェクトフォルダーごと）',
 
+  'children.toolInput': '入力',
+  'children.toolOutput': '出力',
+  'children.waitingTool': 'ツールの出力を待っています。',
+  'children.assistant': '子エージェント',
+  'children.thinking': '思考の要約',
+
 }
