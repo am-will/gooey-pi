@@ -8,7 +8,7 @@ import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
 import { redactedStderrTail } from '../lib/process-detail'
 import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAssemblyTiming } from './chunk-assembly'
-import { AgentEventForwarder, isDesktopReservedEvent } from './events'
+import { AgentEventForwarder, isDesktopReservedEvent, slimForwardedEvent } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
 import { PendingExtensionUi } from './pending-extension-ui'
@@ -551,7 +551,7 @@ export class RpcRuntime {
       this.compactionEpisode = 'none'
     } else if (value.type === 'auto_retry_start') this.retryPending = true
     else if (value.type === 'auto_retry_end') this.retryPending = false
-    this.emit(value)
+    this.emit(slimForwardedEvent(value))
     if (value.type === 'agent_end' && this.adapter.sessionActionEvents === false) this.endRunActions()
     if (contextUsageMoved) this.publishLiveContextUsage(value.type === 'message_end')
     if (value.type === 'message_end'

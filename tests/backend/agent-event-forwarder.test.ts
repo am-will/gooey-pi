@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AgentEventForwarder } from '../../electron/main/agent-rpc/events'
+import { AgentEventForwarder, slimForwardedEvent } from '../../electron/main/agent-rpc/events'
 import type { PrimeEventEnvelope } from '../../src/types/api'
 
 function forwarder(limits: Partial<{ maxEvents: number; maxEnvelopeBytes: number; maxWindowBytes: number; windowMs: number }> = {}) {
@@ -34,5 +34,24 @@ describe('AgentEventForwarder runtime_exit exemption', () => {
     events.emit({ type: 'runtime_exit', code: 0, expected: true })
     events.emit({ type: 'runtime_exit', code: 0, expected: true })
     expect(delivered.filter(({ event }) => event.type === 'runtime_exit')).toHaveLength(1)
+  })
+})
+
+
+describe('forwarded stream payloads', () => {
+  it('removes repeated partial snapshots while preserving deltas, tool arguments, content and usage', () => {
+    const event = {
+      type: 'message_update', message: { role: 'assistant', usage: { output: 50 }, content: 'full snapshot' },
+      assistantMessageEvent: { type: 'toolcall_end', partial: 'full snapshot', contentIndex: 3, delta: 'delta', content: 'content', toolCall: { id: 'call', name: 'Read', arguments: { path: 'a.ts' } }, futureField: true },
+    }
+    expect(slimForwardedEvent(event)).toEqual({
+      type: 'message_update', message: { role: 'assistant', usage: { output: 50 } },
+      assistantMessageEvent: { type: 'toolcall_end', contentIndex: 3, delta: 'delta', content: 'content', toolCall: { id: 'call', name: 'Read', arguments: { path: 'a.ts' } }, futureField: true },
+    })
+    expect(event.assistantMessageEvent.partial).toBe('full snapshot')
+    const fallback = { type: 'message_update', delta: { type: 'text_delta', delta: 'fallback' } }
+    expect(slimForwardedEvent(fallback)).toEqual(fallback)
+    const complete = { type: 'message_end', message: { content: 'complete response' } }
+    expect(slimForwardedEvent(complete)).toBe(complete)
   })
 })

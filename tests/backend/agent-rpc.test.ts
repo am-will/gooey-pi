@@ -529,8 +529,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     send({ type: 'message_end', message: { role: 'user', content: 'continue' } })
     setTimeout(() => send({
       type: 'message_update',
-      message: { role: 'assistant', usage: { output: 80 } },
-      assistantMessageEvent: { type: 'text_delta', delta: 'x'.repeat(400) },
+      message: { role: 'assistant', usage: { output: 80 }, content: 'x'.repeat(100_000) },
+      assistantMessageEvent: { type: 'text_delta', delta: 'x'.repeat(400), partial: 'x'.repeat(100_000) },
     }), 40)
     setTimeout(() => send({
       type: 'message_update',
@@ -565,6 +565,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const liveUsageIndex = events.findIndex((event) => event.type === 'context_usage'
         && Number((event.contextUsage as { tokens?: number } | undefined)?.tokens) > 40_100)
       expect(liveUsageIndex).toBeGreaterThanOrEqual(0)
+      const streamed = events.find((event) => event.type === 'message_update')
+      expect(streamed?.message).toEqual({ role: 'assistant', usage: { output: 80 } })
+      expect(streamed?.assistantMessageEvent).not.toHaveProperty('partial')
       expect(events.findIndex((event) => event.type === 'agent_end')).toBe(-1)
 
       await waitUntil(() => runtime.snapshot().contextUsage?.tokens === 40_700)
