@@ -1,9 +1,9 @@
+import { errorMessage } from '@/lib/errors'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { SettingsUpdate } from './contracts'
 import { useI18n } from '@/lib/i18n'
 import {
   createDraftState,
-  errorMessage,
   reduceDraftState,
   type DraftAction,
   type DraftState,
@@ -46,8 +46,12 @@ export function DraftSettingField({
     dispatch({ type: 'sync', value: committedValue })
   }, [committedValue, dispatch])
 
-  const commit = useCallback(() => {
-    if (inFlight.current) return inFlight.current
+  const commit = useCallback(function commit(): Promise<void> {
+    if (inFlight.current) {
+      const { pending, revision } = stateRef.current
+      if (!pending || pending.revision === revision) return inFlight.current
+      return inFlight.current.then(() => commit())
+    }
     const current = stateRef.current
     const validationError = validate(current.value)
     if (validationError) {
@@ -59,15 +63,15 @@ export function DraftSettingField({
     const value = normalize(current.value)
     const id = ++nextCommitId.current
     dispatch({ type: 'commit', id, value })
-    const operation = Promise.resolve(onCommit(value))
-      .then(() => { dispatch({ type: 'resolve', id }) })
-      .catch((error: unknown) => { dispatch({ type: 'reject', id, error: errorMessage(error) }) })
+    const operation = Promise.resolve().then(async () => onCommit(value))
+      .then((saved) => { dispatch(saved === false ? { type: 'reject', id, error: errorMessage(undefined, t('settings.draft.saveFailed')) } : { type: 'resolve', id }) })
+      .catch((error: unknown) => { dispatch({ type: 'reject', id, error: errorMessage(error, t('settings.draft.saveFailed')) }) })
       .finally(() => {
         if (inFlight.current === operation) inFlight.current = null
       })
     inFlight.current = operation
     return operation
-  }, [dispatch, normalize, onCommit, validate])
+  }, [dispatch, normalize, onCommit, t, validate])
 
   const onChange = (value: string) => {
     dispatch({ type: 'edit', value, error: validate(value) })

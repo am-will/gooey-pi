@@ -1,5 +1,5 @@
 import { Archive, ArrowLeft, AudioLines, Bot, Boxes, ChevronRight, Info, LockKeyhole, PawPrint, Settings2, Sun, Terminal } from 'lucide-react'
-import { useEffect, useState, type ComponentType } from 'react'
+import { memo, useEffect, useState, type ComponentType } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
@@ -60,7 +60,7 @@ interface SettingsPageProps {
   initialSectionRequestId?: number
 }
 
-export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onClose, onUpdate, onResetBrowser, onOpenDocs, onRefreshProviders, onRefreshHarnesses, onSaveProviderApiKey, onLogoutProvider, onSetProviderEnabled, onSetAllProvidersEnabled, onSetAllProvidersDisabled, onSetModelEnabled, onStartProviderOAuth, archivedSessions, projects, onRestoreSession, initialSection = 'general', initialSectionRequestId = 0 }: SettingsPageProps) {
+export const SettingsPage = memo(function SettingsPage({ settings, meta, providerCatalog, voice, pets, onClose, onUpdate, onResetBrowser, onOpenDocs, onRefreshProviders, onRefreshHarnesses, onSaveProviderApiKey, onLogoutProvider, onSetProviderEnabled, onSetAllProvidersEnabled, onSetAllProvidersDisabled, onSetModelEnabled, onStartProviderOAuth, archivedSessions, projects, onRestoreSession, initialSection = 'general', initialSectionRequestId = 0 }: SettingsPageProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -130,4 +130,4 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onC
       ) : null}
     </div>
   )
-}
+})

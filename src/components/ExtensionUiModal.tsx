@@ -203,7 +203,7 @@ export function ExtensionUiModal({ request, deadline, onRespond, platform = 'dar
   }
 
   return (
-    <Modal title={request.title} onClose={cancel} footer={(
+    <Modal title={request.method === 'questionnaire' ? t('extensionUi.answerTitle', { count: request.total }) : request.title} onClose={cancel} footer={(
       <>
         <button type="button" className="button" onClick={cancel}>{t('common.cancel')}</button>
         {request.method === 'confirm' ? <button type="button" className="button button--primary" onClick={() => onRespond({ confirmed: true })}>{t('common.confirm')}</button> : null}

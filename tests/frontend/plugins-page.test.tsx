@@ -239,6 +239,7 @@ describe('PluginsPage bundled capability controls', () => {
   })
 
   it('disables Prime MCP creation and only submits local stdio servers for OMP', async () => {
+    const refresh = vi.fn(async () => undefined)
     const connect = vi.fn(async () => ({ ok: true, output: 'saved server' }))
     await act(async () => {
       root.render(<PluginsPage
@@ -246,7 +247,7 @@ describe('PluginsPage bundled capability controls', () => {
         askUserEnabled={true} onSetAskUserEnabled={async () => undefined}
         browserEnabled={true} onSetBrowserEnabled={async () => undefined}
         computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined}
-        onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })}
+        onRefresh={refresh} onInstall={async () => ({ ok: true, output: '' })}
         onInstallExtension={async () => ({ ok: true, output: '' })}
         onSetMcpSupport={async () => ({ ok: true, output: '' })}
         onConnectMcp={connect}
@@ -268,7 +269,7 @@ describe('PluginsPage bundled capability controls', () => {
         askUserEnabled={true} onSetAskUserEnabled={async () => undefined}
         browserEnabled={true} onSetBrowserEnabled={async () => undefined}
         computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined}
-        onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })}
+        onRefresh={refresh} onInstall={async () => ({ ok: true, output: '' })}
         onInstallExtension={async () => ({ ok: true, output: '' })} onSetMcpSupport={async () => ({ ok: true, output: '' })}
         onConnectMcp={connect} onSetMcpEnabled={async () => ({ ok: true, output: '' })}
       />)
@@ -288,6 +289,7 @@ describe('PluginsPage bundled capability controls', () => {
     const save = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Save local server')!
     await act(async () => { save.click(); await Promise.resolve(); await Promise.resolve() })
     expect(connect).toHaveBeenCalledWith({ name: 'files', scope: 'user', projectPath: undefined, type: 'stdio', command: 'npx', args: ['-y', 'server-files'] })
+    expect(refresh).not.toHaveBeenCalled()
   })
 
   it('toggles Pi MCP support through the supported adapter lifecycle', async () => {
@@ -453,6 +455,22 @@ describe('PluginsPage bundled capability controls', () => {
     expect(setMcpEnabled).not.toHaveBeenCalled()
     expect(mutateCapability).not.toHaveBeenCalled()
   })
+
+  it('serializes package mutations so another row cannot replace the busy owner', async () => {
+    const records: SkillRecord[] = ['A', 'B'].map((name) => ({ id: name, name, description: name, kind: 'package', location: 'user', enabled: false }))
+    let finish!: (result: { ok: boolean; output: string }) => void
+    const mutate = vi.fn(() => new Promise<{ ok: boolean; output: string }>((resolve) => { finish = resolve }))
+    await act(async () => root.render(<PluginsPage harness="omp" skills={records} warnings={[]} loading={false} askUserEnabled onSetAskUserEnabled={async () => undefined} browserEnabled onSetBrowserEnabled={async () => undefined} computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined} onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })} onInstallExtension={async () => ({ ok: true, output: '' })} onSetMcpSupport={async () => ({ ok: true, output: '' })} onConnectMcp={async () => ({ ok: true, output: '' })} onSetMcpEnabled={async () => ({ ok: true, output: '' })} onMutateCapability={mutate} />))
+    const first = container.querySelector<HTMLButtonElement>('button[aria-label="Enable A"]')!
+    const second = container.querySelector<HTMLButtonElement>('button[aria-label="Enable B"]')!
+    act(() => { first.click(); second.click() })
+    expect(mutate).toHaveBeenCalledTimes(1)
+    expect(first.querySelector('.spin')).not.toBeNull()
+    expect(second.disabled).toBe(true)
+    await act(async () => { finish({ ok: true, output: '' }) })
+    expect(second.disabled).toBe(false)
+  })
+
 })
 
 describe('PluginsPage on Rust Prime', () => {

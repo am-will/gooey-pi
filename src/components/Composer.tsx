@@ -48,7 +48,7 @@ interface ComposerProps {
   effort: PrimeThinkingLevel
   modelsByProvider: ReadonlyMap<string, PrimeModelDescriptor[]>
   providers: PrimeProviderDescriptor[]
-  reasoningLevels: PrimeThinkingLevel[]
+  reasoningLevels: readonly PrimeThinkingLevel[]
   fast: boolean
   fastSupported: boolean
   fastAvailable: boolean

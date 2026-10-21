@@ -1,5 +1,5 @@
 import { ChevronRight, ExternalLink, Gauge, KeyRound, LogIn, LogOut, RefreshCw, Search, Zap } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
 import type { HarnessId, PrimeImplementation, PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '@/types/api'
 import { useI18n, type MessageKey } from '@/lib/i18n'
@@ -49,6 +49,7 @@ export function ProviderSettings({ harness = 'prime', catalog, onRefresh, onSave
   const [apiKeyProvider, setApiKeyProvider] = useState<PrimeProviderDescriptor | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [busyProvider, setBusyProvider] = useState<string | null>(null)
+  const busyRef = useRef(false)
   const [collapsedModelProviders, setCollapsedModelProviders] = useState<ReadonlySet<string>>(() => new Set())
   const [error, setError] = useState('')
   const [apiKeyError, setApiKeyError] = useState('')
@@ -88,13 +89,16 @@ export function ProviderSettings({ harness = 'prime', catalog, onRefresh, onSave
   }, [catalog, providerNames, query])
 
   const run = async (providerId: string, action: () => Promise<void>) => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusyProvider(providerId); setError('')
-    try { await action() } catch (failure) { setError(errorMessage(failure)) } finally { setBusyProvider(null) }
+    try { await action() } catch (failure) { setError(errorMessage(failure)) } finally { busyRef.current = false; setBusyProvider(null) }
   }
 
   const saveApiKey = async () => {
     const provider = apiKeyProvider
-    if (!provider || !apiKey.trim()) return
+    if (!provider || !apiKey.trim() || busyRef.current) return
+    busyRef.current = true
     setBusyProvider(provider.id)
     setApiKeyError('')
     try {
@@ -104,6 +108,7 @@ export function ProviderSettings({ harness = 'prime', catalog, onRefresh, onSave
     } catch (failure) {
       setApiKeyError(errorMessage(failure))
     } finally {
+      busyRef.current = false
       setBusyProvider(null)
     }
   }
@@ -136,7 +141,7 @@ export function ProviderSettings({ harness = 'prime', catalog, onRefresh, onSave
       {error ? <p className="settings-error" role="alert">{error}</p> : null}
       {view === 'providers' ? <div className="provider-list">
         {providers.map((provider) => {
-          const busy = busyProvider === provider.id
+          const busy = Boolean(busyProvider)
           return <div className="provider-row" key={provider.id}>
             <label className="provider-row__toggle" title={provider.enabled ? t('settings.providers.row.hide', { agent: agentName }) : t('settings.providers.row.show', { agent: agentName })}><input type="checkbox" aria-label={t('settings.providers.row.showAria', { name: provider.name })} checked={provider.enabled} disabled={busy} onChange={(event) => void run(provider.id, () => onSetEnabled(provider.id, event.target.checked))} /><i aria-hidden="true"><span /></i></label>
             <div className="provider-row__identity"><strong>{provider.name}</strong><small>{externalAuth ? t('settings.providers.row.externalSummary', { source: provider.authLabel ?? t('settings.providers.auth.cliManaged', { harness }), models: provider.availableModelCount.toLocaleString() }) : authDescription(provider, t)}</small></div>
@@ -161,7 +166,7 @@ export function ProviderSettings({ harness = 'prime', catalog, onRefresh, onSave
               {model.fastModeSupported ? <span><Zap size={11} /> {t('settings.providers.models.fast')}</span> : null}
               <span className={model.available && model.enabled !== false ? 'is-available' : ''}>{model.enabled === false ? (externalAuth ? t('settings.providers.models.hidden') : t('settings.providers.models.disabled')) : externalAuth ? t('settings.providers.models.shown') : model.available ? t('settings.providers.models.available') : t('settings.providers.models.needsCredentials')}</span>
             </div>
-            <label className="provider-row__toggle provider-model-row__toggle" title={model.enabled === false ? t('settings.providers.models.show', { agent: agentName }) : t('settings.providers.models.hide', { agent: agentName })}><input type="checkbox" aria-label={t('settings.providers.models.showAria', { name: model.name })} checked={model.enabled !== false} disabled={busyProvider === `model:${model.key}`} onChange={(event) => void run(`model:${model.key}`, () => onSetModelEnabled(model.key, event.target.checked))} /><i aria-hidden="true"><span /></i></label>
+            <label className="provider-row__toggle provider-model-row__toggle" title={model.enabled === false ? t('settings.providers.models.show', { agent: agentName }) : t('settings.providers.models.hide', { agent: agentName })}><input type="checkbox" aria-label={t('settings.providers.models.showAria', { name: model.name })} checked={model.enabled !== false} disabled={Boolean(busyProvider)} onChange={(event) => void run(`model:${model.key}`, () => onSetModelEnabled(model.key, event.target.checked))} /><i aria-hidden="true"><span /></i></label>
           </div>)}</div>
         </div>})}
       </div>}

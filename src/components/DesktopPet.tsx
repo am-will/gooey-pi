@@ -1,3 +1,4 @@
+import { selectPet } from '@/lib/pets'
 import { AudioWaveform, Mic, MicOff, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -112,7 +113,7 @@ export function DesktopPet({ pets, petId, agentBusy, voiceActive, reduceMotion, 
     return () => window.clearTimeout(timer)
   }, [jumping, reduceMotion])
 
-  const pet = useMemo(() => available.find((item) => item.id === petId) ?? available.find((item) => item.id === 'orb') ?? BUILT_IN_PETS[0], [available, petId])
+  const pet = useMemo(() => selectPet(available, petId), [available, petId])
   const activity: PetActivity = dragging
     ? direction === 'left' ? 'running-left' : 'running-right'
     : jumping ? 'jumping'

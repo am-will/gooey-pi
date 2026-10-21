@@ -1,3 +1,4 @@
+import { clearPetSpriteCache } from '../../src/lib/pet-sprite-cache'
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -44,6 +45,28 @@ describe('PetAvatar', () => {
     })
     return container.querySelector<HTMLImageElement>('.pet-sprite img')!
   }
+
+  it('shares sprites across avatar remounts and reloads after an explicit refresh', async () => {
+    const api = { ...pets, sprite: vi.fn(async () => 'data:image/webp;base64,UklGRgQAAABXRUJQ') }
+    const render = () => act(async () => { root.render(<PetAvatar pet={pet} pets={api} reduceMotion />) })
+    await render()
+    await act(async () => root.render(null))
+    await render()
+    expect(api.sprite).toHaveBeenCalledTimes(1)
+    clearPetSpriteCache(api)
+    await act(async () => root.render(null))
+    await render()
+    expect(api.sprite).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries missing sprites on the next mount', async () => {
+    const api = { ...pets, sprite: vi.fn().mockResolvedValueOnce(null).mockResolvedValue('data:image/webp;base64,UklGRgQAAABXRUJQ') }
+    await act(async () => { root.render(<PetAvatar pet={pet} pets={api} reduceMotion />) })
+    await act(async () => root.render(null))
+    await act(async () => { root.render(<PetAvatar pet={pet} pets={api} reduceMotion />) })
+    expect(api.sprite).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('.pet-sprite img')).not.toBeNull()
+  })
 
   it('maps app activity names to the matching v2.2 atlas rows', async () => {
     expect((await renderActivity('waiting')).style.transform).toBe('translate(0px, -1248px)')

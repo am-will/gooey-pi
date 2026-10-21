@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DEFAULT_SETTINGS } from '@/lib/data'
+import { DEFAULT_SETTINGS } from '@/lib/default-settings'
 import {
   confirmedPanelSettings,
   PANEL_SETTING_KEYS,
@@ -60,7 +60,7 @@ export function useAppSettings({ bridge, reportError }: UseAppSettingsOptions) {
     return patch
   }, [confirmedPanelPatch])
 
-  const updateSettings = useCallback(async (patch: Partial<AppSettings>) => {
+  const updateSettings = useCallback(async (patch: Partial<AppSettings>): Promise<boolean> => {
     const mutation = ++settingsMutationRef.current
     const previous = settingsRef.current
     for (const key of PANEL_SETTING_KEYS) if (key in patch) transientPanelKeysRef.current.delete(key)
@@ -68,7 +68,7 @@ export function useAppSettings({ bridge, reportError }: UseAppSettingsOptions) {
     if (!bridge) {
       confirmedSettingsRef.current = settingsRef.current
       transientPanelKeysRef.current.clear()
-      return
+      return true
     }
     const operation = settingsQueueRef.current.catch(() => undefined).then(async () => {
       const saved = await bridge.settings.update(patch)
@@ -78,9 +78,11 @@ export function useAppSettings({ bridge, reportError }: UseAppSettingsOptions) {
     settingsQueueRef.current = operation.catch(() => undefined)
     try {
       await operation
+      return true
     } catch (error) {
       if (settingsMutationRef.current === mutation) applySettings(confirmedSettingsRef.current, takeConfirmedPanelPatch(confirmedSettingsRef.current))
       reportError(error)
+      return false
     }
   }, [applySettings, bridge, reportError, takeConfirmedPanelPatch])
 
