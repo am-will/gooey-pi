@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { HarnessId } from '../../../src/types/api'
-import { isRecord } from '../validation'
+import { errorCode, isRecord } from '../validation'
 
 const BEGIN = '===== BEGIN GOOEYPI AGENT MESSAGE ====='
 const END = '===== END GOOEYPI AGENT MESSAGE ====='
@@ -51,29 +51,55 @@ function signature(metadata: SignedMetadata, text: string): Buffer {
   return createHmac('sha256', signingKey).update(JSON.stringify(metadata)).update('\0').update(text).digest()
 }
 
-/** Loads the app-local signing key, creating it with owner-only permissions on first use. */
+/** Invalid-key recovery runs only after Electron's single-instance lock is acquired in index.ts.
+ * Fresh creation is atomic even for concurrent creators; invalid-file recovery requires that startup ownership.
+ */
 export function loadOrCreateGooeyPiAgentMessageKey(path: string): Buffer {
-  const readExisting = (): Buffer => {
-    const stat = lstatSync(path)
-    if (!stat.isFile() || stat.size !== KEY_BYTES) throw new Error('The GooeyPi agent-message signing key is invalid')
-    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) chmodSync(path, 0o600)
-    const existing = readFileSync(path)
-    if (existing.length !== KEY_BYTES) throw new Error('The GooeyPi agent-message signing key is invalid')
-    return existing
+  for (;;) {
+    try {
+      const observed = lstatSync(path)
+      if (!observed.isFile() || observed.size !== KEY_BYTES) {
+        const current = lstatSync(path)
+        if (current.dev !== observed.dev || current.ino !== observed.ino || current.size !== observed.size
+          || current.mtimeMs !== observed.mtimeMs || current.mode !== observed.mode) continue
+        renameSync(path, `${path}.invalid-${randomUUID()}`)
+        continue
+      }
+      // Read failures are not evidence of corrupt bytes and must never quarantine the key.
+      const descriptor = openSync(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW))
+      try {
+        const opened = fstatSync(descriptor)
+        if (!opened.isFile() || opened.size !== KEY_BYTES || opened.dev !== observed.dev || opened.ino !== observed.ino) continue
+        const buffer = Buffer.alloc(KEY_BYTES + 1)
+        let bytes = 0
+        while (bytes < buffer.length) {
+          const count = readSync(descriptor, buffer, bytes, buffer.length - bytes, bytes)
+          if (count === 0) break
+          bytes += count
+        }
+        if (bytes !== KEY_BYTES) throw new Error('The GooeyPi agent-message signing key changed while loading')
+        if (process.platform !== 'win32' && (observed.mode & 0o077) !== 0) fchmodSync(descriptor, 0o600)
+        return buffer.subarray(0, KEY_BYTES)
+      } finally { closeSync(descriptor) }
+    } catch (error) {
+      if (errorCode(error) === 'ELOOP') continue
+      if (errorCode(error) !== 'ENOENT') throw error
+    }
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    const created = randomBytes(KEY_BYTES)
+    const temporary = `${path}.tmp-${randomUUID()}`
+    const descriptor = openSync(temporary, 'wx', 0o600)
+    try {
+      try { writeFileSync(descriptor, created); fsyncSync(descriptor) }
+      finally { closeSync(descriptor) }
+      try { linkSync(temporary, path) }
+      catch (error) {
+        if (errorCode(error) !== 'EEXIST') throw error
+        continue
+      }
+      return created
+    } finally { unlinkSync(temporary) }
   }
-  try {
-    return readExisting()
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  const created = randomBytes(KEY_BYTES)
-  try { writeFileSync(path, created, { flag: 'wx', mode: 0o600 }) }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    return readExisting()
-  }
-  return created
 }
 
 export function configureGooeyPiAgentMessageSigning(key: Uint8Array): void {

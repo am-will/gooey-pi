@@ -13,17 +13,16 @@ import type {
   ScheduleTiming,
   HarnessId,
 } from '../../../src/types/api'
-import type { JsonStateStore } from '../store'
+import { createSingleFlight } from '../lib/async'
+import { MAX_SCHEDULED_TASKS, type JsonStateStore } from '../store'
 import { rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
-import {
-  countMissedOccurrences,
-  nextScheduleOccurrence,
-  previewScheduleOccurrences,
-  validateScheduleTiming,
-} from './recurrence'
+import { validateScheduleTiming } from './recurrence'
+import { BoundedRecurrenceEvaluator, RecurrenceEvaluationError, type ScheduleRecurrence } from './recurrence-evaluator'
 
-const MAX_TASKS = 500
 const MAX_CONCURRENT_RUNS = 2
+const MAX_REPORTED_MISSED_OCCURRENCES = 10_000
+const FAILURE_RETRY_MS = 1_000
+const WALL_CLOCK_RECHECK_MS = 15_000
 const DUE_GRACE_MS = 60_000
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
 
@@ -40,6 +39,7 @@ export interface AutomationServiceOptions {
   validatePrompt?(prompt: string, harness: HarnessId): void
   run(task: AutomationScheduleRecord): Promise<ScheduleRunResult>
   now?: () => Date
+  recurrence?: () => ScheduleRecurrence
 }
 
 function titleFromPrompt(prompt: string): string {
@@ -71,21 +71,12 @@ function parseExecution(value: unknown): ScheduleExecution {
 }
 
 function parseTiming(value: unknown, now: Date): ScheduleTiming {
-  const timing = requireRecord(value, 'timing')
-  if (timing.kind === 'once') {
-    rejectUnknownKeys(timing, ['kind', 'at'], 'timing')
-    return validateScheduleTiming({ kind: 'once', at: requireString(timing.at, 'timing.at', { min: 1, max: 64, trim: true }) }, { now })
+  const timing = { ...requireRecord(value, 'timing') }
+  for (const key of ['at', 'dtstartLocal', 'timeZone', 'rrule'] as const) {
+    const field = timing[key]
+    if (typeof field === 'string') timing[key] = field.trim()
   }
-  if (timing.kind === 'rrule') {
-    rejectUnknownKeys(timing, ['kind', 'dtstartLocal', 'timeZone', 'rrule'], 'timing')
-    return validateScheduleTiming({
-      kind: 'rrule',
-      dtstartLocal: requireString(timing.dtstartLocal, 'timing.dtstartLocal', { min: 1, max: 64, trim: true }),
-      timeZone: requireString(timing.timeZone, 'timing.timeZone', { min: 1, max: 128, trim: true }),
-      rrule: requireString(timing.rrule, 'timing.rrule', { min: 1, max: 2_048, trim: true }),
-    }, { now })
-  }
-  throw new TypeError('Invalid schedule timing')
+  return validateScheduleTiming(timing, { now })
 }
 
 function parseInput(value: unknown, now: Date): Omit<ScheduleInput, 'createdBy'> {
@@ -115,53 +106,77 @@ function cloneTask(task: AutomationScheduleRecord): AutomationScheduleRecord { r
 export class AutomationService {
   private readonly listeners = new Set<(event: ScheduleChangeEvent) => void>()
   private readonly now: () => Date
+  private recurrence: ScheduleRecurrence
   private timer: NodeJS.Timeout | null = null
   private closed = false
+  private started = false
   private activeRuns = 0
+  private retryNotBefore = 0
+  private initialization: Promise<void> | null = null
+  private readonly dueWork = createSingleFlight<'due', void>()
   private readonly stopWaiters = new Set<() => void>()
   private readonly pending: Array<{ task: AutomationScheduleRecord; runId: string }> = []
 
   constructor(private readonly store: JsonStateStore, private readonly options: AutomationServiceOptions) {
     this.now = options.now ?? (() => new Date())
+    this.recurrence = options.recurrence?.() ?? new BoundedRecurrenceEvaluator()
   }
 
   async start(): Promise<void> {
+    if (this.initialization) return this.initialization
+    if (this.started) return
+    if (this.closed) this.recurrence = this.options.recurrence?.() ?? new BoundedRecurrenceEvaluator()
     this.closed = false
-    await this.reconcileInterruptedRuns()
-    await this.blockInvalidActivePrompts()
-    await this.recoverMissed()
-    this.armTimer()
+    const operation = (async () => {
+      await this.reconcileInterruptedRuns()
+      if (this.closed) return
+      await this.blockInvalidActivePrompts()
+      if (this.closed) return
+      await this.recoverMissed()
+      if (this.closed) return
+      this.started = true
+      this.armTimer()
+    })()
+    this.initialization = operation
+    try { await operation } finally { if (this.initialization === operation) this.initialization = null }
+  }
+
+  private promptBlockReason(task: AutomationScheduleRecord): string | undefined {
+    try { this.options.validatePrompt?.(task.prompt, task.harness) }
+    catch (error) { if (error instanceof TypeError) return error.message; throw error }
+    return undefined
   }
 
   private async blockInvalidActivePrompts(): Promise<void> {
-    if (!this.options.validatePrompt) return
+    const invalid = this.store.getSchedules().filter((task) => task.status === 'active' && this.promptBlockReason(task) !== undefined)
+    if (invalid.length === 0) return
+    const revisions = new Map(invalid.map((task) => [task.id, task.revision]))
     const updatedAt = this.now().toISOString()
     await this.store.update((state) => {
       for (const task of state.schedules) {
-        if (task.status !== 'active') continue
-        try { this.options.validatePrompt!(task.prompt, task.harness) }
-        catch (error) {
-          if (!(error instanceof TypeError)) throw error
-          task.status = 'blocked'
-          task.blockedReason = error.message
-          task.nextRunAt = undefined
-          task.revision += 1
-          task.updatedAt = updatedAt
-        }
+        if (this.closed || task.status !== 'active' || revisions.get(task.id) !== task.revision) continue
+        const reason = this.promptBlockReason(task)
+        if (reason === undefined) continue
+        task.status = 'blocked'
+        task.blockedReason = reason
+        task.nextRunAt = undefined
+        task.revision += 1
+        task.updatedAt = updatedAt
       }
     })
   }
 
-  /**
-   * Runs persisted as queued/running belong to a previous process; they will
-   * never resume, so surface them as interrupted instead of forever-pending.
-   */
+  /** Only records present before startup can belong to the previous process. */
   private async reconcileInterruptedRuns(): Promise<void> {
+    const unfinished = new Set(this.store.getSchedules().flatMap((task) => task.runs
+      .filter((run) => run.status === 'queued' || run.status === 'running').map((run) => run.id)))
+    if (unfinished.size === 0) return
     const finishedAt = this.now().toISOString()
     await this.store.update((state) => {
+      if (this.closed) return
       for (const task of state.schedules) {
         for (const run of task.runs) {
-          if (run.status !== 'queued' && run.status !== 'running') continue
+          if (!unfinished.has(run.id) || (run.status !== 'queued' && run.status !== 'running')) continue
           run.status = 'interrupted'
           run.finishedAt = finishedAt
           run.error = 'GooeyPi quit before this run could finish.'
@@ -172,9 +187,12 @@ export class AutomationService {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.started = false
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.pending.splice(0)
+    await this.recurrence.close()
+    await Promise.allSettled([this.initialization, this.dueWork.get('due')].filter((operation) => operation !== null && operation !== undefined))
     if (this.activeRuns === 0) return
     await new Promise<void>((resolveStop) => this.stopWaiters.add(resolveStop))
   }
@@ -185,11 +203,11 @@ export class AutomationService {
   }
 
   hasActiveSchedules(): boolean {
-    return this.store.snapshot().schedules.some((task) => task.status === 'active')
+    return this.store.getSchedules().some((task) => task.status === 'active')
   }
 
   list(harness?: HarnessId): AutomationScheduleRecord[] {
-    return this.store.snapshot().schedules.filter((task) => harness === undefined || task.harness === harness).map(cloneTask).sort((left, right) => {
+    return this.store.getSchedules().filter((task) => harness === undefined || task.harness === harness).map(cloneTask).sort((left, right) => {
       const next = (left.nextRunAt ?? 'z').localeCompare(right.nextRunAt ?? 'z')
       return next || right.updatedAt.localeCompare(left.updatedAt)
     })
@@ -197,17 +215,17 @@ export class AutomationService {
 
   get(idValue: unknown): AutomationScheduleRecord {
     const id = requireId(idValue, 'schedule id')
-    const task = this.store.snapshot().schedules.find((candidate) => candidate.id === id)
+    const task = this.store.getSchedules().find((candidate) => candidate.id === id)
     if (!task) throw new Error('Scheduled task was not found')
     return cloneTask(task)
   }
 
-  preview(timingValue: unknown, countValue: unknown = 3): SchedulePreview {
+  async preview(timingValue: unknown, countValue: unknown = 3): Promise<SchedulePreview> {
     const count = Number(countValue)
     if (!Number.isSafeInteger(count) || count < 1 || count > 10) throw new TypeError('Preview count must be between 1 and 10')
     const now = this.now()
     const timing = parseTiming(timingValue, now)
-    return { timing, occurrences: previewScheduleOccurrences(timing, count, now) }
+    return { timing, occurrences: await this.recurrence.preview(timing, count, now) }
   }
 
   async create(inputValue: unknown, createdBy: 'user' | 'agent' = 'user', harness: HarnessId = 'prime'): Promise<AutomationScheduleRecord> {
@@ -215,7 +233,7 @@ export class AutomationService {
     const input = parseInput(inputValue, now)
     this.options.validatePrompt?.(input.prompt, harness)
     await Promise.all([this.options.validateTarget(input.target, harness), this.options.validateExecution(input.execution, harness)])
-    const nextRunAt = nextScheduleOccurrence(input.timing, new Date(now.getTime() - 1))
+    const nextRunAt = await this.recurrence.next(input.timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new TypeError('Schedule has no future occurrence')
     const task: AutomationScheduleRecord = {
       schemaVersion: 1,
@@ -235,7 +253,8 @@ export class AutomationService {
       runs: [],
     }
     await this.store.update((state) => {
-      if (state.schedules.length >= MAX_TASKS) throw new Error(`GooeyPi supports at most ${MAX_TASKS} scheduled tasks`)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
+      if (state.schedules.length >= MAX_SCHEDULED_TASKS) throw new Error(`GooeyPi supports at most ${MAX_SCHEDULED_TASKS} scheduled tasks`)
       state.schedules.push(task)
     })
     this.changed({ taskId: task.id, reason: 'created' })
@@ -255,11 +274,12 @@ export class AutomationService {
     this.options.validatePrompt?.(prompt, current.harness)
     await Promise.all([this.options.validateTarget(target, current.harness), this.options.validateExecution(execution, current.harness)])
     const timing = patch.timing ?? current.timing
-    const nextRunAt = nextScheduleOccurrence(timing, new Date(now.getTime() - 1))
+    const nextRunAt = await this.recurrence.next(timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new TypeError('Schedule has no future occurrence')
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!task) throw new Error('Scheduled task was not found')
       if (task.revision !== patch.revision) throw new Error('Scheduled task changed; reload it before saving')
       updated = {
@@ -270,10 +290,10 @@ export class AutomationService {
         target,
         timing,
         execution,
-        status: 'active',
-        blockedReason: undefined,
+        status: task.status,
+        blockedReason: task.blockedReason,
         updatedAt: now.toISOString(),
-        nextRunAt,
+        nextRunAt: task.status === 'active' ? nextRunAt : undefined,
       }
       Object.assign(task, updated)
     })
@@ -290,12 +310,14 @@ export class AutomationService {
     const current = this.get(id)
     this.options.validatePrompt?.(current.prompt, current.harness)
     await Promise.all([this.options.validateTarget(current.target, current.harness), this.options.validateExecution(current.execution, current.harness)])
-    const nextRunAt = nextScheduleOccurrence(current.timing, new Date(now.getTime() - 1))
+    const nextRunAt = await this.recurrence.next(current.timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new Error('This schedule has no future occurrence')
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!task) throw new Error('Scheduled task was not found')
+      if (task.revision !== current.revision) throw new Error('Scheduled task changed; reload it before resuming')
       task.status = 'active'
       task.blockedReason = undefined
       task.nextRunAt = nextRunAt
@@ -344,6 +366,7 @@ export class AutomationService {
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!task) throw new Error('Scheduled task was not found')
       task.status = status
       task.nextRunAt = undefined
@@ -361,17 +384,21 @@ export class AutomationService {
     if (this.closed) return
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
-    const next = this.store.snapshot().schedules
+    const next = this.store.getSchedules()
       .filter((task) => task.status === 'active' && task.nextRunAt)
       .map((task) => Date.parse(task.nextRunAt!))
       .filter(Number.isFinite)
       .reduce<number | undefined>((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined)
     if (next === undefined) return
-    const delay = Math.max(0, Math.min(2_147_483_647, next - this.now().getTime()))
+    const delay = Math.max(this.retryNotBefore - this.now().getTime(), 0, Math.min(WALL_CLOCK_RECHECK_MS, next - this.now().getTime()))
     this.timer = setTimeout(() => {
       this.timer = null
       void this.processDue()
-        .catch((error) => console.error('Scheduled task processing failed:', error))
+        .then(() => { this.retryNotBefore = 0 })
+        .catch((error) => {
+          this.retryNotBefore = this.now().getTime() + FAILURE_RETRY_MS
+          console.error('Scheduled task processing failed:', error)
+        })
         .finally(() => this.armTimer())
     }, delay)
     this.timer.unref()
@@ -379,76 +406,115 @@ export class AutomationService {
 
   private async recoverMissed(): Promise<void> {
     const now = this.now()
-    const snapshot = this.store.snapshot().schedules
+    const snapshot = this.store.getSchedules()
     for (const task of snapshot) {
       if (task.status !== 'active' || !task.nextRunAt || Date.parse(task.nextRunAt) >= now.getTime() - DUE_GRACE_MS) continue
-      await this.skipMissed(task, now)
+      if (this.closed) return
+      try { await this.skipMissed(task, now) } catch (error) { await this.blockRecurrenceFailure(task, error) }
     }
   }
 
-  private async processDue(): Promise<void> {
+  private processDue(): Promise<void> {
+    return this.dueWork.run('due', () => this.processDueTasks())
+  }
+
+  private async processDueTasks(): Promise<void> {
     if (this.closed) return
     const now = this.now()
-    const due = this.store.snapshot().schedules
+    const due = this.store.getSchedules()
       .filter((task) => task.status === 'active' && task.nextRunAt && Date.parse(task.nextRunAt) <= now.getTime())
       .sort((left, right) => left.nextRunAt!.localeCompare(right.nextRunAt!))
     for (const task of due) {
-      if (now.getTime() - Date.parse(task.nextRunAt!) > DUE_GRACE_MS) await this.skipMissed(task, now)
-      else await this.claimAndEnqueue(task, now)
+      if (this.closed) return
+      try {
+        if (now.getTime() - Date.parse(task.nextRunAt!) > DUE_GRACE_MS) await this.skipMissed(task, now)
+        else await this.claimAndEnqueue(task, now)
+      } catch (error) { await this.blockRecurrenceFailure(task, error) }
     }
+  }
+
+  private async blockRecurrenceFailure(snapshot: AutomationScheduleRecord, error: unknown): Promise<void> {
+    if (this.closed) return
+    if (!(error instanceof RecurrenceEvaluationError)) throw error
+    const blocked = await this.store.update((state) => {
+      const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
+      if (this.closed || task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== snapshot.nextRunAt) return false
+      task.status = 'blocked'
+      task.blockedReason = error.message.slice(0, 4_000)
+      task.nextRunAt = undefined
+      task.revision += 1
+      task.updatedAt = this.now().toISOString()
+      return true
+    })
+    if (blocked) this.changed({ taskId: snapshot.id, reason: 'updated' })
   }
 
   private async skipMissed(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
     const scheduledFor = snapshot.nextRunAt
     if (!scheduledFor) return
-    const missed = countMissedOccurrences(snapshot.timing, new Date(scheduledFor), now, 10_000)
+    const missed = await this.recurrence.countMissed(snapshot.timing, new Date(scheduledFor), now, MAX_REPORTED_MISSED_OCCURRENCES)
+    const next = await this.recurrence.next(snapshot.timing, now)
     const run: ScheduleRunRecord = {
       id: randomUUID(), taskId: snapshot.id, taskRevision: snapshot.revision, trigger: 'scheduled',
       scheduledFor, queuedAt: now.toISOString(), finishedAt: now.toISOString(), status: 'skipped',
       execution: snapshot.execution, skippedCount: Math.max(1, missed), error: 'GooeyPi was not available when this task was due.',
     }
-    await this.store.update((state) => {
+    const skipped = await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
-      if (task?.status !== 'active' || task.nextRunAt !== scheduledFor) return
+      if (this.closed || task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return
       this.pushRun(task, run)
-      const next = nextScheduleOccurrence(task.timing, now)
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
       task.updatedAt = now.toISOString()
+      return true
     })
-    this.changed({ taskId: snapshot.id, reason: 'run' })
+    if (skipped) this.changed({ taskId: snapshot.id, reason: 'run' })
   }
 
   private async claimAndEnqueue(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
     const scheduledFor = snapshot.nextRunAt
     if (!scheduledFor) return
-    let claimed: AutomationScheduleRecord | undefined
-    await this.store.update((state) => {
+    const next = await this.recurrence.next(snapshot.timing, new Date(Date.parse(scheduledFor) + 1))
+    const run = this.createRun(snapshot, 'scheduled', scheduledFor)
+    const claimed = await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
-      if (task?.status !== 'active' || task.nextRunAt !== scheduledFor) return
-      const next = nextScheduleOccurrence(task.timing, new Date(Date.parse(scheduledFor) + 1))
+      if (this.closed || task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return undefined
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
       task.updatedAt = now.toISOString()
-      claimed = cloneTask(task)
+      this.pushRun(task, run)
+      return cloneTask(task)
     })
-    if (claimed) await this.enqueue(claimed, 'scheduled', scheduledFor)
+    if (claimed) this.queuePersistedRun(claimed, run)
   }
 
-  private async enqueue(task: AutomationScheduleRecord, trigger: 'scheduled' | 'manual', scheduledFor: string): Promise<ScheduleRunRecord> {
-    const now = this.now().toISOString()
-    const run: ScheduleRunRecord = {
+  private createRun(task: AutomationScheduleRecord, trigger: 'scheduled' | 'manual', scheduledFor: string): ScheduleRunRecord {
+    return {
       id: randomUUID(), taskId: task.id, taskRevision: task.revision, trigger, scheduledFor,
-      queuedAt: now, status: 'queued', execution: structuredClone(task.execution),
+      queuedAt: this.now().toISOString(), status: 'queued', execution: structuredClone(task.execution),
     }
-    await this.store.update((state) => {
-      const current = state.schedules.find((candidate) => candidate.id === task.id)
-      if (!current) throw new Error('Scheduled task was deleted before its run could start')
-      this.pushRun(current, run)
-    })
+  }
+
+  private queuePersistedRun(task: AutomationScheduleRecord, run: ScheduleRunRecord): void {
+    if (this.closed) return
     this.pending.push({ task: cloneTask(task), runId: run.id })
     this.changed({ taskId: task.id, reason: 'run' })
     this.drain()
+  }
+
+  private async enqueue(task: AutomationScheduleRecord, trigger: 'scheduled' | 'manual', scheduledFor: string): Promise<ScheduleRunRecord> {
+    const run = this.createRun(task, trigger, scheduledFor)
+    await this.store.update((state) => {
+      const current = state.schedules.find((candidate) => candidate.id === task.id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
+      if (!current) throw new Error('Scheduled task was deleted before its run could start')
+      if (current.revision !== task.revision) throw new Error('Scheduled task changed before its run could start')
+      if (trigger === 'manual' && current.runs.some((candidate) => candidate.trigger === 'manual' && candidate.taskRevision === task.revision && candidate.status === 'queued')) {
+        throw new Error('A manual run is already queued for this scheduled task')
+      }
+      this.pushRun(current, run)
+    })
+    this.queuePersistedRun(task, run)
     return structuredClone(run)
   }
 
@@ -475,6 +541,7 @@ export class AutomationService {
       this.changed({ taskId: task.id, reason: 'run' })
       return
     }
+    this.changed({ taskId: task.id, reason: 'run' })
     try {
       const result = await this.options.run(task)
       await this.updateRun(task.id, runId, { status: 'succeeded', finishedAt: this.now().toISOString(), ...result })
@@ -497,6 +564,7 @@ export class AutomationService {
 
   private async markRunStarted(taskId: string, runId: string, expectedRevision: number, startedAt: string): Promise<boolean> {
     return this.store.update((state) => {
+      if (this.closed) return false
       const task = state.schedules.find((candidate) => candidate.id === taskId)
       if (!task) return false
       const run = task.runs.find((candidate) => candidate.id === runId)

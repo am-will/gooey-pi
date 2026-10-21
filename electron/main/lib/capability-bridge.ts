@@ -54,7 +54,7 @@ export abstract class CapabilityBridge {
   /** Environment handed to the agent child; `url` points at this bridge. */
   protected abstract environmentEntries(url: string, token: string): NodeJS.ProcessEnv
   /** Handle one authenticated, rate-limited, parsed call. */
-  protected abstract dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim): Promise<unknown>
+  protected abstract dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim, signal: AbortSignal): Promise<unknown>
 
   async start(): Promise<void> {
     if (this.server) return
@@ -77,6 +77,13 @@ export abstract class CapabilityBridge {
     const token = randomBytes(32).toString('base64url')
     this.claims.set(token, { token, ...scope, expiresAt: Date.now() + TOKEN_TTL_MS, windowStartedAt: Date.now(), requests: 0 })
     return this.environmentEntries(`http://127.0.0.1:${this.port}/v1/call`, token)
+  }
+
+  /** Attach a newly discovered session file once; an existing capability scope never changes. */
+  bindSession(token: string | undefined, sessionFile: string | undefined): void {
+    if (!token || !sessionFile) return
+    const claim = this.claimForToken(token)
+    if (claim && !claim.sessionPath) claim.sessionPath = sessionFile
   }
 
   protected claimForToken(token: string): CapabilityClaim | undefined {
@@ -106,6 +113,9 @@ export abstract class CapabilityBridge {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const controller = new AbortController()
+    const onClose = () => { if (!response.writableFinished) controller.abort(new Error('Capability request cancelled')) }
+    response.once('close', onClose)
     try {
       if (request.method !== 'POST' || request.url !== '/v1/call' || request.headers.origin !== undefined) {
         send(response, 404, { ok: false, error: 'Not found' }); return
@@ -129,14 +139,16 @@ export abstract class CapabilityBridge {
       // the exact claim object at the dispatch boundary so revocation cannot be raced.
       if (this.claims.get(claim.token) !== claim) { send(response, 401, { ok: false, error: 'Capability expired' }); return }
       if (claim.expiresAt <= Date.now()) { this.revoke(claim.token); send(response, 401, { ok: false, error: 'Capability expired' }); return }
-      const result = await this.dispatch(method, params, claim)
+      controller.signal.throwIfAborted()
+      const result = await this.dispatch(method, params, claim, controller.signal)
       send(response, 200, { ok: true, result })
     } catch (error) {
+      if (response.destroyed) return
       send(response, error instanceof SyntaxError || error instanceof TypeError ? 400 : 409, {
         ok: false,
         error: error instanceof Error ? error.message.slice(0, 4_000) : String(error).slice(0, 4_000),
       })
-    }
+    } finally { response.off('close', onClose) }
   }
 
   private readBody(request: IncomingMessage): Promise<string> {

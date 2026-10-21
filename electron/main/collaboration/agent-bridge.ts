@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { HarnessId, PrimeModelDescriptor, RuntimeInfo, SessionRecord, TranscriptMessage } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import { streamingBehaviorForIntent } from '../../../src/lib/session-actions'
+import { isRuntimeIdle } from '../../../src/lib/session-actions'
+import { startPromptedRuntime } from '../delegated-task'
 import type { AgentRpcManager } from '../agent-rpc'
+import { createKeyedMutex, createSingleFlight } from '../lib/async'
 import { CapabilityBridge, type CapabilityClaim } from '../lib/capability-bridge'
 import type { ModelCatalogProvider } from '../model-catalog'
-import { availableModels, rankedModelMatches, resolveModel, resolveReasoning } from '../model-selection'
+import { availableModels, modelListing, resolveModel } from '../model-selection'
 import { requireBoolean, requireId, requireInteger, requireString } from '../validation'
 import { encodeGooeyPiAgentMessage } from './message-envelope'
 
@@ -24,20 +26,28 @@ const MAX_ACTIVE_WAITS_PER_TOKEN = 2
 
 interface CollaborationWaitClock {
   now(): number
-  setTimeout(callback: () => void, delayMs: number): { unref(): void }
+  setTimeout(callback: () => void, delayMs: number): { unref(): void; cancel(): void }
 }
 
 const nativeWaitClock: CollaborationWaitClock = {
   now: () => Date.now(),
-  setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+  setTimeout: (callback, delayMs) => {
+    const timer = globalThis.setTimeout(callback, delayMs)
+    return { unref: () => timer.unref(), cancel: () => globalThis.clearTimeout(timer) }
+  },
 }
 
-async function delayUntil(targetTime: number, clock: CollaborationWaitClock): Promise<void> {
+async function delayUntil(targetTime: number, clock: CollaborationWaitClock, signal: AbortSignal): Promise<void> {
   while (true) {
+    signal.throwIfAborted()
     const remaining = targetTime - clock.now()
     if (remaining <= 0) return
-    await new Promise<void>((resolveDelay) => {
-      const timer = clock.setTimeout(resolveDelay, remaining)
+    await new Promise<void>((resolveDelay, reject) => {
+      const finish = () => { signal.removeEventListener('abort', abort); resolveDelay() }
+      const timer = clock.setTimeout(finish, remaining)
+      const abort = () => { timer.cancel(); signal.removeEventListener('abort', abort); reject(signal.reason) }
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
       timer.unref()
     })
   }
@@ -148,8 +158,8 @@ function cursorFor(session: SessionRecord, messages: CollaborationMessage[], liv
 export class AgentCollaborationBridge extends CapabilityBridge {
   protected readonly rateLimit = 120
   protected readonly rateLimitError = 'Session collaboration rate limit exceeded; slow down and retry shortly'
-  private readonly waking = new Map<string, Promise<RuntimeInfo>>()
-  private readonly deliveries = new Map<string, Promise<void>>()
+  private readonly waking = createSingleFlight<string, RuntimeInfo>()
+  private readonly deliveries = createKeyedMutex<string>()
   private readonly sourcesByToken = new Map<string, CollaborationTarget>()
   private readonly activeWaitsByToken = new Map<string, number>()
   private readonly activeWaitTargets = new Set<string>()
@@ -190,7 +200,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     }
     if (runtimeId && !sessionFile) this.pendingRuntimeTokens.set(runtimeId, token)
     if (!sessionFile) return
-    if (!claim.sessionPath) claim.sessionPath = sessionFile
+    super.bindSession(token, sessionFile)
     if (runtimeId) this.pendingRuntimeTokens.delete(runtimeId)
   }
 
@@ -199,7 +209,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     if (token) this.bindSession(token, sessionFile, runtimeId)
   }
 
-  protected async dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim): Promise<unknown> {
+  protected async dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim, signal: AbortSignal): Promise<unknown> {
     const source = await this.sourceFor(claim)
     if (method === 'list') return this.listPeers(source)
     if (method === 'models') return this.listModels(source, params.query)
@@ -207,7 +217,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     const targetId = requireId(params.target_session_id, 'target_session_id')
     if (method === 'wait') return this.withWaitAdmission(claim, targetId, async () => {
       const target = await this.targetFor(source, targetId)
-      return this.wait(target, params.after_cursor, params.timeout_ms)
+      return this.wait(target, params.after_cursor, params.timeout_ms, signal)
     })
     const target = await this.targetFor(source, targetId)
     if (method === 'read') return this.snapshot(target)
@@ -267,14 +277,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
   private async listModels(source: CollaborationTarget, rawQuery: unknown): Promise<Record<string, unknown>> {
     const query = rawQuery === undefined ? '' : requireString(rawQuery, 'query', { max: 256, trim: true })
     const available = await this.modelsFor(source)
-    const matches = query ? rankedModelMatches(query, available) : available
-    const models = matches.slice(0, 100).map((model) => ({
-      key: model.key,
-      name: model.name,
-      provider: model.provider,
-      reasoning_levels: model.availableThinkingLevels,
-    }))
-    return { models, matched: matches.length, returned: models.length, truncated: matches.length > models.length }
+    return modelListing(query, available)
   }
 
   private async create(source: CollaborationTarget, params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -285,47 +288,20 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     const reasoningQuery = params.reasoning === undefined ? undefined : requireString(params.reasoning, 'reasoning', { min: 1, max: 64, trim: true })
     const fast = params.fast === undefined ? undefined : requireBoolean(params.fast, 'fast')
     const selectedModel = modelQuery ? resolveModel(modelQuery, await this.modelsFor(source)) : undefined
-    const selectedReasoning = selectedModel && reasoningQuery
-      ? resolveReasoning(reasoningQuery, selectedModel.availableThinkingLevels)
-      : undefined
     const manager = source.manager
-    const runtime = await manager.start({
+    const { runtime: current, reasoning: appliedReasoning } = await startPromptedRuntime(manager, {
       cwd: source.session.projectPath,
-      ...(selectedModel ? { model: selectedModel.key } : {}),
-      ...(selectedReasoning ? { thinking: selectedReasoning } : {}),
-      ...(fast !== undefined ? { fast } : {}),
+      model: selectedModel, reasoningQuery, prompt, title, fast,
+      missingSessionMessage: 'The harness accepted the prompt but did not create a visible session. The session was not reported as created.',
+      onAbandon: (runtimeId) => { this.pendingRuntimeTokens.delete(runtimeId) },
     })
-    let appliedReasoning = selectedReasoning
-    try {
-      if (!selectedModel && reasoningQuery) {
-        appliedReasoning = resolveReasoning(reasoningQuery, runtime.availableThinkingLevels ?? [])
-        await manager.command(runtime.runtimeId, { type: 'set_thinking_level', level: appliedReasoning })
-      }
-      await manager.command(runtime.runtimeId, {
-        type: 'prompt',
-        message: prompt,
-        streamingBehavior: streamingBehaviorForIntent('queue'),
-      })
-      if (title) await manager.command(runtime.runtimeId, { type: 'set_session_name', name: title }).catch(() => undefined)
-      await manager.command(runtime.runtimeId, { type: 'get_state' })
-    } catch (error) {
-      this.pendingRuntimeTokens.delete(runtime.runtimeId)
-      await manager.stop(runtime.runtimeId).catch(() => false)
-      throw error
-    }
-    const current = manager.list().find((candidate) => candidate.runtimeId === runtime.runtimeId) ?? runtime
-    if (!current.sessionFile) {
-      this.pendingRuntimeTokens.delete(runtime.runtimeId)
-      await manager.stop(runtime.runtimeId).catch(() => false)
-      throw new Error('The harness accepted the prompt but did not create a visible session. The session was not reported as created.')
-    }
     this.bindRuntimeSession(current.runtimeId, current.sessionFile)
     const sessionPath = resolve(current.sessionFile)
     const created = (await source.service.list(source.session.projectPath, false, true))
       .find((candidate) => candidate.depth === 0 && resolve(candidate.filePath) === sessionPath)
     if (!created) {
-      this.pendingRuntimeTokens.delete(runtime.runtimeId)
-      await manager.stop(runtime.runtimeId).catch(() => false)
+      this.pendingRuntimeTokens.delete(current.runtimeId)
+      await manager.stop(current.runtimeId).catch(() => false)
       throw new Error('The harness created a runtime but its session is not yet readable from GooeyPi')
     }
     return {
@@ -388,33 +364,19 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       fromSessionId: source.session.id,
       text: message,
     })
-    const busy = runtime.isStreaming || runtime.isCompacting || runtime.sessionActions?.active
-    await target.manager.command(runtime.runtimeId, { type: busy ? 'follow_up' : 'prompt', message: attribution })
+    const current = target.manager.list().find((candidate) => candidate.runtimeId === runtime.runtimeId) ?? runtime
+    const busy = !isRuntimeIdle(current)
+    await target.manager.command(current.runtimeId, { type: busy ? 'follow_up' : 'prompt', message: attribution })
     return { delivered: true, target_session_id: target.session.id, awakened: !existing, queued: Boolean(busy), cursor_before: before.cursor }
   }
 
   private async wake(target: CollaborationTarget): Promise<RuntimeInfo> {
     const key = `${target.session.harness}:${resolve(target.session.filePath)}`
-    const existing = this.waking.get(key)
-    if (existing) return existing
-    const pending = target.manager.start({ cwd: target.session.projectPath, sessionPath: target.session.filePath })
-    this.waking.set(key, pending)
-    try { return await pending }
-    finally { if (this.waking.get(key) === pending) this.waking.delete(key) }
+    return this.waking.run(key, () => target.manager.start({ cwd: target.session.projectPath, sessionPath: target.session.filePath }))
   }
 
-  private async withDeliveryLock<T>(target: CollaborationTarget, action: () => Promise<T>): Promise<T> {
-    const key = `${target.session.harness}:${resolve(target.session.filePath)}`
-    const previous = this.deliveries.get(key) ?? Promise.resolve()
-    let release!: () => void
-    const current = new Promise<void>((resolveCurrent) => { release = resolveCurrent })
-    this.deliveries.set(key, current)
-    await previous.catch(() => undefined)
-    try { return await action() }
-    finally {
-      release()
-      if (this.deliveries.get(key) === current) this.deliveries.delete(key)
-    }
+  private withDeliveryLock<T>(target: CollaborationTarget, action: () => Promise<T>): Promise<T> {
+    return this.deliveries.run(`${target.session.harness}:${resolve(target.session.filePath)}`, action)
   }
 
   private async withWaitAdmission<T>(claim: CapabilityClaim, targetId: string, action: () => Promise<T>): Promise<T> {
@@ -442,24 +404,27 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     finally { this.activeCreations.delete(claim.token) }
   }
 
-  private async wait(target: CollaborationTarget, rawCursor: unknown, rawTimeout: unknown): Promise<CollaborationSnapshot & { timed_out: boolean }> {
+  private async wait(target: CollaborationTarget, rawCursor: unknown, rawTimeout: unknown, signal: AbortSignal): Promise<CollaborationSnapshot & { timed_out: boolean }> {
     const afterCursor = rawCursor === undefined ? undefined : requireString(rawCursor, 'after_cursor', { min: 1, max: 128, trim: true })
     const timeoutMs = rawTimeout === undefined ? 15_000 : requireInteger(rawTimeout, 'timeout_ms', 0, MAX_WAIT_MS)
     const startedAt = this.waitClock.now()
     const deadline = startedAt + timeoutMs
+    signal.throwIfAborted()
     let snapshot = await this.snapshot(target)
+    signal.throwIfAborted()
     while (this.waitClock.now() < deadline) {
       const runtime = target.manager.getForSession(target.session.filePath)
-      const idle = !runtime || (!runtime.isStreaming && !runtime.isCompacting && !runtime.sessionActions?.active && (runtime.sessionActions?.queuedCount ?? 0) === 0)
+      const idle = !runtime || isRuntimeIdle(runtime)
       if (idle && (afterCursor === undefined || snapshot.cursor !== afterCursor)) return { ...snapshot, timed_out: false }
       // Busy runtimes need only a cheap in-memory state probe. Transcript
       // reads resume at a bounded cadence once the target is idle/offline.
       // Re-arm an early timer wake until the intended poll instant so a short
       // wait cannot perform multiple transcript reads at its deadline.
       const nextPollAt = Math.min(deadline, this.waitClock.now() + (idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
-      await delayUntil(nextPollAt, this.waitClock)
+      await delayUntil(nextPollAt, this.waitClock, signal)
       if (idle) {
         snapshot = await this.snapshot(target)
+        signal.throwIfAborted()
         if (afterCursor === undefined || snapshot.cursor !== afterCursor) return { ...snapshot, timed_out: false }
       }
     }

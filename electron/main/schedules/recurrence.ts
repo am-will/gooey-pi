@@ -11,6 +11,7 @@ export const MAX_RRULE_LENGTH = 1024
 export const MAX_PREVIEW_OCCURRENCES = 1_000
 export const MAX_MISSED_OCCURRENCES = 100_000
 
+const MAX_SKIPPED_CANDIDATES = 100_000
 const MAX_RRULE_COUNT = 100_000
 const MAX_RRULE_INTERVAL = 1_000_000
 const MAX_RRULE_LIST_VALUES = 366
@@ -205,7 +206,6 @@ export function validateScheduleTiming(
   return normalizeTiming(input, true, parseInstant(now, 'now'))
 }
 
-export const canonicalizeScheduleTiming = validateScheduleTiming
 
 function formatterFor(timeZone: string): Intl.DateTimeFormat {
   const existing = formatters.get(timeZone)
@@ -305,7 +305,7 @@ function recurrenceFor(
   return {
     recurrence: new RRule(options, true),
     until,
-    candidateLimit: count ?? MAX_PREVIEW_OCCURRENCES,
+    candidateLimit: count ?? MAX_SKIPPED_CANDIDATES,
   }
 }
 
@@ -318,11 +318,14 @@ function expandRruleInstants(
   const { recurrence, until, candidateLimit } = recurrenceFor(timing, after)
   const result: Date[] = []
   let candidates = 0
+  // Every IANA offset is within a day of UTC; two days safely retain boundary candidates across offset changes.
+  const earliestWall = fakeUtc(localAt(after, timing.timeZone)).getTime() - 2 * 86_400_000
   recurrence.all((candidate) => {
     candidates += 1
     if (candidates > Math.max(candidateLimit, count + MAX_PREVIEW_OCCURRENCES)) {
       throw new RangeError('recurrence search exceeded its iteration limit')
     }
+    if (candidate.getTime() < earliestWall) return true
     const instant = instantForLocal({
       year: candidate.getUTCFullYear(),
       month: candidate.getUTCMonth() + 1,
@@ -348,7 +351,6 @@ export function nextScheduleOccurrence(timing: ScheduleTiming, after: Date | str
   return expandRruleInstants(normalized, afterDate, 1)[0]?.toISOString() ?? null
 }
 
-export const nextOccurrence = nextScheduleOccurrence
 
 /** Returns up to `count` occurrences strictly after `after`. */
 export function previewScheduleOccurrences(
@@ -366,7 +368,6 @@ export function previewScheduleOccurrences(
   return expandRruleInstants(normalized, cursor, count).map((instant) => instant.toISOString())
 }
 
-export const previewOccurrences = previewScheduleOccurrences
 
 /** Counts occurrences in the half-open interval [`fromInclusive`, `untilExclusive`). */
 export function countMissedOccurrences(
@@ -374,6 +375,7 @@ export function countMissedOccurrences(
   fromInclusive: Date | string,
   untilExclusive: Date | string,
   limit = MAX_MISSED_OCCURRENCES,
+  options: { saturate?: boolean } = {},
 ): number {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_MISSED_OCCURRENCES) {
     throw new TypeError(`limit must be an integer from 1 to ${MAX_MISSED_OCCURRENCES}`)
@@ -388,8 +390,10 @@ export function countMissedOccurrences(
   }
 
   const occurrences = expandRruleInstants(normalized, new Date(start.getTime() - 1), limit + 1, end)
-  if (occurrences.length > limit) throw new RangeError('missed occurrence count exceeded its iteration limit')
+  if (occurrences.length > limit) {
+    if (options.saturate) return limit
+    throw new RangeError('missed occurrence count exceeded its iteration limit')
+  }
   return occurrences.length
 }
 
-export const countMissedScheduleOccurrences = countMissedOccurrences

@@ -3,6 +3,7 @@ import { RUST_PRIME_AGENT_NAME, RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '../../
 import type { NativeHeartbeatRecord, PrimeImplementation } from '../../../src/types/api'
 import { UnsupportedRpcCommandError, type AgentRpcManager } from '../agent-rpc'
 import { resolveExecutable, runProcess, type ExecutableSource } from '../process-utils'
+import { redactedStderrTail } from '../lib/process-detail'
 import { isRecord, requireId } from '../validation'
 
 function normalizeHeartbeat(value: unknown, runtimeId?: string): NativeHeartbeatRecord | null {
@@ -46,7 +47,7 @@ function unlessUnsupported(error: unknown): undefined {
  * pauses or resumes a job, and GooeyPi stops one through the CLI.
  */
 function heartbeatActionUnavailable(action: HeartbeatAction, implementation: PrimeImplementation | undefined): Error {
-  if (implementation !== 'rust') return new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
+  if (implementation !== 'rust') return new Error(`Open the owning Prime session before ${action === 'stop' ? 'stopping' : 'pausing or resuming'} this native heartbeat`)
   if (action === 'stop') return new Error(`${RUST_PRIME_AGENT_NAME} could not stop this native heartbeat. Check that its background service is running and try again.`)
   return new Error(RUST_PRIME_HEARTBEAT_PAUSE_DETAIL)
 }
@@ -115,6 +116,8 @@ export class HeartbeatService {
     if (actionValue === 'stop' && primeAgentPath) {
       const result = await runProcess(primeAgentPath, ['schedule', 'cancel', heartbeat.id], { timeoutMs: 30_000, maxBytes: 1024 * 1024 })
       if (result.code === 0 && !result.timedOut && !result.outputExceeded) return this.confirmStopped(id)
+      const reason = redactedStderrTail(result.stderr) || (result.timedOut ? 'The command timed out' : result.outputExceeded ? 'The command exceeded its output limit' : `The command exited with status ${result.code}`)
+      throw new Error(`Could not stop this native heartbeat: ${reason}`)
     }
     throw heartbeatActionUnavailable(actionValue, this.primeImplementation())
   }
