@@ -1,3 +1,4 @@
+import { normalizeBrowserAddress } from '@/lib/browser-address'
 import { isAllowedBrowserUrl } from '@/lib/browser-url'
 import { ArrowLeft, ArrowRight, Bot, ExternalLink, History, MessageCirclePlus, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
@@ -39,16 +40,6 @@ function runInPage(view: WebviewElement, code: string): Promise<unknown> {
     return Promise.resolve(undefined)
   }
 }
-
-function normalizeUrl(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) return 'about:blank'
-  if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) || trimmed.startsWith('about:')) return trimmed
-  if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(trimmed)) return `http://${trimmed}`
-  if (trimmed.includes('.') && !trimmed.includes(' ')) return `https://${trimmed}`
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
-}
-
 
 interface BrowserPanelProps {
   navigationRequest?: { id: number; url: string }
@@ -297,7 +288,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   }, [markerSignature, loading, domReady])
 
   const navigate = useCallback((value: string) => {
-    const url = normalizeUrl(value)
+    const url = normalizeBrowserAddress(value)
     if (!isAllowedBrowserUrl(url)) {
       showNotice('invalid-url')
       return
@@ -554,7 +545,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
               onSubmit={(event) => {
                 event.preventDefault()
                 agentAddressEditingRef.current = false
-                const url = normalizeUrl(agentAddress)
+                const url = normalizeBrowserAddress(agentAddress)
                 if (isAllowedBrowserUrl(url)) onNavigateAgentTab?.(activeAgentTab.tabId, 'url', url)
                 else showNotice('invalid-url')
               }}
