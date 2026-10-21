@@ -68,14 +68,20 @@ function serialize(value: unknown, pretty = false): string {
   try { return JSON.stringify(value, null, pretty ? 2 : undefined) } catch { return String(value) }
 }
 
+const TOOL_PREVIEW_LIMIT = 180
+const QUESTIONNAIRE_PREVIEW_LIMIT = 5
+
 function toolPreview(part: Extract<MessagePart, { type: 'toolCall' }>): string {
   const raw = part.args
   if (raw && typeof raw === 'object') {
     const args = raw as Record<string, unknown>
-    const preferred = args.question ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
-    if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), 180, '…')
+    const questions = Array.isArray(args.questions) ? args.questions.slice(0, QUESTIONNAIRE_PREVIEW_LIMIT).flatMap((question: unknown) =>
+      question && typeof question === 'object' && 'question' in question && typeof question.question === 'string' ? [question.question.slice(0, TOOL_PREVIEW_LIMIT + 1)] : [],
+    ) : []
+    const preferred = args.question ?? (questions.length ? questions.join(' · ') : undefined) ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
+    if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), TOOL_PREVIEW_LIMIT, '…')
   }
-  return typeof raw === 'string' ? boundText(raw.replace(/\s+/g, ' ').trim(), 180, '…') : ''
+  return typeof raw === 'string' ? boundText(raw.replace(/\s+/g, ' ').trim(), TOOL_PREVIEW_LIMIT, '…') : ''
 }
 
 function ReasoningPart({ part, streaming = false }: { part: Extract<MessagePart, { type: 'thinking' }>; streaming?: boolean }) {
