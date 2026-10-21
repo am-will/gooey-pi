@@ -443,7 +443,6 @@ export class AgentBrowserService {
       const button = params.button === undefined ? 'left' : requireString(params.button, 'button', { min: 1, max: 8 })
       if (!['left', 'right', 'middle'].includes(button)) throw new TypeError('button must be left, right, or middle')
       const clickCount = params.double === true ? 2 : 1
-      guest.focus()
       await this.input.glidePointer(tab, guest, point, 'click')
       // Hovering along the glide can shift layout (menus, sticky headers);
       // for ref clicks re-resolve the element position before pressing.
@@ -473,7 +472,6 @@ export class AgentBrowserService {
         const point = await this.pageIO.resolvePoint(guest, params, true)
         await this.input.glidePointer(tab, guest, point, 'move')
       }
-      guest.focus()
       try {
         await this.input.dispatchInput(guest, 'Input.insertText', { text })
       } catch {
@@ -491,7 +489,6 @@ export class AgentBrowserService {
 
   async pressKey(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.withTab(sessionKey, params, async (tab, guest) => {
-      guest.focus()
       await this.input.pressKey(guest, params.key, params.modifiers)
       await delay(SETTLE_MS)
       await this.waitForLoad(guest, 2_000)
