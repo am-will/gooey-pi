@@ -40,6 +40,16 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('activity-tool__contents')
   })
 
+  it('bounds grouped question previews and ignores malformed question entries', () => {
+    const html = renderToStaticMarkup(createElement(WorkTimeline, {
+      parts: [{ type: 'toolCall', name: 'ask_user', args: { questions: [null, 'invalid', { question: 42 }, { question: 'x'.repeat(500) }] } }],
+      showReasoning: true, showTools: true,
+    }))
+    const preview = /<code class="activity-tool__preview">([\s\S]*?)<\/code>/.exec(html)?.[1].replace(/<[^>]+>/g, '')
+    expect(preview).toBe(`${'x'.repeat(180)}…`)
+    expect(html).not.toContain('activity-tool__contents')
+  })
+
   it('streams reasoning inside a distinct process rail with animated thinking dots', () => {
     const html = render([{
       id: 'active',
