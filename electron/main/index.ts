@@ -17,13 +17,14 @@ import { registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY
 import { installCrashGuards, writeCrashLog } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
+import { harnessVisibility } from './model-visibility'
 import { CheckoutService } from './checkouts'
 import { registerIpc, type IpcRegistration } from './ipc'
 import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-discovery'
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
-import { bindRuntimeCapabilities, extensionHarnessRuntimeEnvironment } from './capability-runtime'
+import { bindRuntimeCapabilities, builtInCapabilities, extensionHarnessRuntimeEnvironment } from './capability-runtime'
 import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
@@ -229,12 +230,13 @@ async function bootstrap(): Promise<void> {
     executable: primeExecutable, implementation: () => discovery.primeImplementation(),
   })
   providerService = providers
-  const disabledProviders = () => new Set(stateStore.getSettings().disabledProviders)
-  const disabledModels = () => new Set(stateStore.getSettings().disabledModels)
-  const ompDisabledProviders = () => new Set(stateStore.getSettings().ompDisabledProviders)
-  const ompDisabledModels = () => new Set(stateStore.getSettings().ompDisabledModels)
-  const piDisabledProviders = () => new Set(stateStore.getSettings().piDisabledProviders)
-  const piDisabledModels = () => new Set(stateStore.getSettings().piDisabledModels)
+  const visibility = (harness: HarnessId) => harnessVisibility(stateStore.getSettings(), harness)
+  const disabledProviders = () => visibility('prime').disabledProviders
+  const disabledModels = () => visibility('prime').disabledModels
+  const ompDisabledProviders = () => visibility('omp').disabledProviders
+  const ompDisabledModels = () => visibility('omp').disabledModels
+  const piDisabledProviders = () => visibility('pi').disabledProviders
+  const piDisabledModels = () => visibility('pi').disabledModels
   const ompCatalog = new OmpModelCatalogService(ompExecutable)
   const piCatalog = new PiModelCatalogService(piExecutable)
   agents = new AgentRpcManager(
@@ -367,66 +369,24 @@ async function bootstrap(): Promise<void> {
   const ompAskUserExtensionPath = extensionPathFor('omp', 'askUser')
   const collaborationExtensionPath = extensionPathFor('omp', 'collaboration')
   const piFastModeExtensionPath = extensionPathFor('pi', 'piFastMode')
-  const computerUseSkill = async () => {
-    const enabled = stateStore.getSettings().computerUseEnabled
-    const status = enabled ? await cuaDriver.status() : undefined
-    return {
-      id: 'gooeypi-computer-use', name: 'Computer Use | TryCUA',
-      description: 'Drive native apps through a separately installed TryCUA driver. Install the driver before enabling.',
-      kind: 'extension' as const, location: 'system' as const, path: computerUseSkillPath,
-      enabled,
-      availability: status ? { available: status.available, detail: status.detail, actionUrl: status.available ? undefined : status.installUrl } : undefined,
-    }
+  const capabilitiesFor = async (harness: HarnessId) => {
+    const settings = stateStore.getSettings()
+    return builtInCapabilities(harness, {
+      settings,
+      paths: { scheduleSkill: scheduleSkillPath, scheduleExtension: ompScheduleExtensionPath, browserSkill: browserSkillPath, browserExtension: ompBrowserExtensionPath, askUserExtension: ompAskUserExtensionPath, computerUseSkill: computerUseSkillPath },
+      driverStatus: settings.computerUseEnabled ? await cuaDriver.status() : undefined,
+      mcpCapabilities: harness === 'prime' ? providers.mcpCapabilities() : undefined,
+    })
   }
   const plugins = new PluginService(primeExecutable, (path) => projects.authorizeProjectRoot(path), {
     capabilityAvailability: (record) => primeCapabilityRecordAvailability(record, discovery.primeImplementation()),
-    builtInSkills: async () => [{
-      id: 'prime-work-schedules', name: 'Scheduled tasks',
-      description: 'Create and manage durable project and thread schedules from an agent.',
-      kind: 'skill', location: 'system', path: scheduleSkillPath, enabled: true,
-    }, {
-      id: 'gooeypi-ask-user', name: 'Ask user',
-      description: 'Ask focused multiple-choice questions in the GooeyPi app across Prime, OMP, and Pi.',
-      kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
-    }, {
-      id: 'prime-work-browser', name: 'Browser',
-      description: 'Drive this thread’s browser tabs, navigation, clicks, typing, and screenshots; terminal_read reads its terminal output.',
-      kind: 'skill', location: 'system', path: browserSkillPath, enabled: stateStore.getSettings().browserEnabled,
-    }, await computerUseSkill(), ...providers.mcpCapabilities()],
+    builtInSkills: () => capabilitiesFor('prime'),
   })
   const ompPlugins = new PluginService(ompExecutable, (path) => ompProjects.authorizeProjectRoot(path), {
-    harness: 'omp',
-    builtInSkills: async () => [{
-      id: 'omp-work-schedules', name: 'Scheduled tasks',
-      description: 'OMP extension for durable project and thread schedules managed by GooeyPi.',
-      kind: 'extension', location: 'system', path: ompScheduleExtensionPath, enabled: true,
-    }, {
-      id: 'omp-work-browser', name: 'Browser',
-      description: 'Drive this thread’s in-app browser and read its terminal output with terminal_read.',
-      kind: 'extension', location: 'system', path: ompBrowserExtensionPath, enabled: stateStore.getSettings().browserEnabled,
-    }, {
-      id: 'gooeypi-ask-user', name: 'Ask user',
-      description: 'OMP extension for asking focused multiple-choice questions in the GooeyPi app.',
-      kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
-    }, await computerUseSkill()],
+    harness: 'omp', builtInSkills: () => capabilitiesFor('omp'),
   })
-  // Pi's extension API is the ancestor of OMP's, so pi runtimes inject the
-  // same omp-work-* extension files (accepted naming drift; never forked).
   const piPlugins = new PluginService(piExecutable, (path) => piProjects.authorizeProjectRoot(path), {
-    harness: 'pi',
-    builtInSkills: async () => [{
-      id: 'omp-work-schedules', name: 'Scheduled tasks',
-      description: 'Pi extension for durable project and thread schedules managed by GooeyPi.',
-      kind: 'extension', location: 'system', path: ompScheduleExtensionPath, enabled: true,
-    }, {
-      id: 'omp-work-browser', name: 'Browser',
-      description: 'Drive this thread’s in-app browser and read its terminal output with terminal_read.',
-      kind: 'extension', location: 'system', path: ompBrowserExtensionPath, enabled: stateStore.getSettings().browserEnabled,
-    }, {
-      id: 'gooeypi-ask-user', name: 'Ask user',
-      description: 'Pi extension for asking focused multiple-choice questions in the GooeyPi app.',
-      kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
-    }, await computerUseSkill()],
+    harness: 'pi', builtInSkills: () => capabilitiesFor('pi'),
   })
   const heartbeats = new HeartbeatService(agents, primeExecutable, () => discovery.primeImplementation())
   const primeScheduledRuns = new ScheduledRunExecutor(
@@ -434,24 +394,24 @@ async function bootstrap(): Promise<void> {
     sessions,
     agents,
     providers,
-    () => new Set(stateStore.getSettings().disabledProviders),
-    () => new Set(stateStore.getSettings().disabledModels),
+    disabledProviders,
+    disabledModels,
   )
   const ompScheduledRuns = new ScheduledRunExecutor(
     ompProjects,
     ompSessions,
     ompManager,
     ompCatalog,
-    () => new Set(stateStore.getSettings().ompDisabledProviders),
-    () => new Set(stateStore.getSettings().ompDisabledModels),
+    ompDisabledProviders,
+    ompDisabledModels,
   )
   const piScheduledRuns = new ScheduledRunExecutor(
     piProjects,
     piSessions,
     piManager,
     piCatalog,
-    () => new Set(stateStore.getSettings().piDisabledProviders),
-    () => new Set(stateStore.getSettings().piDisabledModels),
+    piDisabledProviders,
+    piDisabledModels,
   )
   const scheduledRuns: Record<HarnessId, ScheduledRunExecutor> = { prime: primeScheduledRuns, omp: ompScheduledRuns, pi: piScheduledRuns }
   const schedules = new AutomationService(stateStore, {

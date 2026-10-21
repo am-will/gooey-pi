@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { bindRuntimeCapabilities, extensionHarnessRuntimeEnvironment } from '../../electron/main/capability-runtime'
+import { bindRuntimeCapabilities, builtInCapabilities, extensionHarnessRuntimeEnvironment } from '../../electron/main/capability-runtime'
 
 function fixture() {
   const bridge = (tokenKey: string, token: string) => ({
@@ -51,5 +51,28 @@ describe('extension harness capability construction', () => {
     deps.scheduleBridge.revoke.mockImplementation(() => { throw new Error('Cleanup failed') })
     expect(() => extensionHarnessRuntimeEnvironment({ cwd: '/work', interactive: true }, { ...deps, harness: 'omp' })).toThrow('Original error')
     expect(deps.browserBridge.revoke).toHaveBeenCalledWith('browser')
+  })
+})
+
+describe('built-in capability catalog', () => {
+  const paths = { scheduleSkill: '/skills/schedule', scheduleExtension: '/schedule.ts', browserSkill: '/skills/browser', browserExtension: '/browser.ts', askUserExtension: '/ask.ts', computerUseSkill: '/skills/computer-use' }
+  const mcp = { id: 'mcp', name: 'MCP', description: 'MCP', kind: 'mcp', location: 'system', enabled: true } as const
+
+  it.each(['prime', 'omp', 'pi'] as const)('keeps %s capability paths and toggle effects consistent', (harness) => {
+    const records = builtInCapabilities(harness, { paths, settings: { browserEnabled: false, askUserEnabled: false, computerUseEnabled: false }, mcpCapabilities: [mcp] })
+    expect(records.map((record) => record.id)).toEqual(harness === 'prime'
+      ? ['prime-work-schedules', 'gooeypi-ask-user', 'prime-work-browser', 'gooeypi-computer-use', 'mcp']
+      : ['omp-work-schedules', 'omp-work-browser', 'gooeypi-ask-user', 'gooeypi-computer-use'])
+    const browser = records.find((record) => record.name === 'Browser')
+    expect(browser).toMatchObject({ kind: harness === 'prime' ? 'skill' : 'extension', path: harness === 'prime' ? paths.browserSkill : paths.browserExtension, enabled: false, description: expect.stringContaining('terminal_read') })
+    expect(records.find((record) => record.id === 'gooeypi-ask-user')).toMatchObject({ path: paths.askUserExtension, enabled: false })
+    expect(records.find((record) => record.id === 'gooeypi-computer-use')).toMatchObject({ path: paths.computerUseSkill, enabled: false, availability: undefined })
+    expect(records[0]).toMatchObject({ path: harness === 'prime' ? paths.scheduleSkill : paths.scheduleExtension, enabled: true })
+  })
+
+  it('shows unavailable driver guidance only for an enabled Computer Use capability', () => {
+    const options = { paths, settings: { browserEnabled: true, askUserEnabled: true, computerUseEnabled: true }, driverStatus: { available: false, path: null, version: null, detail: 'Install driver', installUrl: 'https://cua.ai/install' } }
+    expect(builtInCapabilities('omp', options).find((record) => record.id === 'gooeypi-computer-use')?.availability).toEqual({ available: false, detail: 'Install driver', actionUrl: 'https://cua.ai/install' })
+    expect(builtInCapabilities('omp', { ...options, settings: { ...options.settings, computerUseEnabled: false } }).find((record) => record.id === 'gooeypi-computer-use')?.availability).toBeUndefined()
   })
 })

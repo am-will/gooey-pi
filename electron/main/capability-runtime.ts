@@ -1,5 +1,7 @@
 import type { RuntimeEnvironmentScope } from './agent-rpc'
-import type { AppSettings, RuntimeInfo } from '../../src/types/api'
+import type { AppSettings, HarnessId, RuntimeInfo, SkillRecord } from '../../src/types/api'
+import type { CuaDriverStatus } from './cua-driver'
+import { HARNESSES } from './harness'
 import type { CapabilityScope } from './lib/capability-bridge'
 
 export interface RuntimeCapabilityBridge {
@@ -106,4 +108,47 @@ export function bindRuntimeCapabilities(environment: NodeJS.ProcessEnv, info: Ru
   for (const name of ['scheduleBridge', 'browserBridge', 'collaborationBridge'] as const) {
     bridges[name].bindSession(environment[TOKEN_KEYS[name]], info.sessionFile, info.runtimeId)
   }
+}
+
+
+export interface BundledCapabilityPaths {
+  scheduleSkill: string
+  scheduleExtension: string
+  browserSkill: string
+  browserExtension: string
+  askUserExtension: string
+  computerUseSkill: string
+}
+
+/** The fixed capabilities shown in each harness's plugin catalog. */
+export function builtInCapabilities(harness: HarnessId, options: {
+  paths: BundledCapabilityPaths
+  settings: Pick<AppSettings, 'browserEnabled' | 'askUserEnabled' | 'computerUseEnabled'>
+  driverStatus?: CuaDriverStatus
+  mcpCapabilities?: readonly SkillRecord[]
+}): SkillRecord[] {
+  const { paths, settings, driverStatus } = options
+  const prime = harness === 'prime'
+  const schedule: SkillRecord = {
+    id: prime ? 'prime-work-schedules' : 'omp-work-schedules', name: 'Scheduled tasks',
+    description: 'Create and manage durable project and thread schedules from an agent.',
+    kind: prime ? 'skill' : 'extension', location: 'system', path: prime ? paths.scheduleSkill : paths.scheduleExtension, enabled: true,
+  }
+  const askUser: SkillRecord = {
+    id: 'gooeypi-ask-user', name: 'Ask user',
+    description: `Ask focused multiple-choice questions in the GooeyPi app with ${HARNESSES[harness].productName}.`,
+    kind: 'extension', location: 'system', path: paths.askUserExtension, enabled: settings.askUserEnabled,
+  }
+  const browser: SkillRecord = {
+    id: prime ? 'prime-work-browser' : 'omp-work-browser', name: 'Browser',
+    description: 'Drive this thread’s in-app browser and read its terminal output with terminal_read.',
+    kind: prime ? 'skill' : 'extension', location: 'system', path: prime ? paths.browserSkill : paths.browserExtension, enabled: settings.browserEnabled,
+  }
+  const computerUse: SkillRecord = {
+    id: 'gooeypi-computer-use', name: 'Computer Use | TryCUA',
+    description: 'Drive native apps through a separately installed TryCUA driver. Install the driver before enabling.',
+    kind: 'extension', location: 'system', path: paths.computerUseSkill, enabled: settings.computerUseEnabled,
+    availability: settings.computerUseEnabled && driverStatus ? { available: driverStatus.available, detail: driverStatus.detail, actionUrl: driverStatus.available ? undefined : driverStatus.installUrl } : undefined,
+  }
+  return [...(prime ? [schedule, askUser, browser] : [schedule, browser, askUser]), computerUse, ...(prime ? options.mcpCapabilities ?? [] : [])]
 }
