@@ -179,6 +179,13 @@ export class ContextUsageProjection {
         || usage.tokens >= previous.tokens + activityDelta
       if (includesActivity) {
         this.snapshotActivityTokens = Math.max(this.snapshotActivityTokens, activityTokens)
+      }
+      // A request rebase can make activityDelta zero without the stored
+      // snapshot including that output. Only observed snapshot growth may
+      // advance the separate watermark used to recognize delayed output.
+      const uncapturedActivity = Math.max(0, activityTokens - this.capturedActivityTokens)
+      if (previous?.tokens !== undefined && previous.tokens !== null && usage.tokens !== null
+        && usage.tokens >= previous.tokens + uncapturedActivity) {
         this.capturedActivityTokens = Math.max(this.capturedActivityTokens, activityTokens)
       }
     }
