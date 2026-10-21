@@ -6,7 +6,7 @@ import { useGitStatus } from '@/hooks/useGitStatus'
 import { useSessionAttention } from '@/hooks/useSessionAttention'
 import { useNativeHeartbeats } from '@/hooks/useNativeHeartbeats'
 import { useBrowserPreviewState } from '@/hooks/useBrowserPreviewState'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { TitleToolbar } from '@/components/TitleToolbar'
 import { ChangesCard } from '@/components/ChangesCard'
@@ -45,7 +45,7 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type RuntimeInfo, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
@@ -135,9 +135,11 @@ export default function App() {
     void settingsState.updateSettings({ activeHarness: harness })
   }, [settingsState.updateSettings])
   const browserAnnotations = useBrowserAnnotations()
+  const runtimeSnapshotObserverRef = useRef<((snapshot: RuntimeInfo) => void) | undefined>(undefined)
   const workspace = useWorkspaceRuntime({
     bridge, harness: activeHarness, initialProject, initialSession, sessions,
     initialMessages: bridge ? [] : SAMPLE_TRANSCRIPT, reportError,
+    onRuntimeSnapshot: (snapshot) => runtimeSnapshotObserverRef.current?.(snapshot),
   })
   const syncProviderRuntime = useCallback(async (runtimeId: string) => {
     if (!bridge) return
@@ -200,6 +202,10 @@ export default function App() {
     bridge, askUserTimeoutMs: settingsState.settings.askUserTimeoutMs, activeRuntimeId: workspace.runtime?.runtimeId, runtimeSessionsRef: workspace.runtimeSessionsRef,
     setSessions, setRuntime: workspace.setRuntime, reportError,
   })
+  useLayoutEffect(() => {
+    runtimeSnapshotObserverRef.current = extension.rehydrateExtensionUi
+    return () => { runtimeSnapshotObserverRef.current = undefined }
+  }, [extension.rehydrateExtensionUi])
   // Stable identity: the harness-switch reset lives inside the bootstrap
   // effect, and an unstable callback would re-run the whole bootstrap.
   // Shared views stay in place while their harness-scoped data refreshes.
