@@ -873,6 +873,27 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('combobox', { name: 'Message Prime' })).toBeVisible()
   })
 
+  test('reopens settings and accesses checkout after compact navigation', async () => {
+    await page.setViewportSize({ width: 960, height: 700 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(980)
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await expect(page.getByRole('heading', { name: 'General' })).toBeVisible()
+    await page.getByRole('combobox', { name: 'Git checkout style' }).selectOption('branch')
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await expect(page.locator('.sidebar')).toHaveCount(0)
+
+    // A restored inspector is an intentional overlay in the compact layout.
+    const closeInspector = page.locator('.inspector').getByRole('button', { name: 'Close inspector' })
+    if (await closeInspector.count()) await closeInspector.click()
+    await page.getByRole('button', { name: /Show sidebar/ }).click()
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await expect(page.getByRole('heading', { name: 'General' })).toBeVisible()
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    if (await closeInspector.count()) await closeInspector.click()
+    await page.getByRole('button', { name: /^Checkout:/ }).click()
+    await expect(page.getByRole('menu', { name: 'Git branches' })).toBeVisible()
+  })
+
   test('keeps the application shell fixed when focus reveals root overflow', async () => {
     const layout = await page.evaluate(() => {
       const root = document.getElementById('root')
