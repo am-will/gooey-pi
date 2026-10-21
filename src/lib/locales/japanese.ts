@@ -710,6 +710,8 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'schedule.action.stop': '停止',
   'schedule.actions.aria': 'スケジュールの操作',
   'schedule.confirm.delete': '「{title}」を削除しますか？このスケジュールの実行履歴はここから参照できなくなります。',
+  'schedule.confirm.discardAction': '変更を破棄',
+  'schedule.confirm.stop': '「{title}」を停止しますか？',
   'schedule.confirm.discard': '未保存のスケジュール変更を破棄しますか？',
   'schedule.count': '{count} 件のスケジュール',
   'schedule.detail.all': 'すべてのスケジュール',

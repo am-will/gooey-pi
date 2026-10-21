@@ -52,6 +52,12 @@ import { EmptyState, Modal, Segmented } from '@/components/ui'
 type ScheduleFilter = 'active' | 'paused' | 'attention' | 'all'
 type ScheduleEditor = { mode: 'create' } | { mode: 'edit'; scheduleId: string; revision: number }
 
+type ScheduleConfirmation =
+  | { kind: 'discard' }
+  | { kind: 'delete'; id: string; title: string }
+  | { kind: 'stop'; heartbeat: NativeHeartbeatRecord }
+  | { kind: 'archive'; id: string; files: string[] }
+
 interface ScheduledPageProps {
   harness: HarnessId
   /** Rust Prime cannot pause or resume native heartbeats from GooeyPi; it can still stop them. */
@@ -214,6 +220,8 @@ export function ScheduledPage({
   const [previewError, setPreviewError] = useState('')
   const [previewing, setPreviewing] = useState(false)
   const [action, setAction] = useState<string | null>(null)
+  const actionPendingRef = useRef(false)
+  const [confirmation, setConfirmation] = useState<ScheduleConfirmation | null>(null)
   const [actionError, setActionError] = useState('')
   const [actionNotice, setActionNotice] = useState('')
   const previewRequest = useRef(0)
@@ -282,7 +290,7 @@ export function ScheduledPage({
   }
   const closeEditor = () => {
     if (saving) return
-    if (JSON.stringify(form) !== baseline && !window.confirm(t('schedule.confirm.discard'))) return
+    if (JSON.stringify(form) !== baseline) { setConfirmation({ kind: 'discard' }); return }
     setEditor(null); setFormError('')
   }
   const setProject = (projectId: string) => {
@@ -331,16 +339,37 @@ export function ScheduledPage({
     finally { setSaving(false) }
   }
   const perform = async (key: string, work: () => Promise<void>, success: string, after?: () => void) => {
-    if (action) return
+    if (actionPendingRef.current) return
+    actionPendingRef.current = true
     setAction(key); setActionError(''); setActionNotice('')
     try { await work(); setActionNotice(success); after?.() }
     catch (reason) { setActionError(errorMessage(reason)) }
-    finally { setAction(null) }
+    finally { actionPendingRef.current = false; setAction(null) }
   }
-  const deleteSchedule = (item: AutomationScheduleRecord) => {
-    if (!window.confirm(t('schedule.confirm.delete', { title: item.title }))) return
-    void perform(`delete:${item.id}`, () => onDelete(item.id), t('schedule.notice.deleted'), () => setSelectedId(null))
+  const deleteSchedule = (item: AutomationScheduleRecord) => setConfirmation({ kind: 'delete', id: item.id, title: item.title })
+  const confirmAction = () => {
+    const pending = confirmation
+    if (!pending) return
+    setConfirmation(null)
+    if (pending.kind === 'discard') { setEditor(null); setFormError(''); return }
+    if (pending.kind === 'delete') {
+      void perform(`delete:${pending.id}`, () => onDelete(pending.id), t('schedule.notice.deleted'), () => setSelectedId(null))
+    } else if (pending.kind === 'stop') {
+      void perform(`heartbeat:${pending.heartbeat.id}`, () => onManageHeartbeat(pending.heartbeat.id, 'stop'), t('schedule.notice.heartbeatStopped'))
+    } else {
+      const current = schedules.find((item) => item.id === pending.id)
+      const eligible = current ? archivableScheduleSessions(current, sessions).filter((session) => pending.files.includes(session.filePath)) : []
+      if (eligible.length && onArchiveSessions) void perform(`archive:${pending.id}`, () => onArchiveSessions(eligible), '')
+    }
   }
+  const confirmationModal = confirmation ? (
+    <Modal title={t('common.confirm')} onClose={() => setConfirmation(null)} footer={<>
+      <button type="button" className="button" onClick={() => setConfirmation(null)}>{t('common.cancel')}</button>
+      <button type="button" className="button button--danger" onClick={confirmAction}>{confirmation.kind === 'delete' ? t('common.delete') : confirmation.kind === 'stop' ? t('schedule.action.stop') : confirmation.kind === 'discard' ? t('schedule.confirm.discardAction') : t('common.confirm')}</button>
+    </>}>
+      <p>{confirmation.kind === 'discard' ? t('schedule.confirm.discard') : confirmation.kind === 'delete' ? t('schedule.confirm.delete', { title: confirmation.title }) : confirmation.kind === 'stop' ? t('schedule.confirm.stop', { title: confirmation.heartbeat.label || t(confirmation.heartbeat.source === 'heartbeat' ? 'schedule.heartbeats.thread' : 'schedule.heartbeats.agent') }) : t('schedule.history.archiveConfirm', { count: confirmation.files.length })}</p>
+    </Modal>
+  ) : null
 
   const editorModal = editor ? (
     <Modal title={editor.mode === 'create' ? t('schedule.editor.create') : t('schedule.editor.editTitle')} onClose={closeEditor} footer={(
@@ -446,7 +475,7 @@ export function ScheduledPage({
 
         <section className="schedule-history">
           <header><div><History size={15} /><h2>{t('schedule.history.title')}</h2></div><span>{t('schedule.history.summary', { count: selected.runs.length })}</span>{onArchiveSessions && finishedSessions.length > 0 ? <button type="button" className="button" disabled={busy} onClick={() => {
-            if (window.confirm(t('schedule.history.archiveConfirm', { count: finishedSessions.length }))) void perform(`archive:${selected.id}`, () => onArchiveSessions(finishedSessions), '')
+            setConfirmation({ kind: 'archive', id: selected.id, files: finishedSessions.map((session) => session.filePath) })
           }}><Archive size={13} />{action === `archive:${selected.id}` ? t('schedule.history.archiving') : t('schedule.history.archiveFinished', { count: finishedSessions.length })}</button> : null}</header>
           {recentRuns.length ? <div className="schedule-history__list">{recentRuns.map((run) => {
             const runSession = sessions.find((session) => session.filePath === run.sessionFile) ?? (run.sessionId ? sessionMap.get(run.sessionId) : undefined)
@@ -459,6 +488,7 @@ export function ScheduledPage({
           })}</div> : <div className="schedule-history__empty"><History size={20} /><p>{t('schedule.history.empty')}</p></div>}
         </section>
         {editorModal}
+        {confirmationModal}
       </div></div>
     )
   }
@@ -490,10 +520,11 @@ export function ScheduledPage({
         <div className="native-heartbeats__list">{nativeHeartbeats.map((heartbeat) => <article key={heartbeat.id} className="native-heartbeat">
           <span className={`schedule-row__status schedule-row__status--${heartbeat.status}`}><CalendarClock size={15} /></span>
           <div className="native-heartbeat__main"><span><strong>{heartbeat.label || (heartbeat.source === 'heartbeat' ? 'Thread heartbeat' : 'Agent heartbeat')}</strong><i className={`schedule-state schedule-state--${heartbeat.status}`}>{heartbeat.status}</i></span><p>{heartbeat.prompt}</p><small>{heartbeat.schedule}{heartbeat.nextRunAt ? ` · next ${formatRelative(heartbeat.nextRunAt)}` : ''}</small></div>
-          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'Heartbeat paused.')}>Pause</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'Heartbeat resumed.')}>Resume</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'stop'), 'Heartbeat stopped.')}>Stop</button></div>
+          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'Heartbeat paused.')}>Pause</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'Heartbeat resumed.')}>Resume</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => setConfirmation({ kind: 'stop', heartbeat })}>Stop</button></div>
         </article>)}</div>
       </section> : null}
       {editorModal}
+      {confirmationModal}
     </div></div>
   )
 }

@@ -95,3 +95,25 @@ it('reports one-time date errors independently of the hidden advanced recurrence
   expect(document.body.textContent).toContain('Choose a valid date and time.')
   expect(document.body.textContent).not.toContain('Enter a valid RRULE')
 })
+
+
+it('keeps unsaved edits when discarding is cancelled and discards only after in-app confirmation', () => {
+  renderPage({ schedules: [task], projects: [project], models: [model] })
+  act(() => host.querySelector<HTMLButtonElement>('.schedule-row')!.click())
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === 'Edit')!.click())
+  const input = document.querySelector<HTMLInputElement>('#schedule-editor-form input')!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Changed title')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const cancelEditor = document.querySelector<HTMLButtonElement>('.modal__footer button')!
+  act(() => cancelEditor.click())
+  expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2)
+  const confirmation = [...document.querySelectorAll('.modal')].at(-1)!
+  act(() => confirmation.querySelector<HTMLButtonElement>('.modal__footer button')!.click())
+  expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+  expect(input.value).toBe('Changed title')
+  act(() => cancelEditor.click())
+  act(() => document.querySelector<HTMLButtonElement>('.modal__footer .button--danger')!.click())
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+})
