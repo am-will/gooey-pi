@@ -16,7 +16,7 @@ interface ExtensionApi {
     label: string
     description: string
     parameters: unknown
-    execute(id: string, params: Params): Promise<ToolResult>
+    execute(id: string, params: Params, signal?: AbortSignal): Promise<ToolResult>
   }): void
 }
 
@@ -45,16 +45,17 @@ interface BridgeResult { ok: boolean; result?: unknown; error?: string }
 const BRIDGE_URL = process.env.GOOEYPI_COLLABORATION_URL
 const BRIDGE_TOKEN = process.env.GOOEYPI_COLLABORATION_TOKEN
 
-async function call(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+async function call(method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   if (!BRIDGE_URL || !BRIDGE_TOKEN) throw new Error('GooeyPi session collaboration is not available in this runtime')
   let response: Response
   try {
     response = await fetch(BRIDGE_URL, {
-      method: 'POST',
+      method: 'POST', signal,
       headers: { authorization: `Bearer ${BRIDGE_TOKEN}`, 'content-type': 'application/json' },
       body: JSON.stringify({ method, params }),
     })
   } catch (error) {
+    signal?.throwIfAborted()
     throw new Error(`GooeyPi's session collaboration broker is not reachable: ${String(error)}`)
   }
   const body = (await response.json()) as BridgeResult
@@ -81,7 +82,7 @@ function registerTools(pi: ExtensionApi, Type: HostTypebox): void {
     label: 'List sessions',
     description: 'List other GooeyPi sessions in this working directory. Results include title, UUID, harness, status, and whether the session is live. Use an exact UUID with the other session tools.',
     parameters: Type.Object({}),
-    async execute() { return result(await call('list')) },
+    async execute(_id, _params, signal) { return result(await call('list', {}, signal)) },
   })
   pi.registerTool<{ query?: string }>({
     name: 'gooeypi_session_models',
@@ -90,7 +91,7 @@ function registerTools(pi: ExtensionApi, Type: HostTypebox): void {
     parameters: Type.Object({
       query: Type.Optional(Type.String({ maxLength: 256, description: 'Optional approximate model name, provider, family, or spoken model wording' })),
     }),
-    async execute(_id, params) { return result(await call('models', params)) },
+    async execute(_id, params, signal) { return result(await call('models', params, signal)) },
   })
   pi.registerTool<{ prompt: string; title?: string; model?: string; reasoning?: string; fast?: boolean }>({
     name: 'gooeypi_session_create',
@@ -103,14 +104,14 @@ function registerTools(pi: ExtensionApi, Type: HostTypebox): void {
       reasoning: Type.Optional(Type.String({ minLength: 1, maxLength: 64, description: 'Optional reasoning intensity; the closest level supported by the selected or default model is used' })),
       fast: Type.Optional(Type.Boolean({ description: 'Request fast/priority mode; unsupported models still start normally and report fast mode as unavailable' })),
     }),
-    async execute(_id, params) { return result(await call('create', params)) },
+    async execute(_id, params, signal) { return result(await call('create', params, signal)) },
   })
   pi.registerTool<{ target_session_id: string }>({
     name: 'gooeypi_session_read',
     label: 'Read session',
     description: 'Read bounded recent conversational context from another GooeyPi session in this working directory without modifying its transcript. Includes user, assistant, agent, and thinking text; omits tool calls, tool results, and internal compaction data. Results are capped at 30,000 estimated tokens and report whether truncation occurred.',
     parameters: Type.Object({ target_session_id: target }),
-    async execute(_id, params) { return result(await call('read', params)) },
+    async execute(_id, params, signal) { return result(await call('read', params, signal)) },
   })
   pi.registerTool<{ target_session_id: string; message: string }>({
     name: 'gooeypi_session_send',
@@ -120,7 +121,7 @@ function registerTools(pi: ExtensionApi, Type: HostTypebox): void {
       target_session_id: target,
       message: Type.String({ minLength: 1, maxLength: 64 * 1024, description: 'The concise message or coordination request to send' }),
     }),
-    async execute(_id, params) { return result(await call('send', params)) },
+    async execute(_id, params, signal) { return result(await call('send', params, signal)) },
   })
   pi.registerTool<{ target_session_id: string; after_cursor?: string; timeout_ms?: number }>({
     name: 'gooeypi_session_wait',
@@ -131,7 +132,7 @@ function registerTools(pi: ExtensionApi, Type: HostTypebox): void {
       after_cursor: Type.Optional(Type.String({ description: 'cursor_before returned by gooeypi_session_send, or cursor returned by gooeypi_session_read/gooeypi_session_wait' })),
       timeout_ms: Type.Optional(Type.Number({ minimum: 0, maximum: 30_000, description: 'Maximum wait, default 15000 and hard-capped at 30000' })),
     }),
-    async execute(_id, params) { return result(await call('wait', params)) },
+    async execute(_id, params, signal) { return result(await call('wait', params, signal)) },
   })
 }
 

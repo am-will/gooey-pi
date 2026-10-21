@@ -24,20 +24,28 @@ const MAX_ACTIVE_WAITS_PER_TOKEN = 2
 
 interface CollaborationWaitClock {
   now(): number
-  setTimeout(callback: () => void, delayMs: number): { unref(): void }
+  setTimeout(callback: () => void, delayMs: number): { unref(): void; cancel(): void }
 }
 
 const nativeWaitClock: CollaborationWaitClock = {
   now: () => Date.now(),
-  setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+  setTimeout: (callback, delayMs) => {
+    const timer = globalThis.setTimeout(callback, delayMs)
+    return { unref: () => timer.unref(), cancel: () => globalThis.clearTimeout(timer) }
+  },
 }
 
-async function delayUntil(targetTime: number, clock: CollaborationWaitClock): Promise<void> {
+async function delayUntil(targetTime: number, clock: CollaborationWaitClock, signal: AbortSignal): Promise<void> {
   while (true) {
+    signal.throwIfAborted()
     const remaining = targetTime - clock.now()
     if (remaining <= 0) return
-    await new Promise<void>((resolveDelay) => {
-      const timer = clock.setTimeout(resolveDelay, remaining)
+    await new Promise<void>((resolveDelay, reject) => {
+      const finish = () => { signal.removeEventListener('abort', abort); resolveDelay() }
+      const timer = clock.setTimeout(finish, remaining)
+      const abort = () => { timer.cancel(); signal.removeEventListener('abort', abort); reject(signal.reason) }
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
       timer.unref()
     })
   }
@@ -199,7 +207,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     if (token) this.bindSession(token, sessionFile, runtimeId)
   }
 
-  protected async dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim): Promise<unknown> {
+  protected async dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim, signal: AbortSignal): Promise<unknown> {
     const source = await this.sourceFor(claim)
     if (method === 'list') return this.listPeers(source)
     if (method === 'models') return this.listModels(source, params.query)
@@ -207,7 +215,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     const targetId = requireId(params.target_session_id, 'target_session_id')
     if (method === 'wait') return this.withWaitAdmission(claim, targetId, async () => {
       const target = await this.targetFor(source, targetId)
-      return this.wait(target, params.after_cursor, params.timeout_ms)
+      return this.wait(target, params.after_cursor, params.timeout_ms, signal)
     })
     const target = await this.targetFor(source, targetId)
     if (method === 'read') return this.snapshot(target)
@@ -443,12 +451,14 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     finally { this.activeCreations.delete(claim.token) }
   }
 
-  private async wait(target: CollaborationTarget, rawCursor: unknown, rawTimeout: unknown): Promise<CollaborationSnapshot & { timed_out: boolean }> {
+  private async wait(target: CollaborationTarget, rawCursor: unknown, rawTimeout: unknown, signal: AbortSignal): Promise<CollaborationSnapshot & { timed_out: boolean }> {
     const afterCursor = rawCursor === undefined ? undefined : requireString(rawCursor, 'after_cursor', { min: 1, max: 128, trim: true })
     const timeoutMs = rawTimeout === undefined ? 15_000 : requireInteger(rawTimeout, 'timeout_ms', 0, MAX_WAIT_MS)
     const startedAt = this.waitClock.now()
     const deadline = startedAt + timeoutMs
+    signal.throwIfAborted()
     let snapshot = await this.snapshot(target)
+    signal.throwIfAborted()
     while (this.waitClock.now() < deadline) {
       const runtime = target.manager.getForSession(target.session.filePath)
       const idle = !runtime || isRuntimeIdle(runtime)
@@ -458,9 +468,10 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       // Re-arm an early timer wake until the intended poll instant so a short
       // wait cannot perform multiple transcript reads at its deadline.
       const nextPollAt = Math.min(deadline, this.waitClock.now() + (idle ? WAIT_TRANSCRIPT_POLL_MS : WAIT_RUNTIME_POLL_MS))
-      await delayUntil(nextPollAt, this.waitClock)
+      await delayUntil(nextPollAt, this.waitClock, signal)
       if (idle) {
         snapshot = await this.snapshot(target)
+        signal.throwIfAborted()
         if (afterCursor === undefined || snapshot.cursor !== afterCursor) return { ...snapshot, timed_out: false }
       }
     }

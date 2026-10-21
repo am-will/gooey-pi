@@ -81,9 +81,11 @@ class FakeCollaborationWaitClock {
 
   constructor(private currentTime = 10_000) {}
 
+  readonly cancelled = vi.fn()
+
   readonly now = (): number => this.currentTime
 
-  readonly setTimeout = (callback: () => void, delayMs: number): { unref(): void } => {
+  readonly setTimeout = (callback: () => void, delayMs: number): { unref(): void; cancel(): void } => {
     const timer: ScheduledFakeTimer = {
       callback,
       requestedAt: this.currentTime,
@@ -94,7 +96,7 @@ class FakeCollaborationWaitClock {
     const waiter = this.waiters.shift()
     if (waiter) waiter(timer)
     else this.pending.push(timer)
-    return { unref: timer.unref }
+    return { unref: timer.unref, cancel: () => { this.cancelled(); const index = this.pending.indexOf(timer); if (index >= 0) this.pending.splice(index, 1) } }
   }
 
   takeNextTimer(): Promise<ScheduledFakeTimer> {
@@ -159,9 +161,9 @@ async function fixture(
   await bridge.start()
   bridges.push(bridge)
   const environment = bridge.environmentFor({ cwd: '/project', sessionPath: source.filePath, harness: 'prime' })
-  const call = async (method: string, params: Record<string, unknown> = {}, token = environment.GOOEYPI_COLLABORATION_TOKEN) => {
+  const call = async (method: string, params: Record<string, unknown> = {}, token = environment.GOOEYPI_COLLABORATION_TOKEN, signal?: AbortSignal) => {
     const response = await fetch(environment.GOOEYPI_COLLABORATION_URL!, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ method, params }),
+      method: 'POST', signal, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ method, params }),
     })
     return { status: response.status, body: await response.json() as { ok: boolean; result?: Record<string, unknown> | Array<Record<string, unknown>>; error?: string } }
   }
@@ -375,6 +377,21 @@ describe('AgentCollaborationBridge', () => {
     expect(response.body.error).toContain('Network MCP authentication is managed outside GooeyPi')
     expect(primeManager.start).not.toHaveBeenCalled()
     expect(primeManager.command).not.toHaveBeenCalled()
+  })
+
+  it('cancels disconnected waits immediately and releases their target admission', async () => {
+    const clock = new FakeCollaborationWaitClock()
+    const { call } = await fixture(false, defaultTargetTranscript, clock)
+    const read = await call('read', { target_session_id: target.id })
+    const cursor = (read.body.result as { cursor: string }).cursor
+    const controller = new AbortController()
+    const waiting = call('wait', { target_session_id: target.id, after_cursor: cursor }, undefined, controller.signal)
+    const rejected = expect(waiting).rejects.toThrow()
+    await clock.takeNextTimer()
+    controller.abort()
+    await rejected
+    await vi.waitFor(() => expect(clock.cancelled).toHaveBeenCalledOnce())
+    expect(await call('wait', { target_session_id: target.id, timeout_ms: 0 })).toMatchObject({ status: 200 })
   })
 
   it('starts normally and reports unavailable when fast mode is requested without model support', async () => {
