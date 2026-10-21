@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { closeSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { HarnessId } from '../../../src/types/api'
 import { errorCode, isRecord } from '../validation'
@@ -66,14 +66,23 @@ export function loadOrCreateGooeyPiAgentMessageKey(path: string): Buffer {
         continue
       }
       // Read failures are not evidence of corrupt bytes and must never quarantine the key.
-      const descriptor = openSync(path, 'r')
+      const descriptor = openSync(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW))
       try {
-        const existing = readFileSync(descriptor)
-        if (existing.length !== KEY_BYTES) throw new Error('The GooeyPi agent-message signing key changed while loading')
+        const opened = fstatSync(descriptor)
+        if (!opened.isFile() || opened.size !== KEY_BYTES || opened.dev !== observed.dev || opened.ino !== observed.ino) continue
+        const buffer = Buffer.alloc(KEY_BYTES + 1)
+        let bytes = 0
+        while (bytes < buffer.length) {
+          const count = readSync(descriptor, buffer, bytes, buffer.length - bytes, bytes)
+          if (count === 0) break
+          bytes += count
+        }
+        if (bytes !== KEY_BYTES) throw new Error('The GooeyPi agent-message signing key changed while loading')
         if (process.platform !== 'win32' && (observed.mode & 0o077) !== 0) fchmodSync(descriptor, 0o600)
-        return existing
+        return buffer.subarray(0, KEY_BYTES)
       } finally { closeSync(descriptor) }
     } catch (error) {
+      if (errorCode(error) === 'ELOOP') continue
       if (errorCode(error) !== 'ENOENT') throw error
     }
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
