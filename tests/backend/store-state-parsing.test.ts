@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings, JsonStateStore } from '../../electron/main/store'
 import type { DesktopState } from '../../electron/main/store'
 
+import { SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES } from '../../src/types/api'
+
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
@@ -353,6 +355,14 @@ describe('persisted schedule parsing', () => {
     expect(schedules[0].runs[1]).toMatchObject({ startedAt: undefined, finishedAt: undefined, sessionId: undefined, sessionFile: undefined, error: undefined, skippedCount: undefined })
     expect(schedules[0].runs[2]).toMatchObject({ status: 'cancelled', finishedAt: '2026-01-01T09:00:03.000Z', error: 'Task changed' })
     expect(loadState({ version: 3, schedules: [{ ...validSchedule, runs: 'none' }] }).schedules[0].runs).toEqual([])
+  })
+
+  it('retains every shared schedule and run status on reload', () => {
+    for (const status of SCHEDULE_DEFINITION_STATUSES) {
+      const { schedules } = loadState({ version: 4, schedules: [{ ...validSchedule, status, runs: SCHEDULE_RUN_STATUSES.map((runStatus, index) => ({ ...validRun, id: `run-${index}`, status: runStatus })) }] })
+      expect(schedules[0].status).toBe(status)
+      expect(schedules[0].runs.map((run) => run.status)).toEqual([...SCHEDULE_RUN_STATUSES])
+    }
   })
 
   it('caps stored schedules', () => {

@@ -4,11 +4,11 @@ import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type LocalePreference, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type LocalePreference, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { renameWithWindowsRetry } from './lib/durable-write'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
-import { isRecord } from './validation'
+import { isOneOf, isRecord } from './validation'
 
 export interface FolderIdentity {
   dev: string
@@ -267,8 +267,6 @@ function parseDisabledModels(value: unknown, fallback: string[]): string[] {
 }
 
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
-const RUN_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'skipped', 'interrupted', 'cancelled'])
-const SCHEDULE_STATUSES = new Set(['active', 'paused', 'completed', 'blocked'])
 
 function boundedString(value: unknown, max: number, allowEmpty = false): value is string {
   return typeof value === 'string' && value.length <= max && (allowEmpty || value.trim().length > 0)
@@ -298,7 +296,7 @@ function parseScheduleExecution(value: unknown): ScheduleExecution | null {
 
 function parseScheduleRun(value: unknown): ScheduleRunRecord | null {
   if (!isRecord(value) || !boundedString(value.id, 256) || !boundedString(value.taskId, 256)) return null
-  if (!Number.isSafeInteger(value.taskRevision) || Number(value.taskRevision) < 1 || !RUN_STATUSES.has(String(value.status))) return null
+  if (!Number.isSafeInteger(value.taskRevision) || Number(value.taskRevision) < 1 || !isOneOf(SCHEDULE_RUN_STATUSES, value.status)) return null
   if ((value.trigger !== 'scheduled' && value.trigger !== 'manual') || !validDate(value.scheduledFor) || !validDate(value.queuedAt)) return null
   const execution = parseScheduleExecution(value.execution)
   if (!execution) return null
@@ -311,7 +309,7 @@ function parseScheduleRun(value: unknown): ScheduleRunRecord | null {
     queuedAt: value.queuedAt,
     startedAt: validDate(value.startedAt) ? value.startedAt : undefined,
     finishedAt: validDate(value.finishedAt) ? value.finishedAt : undefined,
-    status: value.status as ScheduleRunRecord['status'],
+    status: value.status,
     execution,
     sessionId: boundedString(value.sessionId, 256) ? value.sessionId : undefined,
     sessionFile: boundedString(value.sessionFile, 4_096) ? value.sessionFile : undefined,
@@ -327,7 +325,7 @@ function parseSchedule(value: unknown, preHarnessState: boolean): AutomationSche
   const timing = parseScheduleTiming(value.timing)
   const execution = parseScheduleExecution(value.execution)
   const harness = parseHarness(value.harness, preHarnessState)
-  if (!target || !timing || !execution || !harness || !SCHEDULE_STATUSES.has(String(value.status))) return null
+  if (!target || !timing || !execution || !harness || !isOneOf(SCHEDULE_DEFINITION_STATUSES, value.status)) return null
   if ((value.createdBy !== 'user' && value.createdBy !== 'agent') || !validDate(value.createdAt) || !validDate(value.updatedAt)) return null
   const runs = Array.isArray(value.runs) ? value.runs.map(parseScheduleRun).filter((run): run is ScheduleRunRecord => run !== null) : []
   return {
@@ -340,7 +338,7 @@ function parseSchedule(value: unknown, preHarnessState: boolean): AutomationSche
     target,
     timing,
     execution,
-    status: value.status as AutomationScheduleRecord['status'],
+    status: value.status,
     createdBy: value.createdBy,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,

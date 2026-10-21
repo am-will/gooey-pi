@@ -624,8 +624,10 @@ export interface VoiceToolResult {
   task?: VoiceTaskStarted
 }
 
-export type ScheduleDefinitionStatus = 'active' | 'paused' | 'completed' | 'blocked'
-export type ScheduleRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted' | 'cancelled'
+export const SCHEDULE_DEFINITION_STATUSES = ['active', 'paused', 'completed', 'blocked'] as const
+export type ScheduleDefinitionStatus = (typeof SCHEDULE_DEFINITION_STATUSES)[number]
+export const SCHEDULE_RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'skipped', 'interrupted', 'cancelled'] as const
+export type ScheduleRunStatus = (typeof SCHEDULE_RUN_STATUSES)[number]
 export type ScheduleCreatedBy = 'user' | 'agent'
 
 export type ScheduleTarget =
