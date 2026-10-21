@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
 import { AuthStorage } from 'prime-agent'
 import { MAX_CATALOG_PROVIDERS, PrimeProviderService, resolveAvailableModelKeys } from '../../electron/main/providers'
 import type { PrimeImplementation, PrimeModelCatalog } from '../../src/types/api'
@@ -353,6 +354,30 @@ describe('Prime provider adapter', () => {
     expect(providerService.cancelOAuth(second.flowId)).toBe(true)
     // A second cancel of the same flow is a no-op.
     expect(providerService.cancelOAuth(second.flowId)).toBe(false)
+  })
+
+  it('ignores late authorization URLs, progress and completion after OAuth cancellation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-oauth-cancel-'))
+    dirs.push(dir)
+    const openExternal = vi.fn(async () => undefined)
+    const providerService = new PrimeProviderService({ authPath: join(dir, 'auth.json'), modelsPath: join(dir, 'models.json'), openExternal })
+    const events = vi.fn()
+    providerService.setEventSink(events)
+    let callbacks!: OAuthLoginCallbacks
+    let finish!: () => void
+    const internals = providerService as unknown as { authStorage: { login(providerId: string, value: OAuthLoginCallbacks): Promise<void> } }
+    internals.authStorage.login = async (_provider, value) => { callbacks = value; await new Promise<void>((resolve) => { finish = resolve }) }
+    const provider = (await providerService.catalog()).providers.find((candidate) => candidate.authMethod === 'oauth')!
+    const { flowId } = await providerService.startOAuth(provider.id)
+    providerService.cancelOAuth(flowId)
+    events.mockClear()
+    callbacks.onAuth({ url: 'https://example.test/login' })
+    callbacks.onProgress?.('Late progress')
+    finish()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(openExternal).not.toHaveBeenCalled()
+    expect(events).not.toHaveBeenCalled()
   })
 
   it('rejects OAuth for providers that do not own an OAuth flow', async () => {

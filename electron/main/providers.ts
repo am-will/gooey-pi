@@ -419,15 +419,17 @@ export class PrimeProviderService {
   }
 
   private async runOAuth(flow: OAuthFlow): Promise<void> {
+    const live = () => this.flows.get(flow.id) === flow && !flow.abort.signal.aborted
     try {
       const callbacks: OAuthLoginCallbacks = {
         signal: flow.abort.signal,
         onAuth: (info) => {
+          if (!live()) return
           const url = requireWebUrl(info.url)
           this.emit(flow, { type: 'auth', url, instructions: info.instructions?.slice(0, 4_000) })
-          void this.openExternal(url).catch((error) => this.emit(flow, { type: 'error', error: this.errorMessage(error) }))
+          if (live()) void this.openExternal(url).catch((error) => { if (live()) this.emit(flow, { type: 'error', error: this.errorMessage(error) }) })
         },
-        onProgress: (message) => this.emit(flow, { type: 'progress', message: message.slice(0, 4_000) }),
+        onProgress: (message) => { if (live()) this.emit(flow, { type: 'progress', message: message.slice(0, 4_000) }) },
         onPrompt: (prompt) => this.requestOAuthValue(flow, {
           type: 'prompt',
           message: prompt.message.slice(0, 4_000),
@@ -447,10 +449,11 @@ export class PrimeProviderService {
         }),
       }
       await this.authStorage.login(flow.providerId, callbacks)
+      if (!live()) return
       this.invalidate()
       this.emit(flow, { type: 'complete' })
     } catch (error) {
-      this.emit(flow, flow.abort.signal.aborted ? { type: 'cancelled' } : { type: 'error', error: this.errorMessage(error) })
+      if (live()) this.emit(flow, { type: 'error', error: this.errorMessage(error) })
     } finally {
       clearTimeout(flow.timer)
       flow.pending?.reject(new Error('Provider login ended'))
@@ -463,6 +466,7 @@ export class PrimeProviderService {
     // Release the flow slot immediately so cancel -> retry always works, even
     // when the underlying login ignores the abort signal and never settles.
     clearTimeout(flow.timer)
+    this.emit(flow, { type: 'cancelled' })
     this.flows.delete(flow.id)
     flow.abort.abort(error)
     flow.pending?.reject(error)
