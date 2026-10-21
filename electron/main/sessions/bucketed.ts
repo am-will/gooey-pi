@@ -1,14 +1,18 @@
+import type { SessionServiceOptions } from '../sessions'
+import { compactText } from '../../../src/lib/text'
 import type { Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
-import { mapLimit } from '../lib/async'
-import { isPathWithin, isRecord } from '../validation'
+import { comparePaths, mapLimit } from '../lib/async'
+import { isPathWithin } from '../validation'
 import { fallbackModelFromRecord, fallbackNoticeText } from '../../../src/lib/events/model-fallback'
 import type { TranscriptMessage } from '../../../src/types/api'
 import type { SessionCatalogEntry, SessionCatalogIo } from './catalog'
 import {
-  ingestMessageActivity,
-  MAX_METADATA_RECORDS,
+  ingestCommonRecord,
+  parseMetadataRecord,
+  sessionTitle,
+  type BaseMetadataAccumulator,
   statusFrom,
   type JsonRecord,
   type MetadataLineParser,
@@ -16,11 +20,10 @@ import {
 } from './metadata'
 import {
   boundedString,
-  compactText,
+  systemNotice,
   createTranscriptReader,
   MAX_PART_TEXT_CHARS,
   textFromContent,
-  validTimestamp,
   type TranscriptFileReader,
   type TranscriptDialect,
 } from './transcript'
@@ -57,6 +60,8 @@ export function createBucketedCatalogIo(): SessionCatalogIo {
     async readDirectory(root: string): Promise<readonly SessionCatalogEntry[]> {
       const buckets = (await readdir(root, { withFileTypes: true }))
         .filter((bucket) => bucket.isDirectory() && !bucket.name.startsWith('.'))
+        // Readdir order is filesystem-defined; sort so truncation is deterministic.
+        .sort((left, right) => comparePaths(left.name, right.name))
         .slice(0, MAX_BUCKET_DIRECTORIES)
       const perBucket = await mapLimit(buckets, MAX_BUCKET_CONCURRENCY, async (bucket): Promise<SessionCatalogEntry[] | null> => {
         try {
@@ -84,23 +89,9 @@ export function isBucketedSessionPath(sessionRootRealPath: string, sessionRealPa
   return segments.length === 2 && segments.every((segment) => segment.length > 0)
 }
 
-export interface BucketedMetadataAccumulator {
-  id: string
-  projectPath: string
-  createdAt: string
-  updatedAt: string
-  sawRecordTimestamp: boolean
-  lastUserMessageAt?: string
-  model?: string
-  provider?: string
-  thinkingLevel?: string
+export interface BucketedMetadataAccumulator extends BaseMetadataAccumulator {
   /** Harness-reported session title; falls back to the first user prompt. */
   displayName?: string
-  firstUser: string
-  preview: string
-  lastRole?: string
-  stopReason?: string
-  records: number
 }
 
 function idFromBucketedFileName(filePath: string): string {
@@ -128,7 +119,7 @@ function bucketedMetadataFromAccumulator(state: BucketedMetadataAccumulator, fil
     id: state.id,
     filePath,
     projectPath: state.projectPath,
-    title: compactText(state.displayName ?? '', 100) || compactText(state.firstUser, 100) || 'Untitled session',
+    title: sessionTitle(state.displayName, state.firstUser),
     createdAt: state.createdAt,
     updatedAt: state.sawRecordTimestamp ? state.updatedAt : fallbackUpdated,
     lastUserMessageAt: state.lastUserMessageAt ?? state.createdAt,
@@ -158,25 +149,29 @@ export function createBucketedMetadataParser(ingestRecord: BucketedRecordIngest)
   return {
     createAccumulator: createBucketedAccumulator,
     ingestLine: (state, line) => {
-      if (!line) return
-      if (++state.records > MAX_METADATA_RECORDS) throw new Error('Session file has too many records')
-      let value: unknown
-      try { value = JSON.parse(line) } catch { return }
-      if (!isRecord(value)) return
-      const recordTimestamp = validTimestamp(value.timestamp, '')
-      if (recordTimestamp) {
-        state.updatedAt = recordTimestamp
-        state.sawRecordTimestamp = true
-      }
-      if (value.type === 'session') {
-        if (typeof value.id === 'string') state.id = value.id
-        if (typeof value.cwd === 'string') state.projectPath = value.cwd
-        state.createdAt = validTimestamp(value.timestamp, state.createdAt)
-      } else if (value.type === 'thinking_level_change' && typeof value.thinkingLevel === 'string') state.thinkingLevel = value.thinkingLevel
-      else if (value.type === 'message') ingestMessageActivity(state, value)
-      else ingestRecord(state, value)
+      const value = parseMetadataRecord(state, line)
+      if (!value) return
+      ingestCommonRecord(state, value)
+      if (value.type !== 'session' && value.type !== 'thinking_level_change' && value.type !== 'message') ingestRecord(state, value)
     },
     snapshot: bucketedMetadataFromAccumulator,
+  }
+}
+
+/** The one-level bucketed layouts share discovery, path authority, and watcher wiring. */
+export function bucketedSessionServiceOptions(
+  harness: 'omp' | 'pi',
+  sessionRoot: string,
+  metadataReader: NonNullable<SessionServiceOptions['metadataReader']>,
+  transcriptReader: TranscriptFileReader,
+  renameFile: NonNullable<SessionServiceOptions['renameFile']>,
+): SessionServiceOptions {
+  return {
+    harness, sessionRoot, metadataReader, transcriptReader, renameFile,
+    catalogIo: createBucketedCatalogIo(),
+    catalogNameTimestamp: timestampFromBucketedSessionName,
+    isSessionPathAuthorized: isBucketedSessionPath,
+    recursiveWatch: true,
   }
 }
 
@@ -212,14 +207,5 @@ export function branchSummaryTranscriptDialect(): TranscriptDialect {
 
 /** Fallbacks and branch summaries are neutral notices: they never render as failures. */
 function noticeRow(entry: JsonRecord, safeId: string, text: string): TranscriptMessage {
-  const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
-  return {
-    id: safeId,
-    role: 'system',
-    kind: 'notice',
-    timestamp,
-    startedAt: timestamp,
-    completedAt: timestamp,
-    parts: [{ type: 'text', text: boundedString(text, MAX_PART_TEXT_CHARS) }],
-  }
+  return { ...systemNotice(entry, safeId, [{ type: 'text', text: boundedString(text, MAX_PART_TEXT_CHARS) }]), kind: 'notice' }
 }

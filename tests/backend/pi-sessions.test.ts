@@ -1,3 +1,5 @@
+import { waitUntil } from '../helpers/wait'
+import { isBucketedSessionPath, timestampFromBucketedSessionName } from '../../electron/main/sessions/bucketed'
 import { appendFileSync, createReadStream, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,9 +10,7 @@ import { METADATA_VERIFY_TAIL_BYTES } from '../../electron/main/sessions/metadat
 import {
   appendPiSessionInfo,
   createPiSessionMetadataReader,
-  isPiSessionPath,
   piSessionServiceOptions,
-  piTimestampFromSessionName,
 } from '../../electron/main/sessions/pi'
 import { JsonStateStore } from '../../electron/main/store'
 
@@ -52,10 +52,10 @@ const BUCKET = '--Users-am.will-Applications-prime--'
 
 describe('pi session file names', () => {
   it('derives ordering timestamps from the ISO file-name prefix, with or without a bucket prefix', () => {
-    expect(piTimestampFromSessionName(NAME_C)).toBe(Date.parse('2026-08-10T22:41:20.246Z'))
-    expect(piTimestampFromSessionName(`${BUCKET}/${NAME_A}`)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
-    expect(piTimestampFromSessionName('legacy.jsonl')).toBeUndefined()
-    expect(piTimestampFromSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName(NAME_C)).toBe(Date.parse('2026-08-10T22:41:20.246Z'))
+    expect(timestampFromBucketedSessionName(`${BUCKET}/${NAME_A}`)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
+    expect(timestampFromBucketedSessionName('legacy.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
   })
 })
 
@@ -118,6 +118,41 @@ describe('pi metadata reader', () => {
     const titles = new Map((await service.list()).map((record) => [record.filePath.endsWith(NAME_B) ? 'cleared' : 'untitled', record.title]))
     expect(titles.get('untitled')).toBe('name me by prompt')
     expect(titles.get('cleared')).toBe('original prompt')
+  })
+
+  it('bounds an oversized session_info name to the title length', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } }),
+        piEntry('session_info', 'bb22cc33', 'aa11bb22', { name: 'n'.repeat(1024 * 1024) }),
+      ],
+    })
+
+    const title = (await service.list())[0]?.title ?? ''
+    expect(title).toHaveLength(100)
+    expect(title.endsWith('…')).toBe(true)
+  })
+
+  it('previews only visible assistant text, never thinking parts', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [
+        piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'question' } }),
+        piEntry('message', 'bb22cc33', 'aa11bb22', { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'plan...' }, { type: 'text', text: 'Final answer' }] } }),
+      ],
+    })
+    expect((await service.list())[0]?.preview).toBe('Final answer')
+
+    appendFileSync(file, `${piEntry('message', 'cc33dd44', 'bb22cc33', { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'more reasoning' }, { type: 'toolCall', name: 'bash', arguments: {} }] } })}\n`)
+    expect((await service.list(undefined, false, true))[0]?.preview).toBe('Final answer')
+    expect((await createPiSessionMetadataReader()(file)).preview).toBe('Final answer')
   })
 
   it('resumes appended tails incrementally and picks up a session_info rename', async () => {
@@ -235,11 +270,11 @@ describe('pi session path authorization', () => {
   })
 
   it('validates candidate shapes without touching the filesystem', () => {
-    expect(isPiSessionPath('/root', `/root/${BUCKET}/${NAME_A}`)).toBe(true)
-    expect(isPiSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
-    expect(isPiSessionPath('/root', `/root/${BUCKET}/deep/${NAME_A}`)).toBe(false)
-    expect(isPiSessionPath('/root', `/elsewhere/${BUCKET}/${NAME_A}`)).toBe(false)
-    expect(isPiSessionPath('/root', `/root/${BUCKET}/session.txt`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/${BUCKET}/${NAME_A}`)).toBe(true)
+    expect(isBucketedSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/${BUCKET}/deep/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/elsewhere/${BUCKET}/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/${BUCKET}/session.txt`)).toBe(false)
   })
 })
 
@@ -398,14 +433,14 @@ describe('pi session service harness identity', () => {
       const watcherHarness = service as unknown as { queueSessionChange(filename: string): void }
       // Recursive watchers report bucket-relative names one directory deep.
       watcherHarness.queueSessionChange(`${BUCKET}/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
       expect(events).toContainEqual({ filePath: realpathSync(file), harness: 'pi' })
 
       // Deeper or hidden names cannot resolve to one session file and coalesce
       // into a catalog-wide refresh instead.
       events.splice(0)
       watcherHarness.queueSessionChange(`${BUCKET}/nested/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.length > 0, 4_000)
       expect(events).toEqual([{ harness: 'pi' }])
     } finally {
       unsubscribe()
@@ -451,5 +486,41 @@ describe('pi file-level rename fallback', () => {
     expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
     const appended = JSON.parse(readFileSync(file, 'utf8').slice(before.length).trim()) as { parentId: string }
     expect(appended.parentId).toBe('deadbeef')
+  })
+
+  it('starts a fresh line when the last complete entry has no trailing LF', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } })],
+    })
+    appendFileSync(file, piEntry('message', 'bb22cc33', 'aa11bb22', { message: { role: 'assistant', content: 'unterminated' } }))
+
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
+    const records = lines.map((line) => JSON.parse(line) as { type: string; id?: string; parentId?: string | null; name?: string })
+    expect(records.at(-2)).toMatchObject({ type: 'message', id: 'bb22cc33' })
+    expect(records.at(-1)).toMatchObject({ type: 'session_info', parentId: 'bb22cc33', name: 'Renamed offline' })
+    expect((await service.list())[0]?.title).toBe('Renamed offline')
+  })
+
+  it('parents to the last complete entry and keeps the record parseable after a truncated partial line', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, BUCKET))
+    const file = join(root, BUCKET, NAME_C)
+    writePiSession(file, {
+      cwd: project,
+      entries: [piEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'first prompt' } })],
+    })
+    appendFileSync(file, '{"type":"message","id":"cafe')
+
+    expect(appendPiSessionInfo(file, 'Renamed offline')).toBe(true)
+    const lines = readFileSync(file, 'utf8').split('\n')
+    expect(lines.at(-1)).toBe('')
+    expect(lines.at(-3)).toBe('{"type":"message","id":"cafe')
+    expect(JSON.parse(lines.at(-2)!)).toMatchObject({ type: 'session_info', parentId: 'aa11bb22', name: 'Renamed offline' })
+    expect((await service.list())[0]?.title).toBe('Renamed offline')
   })
 })

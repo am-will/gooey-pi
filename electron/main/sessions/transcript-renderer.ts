@@ -1,10 +1,11 @@
 import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
 import { isCompactionReason } from '../../../src/lib/compaction-reason'
+import { SESSION_FILE_MAX_RECORDS } from '../jsonl-limits'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
 import { parseGooeyPiAgentMessage } from '../collaboration/message-envelope'
 import { providerErrorDetail } from '../agent-rpc/limits'
-import { boundedString, textFromContent, MAX_PART_TEXT_CHARS, type TranscriptDialect } from './transcript'
+import { boundedEntryTimestamp, systemNotice, boundedString, textFromContent, MAX_PART_TEXT_CHARS, type TranscriptDialect } from './transcript'
 
 const MAX_TRANSCRIPT_GRAPH_BYTES = 16 * 1024 * 1024
 const MAX_TRANSCRIPT_GRAPH_RECORDS = 10_000
@@ -182,7 +183,7 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
   // a record the catalog accepts must never make the transcript unopenable.
   for await (const line of lines) {
     if (!line) continue
-    if (++recordCount > 200_000) throw new Error('Session transcript has too many records')
+    if (++recordCount > SESSION_FILE_MAX_RECORDS) throw new Error('Session transcript has too many records')
     let entry: unknown
     try { entry = JSON.parse(line) } catch { continue }
     if (!isRecord(entry) || entry.type === 'session' || typeof entry.id !== 'string' || entry.id.length > 1_024) continue
@@ -268,19 +269,11 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
       // Pi, OMP and both Prime builds persist no trigger with a completed
       // compaction, so the row names no reason; only a Prime
       // compaction_outcome row below records one.
-      const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
       const tokensBefore = typeof entry.tokensBefore === 'number' && Number.isFinite(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined
       const summary = typeof entry.summary === 'string' ? boundedString(entry.summary, MAX_PART_TEXT_CHARS) : undefined
       const firstKeptEntryId = typeof entry.firstKeptEntryId === 'string' ? boundedString(entry.firstKeptEntryId, 1_024) : undefined
       const customInstructions = typeof entry.customInstructions === 'string' ? boundedString(entry.customInstructions, MAX_PART_TEXT_CHARS) : undefined
-      transcript.push({
-        id: safeId,
-        role: 'system',
-        timestamp,
-        startedAt: timestamp,
-        completedAt: timestamp,
-        parts: [{ type: 'compaction', status: 'done', tokensBefore, summary, firstKeptEntryId, customInstructions }],
-      })
+      transcript.push(systemNotice(entry, safeId, [{ type: 'compaction', status: 'done', tokensBefore, summary, firstKeptEntryId, customInstructions }]))
       activeAssistant = undefined
       continue
     }
@@ -291,16 +284,8 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
       if (customType === 'compaction_outcome') {
         const outcome = details?.outcome === 'cancelled' ? 'cancelled' : details?.outcome === 'skipped' ? 'skipped' : 'failed'
         const reason = isCompactionReason(details?.reason) ? details.reason : undefined
-        const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
         const text = boundedString(textFromContent(entry.content), MAX_PART_TEXT_CHARS)
-        transcript.push({
-          id: safeId,
-          role: 'system',
-          timestamp,
-          startedAt: timestamp,
-          completedAt: timestamp,
-          parts: [{ type: 'compaction', status: outcome === 'cancelled' ? 'cancelled' : 'failed', outcome, reason, error: text }],
-        })
+        transcript.push(systemNotice(entry, safeId, [{ type: 'compaction', status: outcome === 'cancelled' ? 'cancelled' : 'failed', outcome, reason, error: text }]))
         activeAssistant = undefined
         continue
       }
@@ -311,7 +296,7 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
       const agentName = typeof from?.sessionName === 'string' ? boundedString(from.sessionName, 200) : undefined
       const readableText = isGoalSummary ? goalObjective ?? detailMessage : detailMessage
       const text = boundedString(readableText ?? textFromContent(entry.content), MAX_PART_TEXT_CHARS)
-      const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
+      const timestamp = boundedEntryTimestamp(entry)
       if (isAgentMessage && activeAssistant) {
         appendAssistantParts([{ type: 'agentMessage', text, agentName }])
         activeAssistant.completedAt = timestamp ?? activeAssistant.completedAt
@@ -358,7 +343,7 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
     }
     const role = roleOf(message)
     // Messages start at their own timestamp; the enclosing entry is persisted at completion.
-    const entryTimestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
+    const entryTimestamp = boundedEntryTimestamp(entry)
     const rawTimestamp = typeof message.timestamp === 'string' || typeof message.timestamp === 'number' ? message.timestamp : entryTimestamp
     const timestamp = typeof rawTimestamp === 'string' ? boundedString(rawTimestamp, 128) : rawTimestamp
     const completedAt = entryTimestamp ?? timestamp

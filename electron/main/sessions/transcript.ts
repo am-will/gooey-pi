@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import type { TranscriptMessage } from '../../../src/types/api'
-import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
+import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
+import { SESSION_FILE_MAX_BYTES, SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { strictJsonLines } from '../jsonl'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
@@ -18,14 +18,14 @@ export function boundedString(value: string, max: number): string {
   return `${value.slice(0, head)}${TRUNCATION_MARKER}${value.slice(-(available - head))}`
 }
 
-export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS): string {
+export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS, { includeThinking = true }: { includeThinking?: boolean } = {}): string {
   if (typeof content === 'string') return boundedString(content, max)
   if (!Array.isArray(content)) return ''
   let text = ''
   for (const part of content) {
     if (!isRecord(part)) continue
     const addition = part.type === 'text' && typeof part.text === 'string' ? part.text
-      : part.type === 'thinking' && typeof part.thinking === 'string' ? part.thinking : ''
+      : includeThinking && part.type === 'thinking' && typeof part.thinking === 'string' ? part.thinking : ''
     if (!addition) continue
     text += `${text ? '\n' : ''}${addition}`
     if (text.length > max) return boundedString(text, max)
@@ -33,9 +33,13 @@ export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS): st
   return text
 }
 
-export function compactText(value: string, max = 160): string {
-  const oneLine = value.replace(/\s+/g, ' ').trim()
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine
+export function boundedEntryTimestamp(entry: JsonRecord): string | undefined {
+  return typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
+}
+
+export function systemNotice(entry: JsonRecord, id: string, parts: MessagePart[]): TranscriptMessage {
+  const timestamp = boundedEntryTimestamp(entry)
+  return { id, role: 'system', timestamp, startedAt: timestamp, completedAt: timestamp, parts }
 }
 
 export function validTimestamp(value: unknown, fallback: string): string {
@@ -72,7 +76,9 @@ export function createTranscriptReader(dialect: TranscriptDialect = primeTranscr
 }
 
 async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: string, isStreaming: boolean): Promise<TranscriptMessage[]> {
-  if ((await stat(filePath)).size > 256 * 1024 * 1024) throw new Error('Session transcript is too large to display')
+  const info = await stat(filePath)
+  if (!info.isFile()) throw new Error('Session transcript is not a regular file')
+  if (info.size > SESSION_FILE_MAX_BYTES) throw new Error('Session transcript is too large to display')
   return renderTranscriptLines(strictJsonLines(createReadStream(filePath), SESSION_FILE_RECORD_LIMIT_BYTES), isStreaming, dialect)
 }
 
