@@ -1,11 +1,12 @@
 import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import * as pty from 'node-pty'
 import type { TerminalActiveContext, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
+import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 import { TERMINAL_CONTEXT_MAX_CHARS } from '../../src/lib/terminal-context'
 import type { WorkspaceUseLease, WorkspaceUseOwner } from './repository-use-gate'
 import { killProcessTree, safeChildEnvironment } from './process-utils'
@@ -41,8 +42,8 @@ interface PendingTerminal {
 function systemShells(): Set<string> {
   if (process.platform === 'win32') {
     const shells = new Set<string>()
-    if (process.env.ComSpec && isAbsolute(process.env.ComSpec)) shells.add(process.env.ComSpec)
-    if (process.env.SystemRoot && isAbsolute(process.env.SystemRoot)) {
+    if (process.env.ComSpec && isAbsolutePathForPlatform(process.env.ComSpec, process.platform)) shells.add(process.env.ComSpec)
+    if (process.env.SystemRoot && isAbsolutePathForPlatform(process.env.SystemRoot, process.platform)) {
       shells.add(join(process.env.SystemRoot, 'System32', 'cmd.exe'))
       shells.add(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
     }
@@ -134,7 +135,7 @@ export class TerminalService {
 
   validateShell(value: unknown): string {
     const requested = requireString(value, 'shell', { min: 1, max: 4096 })
-    if (!isAbsolute(requested)) throw new TypeError('shell must be an absolute path')
+    if (!isAbsolutePathForPlatform(requested, process.platform)) throw new TypeError('shell must be an absolute path')
     let canonical: string
     try {
       canonical = realpathSync(requested)
@@ -143,7 +144,7 @@ export class TerminalService {
     } catch { throw new TypeError('shell is not executable') }
     const allowedCanonical = new Set<string>()
     for (const shell of this.allowedShells) {
-      if (!shell || !isAbsolute(shell) || !existsSync(shell)) continue
+      if (!shell || !isAbsolutePathForPlatform(shell, process.platform) || !existsSync(shell)) continue
       try { allowedCanonical.add(realpathSync(shell)) } catch { /* ignore */ }
     }
     if (!allowedCanonical.has(canonical)) throw new TypeError(process.platform === 'win32' ? 'shell is not an approved Windows shell' : 'shell is not listed in /etc/shells')

@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { probeHarnessExecutable } from '../../electron/main/harness-discovery'
 import { HARNESSES } from '../../electron/main/harness'
-import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, primeAgentCandidates, primeAgentExecutableName, processFailureReason, processOutcome, runProcess, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
+import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, processFailureReason, processOutcome, runProcess, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
 import { waitUntil } from '../helpers/wait'
 
 const spawnOverride = vi.hoisted(() => ({ current: null as null | ((...args: unknown[]) => unknown) }))
@@ -331,16 +331,16 @@ describe('waitForProcessExit', () => {
 
 describe('Prime Agent discovery candidates', () => {
   it('uses native executable names and absolute paths for every supported desktop platform', () => {
-    expect(primeAgentExecutableName('darwin')).toBe('prime-agent')
-    expect(primeAgentExecutableName('linux')).toBe('prime-agent')
-    expect(primeAgentExecutableName('win32')).toBe('prime-agent.exe')
+    expect(HARNESSES.prime.executableName('darwin')).toBe('prime-agent')
+    expect(HARNESSES.prime.executableName('linux')).toBe('prime-agent')
+    expect(HARNESSES.prime.executableName('win32')).toBe('prime-agent.exe')
     expect(isAbsolutePathForPlatform('/opt/prime-agent', 'linux')).toBe(true)
     expect(isAbsolutePathForPlatform('C:\\Tools\\prime-agent.exe', 'win32')).toBe(true)
     expect(isAbsolutePathForPlatform('prime-agent.exe', 'win32')).toBe(false)
   })
 
   it('accepts explicit Windows binaries and searches the Windows PATH without speculative install locations', () => {
-    const candidates = primeAgentCandidates({
+    const candidates = harnessExecutableCandidates(HARNESSES.prime, {
       PRIME_AGENT_BINARY: 'C:\\Tools\\prime-agent.exe',
       Path: 'C:\\Program Files\\Prime Agent;D:\\bin',
       LOCALAPPDATA: 'C:\\Users\\Ada\\AppData\\Local',

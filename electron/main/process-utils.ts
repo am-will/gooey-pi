@@ -3,6 +3,8 @@ import { access, readdir } from 'node:fs/promises'
 import { delimiter, posix, win32 } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { homedir } from 'node:os'
+import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
+export { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 import { createAdmissionQueue } from './lib/async'
 import { HARNESSES, type HarnessDescriptor } from './harness'
 import type { ProcessFailureReason, ProcessOutcome } from '../../src/types/api'
@@ -40,7 +42,7 @@ export function processOutcome(result: ProcessResult, output: string): ProcessOu
 }
 
 export const PROCESS_CONCURRENCY_LIMIT = 8
-export const PROCESS_QUEUE_LIMIT = 64
+const PROCESS_QUEUE_LIMIT = 64
 
 const POSIX_SYSTEM_PATH_DIRS = new Set(['/opt/homebrew/bin', '/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
 
@@ -372,8 +374,8 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
   // values rather than credentials, provider tokens, signing agents, or Git's
   // many environment-based configuration injection mechanisms. HOME/XDG_CONFIG_HOME
   // are included so Git can still find the user's global excludes file
-  // (~/.config/git/ignore) — GIT_CONFIG_GLOBAL=/dev/null above already keeps it
-  // from reading ~/.gitconfig itself.
+  // (~/.config/git/ignore); GIT_CONFIG_GLOBAL below separately disables
+  // reading ~/.gitconfig itself.
   const env: NodeJS.ProcessEnv = {
     LANG: 'C',
     LC_ALL: 'C',
@@ -395,10 +397,6 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
     if (value !== undefined) env[key] = value
   }
   return env
-}
-
-export function isAbsolutePathForPlatform(value: string, platform = process.platform): boolean {
-  return platform === 'win32' ? win32.isAbsolute(value) : posix.isAbsolute(value)
 }
 
 function sharedHarnessCandidateDirs(
@@ -544,18 +542,6 @@ export type ExecutableSource = string | null | (() => string | null)
 /** Resolves a startup-fixed path or a live discovery-backed executable source. */
 export function resolveExecutable(source: ExecutableSource): string | null {
   return typeof source === 'function' ? source() : source
-}
-
-export function primeAgentExecutableName(platform = process.platform): string {
-  return HARNESSES.prime.executableName(platform)
-}
-
-export function primeAgentCandidates(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string[] {
-  return harnessExecutableCandidates(HARNESSES.prime, env, platform)
-}
-
-export async function findPrimeAgent(): Promise<string | null> {
-  return findHarnessExecutable(HARNESSES.prime)
 }
 
 export function runProcess(file: string, args: readonly string[], options: {
