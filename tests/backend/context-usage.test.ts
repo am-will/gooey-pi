@@ -130,6 +130,22 @@ describe('context usage projection', () => {
     expect(projection.current()?.tokens).toBe(44_600)
   })
 
+  it('does not certify rebased activity when an intervening snapshot has not grown', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_100))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(3_000))
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantStart)
+    // This response predates the first output. Rebasing the overlay at the
+    // next request does not prove that the stored snapshot includes it.
+    projection.applySnapshot(usage(40_100), requestedAt)
+    projection.handleEvent(assistantEnd(1_500))
+    projection.applySnapshot(usage(43_100), requestedAt)
+    expect(projection.current()?.tokens).toBe(44_600)
+  })
+
   it('forgets pre-compaction activity when checking what a delayed snapshot includes', () => {
     const projection = new ContextUsageProjection()
     projection.applySnapshot(usage(150_000))
