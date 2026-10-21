@@ -1221,10 +1221,14 @@ setInterval(() => {}, 1000)
     writeFileSync(executable, `#!/usr/bin/env node
 const readline = require('node:readline')
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+send({ type: 'fake_ready' })
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const command = JSON.parse(line)
   if (command.type === 'sleepy') {
-    setTimeout(() => send({ id: command.id, type: 'response', command: 'sleepy', success: true }), 300)
+    setTimeout(() => {
+      send({ id: command.id, type: 'response', command: 'sleepy', success: true })
+      send({ type: 'fake_late_reply_sent' })
+    }, 300)
   }
 })
 setInterval(() => {}, 1000)
@@ -1234,8 +1238,9 @@ setInterval(() => {}, 1000)
     const runtime = new RpcRuntime(executable, [], cwd, (envelope) => events.push(envelope as unknown as { event: { type?: unknown } }), () => undefined)
     try {
       const request = (runtime as unknown as { request(command: RpcObject, timeoutMs: number): Promise<RpcObject> }).request.bind(runtime)
+      await waitUntil(() => events.some((envelope) => envelope.event.type === 'fake_ready'))
       await expect(request({ type: 'sleepy' }, 100)).rejects.toThrow(/timed out after delivery.*do not retry automatically/)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.some((envelope) => envelope.event.type === 'fake_late_reply_sent'))
       expect(events.some((envelope) => envelope.event.type === 'orphan_response')).toBe(false)
     } finally {
       await runtime.stop()
