@@ -26,6 +26,25 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('carries a new chat’s queue through runtime attachment and catalog adoption', () => {
+    const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
+    act(() => root.render(createElement(Probe)))
+    act(() => {
+      latest.queuePrompt('before runtime', 'queue')
+      latest.attachRuntime({ ...runtime, sessionFile: undefined }, 0)
+      latest.queuePrompt('before session discovery', 'queue')
+      latest.attachRuntime(runtime, 0)
+    })
+    const queue = latest.pendingQueuedPrompts
+    act(() => root.render(createElement(Probe, { sessions: [session, other] })))
+    expect(latest.activeSessionId).toBe(session.id)
+    expect(latest.viewKey).toBe('new:0')
+    expect(latest.pendingQueuedPrompts).toBe(queue)
+    act(() => { latest.activateWorkspace(project, other); latest.activateWorkspace(project, session) })
+    expect(latest.pendingQueuedPrompts).toBe(queue)
+    expect(latest.pendingQueuedPrompts.map((prompt) => prompt.text)).toEqual(['before runtime', 'before session discovery'])
+  })
+
   it('keeps queue and prompt identity when there are no flush failures to clear', () => {
     act(() => root.render(createElement(Probe)))
     act(() => latest.queuePrompt('queue me', 'queue'))

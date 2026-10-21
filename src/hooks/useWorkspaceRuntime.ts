@@ -5,6 +5,7 @@ import {
   admitAgentEvent,
   authoritativeTranscriptReadIsCurrent,
   eventsForWorkspace,
+  eventType,
   isTranscriptTerminalEvent,
   needsTranscriptReconciliation,
   reconcileTranscriptMessages,
@@ -111,7 +112,17 @@ export function useWorkspaceRuntime({
   const chunkedFlushTimerRef = useRef<number | null>(null)
   const reconcileOnVisibleRef = useRef(false)
 
-  const flushAgentEvents = useCallback(() => {
+  const commitActiveQueue = useCallback((next: QueuedPrompt[]) => {
+    pendingQueuedPromptsRef.current = next
+    const owner = activeQueuedPromptOwnerRef.current
+    if (owner) {
+      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
+      else queuedPromptsByOwnerRef.current.delete(owner)
+    }
+    setPendingQueuedPrompts(next)
+  }, [])
+
+  const cancelScheduledFlush = useCallback(() => {
     if (agentEventFrameRef.current !== null) {
       cancelAnimationFrame(agentEventFrameRef.current)
       agentEventFrameRef.current = null
@@ -120,6 +131,10 @@ export function useWorkspaceRuntime({
       window.clearTimeout(chunkedFlushTimerRef.current)
       chunkedFlushTimerRef.current = null
     }
+  }, [])
+
+  const flushAgentEvents = useCallback(() => {
+    cancelScheduledFlush()
     const generation = workspaceRef.current.generation
     const pending = pendingAgentEventsRef.current
     pendingAgentEventsRef.current = []
@@ -127,7 +142,7 @@ export function useWorkspaceRuntime({
     if (admitted.length) {
       setMessages((current) => replayPrimeEvents(current, admitted))
     }
-  }, [])
+  }, [cancelScheduledFlush])
 
   const flushAgentEventsChunked = useCallback(() => {
     if (chunkedFlushTimerRef.current !== null) return
@@ -162,10 +177,8 @@ export function useWorkspaceRuntime({
       if (previousQueueOwner?.includes(':new:') || previousQueueOwner?.includes(':runtime:')) {
         queuedPromptsByOwnerRef.current.delete(previousQueueOwner)
       }
-      if (nextQueueOwner && nextQueue.length) queuedPromptsByOwnerRef.current.set(nextQueueOwner, nextQueue)
       activeQueuedPromptOwnerRef.current = nextQueueOwner
-      pendingQueuedPromptsRef.current = nextQueue
-      setPendingQueuedPrompts(nextQueue)
+      commitActiveQueue(nextQueue)
     }
     if (next?.sessionFile) {
       runtimeSessionsRef.current.set(next.runtimeId, next.sessionFile)
@@ -175,7 +188,7 @@ export function useWorkspaceRuntime({
     runtimeIdRef.current = next?.runtimeId ?? null
     runtimeOwnerRef.current = next ? { runtimeId: next.runtimeId, generation } : null
     setRuntime(next)
-  }, [])
+  }, [commitActiveQueue])
 
   const replaceActiveProject = useCallback((previousId: string, granted: ProjectRecord) => {
     const selected = workspaceRef.current
@@ -205,14 +218,7 @@ export function useWorkspaceRuntime({
     reconciliationNeededRef.current = null
     deferredReconciliationRef.current = null
     reconcileOnVisibleRef.current = false
-    if (agentEventFrameRef.current !== null) {
-      cancelAnimationFrame(agentEventFrameRef.current)
-      agentEventFrameRef.current = null
-    }
-    if (chunkedFlushTimerRef.current !== null) {
-      window.clearTimeout(chunkedFlushTimerRef.current)
-      chunkedFlushTimerRef.current = null
-    }
+    cancelScheduledFlush()
     const generation = workspaceRef.current.generation + 1
     workspaceRef.current = {
       generation,
@@ -227,9 +233,8 @@ export function useWorkspaceRuntime({
     const queueOwner = queuedPromptOwner(project, session, nextRuntime, generation)
     const queuedPrompts = queueOwner ? queuedPromptsByOwnerRef.current.get(queueOwner) ?? [] : []
     activeQueuedPromptOwnerRef.current = queueOwner
-    pendingQueuedPromptsRef.current = queuedPrompts
     setWorkspaceGeneration(generation)
-    setPendingQueuedPrompts(queuedPrompts)
+    commitActiveQueue(queuedPrompts)
     setActiveProjectId(project?.id)
     setActiveSessionId(session?.id)
     setViewKey(session?.id ?? `new:${generation}`)
@@ -239,7 +244,7 @@ export function useWorkspaceRuntime({
       setLoadingSession(Boolean(session?.filePath))
     }
     return generation
-  }, [attachRuntime, bridge])
+  }, [attachRuntime, bridge, cancelScheduledFlush, commitActiveQueue])
 
   const reconcileRuntime = useCallback(async (generation: number) => {
     if (!bridge) return
@@ -334,18 +339,11 @@ export function useWorkspaceRuntime({
   const runOverflowReconciliation = useCallback(() => {
     reconcileOnVisibleRef.current = false
     pendingAgentEventsRef.current = []
-    if (agentEventFrameRef.current !== null) {
-      cancelAnimationFrame(agentEventFrameRef.current)
-      agentEventFrameRef.current = null
-    }
-    if (chunkedFlushTimerRef.current !== null) {
-      window.clearTimeout(chunkedFlushTimerRef.current)
-      chunkedFlushTimerRef.current = null
-    }
+    cancelScheduledFlush()
     const selected = workspaceRef.current
     if (!selected.sessionFile) return
     startTranscriptRead(selected, false)
-  }, [startTranscriptRead])
+  }, [cancelScheduledFlush, startTranscriptRead])
 
   const queueAgentEvent = useCallback((event: Record<string, unknown>) => {
     const generation = workspaceRef.current.generation
@@ -356,30 +354,33 @@ export function useWorkspaceRuntime({
       // hidden window does not re-read on every dropped event.
       reconcileOnVisibleRef.current = true
       pendingAgentEventsRef.current = []
-      if (agentEventFrameRef.current !== null) {
-        cancelAnimationFrame(agentEventFrameRef.current)
-        agentEventFrameRef.current = null
-      }
+      cancelScheduledFlush()
       if (typeof document === 'undefined' || document.visibilityState === 'visible') runOverflowReconciliation()
       return
     }
     if (owner === 'frame' && agentEventFrameRef.current === null && chunkedFlushTimerRef.current === null) {
       agentEventFrameRef.current = requestAnimationFrame(flushAgentEvents)
     }
-  }, [flushAgentEvents, runOverflowReconciliation])
+  }, [cancelScheduledFlush, flushAgentEvents, runOverflowReconciliation])
+
+  const supersedeTranscriptLoad = useCallback((generation: number) => {
+    const load = transcriptLoadRef.current
+    if (load?.generation !== generation) return
+    transcriptLoadRef.current = null
+    deferredReconciliationRef.current = null
+    setMessages((current) => load.eventBuffer.replay(current))
+  }, [])
 
   const reconcileTranscriptForEvent = useCallback((runtimeId: string, event: Record<string, unknown>) => {
     const selected = workspaceRef.current
-    const type = typeof event.type === 'string' ? event.type : ''
+    const type = eventType(event)
     // auto_retry_start also supersedes any in-flight reconciliation: the
     // agent_end that scheduled it did not actually end the turn, and the disk
     // read would replace the still-streaming transcript with finalized rows.
     if (type === 'agent_start' || type === 'turn_start' || type === 'compaction_start' || type === 'auto_retry_start') {
       const load = transcriptLoadRef.current
       if (load?.generation === selected.generation && !(load.initial && (type === 'agent_start' || type === 'turn_start'))) {
-        transcriptLoadRef.current = null
-        deferredReconciliationRef.current = null
-        setMessages((current) => load.eventBuffer.replay(current))
+        supersedeTranscriptLoad(selected.generation)
       }
     }
     if (promptAdmissionGenerationRef.current === selected.generation) {
@@ -410,47 +411,33 @@ export function useWorkspaceRuntime({
     }
     flushAgentEvents()
     startTranscriptRead(selected, true, runtimeId)
-  }, [flushAgentEvents, startTranscriptRead])
+  }, [flushAgentEvents, startTranscriptRead, supersedeTranscriptLoad])
 
   const prepareForPrompt = useCallback((generation: number): boolean => {
     if (workspaceRef.current.generation !== generation) return false
     promptAdmissionRevisionRef.current += 1
     promptAdmissionGenerationRef.current = generation
     reconciliationNeededRef.current = null
-    const load = transcriptLoadRef.current
     // Supersede every pending transcript load, not only reconciliations: a
     // background read resolving after the prompt would otherwise replace the
     // optimistic user message with older on-disk state. The reconciliation
     // read after the turn's terminal event restores disk authority.
-    if (load?.generation === generation) {
-      transcriptLoadRef.current = null
-      deferredReconciliationRef.current = null
-      setMessages((current) => load.eventBuffer.replay(current))
-    }
+    supersedeTranscriptLoad(generation)
     return true
-  }, [])
+  }, [supersedeTranscriptLoad])
 
   const queuePrompt = useCallback((text: string, intent: PromptDeliveryIntent, parts?: MessagePart[], timestamp = Date.now()): string => {
     const queued: QueuedPrompt = { id: nextQueuedPromptId(), text, intent, timestamp, ...(parts ? { parts } : {}) }
     const next = [...pendingQueuedPromptsRef.current, queued]
-    pendingQueuedPromptsRef.current = next
-    const owner = activeQueuedPromptOwnerRef.current
-    if (owner) queuedPromptsByOwnerRef.current.set(owner, next)
-    setPendingQueuedPrompts(next)
+    commitActiveQueue(next)
     return queued.id
-  }, [])
+  }, [commitActiveQueue])
   const removeQueuedPrompt = useCallback((id: string) => {
     observedSteerIdsRef.current.delete(id)
     const current = pendingQueuedPromptsRef.current
     const next = current.filter((prompt) => prompt.id !== id)
     if (next.length !== current.length) {
-      pendingQueuedPromptsRef.current = next
-      const owner = activeQueuedPromptOwnerRef.current
-      if (owner) {
-        if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
-        else queuedPromptsByOwnerRef.current.delete(owner)
-      }
-      setPendingQueuedPrompts(next)
+      commitActiveQueue(next)
       return
     }
     for (const [owner, prompts] of queuedPromptsByOwnerRef.current) {
@@ -464,7 +451,7 @@ export function useWorkspaceRuntime({
       setPendingQueuedPrompts([...pendingQueuedPromptsRef.current])
       return
     }
-  }, [])
+  }, [commitActiveQueue])
   const updateQueuedPrompts = useCallback((transform: (prompt: QueuedPrompt) => QueuedPrompt) => {
     const update = (prompts: QueuedPrompt[]) => {
       let changed = false
@@ -477,14 +464,13 @@ export function useWorkspaceRuntime({
     }
     const nextActive = update(pendingQueuedPromptsRef.current)
     if (nextActive !== pendingQueuedPromptsRef.current) {
-      pendingQueuedPromptsRef.current = nextActive
-      setPendingQueuedPrompts(nextActive)
+      commitActiveQueue(nextActive)
     }
     for (const [owner, prompts] of queuedPromptsByOwnerRef.current) {
       const next = update(prompts)
       if (next !== prompts) queuedPromptsByOwnerRef.current.set(owner, next)
     }
-  }, [])
+  }, [commitActiveQueue])
   const markQueuedPromptFlushFailed = useCallback((id: string) => {
     updateQueuedPrompts((prompt) => prompt.id === id && !prompt.flushAttemptFailed
       ? { ...prompt, flushAttemptFailed: true }
@@ -509,14 +495,11 @@ export function useWorkspaceRuntime({
       const next = prompts.filter((prompt) => prompt.intent !== 'steer')
       if (next.length === prompts.length) continue
       for (const prompt of prompts) if (prompt.intent === 'steer') observedSteerIdsRef.current.delete(prompt.id)
-      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
+      if (owner === activeQueuedPromptOwnerRef.current) commitActiveQueue(next)
+      else if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
       else queuedPromptsByOwnerRef.current.delete(owner)
-      if (owner === activeQueuedPromptOwnerRef.current) {
-        pendingQueuedPromptsRef.current = next
-        setPendingQueuedPrompts(next)
-      }
     }
-  }, [])
+  }, [commitActiveQueue])
   const acceptSteer = useCallback((id: string) => {
     const prompt = pendingQueuedPromptsRef.current.find((candidate) => candidate.id === id && candidate.intent === 'steer')
     if (prompt) {
@@ -557,20 +540,14 @@ export function useWorkspaceRuntime({
     const pickedUp = snapshot.active?.kind === 'turn' ? settled : []
     const settledIds = new Set(settled.map((prompt) => prompt.id))
     const next = pendingQueuedPromptsRef.current.filter((prompt) => !settledIds.has(prompt.id))
-    pendingQueuedPromptsRef.current = next
-    const owner = activeQueuedPromptOwnerRef.current
-    if (owner) {
-      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
-      else queuedPromptsByOwnerRef.current.delete(owner)
-    }
+    commitActiveQueue(next)
     for (const prompt of settled) observedSteerIdsRef.current.delete(prompt.id)
-    setPendingQueuedPrompts(next)
 
     // Keep the pickup boundary in the same ordered event buffer as preceding
     // tool output. Directly mutating messages here would let an unflushed tool
     // event jump below the newly inserted user row.
     if (pickedUp.length) queueAgentEvent(createSteerPickupEvent(pickedUp))
-  }, [queueAgentEvent])
+  }, [commitActiveQueue, queueAgentEvent])
 
   const acknowledgeSteer = useCallback((id: string, snapshot: SessionActionSnapshot) => {
     if (!pendingQueuedPromptsRef.current.some((prompt) => prompt.id === id && prompt.intent === 'steer')) return
@@ -665,9 +642,8 @@ export function useWorkspaceRuntime({
 
   useEffect(() => () => {
     transcriptLoadRef.current = null
-    if (agentEventFrameRef.current !== null) cancelAnimationFrame(agentEventFrameRef.current)
-    if (chunkedFlushTimerRef.current !== null) window.clearTimeout(chunkedFlushTimerRef.current)
-  }, [])
+    cancelScheduledFlush()
+  }, [cancelScheduledFlush])
 
   return {
     messages,
