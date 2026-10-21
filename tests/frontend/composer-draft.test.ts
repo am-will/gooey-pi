@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearComposerDraft,
   composerDraftStorageKey,
+  composerDraftScope,
   readComposerDraft,
   restoreComposerDraft,
   saveComposerDraft,
@@ -15,6 +16,12 @@ afterEach(() => {
 })
 
 describe('composer draft storage', () => {
+  it('defines the shared project/new-session scope without changing persisted keys', () => {
+    expect(composerDraftScope('project')).toBe('project:new')
+    expect(composerDraftScope('project', 'session')).toBe('project:session')
+    expect(composerDraftScope(undefined, '')).toBe('no-project:new')
+  })
+
   it('round-trips text and model selection for a workspace scope', () => {
     saveComposerDraft('project:new', { text: 'Ship the sidebar', model: 'openai:gpt-5.2', effort: 'high', fast: true })
     expect(readComposerDraft('project:new')).toEqual({

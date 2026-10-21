@@ -7,6 +7,11 @@ export interface ComposerDraftSnapshot {
 
 const COMPOSER_DRAFT_PREFIX = 'prime-work.composer-draft.v2:'
 
+/** Unsaved sessions share one draft scope per project; saved chats keep their own. */
+export function composerDraftScope(projectId: string | undefined, sessionId?: string): string {
+  return `${projectId ?? 'no-project'}:${sessionId || 'new'}`
+}
+
 export function composerDraftStorageKey(scope: string): string {
   return `${COMPOSER_DRAFT_PREFIX}${scope}`
 }
