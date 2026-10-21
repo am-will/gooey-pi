@@ -1,3 +1,4 @@
+import { useCheckoutCatalog } from '@/hooks/useCheckoutCatalog'
 import { useGitStatus } from '@/hooks/useGitStatus'
 import { useSessionAttention } from '@/hooks/useSessionAttention'
 import { useNativeHeartbeats } from '@/hooks/useNativeHeartbeats'
@@ -42,7 +43,7 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type HarnessId, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
@@ -100,8 +101,6 @@ export default function App() {
   const [schedules, setSchedules] = useState<AutomationScheduleRecord[]>(() => bridge ? [] : SAMPLE_SCHEDULES)
   const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
   const [scheduleError, setScheduleError] = useState('')
-  const [checkoutCatalog, setCheckoutCatalog] = useState<CheckoutCatalog>()
-  const [checkoutsLoading, setCheckoutsLoading] = useState(false)
   const [view, setView] = useState<WorkspaceView>('session')
   const [settingsSectionRequest, setSettingsSectionRequest] = useState<{ section: 'general' | 'agent'; id: number }>({ section: 'general', id: 0 })
   const [noHarnessPromptDismissed, setNoHarnessPromptDismissed] = useState(false)
@@ -115,7 +114,6 @@ export default function App() {
   const [changesCardDismissed, setChangesCardDismissed] = useState(false)
   const submissionAdmissionRef = useRef(createSingleFlightAdmission())
   const queuedFlushRef = useRef(false)
-  const checkoutRequestRef = useRef(0)
   const scheduleRequestRef = useRef(0)
   const demoTimerRef = useRef<number[]>([])
   const [activeProjectScriptRun, setActiveProjectScriptRun] = useState<ActiveProjectScriptRun>()
@@ -251,20 +249,7 @@ export default function App() {
     activeSessionVisible: view === 'session',
   })
 
-  const refreshCheckouts = useCallback(async () => {
-    const requestId = ++checkoutRequestRef.current
-    if (!bridge || !activeProject || activeProject.inferred) { setCheckoutCatalog(undefined); setCheckoutsLoading(false); return }
-    setCheckoutsLoading(true)
-    try {
-      const next = await bridge.projects.listCheckouts(activeProject.id, activeProject.harness)
-      if (checkoutRequestRef.current === requestId) setCheckoutCatalog(next)
-    } catch (error) {
-      if (checkoutRequestRef.current === requestId) { setCheckoutCatalog(undefined); reportError(error) }
-    } finally {
-      if (checkoutRequestRef.current === requestId) setCheckoutsLoading(false)
-    }
-  }, [activeProject, bridge, reportError, settingsState.settings.checkoutStrategy])
-  useEffect(() => { void refreshCheckouts(); return () => { checkoutRequestRef.current += 1 } }, [refreshCheckouts])
+  const { checkoutCatalog, checkoutsLoading, refreshCheckouts } = useCheckoutCatalog({ bridge, project: activeProject, checkoutStrategy: settingsState.settings.checkoutStrategy, reportError })
   const agentBrowser = useAgentBrowserTabs({ bridge, reportError })
   const terminalDrawerRefs = useRef(new Map<string, TerminalDrawerHandle>())
   const [terminalSelection, setTerminalSelection] = useState<TerminalSelectionContext>()
