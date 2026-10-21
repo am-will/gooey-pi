@@ -5,12 +5,12 @@ import { appShortcutForKey, createAppKeydownHandler, isOverlayOpen, type AppShor
 function installHandler() {
   const calls: AppShortcutAction[] = []
   const actions = Object.fromEntries(
-    (['open-palette', 'new-session', 'open-browser', 'toggle-sidebar', 'toggle-terminal', 'open-settings', 'close-palette', 'close-settings'] as const).map((action) => [
+    (['open-palette', 'new-session', 'open-browser', 'toggle-sidebar', 'toggle-terminal', 'open-settings', 'close-settings'] as const).map((action) => [
       action,
       () => { calls.push(action) },
     ]),
   ) as Record<AppShortcutAction, () => void>
-  const handler = createAppKeydownHandler(actions)
+  const handler = createAppKeydownHandler(actions, document, false, 'darwin')
   window.addEventListener('keydown', handler)
   return { calls, dispose: () => window.removeEventListener('keydown', handler) }
 }
@@ -95,7 +95,7 @@ describe('app keyboard shortcuts with overlays open', () => {
     try {
       const palette = dispatchKey({ key: 'k', metaKey: true })
       expect(palette.defaultPrevented).toBe(true)
-      const newSession = dispatchKey({ key: 'n', ctrlKey: true })
+      const newSession = dispatchKey({ key: 'n', metaKey: true })
       expect(newSession.defaultPrevented).toBe(true)
       const browser = dispatchKey({ key: 'B', metaKey: true, shiftKey: true })
       expect(browser.defaultPrevented).toBe(true)
@@ -123,34 +123,44 @@ describe('app keyboard shortcuts with overlays open', () => {
 describe('app shortcut key mapping', () => {
   const event = (overrides: Partial<Parameters<typeof appShortcutForKey>[0]> = {}) => ({ key: '', metaKey: false, ctrlKey: false, shiftKey: false, ...overrides })
 
-  it('maps every owned combination when no overlay is open', () => {
-    expect(appShortcutForKey(event({ key: 'k', metaKey: true }), false)).toBe('open-palette')
-    expect(appShortcutForKey(event({ key: 'n', ctrlKey: true }), false)).toBe('new-session')
-    expect(appShortcutForKey(event({ key: 'b', metaKey: true, shiftKey: true }), false)).toBe('open-browser')
-    expect(appShortcutForKey(event({ key: 'b', metaKey: true }), false)).toBe('toggle-sidebar')
-    expect(appShortcutForKey(event({ key: 'j', ctrlKey: true }), false)).toBe('toggle-terminal')
-    expect(appShortcutForKey(event({ key: ',', metaKey: true }), false)).toBe('open-settings')
-    expect(appShortcutForKey(event({ key: ',', ctrlKey: true }), false)).toBe('open-settings')
-    expect(appShortcutForKey(event({ key: 'Escape' }), false)).toBe('close-palette')
-    expect(appShortcutForKey(event({ key: 'v', metaKey: true }), false)).toBeNull()
+  it.each(['darwin', 'win32', 'linux'] as const)('uses the native primary modifier on %s', (platform) => {
+    const primary = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true }
+    const map = (key: string, shiftKey = false) => appShortcutForKey(event({ key, shiftKey, ...primary }), false, false, platform)
+    expect(map('k')).toBe('open-palette')
+    expect(map('n')).toBe('new-session')
+    expect(map('B', true)).toBe('open-browser')
+    expect(map('b')).toBe('toggle-sidebar')
+    expect(map('j')).toBe('toggle-terminal')
+    expect(map(',')).toBe('open-settings')
+    expect(map('v')).toBeNull()
+    expect(map('k', true)).toBeNull()
+    const otherModifier = platform === 'darwin' ? { ctrlKey: true } : { metaKey: true }
+    expect(appShortcutForKey(event({ key: 'b', ...otherModifier }), false, false, platform)).toBeNull()
   })
 
-  it('closes settings with Escape or the primary W shortcut', () => {
-    expect(appShortcutForKey(event({ key: 'Escape' }), false, true)).toBe('close-settings')
-    expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false, true)).toBe('close-settings')
-    expect(appShortcutForKey(event({ key: 'w', metaKey: true }), false, true)).toBe('close-settings')
-    expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false)).toBeNull()
+  it('leaves macOS Ctrl text-editing and AltGr combinations alone', () => {
+    expect(appShortcutForKey(event({ key: 'n', ctrlKey: true }), false, false, 'darwin')).toBeNull()
+    expect(appShortcutForKey(event({ key: 'j', ctrlKey: true, altKey: true }), false, false, 'win32')).toBeNull()
+    expect(appShortcutForKey(event({ key: 'k', metaKey: true, ctrlKey: true }), false, false, 'darwin')).toBeNull()
+  })
+
+  it('closes Settings with Escape or native primary W and leaves unrelated Escape alone', () => {
+    expect(appShortcutForKey(event({ key: 'Escape' }), false, true, 'darwin')).toBe('close-settings')
+    expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false, true, 'win32')).toBe('close-settings')
+    expect(appShortcutForKey(event({ key: 'w', metaKey: true }), false, true, 'darwin')).toBe('close-settings')
+    expect(appShortcutForKey(event({ key: 'Escape' }), false, false, 'darwin')).toBeNull()
+    expect(appShortcutForKey(event({ key: 'w', ctrlKey: true }), false, false, 'win32')).toBeNull()
   })
 
   it('owns no shortcuts while an overlay is open', () => {
-    expect(appShortcutForKey(event({ key: 'k', metaKey: true }), true)).toBeNull()
-    expect(appShortcutForKey(event({ key: 'v', metaKey: true }), true)).toBeNull()
-    expect(appShortcutForKey(event({ key: 'Escape' }), true)).toBeNull()
+    expect(appShortcutForKey(event({ key: 'k', metaKey: true }), true, false, 'darwin')).toBeNull()
+    expect(appShortcutForKey(event({ key: 'Escape' }), true, true, 'darwin')).toBeNull()
   })
 
-  it('detects modal and palette overlays in the document', () => {
+  it('detects every modal dialog, including an image lightbox without the modal class', () => {
     expect(isOverlayOpen(document)).toBe(false)
     const modal = openModal()
+    modal.className = 'image-lightbox'
     expect(isOverlayOpen(document)).toBe(true)
     modal.remove()
     expect(isOverlayOpen(document)).toBe(false)

@@ -27,6 +27,7 @@ let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),

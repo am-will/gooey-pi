@@ -666,9 +666,8 @@ export default function App() {
     'toggle-sidebar': () => toggleSidebar(),
     'toggle-terminal': () => { void toggleTerminal() },
     'open-settings': () => navigate('settings'),
-    'close-palette': () => setPaletteOpen(false),
     'close-settings': () => navigate('session'),
-  }, document, view === 'settings'))
+  }, document, view === 'settings', platform))
 
   useEffect(() => {
     window.addEventListener('keydown', onAppKeyDown)

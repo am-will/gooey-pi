@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import type { ApplicationMenuName, ProjectRecord, WorkspaceView } from '@/types/api'
 import { useI18n, type MessageKey } from '@/lib/i18n'
+import { APP_SHORTCUT_KEYS } from '@/lib/app-shortcuts'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { BrowserGlobe, IconButton } from './ui'
 import { ProjectRunControl, type ProjectScriptKind } from './ProjectRunControl'
@@ -53,9 +54,9 @@ interface TitleToolbarProps {
 
 export function TitleToolbar({ project, gitBranch, view, productName = 'Prime Work', sidebarOpen, inspectorOpen, terminalOpen, voiceOpen = false, activeProjectScriptKind, onToggleSidebar, onToggleInspector, onToggleTerminal, onOpenBrowser, onToggleVoice, onRunProjectScript, onStopProjectScript, onSaveProjectScripts, platform = 'darwin' }: TitleToolbarProps) {
   const { t } = useI18n()
-  const sidebarShortcut = shortcutLabel(platform, ['Primary', 'B'])
-  const terminalShortcut = shortcutLabel(platform, ['Primary', 'J'])
-  const browserShortcut = shortcutLabel(platform, ['Primary', 'Shift', 'B'])
+  const sidebarShortcut = shortcutLabel(platform, APP_SHORTCUT_KEYS['toggle-sidebar'])
+  const terminalShortcut = shortcutLabel(platform, APP_SHORTCUT_KEYS['toggle-terminal'])
+  const browserShortcut = shortcutLabel(platform, APP_SHORTCUT_KEYS['open-browser'])
   return (
     <header className="title-toolbar drag-region">
       {!sidebarOpen && platform === 'darwin' ? <div className="traffic-light-clearance traffic-light-clearance--toolbar" aria-hidden="true" /> : null}
