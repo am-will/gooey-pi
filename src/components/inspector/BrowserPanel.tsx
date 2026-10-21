@@ -127,7 +127,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   // Bind the Preview guest to the active thread so its agent can adopt it as
   // the "preview" tab; clear the binding when the panel goes away.
   useEffect(() => {
-    if (previewWebContentsId === null || !agentSessionKey) return
+    if (previewWebContentsId === null || !agentSessionKey) {
+      onPreviewContextRef.current?.(null, null)
+      return
+    }
     onPreviewContextRef.current?.(previewWebContentsId, agentSessionKey)
   }, [previewWebContentsId, agentSessionKey])
   useEffect(() => () => { onPreviewContextRef.current?.(null, null) }, [])
