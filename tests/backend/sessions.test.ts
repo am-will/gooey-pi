@@ -9,7 +9,7 @@ import { AgentRpcManager } from '../../electron/main/agent-rpc'
 import { ProjectService } from '../../electron/main/projects'
 import { SessionService, type SessionServiceOptions } from '../../electron/main/sessions'
 import { boundedSessionDiscoveryNames, SessionMetadataCatalog, type SessionCatalogIo } from '../../electron/main/sessions/catalog'
-import { applyLiveMetadata, createSessionMetadataReader, ingestMessageActivity, METADATA_VERIFY_TAIL_BYTES, readSessionMetadata, type SessionMetadata } from '../../electron/main/sessions/metadata'
+import { applyLiveMetadata, createSessionMetadataReader, ingestMessageActivity, METADATA_VERIFY_TAIL_BYTES, type SessionMetadata } from '../../electron/main/sessions/metadata'
 import { JsonStateStore } from '../../electron/main/store'
 import { waitUntil } from '../helpers/wait'
 
@@ -238,7 +238,6 @@ describe('SessionService catalog scaling', () => {
 
     expect(records).toHaveLength(1)
     expect(records[0].projectPath).toBe(realpathSync(project))
-    expect(await service.projectPaths()).toEqual([realpathSync(project)])
 
     const info = lstatSync(project, { bigint: true })
     const now = new Date().toISOString()
@@ -401,7 +400,7 @@ describe('incremental session metadata reads', () => {
     expect(opens).toHaveLength(2)
     expect(opens[1]).toEqual({ start: firstSize - METADATA_VERIFY_TAIL_BYTES, end: secondSize - 1 })
     expect(opens[1]!.start).toBeGreaterThan(0)
-    expect(second).toEqual(await readSessionMetadata(file))
+    expect(second).toEqual(await createSessionMetadataReader()(file))
   })
 
   it('resumes a verified partial line and matches the one-shot parser', async () => {
@@ -416,7 +415,7 @@ describe('incremental session metadata reads', () => {
     appendFileSync(file, record.slice(0, 25))
     const speculative = await reader(file)
     // The unterminated tail parses speculatively, exactly like a full read.
-    expect(speculative).toEqual(await readSessionMetadata(file))
+    expect(speculative).toEqual(await createSessionMetadataReader()(file))
     expect(opens[1]?.start).toBe(baseSize - METADATA_VERIFY_TAIL_BYTES)
 
     appendFileSync(file, `${record.slice(25)}\n`)
@@ -425,7 +424,7 @@ describe('incremental session metadata reads', () => {
     expect(opens[2]?.start).toBe(statSync(file).size - record.length - 1 - (METADATA_VERIFY_TAIL_BYTES - 25))
     expect(opens[2]!.start).toBeGreaterThan(0)
     expect(completed.preview).toBe('split record')
-    expect(completed).toEqual(await readSessionMetadata(file))
+    expect(completed).toEqual(await createSessionMetadataReader()(file))
   })
 
   it('falls back to a full re-read on truncation and rewritten tails', async () => {
@@ -440,7 +439,7 @@ describe('incremental session metadata reads', () => {
     const rewritten = await reader(file)
     expect(rewritten.preview).toBe('rewritten')
     expect(opens.at(-1)?.start).toBe(0)
-    expect(rewritten).toEqual(await readSessionMetadata(file))
+    expect(rewritten).toEqual(await createSessionMetadataReader()(file))
 
     const longer = [
       JSON.stringify({ type: 'session', id: 'replaced', cwd: '/project' }),
@@ -452,7 +451,7 @@ describe('incremental session metadata reads', () => {
     const replaced = await reader(file)
     expect(replaced.preview).toBe('a completely different transcript body')
     expect(opens.at(-1)?.start).toBe(0)
-    expect(replaced).toEqual(await readSessionMetadata(file))
+    expect(replaced).toEqual(await createSessionMetadataReader()(file))
   })
 })
 
@@ -473,7 +472,7 @@ describe('Prime task-state freshness', () => {
     appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'assistant', parentId: 'user', message: { role: 'assistant', content: 'answered' } })}\n`)
     const staleVerdict = await reader(file)
     expect(staleVerdict.status).toBe('complete')
-    expect(staleVerdict).toEqual(await readSessionMetadata(file))
+    expect(staleVerdict).toEqual(await createSessionMetadataReader()(file))
 
     appendFileSync(file, `${JSON.stringify({ type: 'agent_status', status: { summary: 'Waiting again', taskState: 'needs_input', basedOnMessageCount: 2 } })}\n`)
     expect((await reader(file)).status).toBe('waiting')
@@ -528,7 +527,7 @@ describe('Prime session previews', () => {
 
     appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'tool-turn', parentId: 'answer', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'more reasoning' }, { type: 'toolCall', name: 'bash', arguments: {} }] } })}\n`)
     expect((await service.list(undefined, false, true))[0]?.preview).toBe('Final answer')
-    expect((await readSessionMetadata(file)).preview).toBe('Final answer')
+    expect((await createSessionMetadataReader()(file)).preview).toBe('Final answer')
   })
 })
 
@@ -550,9 +549,9 @@ describe('retained metadata parse state', () => {
       '',
     ].join('\n'))
 
-    const metadata = await readSessionMetadata(file)
+    const metadata = await createSessionMetadataReader()(file)
     expect(metadata.title).toBe(`${'n'.repeat(99)}…`)
-    expect(metadata.sessionName).toBe(metadata.title)
+    expect(metadata).not.toHaveProperty('sessionName')
     expect(metadata.preview).toBe(`${'word '.repeat(31)}word…`)
   })
 
@@ -568,7 +567,7 @@ describe('retained metadata parse state', () => {
       '',
     ].join('\n'))
 
-    expect(await readSessionMetadata(file)).toMatchObject({ title: 'real prompt', preview: 'visible reply' })
+    expect(await createSessionMetadataReader()(file)).toMatchObject({ title: 'real prompt', preview: 'visible reply' })
   })
 })
 

@@ -11,7 +11,7 @@ import { textFromContent, validTimestamp } from './transcript'
 export type JsonRecord = Record<string, unknown>
 
 /** Per-file metadata snapshot; the owning SessionService stamps the harness when it builds SessionRecords. */
-export interface SessionMetadata extends Omit<SessionRecord, 'harness'> { sessionName?: string; hasRunningRlmChildren?: boolean }
+export interface SessionMetadata extends Omit<SessionRecord, 'harness'> { hasRunningRlmChildren?: boolean }
 
 export class SessionFileLimitError extends Error {}
 // The transcript reader of the same file MUST share this per-record tolerance.
@@ -192,7 +192,6 @@ function metadataFromAccumulator(state: MetadataAccumulator, filePath: string, f
     pinned: false,
     unread: false,
     preview: compactText(state.preview || state.firstUser),
-    sessionName: state.sessionName,
   }
 }
 
@@ -411,6 +410,3 @@ export function createSessionMetadataReader(io: SessionMetadataReaderIo = nodeMe
   return createIncrementalMetadataReader(primeMetadataParser, io)
 }
 
-export async function readSessionMetadata(filePath: string, knownStat?: Stats): Promise<SessionMetadata> {
-  return createSessionMetadataReader()(filePath, knownStat)
-}

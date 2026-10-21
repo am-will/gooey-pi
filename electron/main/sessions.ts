@@ -238,7 +238,7 @@ export class SessionService {
         ? runtimeBySession.get(resolve(metadata.filePath))
         : this.runtimeForSession(metadata.filePath)
       if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting || metadata.hasRunningRlmChildren ? 'running' : 'idle'
-      const { sessionName: _sessionName, hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
+      const { hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
       records.push({ ...record, harness: this.harness, archived: isArchived })
     }
     return records.sort((a, b) => Date.parse(b.lastUserMessageAt ?? b.createdAt) - Date.parse(a.lastUserMessageAt ?? a.createdAt) || comparePaths(a.filePath, b.filePath))
@@ -255,10 +255,6 @@ export class SessionService {
     return bySession
   }
 
-  async projectPaths(): Promise<string[]> {
-    const sessions = await this.list()
-    return [...new Set(sessions.map((session) => session.projectPath).filter((path) => path.startsWith('/')))]
-  }
 
   async read(filePath: unknown): Promise<TranscriptMessage[]> {
     const requested = requireString(filePath, 'filePath', { min: 1, max: 4096 })

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readSessionMetadata } from '../../electron/main/sessions/metadata'
+import { createSessionMetadataReader } from '../../electron/main/sessions/metadata'
 import { createTranscriptReader, readTranscript, textFromContent } from '../../electron/main/sessions/transcript'
 import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { configureGooeyPiAgentMessageSigning, encodeGooeyPiAgentMessage, loadOrCreateGooeyPiAgentMessageKey, parseGooeyPiAgentMessage } from '../../electron/main/collaboration/message-envelope'
@@ -25,7 +25,7 @@ describe('session file record tolerance', () => {
     ].join('\n'))
 
     // The catalog admits this session, so the transcript reader must open it too.
-    const metadata = await readSessionMetadata(file)
+    const metadata = await createSessionMetadataReader()(file)
     expect(metadata.id).toBe('big-record')
     expect(metadata.preview?.length).toBeGreaterThan(0)
 
