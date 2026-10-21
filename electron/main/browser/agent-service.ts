@@ -65,6 +65,7 @@ interface TabState {
   tabId: string
   sessionKey: string
   webContentsId: number | null
+  everAttached: boolean
   url: string
   title: string
   /** Last known pointer position in guest CSS pixels; null until the first pointer action. */
@@ -250,9 +251,10 @@ export class AgentBrowserService {
     guest.setBackgroundThrottling(false)
     // A recreated webview (renderer reload) starts at about:blank; restore the
     // tab's last known location so the registry stays authoritative.
-    if (tab.url && tab.url !== 'about:blank' && guest.getURL() !== tab.url) {
+    if (tab.everAttached && tab.url && tab.url !== 'about:blank' && guest.getURL() !== tab.url) {
       guest.loadURL(tab.url).catch((error: unknown) => logNavigationFailure(tab.url, error))
     }
+    tab.everAttached = true
     for (const waiter of tab.attachWaiters.splice(0)) {
       clearTimeout(waiter.timer)
       waiter.resolve()
@@ -294,6 +296,7 @@ export class AgentBrowserService {
       webContentsId,
       url: '',
       title: '',
+      everAttached: true,
       pointer: previous?.webContentsId === webContentsId ? previous.pointer : null,
       generation: this.nextGeneration++,
       revoked: false,
@@ -361,6 +364,7 @@ export class AgentBrowserService {
       tabId: `bt-${randomBytes(6).toString('hex')}`,
       sessionKey,
       webContentsId: null,
+      everAttached: false,
       url,
       title: '',
       pointer: null,
