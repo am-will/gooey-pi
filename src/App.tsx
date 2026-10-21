@@ -9,7 +9,6 @@ import { useBrowserPreviewState } from '@/hooks/useBrowserPreviewState'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { TitleToolbar } from '@/components/TitleToolbar'
-import type { ProjectScriptKind } from '@/components/ProjectRunControl'
 import { ChangesCard } from '@/components/ChangesCard'
 import { Composer } from '@/components/Composer'
 import type { TerminalDrawerHandle } from '@/components/TerminalDrawer'
@@ -23,9 +22,9 @@ import { I18nProvider, useLocaleTranslator } from '@/lib/i18n'
 import { openExternalUrl, revealPath } from '@/lib/desktop-actions'
 import { createSingleFlightAdmission, findProjectForSession, workspaceCwd } from '@/lib/workspace'
 import { waitForVoiceSession } from '@/lib/voice'
-import { activeProjectScriptKind, ProjectScriptBusyError, setupNeedsRun } from '@/lib/project-scripts'
+import { type ProjectScriptKind, activeProjectScriptKind, ProjectScriptBusyError, setupNeedsRun } from '@/lib/project-scripts'
 import { SAMPLE_GIT, SAMPLE_PROJECTS, SAMPLE_SCHEDULES, SAMPLE_SESSIONS, SAMPLE_SKILLS, SAMPLE_TRANSCRIPT } from '@/lib/demo-workspace'
-import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { HARNESS_PROVIDER_DOCS, HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { harnessOffersFastMode } from '@/lib/prime-compat'
 import { AgentBrowserLayer, type AgentSlotRect } from '@/components/AgentBrowserLayer'
 import { useAgentBrowserTabs } from '@/hooks/useAgentBrowserTabs'
@@ -68,11 +67,6 @@ const EMPTY_PROVIDERS: PrimeProviderDescriptor[] = []
 // Stable identity for the Inspector while the Summary tab is inactive: the
 // streaming transcript array must not reach the memoized inspector subtree.
 const EMPTY_MESSAGES: TranscriptMessage[] = []
-const HARNESS_PROVIDER_DOCS: Record<HarnessId, string> = {
-  omp: 'https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md',
-  prime: 'https://github.com/PrimeIntellect-ai/prime-agent',
-  pi: 'https://pi.dev',
-}
 interface ActiveProjectScriptRun {
   requestId: string
   projectId: string
