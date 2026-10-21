@@ -94,7 +94,7 @@ export class BoundedRecurrenceEvaluator implements ScheduleRecurrence {
       const worker = new Worker(this.workerUrl)
       this.worker = worker
       worker.on('message', (message: unknown) => { if (this.worker === worker) this.receive(message) })
-      worker.once('error', (error) => { if (this.worker === worker) void this.retire(error) })
+      worker.once('error', (error) => { if (this.worker === worker) void this.retire(new RecurrenceEvaluationError(error.message)) })
       worker.once('exit', () => {
         if (this.worker === worker) void this.retire(new RecurrenceEvaluationError('The recurrence worker exited unexpectedly'))
       })
@@ -126,7 +126,7 @@ export class BoundedRecurrenceEvaluator implements ScheduleRecurrence {
     if (message.success) active.resolve(message.value)
     else {
       const detail = typeof message.error === 'string' ? message.error.slice(0, 4_000) : 'Recurrence evaluation failed'
-      active.reject(message.name === 'TypeError' ? new TypeError(detail) : message.name === 'RangeError' ? new RangeError(detail) : new RecurrenceEvaluationError(detail))
+      active.reject(new RecurrenceEvaluationError(detail))
     }
     this.pump()
   }

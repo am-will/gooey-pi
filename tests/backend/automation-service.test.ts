@@ -363,6 +363,55 @@ describe('AutomationService', () => {
     } finally { writes.mockRestore(); logged.mockRestore(); await service.stop() }
   })
 
+  it('blocks only an over-budget legacy rule while recovering other tasks', async () => {
+    const stateStore = store()
+    let now = new Date('2030-01-01T00:00:00Z')
+    const service = new AutomationService(stateStore, {
+      recurrence: () => new BoundedRecurrenceEvaluator({ workerUrl: workerFixture.url, computeTimeoutMs: 100 }),
+      validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => ({}), now: () => now,
+    })
+    const bad = await service.create({ prompt: 'Bad legacy rule', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const good = await service.create({ prompt: 'Good legacy rule', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    await stateStore.update((state) => {
+      for (const task of state.schedules) {
+        task.timing = { kind: 'rrule', dtstartLocal: '2030-01-01T09:00:00', timeZone: 'UTC', rrule: task.id === bad.id ? 'FREQ=MINUTELY;BYMONTH=2;BYMONTHDAY=30' : 'FREQ=DAILY' }
+        task.nextRunAt = '2030-01-01T09:00:00.000Z'
+      }
+    })
+    now = new Date('2030-01-09T12:00:00Z')
+    try {
+      await service.start()
+      expect(service.get(bad.id)).toMatchObject({ status: 'blocked', blockedReason: expect.stringContaining('time budget'), nextRunAt: undefined })
+      expect(service.get(good.id)).toMatchObject({ status: 'active', nextRunAt: '2030-01-10T09:00:00.000Z', runs: [expect.objectContaining({ status: 'skipped', skippedCount: 9 })] })
+    } finally { await service.stop() }
+  })
+
+  it('waits for interrupted recurrence recovery on shutdown without blocking the task', async () => {
+    const stateStore = store()
+    let now = new Date('2030-01-01T00:00:00Z')
+    const engine = recurrence()
+    const originalCount = engine.countMissed.bind(engine)
+    let entered: () => void = () => undefined
+    const evaluating = new Promise<void>((resolve) => { entered = resolve })
+    vi.spyOn(engine, 'countMissed').mockImplementation((...args) => { const result = originalCount(...args); entered(); return result })
+    const service = new AutomationService(stateStore, {
+      recurrence: () => engine, validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => ({}), now: () => now,
+    })
+    const task = await service.create({ prompt: 'Legacy rule', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    await stateStore.update((state) => {
+      state.schedules[0].timing = { kind: 'rrule', dtstartLocal: '2030-01-01T09:00:00', timeZone: 'UTC', rrule: 'FREQ=MINUTELY;BYMONTH=2;BYMONTHDAY=30' }
+      state.schedules[0].nextRunAt = '2030-01-01T09:00:00.000Z'
+    })
+    now = new Date('2030-01-09T12:00:00Z')
+    const starting = service.start()
+    await evaluating
+    await service.stop()
+    await starting
+    expect(service.get(task.id)).toMatchObject({ status: 'active', runs: [] })
+  })
+
   it('records missed occurrences as skipped without dispatching them', async () => {
     const stateStore = store()
     let now = new Date('2030-01-01T00:00:00Z')

@@ -13,13 +13,15 @@ import type {
   ScheduleTiming,
   HarnessId,
 } from '../../../src/types/api'
+import { createSingleFlight } from '../lib/async'
 import { MAX_SCHEDULED_TASKS, type JsonStateStore } from '../store'
 import { rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
 import { validateScheduleTiming } from './recurrence'
-import { BoundedRecurrenceEvaluator, type ScheduleRecurrence } from './recurrence-evaluator'
+import { BoundedRecurrenceEvaluator, RecurrenceEvaluationError, type ScheduleRecurrence } from './recurrence-evaluator'
 
 const MAX_CONCURRENT_RUNS = 2
 const MAX_REPORTED_MISSED_OCCURRENCES = 10_000
+const FAILURE_RETRY_MS = 1_000
 const DUE_GRACE_MS = 60_000
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
 
@@ -116,6 +118,9 @@ export class AutomationService {
   private timer: NodeJS.Timeout | null = null
   private closed = false
   private activeRuns = 0
+  private retryNotBefore = 0
+  private initialization: Promise<void> | null = null
+  private readonly dueWork = createSingleFlight<'due', void>()
   private readonly stopWaiters = new Set<() => void>()
   private readonly pending: Array<{ task: AutomationScheduleRecord; runId: string }> = []
 
@@ -125,12 +130,19 @@ export class AutomationService {
   }
 
   async start(): Promise<void> {
+    if (this.initialization) return this.initialization
     if (this.closed) this.recurrence = this.options.recurrence?.() ?? new BoundedRecurrenceEvaluator()
     this.closed = false
-    await this.reconcileInterruptedRuns()
-    await this.blockInvalidActivePrompts()
-    await this.recoverMissed()
-    this.armTimer()
+    const operation = (async () => {
+      await this.reconcileInterruptedRuns()
+      if (this.closed) return
+      await this.blockInvalidActivePrompts()
+      if (this.closed) return
+      await this.recoverMissed()
+      this.armTimer()
+    })()
+    this.initialization = operation
+    try { await operation } finally { if (this.initialization === operation) this.initialization = null }
   }
 
   private async blockInvalidActivePrompts(): Promise<void> {
@@ -176,6 +188,7 @@ export class AutomationService {
     this.timer = null
     this.pending.splice(0)
     await this.recurrence.close()
+    await Promise.allSettled([this.initialization, this.dueWork.get('due')].filter((operation) => operation !== null && operation !== undefined))
     if (this.activeRuns === 0) return
     await new Promise<void>((resolveStop) => this.stopWaiters.add(resolveStop))
   }
@@ -236,6 +249,7 @@ export class AutomationService {
       runs: [],
     }
     await this.store.update((state) => {
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (state.schedules.length >= MAX_SCHEDULED_TASKS) throw new Error(`GooeyPi supports at most ${MAX_SCHEDULED_TASKS} scheduled tasks`)
       state.schedules.push(task)
     })
@@ -261,6 +275,7 @@ export class AutomationService {
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!task) throw new Error('Scheduled task was not found')
       if (task.revision !== patch.revision) throw new Error('Scheduled task changed; reload it before saving')
       updated = {
@@ -296,6 +311,7 @@ export class AutomationService {
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!task) throw new Error('Scheduled task was not found')
       if (task.revision !== current.revision) throw new Error('Scheduled task changed; reload it before resuming')
       task.status = 'active'
@@ -346,6 +362,7 @@ export class AutomationService {
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!task) throw new Error('Scheduled task was not found')
       task.status = status
       task.nextRunAt = undefined
@@ -369,11 +386,15 @@ export class AutomationService {
       .filter(Number.isFinite)
       .reduce<number | undefined>((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined)
     if (next === undefined) return
-    const delay = Math.max(0, Math.min(2_147_483_647, next - this.now().getTime()))
+    const delay = Math.max(this.retryNotBefore - this.now().getTime(), 0, Math.min(2_147_483_647, next - this.now().getTime()))
     this.timer = setTimeout(() => {
       this.timer = null
       void this.processDue()
-        .catch((error) => console.error('Scheduled task processing failed:', error))
+        .then(() => { this.retryNotBefore = 0 })
+        .catch((error) => {
+          this.retryNotBefore = this.now().getTime() + FAILURE_RETRY_MS
+          console.error('Scheduled task processing failed:', error)
+        })
         .finally(() => this.armTimer())
     }, delay)
     this.timer.unref()
@@ -384,20 +405,44 @@ export class AutomationService {
     const snapshot = this.store.getSchedules()
     for (const task of snapshot) {
       if (task.status !== 'active' || !task.nextRunAt || Date.parse(task.nextRunAt) >= now.getTime() - DUE_GRACE_MS) continue
-      await this.skipMissed(task, now)
+      if (this.closed) return
+      try { await this.skipMissed(task, now) } catch (error) { await this.blockRecurrenceFailure(task, error) }
     }
   }
 
-  private async processDue(): Promise<void> {
+  private processDue(): Promise<void> {
+    return this.dueWork.run('due', () => this.processDueTasks())
+  }
+
+  private async processDueTasks(): Promise<void> {
     if (this.closed) return
     const now = this.now()
     const due = this.store.getSchedules()
       .filter((task) => task.status === 'active' && task.nextRunAt && Date.parse(task.nextRunAt) <= now.getTime())
       .sort((left, right) => left.nextRunAt!.localeCompare(right.nextRunAt!))
     for (const task of due) {
-      if (now.getTime() - Date.parse(task.nextRunAt!) > DUE_GRACE_MS) await this.skipMissed(task, now)
-      else await this.claimAndEnqueue(task, now)
+      if (this.closed) return
+      try {
+        if (now.getTime() - Date.parse(task.nextRunAt!) > DUE_GRACE_MS) await this.skipMissed(task, now)
+        else await this.claimAndEnqueue(task, now)
+      } catch (error) { await this.blockRecurrenceFailure(task, error) }
     }
+  }
+
+  private async blockRecurrenceFailure(snapshot: AutomationScheduleRecord, error: unknown): Promise<void> {
+    if (this.closed) return
+    if (!(error instanceof RecurrenceEvaluationError)) throw error
+    const blocked = await this.store.update((state) => {
+      const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
+      if (this.closed || task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== snapshot.nextRunAt) return false
+      task.status = 'blocked'
+      task.blockedReason = error.message.slice(0, 4_000)
+      task.nextRunAt = undefined
+      task.revision += 1
+      task.updatedAt = this.now().toISOString()
+      return true
+    })
+    if (blocked) this.changed({ taskId: snapshot.id, reason: 'updated' })
   }
 
   private async skipMissed(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
@@ -410,15 +455,16 @@ export class AutomationService {
       scheduledFor, queuedAt: now.toISOString(), finishedAt: now.toISOString(), status: 'skipped',
       execution: snapshot.execution, skippedCount: Math.max(1, missed), error: 'GooeyPi was not available when this task was due.',
     }
-    await this.store.update((state) => {
+    const skipped = await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
-      if (task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return
+      if (this.closed || task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return
       this.pushRun(task, run)
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
       task.updatedAt = now.toISOString()
+      return true
     })
-    this.changed({ taskId: snapshot.id, reason: 'run' })
+    if (skipped) this.changed({ taskId: snapshot.id, reason: 'run' })
   }
 
   private async claimAndEnqueue(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
@@ -428,7 +474,7 @@ export class AutomationService {
     const run = this.createRun(snapshot, 'scheduled', scheduledFor)
     const claimed = await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
-      if (task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return undefined
+      if (this.closed || task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return undefined
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
       task.updatedAt = now.toISOString()
@@ -446,6 +492,7 @@ export class AutomationService {
   }
 
   private queuePersistedRun(task: AutomationScheduleRecord, run: ScheduleRunRecord): void {
+    if (this.closed) return
     this.pending.push({ task: cloneTask(task), runId: run.id })
     this.changed({ taskId: task.id, reason: 'run' })
     this.drain()
@@ -455,6 +502,7 @@ export class AutomationService {
     const run = this.createRun(task, trigger, scheduledFor)
     await this.store.update((state) => {
       const current = state.schedules.find((candidate) => candidate.id === task.id)
+      if (this.closed) throw new Error('Scheduled tasks are stopping')
       if (!current) throw new Error('Scheduled task was deleted before its run could start')
       if (current.revision !== task.revision) throw new Error('Scheduled task changed before its run could start')
       if (trigger === 'manual' && current.runs.some((candidate) => candidate.trigger === 'manual' && candidate.taskRevision === task.revision && candidate.status === 'queued')) {
