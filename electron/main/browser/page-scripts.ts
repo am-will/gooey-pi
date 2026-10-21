@@ -2,8 +2,8 @@
  * JavaScript source strings injected into agent-controlled browser guests.
  * Everything these scripts return is untrusted page data: callers must bound
  * and sanitize it before it reaches the agent or the renderer. Dynamic values
- * are embedded via JSON.stringify (strings) or validated integers only, so
- * hostile inputs cannot break out of the script text.
+ * use JSON.stringify for strings or validated integers. evaluateScript alone
+ * intentionally accepts agent-authored JavaScript as a function body.
  */
 
 const INTERACTIVE_SELECTOR = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="switch"], [contenteditable="true"], [onclick]'
@@ -171,7 +171,9 @@ export function evaluateScript(code: string, maxResultChars: number): string {
   const limit = boundedInt(maxResultChars, 1, 100_000, 'maxResultChars')
   return `(async () => {
     try {
-      const value = await (async () => { ${code} })()
+      const value = await (async () => {
+${code}
+      })()
       let rendered
       try { rendered = JSON.stringify(value) } catch { rendered = undefined }
       if (rendered === undefined) rendered = String(value)
