@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useI18n } from '@/lib/i18n'
-import { boundTerminalText, TERMINAL_CONTEXT_MAX_CHARS, TERMINAL_SELECTION_MAX_CHARS } from '@/lib/terminal-context'
+import { boundTerminalText, readTerminalBufferTail, TERMINAL_SELECTION_MAX_CHARS } from '@/lib/terminal-context'
 import { openExternalUrl } from '@/lib/desktop-actions'
 import { terminalLinkOpensExternally } from '@/lib/terminal-links'
 import type { TerminalPromptContext, TerminalSelectionContext } from '@/types/api'
@@ -97,26 +97,6 @@ const terminalTheme = (): ITheme => {
   }
 }
 
-function readTerminalContent(terminal: Terminal): { content: string; contentTruncated: boolean } {
-  const buffer = terminal.buffer.active
-  const lines: string[] = []
-  let current = ''
-  for (let index = 0; index < buffer.length; index += 1) {
-    const line = buffer.getLine(index)
-    if (!line) continue
-    const text = line.translateToString(true)
-    if (line.isWrapped) current += text
-    else {
-      if (current) lines.push(current)
-      current = text
-    }
-  }
-  if (current) lines.push(current)
-  const bounded = boundTerminalText(lines.join('\n'), TERMINAL_CONTEXT_MAX_CHARS)
-  return { content: bounded.text, contentTruncated: bounded.truncated }
-}
-
-
 const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function TerminalView({ cwd, sessionPath, shell, command, label, visible, onStateChange, onSelectionChange, onError, onOpenLink, onExit }, ref) {
   const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -154,8 +134,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     const terminal = terminalRef.current
     const terminalId = terminalIdRef.current
     if (!visibleRef.current || !terminal || !terminalId || !window.prime) return
-    const content = readTerminalContent(terminal)
-    window.prime.terminal.setActiveContext(terminalId, { label: labelRef.current, content: content.content, truncated: content.contentTruncated })
+    const content = readTerminalBufferTail(terminal.buffer.active)
+    window.prime.terminal.setActiveContext(terminalId, { label: labelRef.current, content: content.text, truncated: content.truncated })
   }
 
   const scheduleActiveContext = () => {
