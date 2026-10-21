@@ -39,7 +39,7 @@ export function statusFrom(
 
 export function applyLiveMetadata(metadata: SessionMetadata, live: JsonRecord): void {
   const active = live.isSessionActive !== false
-  metadata.hasRunningRlmChildren = live.hasRunningRlmChildren === true
+  metadata.hasRunningRlmChildren = live.hasRunningRlmChildren === true || live.hasRunningSubagents === true
   if (live.workerState === 'failed') metadata.status = 'failed'
   else if (metadata.hasRunningRlmChildren || (active && (live.isStreaming === true || live.activity === 'working' || live.isCompacting === true))) metadata.status = 'running'
   else if (live.lifecycle === 'archived') metadata.status = 'complete'
