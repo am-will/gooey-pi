@@ -1,7 +1,6 @@
 ---
 name: setup-pstack
 description: Configure model-neutral delegation or record a model override explicitly requested by the user. Use for /setup-pstack, resetting delegation to inherit the session, or a user-requested model choice.
-disable-model-invocation: true
 ---
 
 # Set up pstack delegation

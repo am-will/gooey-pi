@@ -47,6 +47,11 @@ All skill delegations inherit the current chat/session model by omitting the
 across roles. Use `/setup-pstack` only to reset inheritance or record a model
 choice the user explicitly requests; do not detect or assign role defaults.
 
+After editing skills or agent instructions, run
+`python3 .agents/scripts/audit-model-routing.py --self-test` to check the
+[repository routing policy](.agents/scripts/audit-model-routing.py), including
+skill references, helpers, and agent prompts.
+
 ## Architecture and boundaries
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [documentation index](docs/README.md)
