@@ -14,7 +14,7 @@ import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
 import { bindRendererNavigation } from './renderer-navigation'
 import { hardenRenderer, registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY_POLICY } from './renderer-security'
-import { installCrashGuards } from './crash-guard'
+import { installCrashGuards, writeCrashLog } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
 import { CheckoutService } from './checkouts'
@@ -82,12 +82,13 @@ installCrashGuards({
   logPath: () => {
     try { return join(app.getPath('userData'), 'crash.log') } catch { return null }
   },
+  cleanupTimeoutMs: 10_000,
   cleanup: async () => {
     agents?.beginShutdown()
     ompAgents?.beginShutdown()
     piAgents?.beginShutdown()
     beginProcessShutdown()
-    await Promise.allSettled([agents?.stopAll() ?? Promise.resolve(), ompAgents?.stopAll() ?? Promise.resolve(), piAgents?.stopAll() ?? Promise.resolve(), stopChildProcesses()])
+    await Promise.allSettled([terminals?.killAll() ?? Promise.resolve(), agents?.stopAll() ?? Promise.resolve(), ompAgents?.stopAll() ?? Promise.resolve(), piAgents?.stopAll() ?? Promise.resolve(), stopChildProcesses()])
   },
 })
 
@@ -374,7 +375,7 @@ export function startupFailureDialog(error: unknown): StartupFailureDialog | nul
   if (error instanceof StateCompatibilityError) {
     return { title: 'GooeyPi update required', detail: boundedErrorMessage(error, 2_048) }
   }
-  return null
+  return { title: 'GooeyPi could not start', detail: boundedErrorMessage(error, 2_048) }
 }
 
 export async function settleShutdown(
@@ -987,6 +988,7 @@ else void app.whenReady().then(async () => {
     if (!shutdownStarted && (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible())) revealApplication('activation')
   })
 }).catch((error: unknown) => {
+  writeCrashLog(() => join(app.getPath('userData'), 'crash.log'), 'startup', error)
   const failureDialog = startupFailureDialog(error)
   if (failureDialog) dialog.showErrorBox(failureDialog.title, failureDialog.detail)
   if (!shutdownStarted) console.error(`GooeyPi failed to start: ${boundedErrorMessage(error)}`)

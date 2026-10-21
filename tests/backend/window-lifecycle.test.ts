@@ -41,7 +41,7 @@ describe('application window lifecycle', () => {
       detail: expect.stringMatching(/startup stopped.*retry.*prime-work-state-v4\.json.*prime-work-state\.json.*migrated-v4-backup.*do not delete/i),
     })
     expect(startupFailureDialog(new UnsupportedStateVersionError(99, '/tmp/state.json'))?.title).toBe('GooeyPi update required')
-    expect(startupFailureDialog(new Error('ordinary startup failure'))).toBeNull()
+    expect(startupFailureDialog(new Error('ordinary startup failure'))).toEqual({ title: 'GooeyPi could not start', detail: 'ordinary startup failure' })
   })
 
   it('uses one overlay title bar on Windows and Linux while preserving native macOS chrome', () => {
