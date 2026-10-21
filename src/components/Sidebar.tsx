@@ -26,7 +26,7 @@ import {
   SquarePen,
   Trash2,
 } from 'lucide-react'
-import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
+import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
 import { PROJECT_SORT_MODES, type AppMeta, type AppUpdateState, type HarnessId, type ProjectRecord, type ProjectSortMode, type SessionRecord, type WorkspaceView } from '@/types/api'
 import { writeClipboardText } from '@/lib/clipboard'
 import { formatRelative } from '@/lib/data'
@@ -36,6 +36,7 @@ import { useI18n, type MessageKey } from '@/lib/i18n'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { sessionTitleText } from '@/lib/session-title'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
+import { ChildSessionRows, type ChildRosterView } from './ChildSessionRows'
 import { IconButton, Modal, OmpMark, PiMark, PrimeMark, useFocusTrap } from './ui'
 
 const PROJECT_SORT_LABEL_KEYS = { recent: 'projects.sort.recent', alphabetical: 'projects.sort.alphabetical' } as const satisfies Record<ProjectSortMode, MessageKey>
@@ -43,6 +44,7 @@ const PROJECT_SORT_LABEL_KEYS = { recent: 'projects.sort.recent', alphabetical: 
 export interface SidebarProps {
   projects: ProjectRecord[]
   sessions: SessionRecord[]
+  childRoster?: ChildRosterView
   activeProjectId?: string
   activeSessionId?: string
   activeView: WorkspaceView
@@ -176,7 +178,7 @@ function updateConfirmCopy(state: AppUpdateState, t: Translate): { title: string
   }
 }
 
-function SidebarView({ projects, sessions, activeProjectId, activeSessionId, activeView, activeHarness = 'omp', harnesses, clearedAttention = {}, updateState = { phase: 'unsupported' }, onUpdateAction, onSelectHarness, onSelectProject, onSelectSession, onNavigate, onNewSession, onAddProject, onRemoveProject, projectSortMode = 'recent', onSetProjectSortMode = () => undefined, onTogglePinProject = () => undefined, onClose, onOpenPalette, onRenameSession, onArchiveSession, overlay = false, platform = 'darwin' }: SidebarProps) {
+function SidebarView({ projects, sessions, childRoster, activeProjectId, activeSessionId, activeView, activeHarness = 'omp', harnesses, clearedAttention = {}, updateState = { phase: 'unsupported' }, onUpdateAction, onSelectHarness, onSelectProject, onSelectSession, onNavigate, onNewSession, onAddProject, onRemoveProject, projectSortMode = 'recent', onSetProjectSortMode = () => undefined, onTogglePinProject = () => undefined, onClose, onOpenPalette, onRenameSession, onArchiveSession, overlay = false, platform = 'darwin' }: SidebarProps) {
   const { t } = useI18n()
   // Session titles are record data; only the main-process placeholder is
   // presented in the interface language (see `src/lib/session-title.ts`).
@@ -344,7 +346,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
               {!isCollapsed ? (
                 <div className="session-list">
                   {projectSessions.slice(0, sessionLimit).map((session) => (
-                    <div key={session.id} className={`session-row-wrap session-row-wrap--${session.status} ${needsAttention(session) ? 'has-attention' : ''} ${activeSessionId === session.id && activeView === 'session' ? 'is-selected' : ''}`}>
+                    <Fragment key={session.id}><div className={`session-row-wrap session-row-wrap--${session.status} ${needsAttention(session) ? 'has-attention' : ''} ${activeSessionId === session.id && activeView === 'session' ? 'is-selected' : ''}`}>
                       <button type="button" title={displayTitle(session.title)} className="session-row" onClick={() => { setSessionMenu(null); onSelectSession(session) }} onContextMenu={(event) => { event.preventDefault(); openSessionMenu(session.id, event.currentTarget) }}>
                         <SessionStatusMark status={session.status} attention={needsAttention(session)} />
                         <span className="session-row__text"><span className="session-row__title">{displayTitle(session.title)}</span><span className="session-row__meta">{session.status === 'running' ? t('sidebar.sessionMeta.working') : session.status === 'waiting' ? t('sidebar.sessionMeta.attention') : session.status === 'complete' ? t('sidebar.status.complete') : formatRelative(session.updatedAt)}</span></span>
@@ -357,7 +359,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                       ><Archive size={13}/></IconButton>
                       <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={(event) => openSessionMenu(session.id, event.currentTarget)}><MoreHorizontal size={13}/></IconButton>
                       {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
-                    </div>
+                    </div>{childRoster?.parentFile === session.filePath ? <ChildSessionRows roster={childRoster} /> : null}</Fragment>
                   ))}
                   {projectSessions.length > sessionLimit ? <button type="button" className="session-row session-row--empty" onClick={() => setSessionLimits((limits) => ({ ...limits, [project.id]: sessionLimit + SIDEBAR_SESSION_LIMIT }))}>{t('sidebar.moreSessions', { count: projectSessions.length - sessionLimit })}</button> : null}
                   {sessionLimit > SIDEBAR_SESSION_LIMIT ? <button type="button" className="session-row session-row--empty" onClick={() => { setSessionMenu(null); setSessionLimits((limits) => ({ ...limits, [project.id]: SIDEBAR_SESSION_LIMIT })) }}>{t('sidebar.showLess')}</button> : null}
@@ -400,6 +402,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
 export function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps): boolean {
   return previous.projects === next.projects
     && previous.sessions === next.sessions
+    && previous.childRoster === next.childRoster
     && previous.activeProjectId === next.activeProjectId
     && previous.activeSessionId === next.activeSessionId
     && previous.activeView === next.activeView
