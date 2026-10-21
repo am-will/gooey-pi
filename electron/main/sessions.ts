@@ -1,3 +1,4 @@
+import { HARNESSES } from './harness'
 import { watch, type Dirent, type Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -144,7 +145,7 @@ export class SessionService {
       closedError: () => new Error('Too many transcript reads are pending'),
     })
     this.harness = options.harness ?? 'prime'
-    this.sessionRoot = options.sessionRoot ?? join(homedir(), '.prime', 'agent', 'sessions')
+    this.sessionRoot = options.sessionRoot ?? HARNESSES.prime.sessionRoot(homedir())
     this.recursiveWatch = options.recursiveWatch === true
     this.metadataReader = options.metadataReader ?? createSessionMetadataReader()
     this.transcriptReader = options.transcriptReader ?? readTranscript

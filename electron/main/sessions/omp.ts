@@ -1,7 +1,7 @@
+import { HARNESSES } from '../harness'
 import { compactText } from '../../../src/lib/text'
 import { closeSync, openSync, readSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
 import {
@@ -31,9 +31,6 @@ import type { TranscriptFileReader } from './transcript'
  */
 export const OMP_TITLE_SLOT_BYTES = 256
 
-export function ompSessionRoot(): string {
-  return join(homedir(), '.omp', 'agent', 'sessions')
-}
 
 const ompMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change' && typeof value.model === 'string') {
@@ -130,6 +127,6 @@ export const readOmpTranscript: TranscriptFileReader = createBranchSummaryTransc
  * Fully wired SessionService options for an OMP session root. Construct the
  * service with a null CLI path: OMP has no `prime-agent list` live overlay.
  */
-export function ompSessionServiceOptions(sessionRoot = ompSessionRoot()): SessionServiceOptions {
+export function ompSessionServiceOptions(sessionRoot = HARNESSES.omp.sessionRoot(homedir())): SessionServiceOptions {
   return bucketedSessionServiceOptions('omp', sessionRoot, createOmpSessionMetadataReader(), readOmpTranscript, writeOmpTitleSlot)
 }

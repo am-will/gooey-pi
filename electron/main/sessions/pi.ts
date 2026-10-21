@@ -1,8 +1,8 @@
+import { HARNESSES } from '../harness'
 import { compactText } from '../../../src/lib/text'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
 import {
@@ -33,9 +33,6 @@ import type { TranscriptFileReader } from './transcript'
  * Everything except the display-name and `model_change` record shapes is shared
  * with OMP through `./bucketed`.
  */
-export function piSessionRoot(): string {
-  return join(homedir(), '.pi', 'agent', 'sessions')
-}
 
 const piMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change') {
@@ -104,6 +101,6 @@ export const readPiTranscript: TranscriptFileReader = createBranchSummaryTranscr
  * Fully wired SessionService options for a pi session root. Construct the
  * service with a null CLI path: pi has no `prime-agent list` live overlay.
  */
-export function piSessionServiceOptions(sessionRoot = piSessionRoot()): SessionServiceOptions {
+export function piSessionServiceOptions(sessionRoot = HARNESSES.pi.sessionRoot(homedir())): SessionServiceOptions {
   return bucketedSessionServiceOptions('pi', sessionRoot, createPiSessionMetadataReader(), readPiTranscript, appendPiSessionInfo)
 }
