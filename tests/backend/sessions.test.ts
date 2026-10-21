@@ -1190,6 +1190,27 @@ describe('bounded transcript result caching', () => {
     expect(transcriptReader).toHaveBeenLastCalledWith(await service.requireSessionPath(file), true)
   })
 
+  it('invalidates same-size rewrites even when mtime is restored', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'rewrite.jsonl')
+    writeSession(file, project, 'rewrite')
+    const fixed = new Date('2025-01-01T00:00:00.000Z')
+    utimesSync(file, fixed, fixed)
+    await service.read(file)
+    const before = statSync(file)
+    // Wait for an observable filesystem revision, not an assumed clock resolution.
+    await waitUntil(() => {
+      writeFileSync(file, readFileSync(file, 'utf8').replace('rewrite', 'changed'))
+      utimesSync(file, fixed, fixed)
+      return statSync(file).ctimeMs !== before.ctimeMs
+    }, 4_000)
+    expect(statSync(file).size).toBe(before.size)
+    expect(statSync(file).mtimeMs).toBe(before.mtimeMs)
+    await service.read(file)
+    expect(transcriptReader).toHaveBeenCalledTimes(2)
+  })
+
   it('evicts the least recently used path and never caches reader failures', async () => {
     const transcriptReader = vi.fn(async () => [])
     const { root, project, service } = setup(undefined, { transcriptReader })
