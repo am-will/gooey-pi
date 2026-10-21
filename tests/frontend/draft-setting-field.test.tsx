@@ -14,7 +14,7 @@ function deferred() {
   const promise = new Promise<void>((done) => { resolve = done })
   return { promise, resolve }
 }
-function renderField(onCommit: (value: string) => Promise<void> | void) {
+function renderField(onCommit: (value: string) => Promise<boolean | void> | void) {
   act(() => root.render(<DraftSettingField id="field" label="Field" description="Description" committedValue="original" validate={() => ''} onCommit={onCommit} />))
   return host.querySelector('input')!
 }
@@ -53,4 +53,14 @@ it('settles a synchronous save error without stranding a pending field', async (
   await act(async () => enter(input))
   expect(host.querySelector('[role="alert"]')?.textContent).toBe('Save failed')
   expect(host.querySelector('button')?.textContent).toBe('Save')
+})
+
+
+it('preserves a rejected draft and displays explicit failed persistence', async () => {
+  const input = renderField(async () => false)
+  edit(input, 'unsaved')
+  await act(async () => enter(input))
+  expect(input.value).toBe('unsaved')
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe('The setting could not be saved.')
+  expect(host.querySelector('button')?.disabled).toBe(true)
 })

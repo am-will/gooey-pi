@@ -90,8 +90,8 @@ describe('settings queue reconciliation', () => {
     }
     await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
 
-    let firstMutation!: Promise<void>
-    let secondMutation!: Promise<void>
+    let firstMutation!: Promise<boolean>
+    let secondMutation!: Promise<boolean>
     let reconciliation!: ReturnType<typeof state.reconcileExternalSettings>
     await act(async () => {
       firstMutation = state.updateSettings({ sidebarOpen: false })
@@ -147,8 +147,8 @@ describe('settings queue reconciliation', () => {
     }
     await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
 
-    let firstMutation!: Promise<void>
-    let secondMutation!: Promise<void>
+    let firstMutation!: Promise<boolean>
+    let secondMutation!: Promise<boolean>
     await act(async () => {
       firstMutation = state.updateSettings({ sidebarOpen: false })
       secondMutation = state.updateSettings({ terminalOpen: true })
@@ -177,7 +177,7 @@ describe('settings queue reconciliation', () => {
     }
     await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
 
-    let mutation!: Promise<void>
+    let mutation!: Promise<boolean>
     await act(async () => {
       mutation = state.updateSettings({ sidebarOpen: false })
       state.setInspectorOpen(false)
@@ -1265,4 +1265,19 @@ it('sends questionnaire answers concurrently and releases only failed response i
   await act(async () => { first.reject(error); second.resolve({}); await reply })
   expect(command.mock.calls.filter(([, payload]) => payload.type === 'extension_ui_response' && 'cancelled' in payload)).toEqual([['runtime', { type: 'extension_ui_response', id: 'q1', cancelled: true }]])
   expect(reportError).toHaveBeenCalledExactlyOnceWith(error)
+})
+
+it('returns false for rolled-back persistence and true only for a saved settings update', async () => {
+  const failure = new Error('disk unavailable')
+  const update = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({ ...DEFAULT_SETTINGS, browserHome: 'https://saved.example/' })
+  const bridge = { settings: { get: async () => DEFAULT_SETTINGS, update } } as unknown as PrimeWorkApi
+  const reportError = vi.fn()
+  let state!: ReturnType<typeof useAppSettings>
+  function SettingsProbe() { state = useAppSettings({ bridge, reportError }); return null }
+  await act(async () => root.render(<SettingsProbe />))
+  await act(async () => { expect(await state.updateSettings({ browserHome: 'https://failed.example/' })).toBe(false) })
+  expect(state.settings.browserHome).toBe(DEFAULT_SETTINGS.browserHome)
+  expect(reportError).toHaveBeenCalledExactlyOnceWith(failure)
+  await act(async () => { expect(await state.updateSettings({ browserHome: 'https://saved.example/' })).toBe(true) })
+  expect(state.settings.browserHome).toBe('https://saved.example/')
 })

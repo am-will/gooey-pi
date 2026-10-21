@@ -78,13 +78,13 @@ interface PluginsPageProps {
   activeProjectPath?: string
   onRefresh(): Promise<void>
   askUserTimeoutMs?: number
-  onSetAskUserTimeoutMs?(ms: number): Promise<void>
+  onSetAskUserTimeoutMs?(ms: number): Promise<boolean | void>
   askUserEnabled: boolean
-  onSetAskUserEnabled(enabled: boolean): Promise<void>
+  onSetAskUserEnabled(enabled: boolean): Promise<boolean | void>
   browserEnabled: boolean
-  onSetBrowserEnabled(enabled: boolean): Promise<void>
+  onSetBrowserEnabled(enabled: boolean): Promise<boolean | void>
   computerUseEnabled: boolean
-  onSetComputerUseEnabled(enabled: boolean): Promise<void>
+  onSetComputerUseEnabled(enabled: boolean): Promise<boolean | void>
   onOpenExternal(url: string): void
   onInstall(source: string): Promise<{ ok: boolean; output: string }>
   onInstallExtension(input: ExtensionInstallInput): Promise<{ ok: boolean; output: string }>

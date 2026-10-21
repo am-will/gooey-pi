@@ -64,7 +64,7 @@ export function DraftSettingField({
     const id = ++nextCommitId.current
     dispatch({ type: 'commit', id, value })
     const operation = Promise.resolve().then(async () => onCommit(value))
-      .then(() => { dispatch({ type: 'resolve', id }) })
+      .then((saved) => { dispatch(saved === false ? { type: 'reject', id, error: errorMessage(undefined) } : { type: 'resolve', id }) })
       .catch((error: unknown) => { dispatch({ type: 'reject', id, error: errorMessage(error) }) })
       .finally(() => {
         if (inFlight.current === operation) inFlight.current = null

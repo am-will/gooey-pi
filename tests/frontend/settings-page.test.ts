@@ -45,12 +45,12 @@ describe('settings draft synchronization', () => {
     expect(rejected.error).toBe('shell is not executable')
   })
 
-  it('recognizes an optimistic prop rollback without replacing the submitted draft', () => {
+  it('uses explicit rejection after an optimistic prop rollback without replacing the draft', () => {
     const edited = reduceDraftState(createDraftState('/bin/zsh'), { type: 'edit', value: '/bin/bash', error: '' })
     const committing = reduceDraftState(edited, { type: 'commit', id: 8, value: '/bin/bash' })
     const optimistic = reduceDraftState(committing, { type: 'sync', value: '/bin/bash' })
     const rolledBack = reduceDraftState(optimistic, { type: 'sync', value: '/bin/zsh' })
-    const resolved = reduceDraftState(rolledBack, { type: 'resolve', id: 8 })
+    const resolved = reduceDraftState(rolledBack, { type: 'reject', id: 8, error: 'The setting could not be saved.' })
 
     expect(resolved.value).toBe('/bin/bash')
     expect(resolved.baseline).toBe('/bin/zsh')
@@ -58,11 +58,11 @@ describe('settings draft synchronization', () => {
     expect(resolved.error).toContain('could not be saved')
   })
 
-  it('recognizes a prop rollback that renders just after the update promise resolves', () => {
+  it('preserves explicit rejection when a prop rollback renders after settlement', () => {
     const edited = reduceDraftState(createDraftState('/bin/zsh'), { type: 'edit', value: '/bin/bash', error: '' })
     const committing = reduceDraftState(edited, { type: 'commit', id: 9, value: '/bin/bash' })
     const optimistic = reduceDraftState(committing, { type: 'sync', value: '/bin/bash' })
-    const resolved = reduceDraftState(optimistic, { type: 'resolve', id: 9 })
+    const resolved = reduceDraftState(optimistic, { type: 'reject', id: 9, error: 'The setting could not be saved.' })
     const rolledBack = reduceDraftState(resolved, { type: 'sync', value: '/bin/zsh' })
 
     expect(rolledBack.value).toBe('/bin/bash')
