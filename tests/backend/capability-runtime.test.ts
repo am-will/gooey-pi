@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { extensionHarnessRuntimeEnvironment } from '../../electron/main/capability-runtime'
+import { bindRuntimeCapabilities, extensionHarnessRuntimeEnvironment } from '../../electron/main/capability-runtime'
 
 function fixture() {
   const bridge = (tokenKey: string, token: string) => ({
@@ -19,6 +19,14 @@ function fixture() {
 }
 
 describe('extension harness capability construction', () => {
+  it('binds every broker to the same discovered session and runtime', () => {
+    const bridges = { scheduleBridge: { bindSession: vi.fn() }, browserBridge: { bindSession: vi.fn() }, collaborationBridge: { bindSession: vi.fn() } }
+    bindRuntimeCapabilities({ PRIME_WORK_SCHEDULE_TOKEN: 'schedule', PRIME_WORK_BROWSER_TOKEN: 'browser', GOOEYPI_COLLABORATION_TOKEN: 'collaboration' }, { runtimeId: 'runtime', harness: 'omp', cwd: '/work', isStreaming: false, sessionFile: '/session' }, bridges)
+    expect(bridges.scheduleBridge.bindSession).toHaveBeenCalledWith('schedule', '/session', 'runtime')
+    expect(bridges.browserBridge.bindSession).toHaveBeenCalledWith('browser', '/session', 'runtime')
+    expect(bridges.collaborationBridge.bindSession).toHaveBeenCalledWith('collaboration', '/session', 'runtime')
+  })
+
   it.each(['omp', 'pi'] as const)('cleans every earlier claim when %s collaboration construction fails', (harness) => {
     const deps = fixture()
     deps.collaborationBridge.environmentFor.mockImplementation(() => { throw new Error('Cannot mint collaboration') })

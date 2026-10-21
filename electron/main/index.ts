@@ -22,7 +22,7 @@ import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-disco
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
-import { extensionHarnessRuntimeEnvironment } from './capability-runtime'
+import { bindRuntimeCapabilities, extensionHarnessRuntimeEnvironment } from './capability-runtime'
 import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
@@ -892,10 +892,9 @@ async function bootstrap(): Promise<void> {
     settings: stateStore.getSettings(), scheduleBridge, browserBridge, collaborationBridge,
     askUserExtensionPath: ompAskUserExtensionPath, cuaDriver, computerUseSkillPath,
   }))
-  agents.setRuntimeStartListener((environment, info) => {
-    browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
-    collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
-  })
+  agents.setRuntimeStartListener((environment, info) => bindRuntimeCapabilities(environment, info, {
+    scheduleBridge: scheduleBridge, browserBridge, collaborationBridge,
+  }))
   agents.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, scheduleBridge))
   // OMP runtimes get the same capability-scoped brokers through OMP-flavored
   // extensions. OMP has no --skill flag, so their tool descriptions carry the
@@ -909,10 +908,9 @@ async function bootstrap(): Promise<void> {
     harness: 'omp', settings: stateStore.getSettings(), extensionPaths: capabilityExtensionPaths,
     scheduleBridge: ompScheduleBridge, browserBridge, collaborationBridge, cuaDriver, computerUseSkillPath,
   }))
-  ompManager.setRuntimeStartListener((environment, info) => {
-    browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
-    collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
-  })
+  ompManager.setRuntimeStartListener((environment, info) => bindRuntimeCapabilities(environment, info, {
+    scheduleBridge: ompScheduleBridge, browserBridge, collaborationBridge,
+  }))
   ompManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, ompScheduleBridge))
   // Pi runtimes receive the identical capability surface: pi's extension API
   // is the ancestor of OMP's, so the omp-work-* files are shared by design.
@@ -921,10 +919,9 @@ async function bootstrap(): Promise<void> {
     scheduleBridge: piScheduleBridge, browserBridge, collaborationBridge, cuaDriver, computerUseSkillPath,
     piFastModeExtensionPath,
   }))
-  piManager.setRuntimeStartListener((environment, info) => {
-    browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
-    collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
-  })
+  piManager.setRuntimeStartListener((environment, info) => bindRuntimeCapabilities(environment, info, {
+    scheduleBridge: piScheduleBridge, browserBridge, collaborationBridge,
+  }))
   piManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, piScheduleBridge))
   if (shutdownStarted) return
   const meta: AppMeta = {

@@ -1,5 +1,5 @@
 import type { RuntimeEnvironmentScope } from './agent-rpc'
-import type { AppSettings } from '../../src/types/api'
+import type { AppSettings, RuntimeInfo } from '../../src/types/api'
 import type { CapabilityScope } from './lib/capability-bridge'
 
 export interface RuntimeCapabilityBridge {
@@ -95,4 +95,15 @@ export function extensionHarnessRuntimeEnvironment(scope: RuntimeEnvironmentScop
     GOOEYPI_CUA_DRIVER_PATH: cuaDriverPath ?? undefined,
     GOOEYPI_COMPUTER_USE_SKILL_PATH: cuaDriverPath ? dependencies.computerUseSkillPath : undefined,
   }))
+}
+
+interface RuntimeCapabilityBinding {
+  bindSession(token: string | undefined, sessionFile: string | undefined, runtimeId?: string): void
+}
+
+/** Bind the first session discovered by a newly started runtime on every broker. */
+export function bindRuntimeCapabilities(environment: NodeJS.ProcessEnv, info: RuntimeInfo, bridges: Record<BridgeName, RuntimeCapabilityBinding>): void {
+  for (const name of ['scheduleBridge', 'browserBridge', 'collaborationBridge'] as const) {
+    bridges[name].bindSession(environment[TOKEN_KEYS[name]], info.sessionFile, info.runtimeId)
+  }
 }
