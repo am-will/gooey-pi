@@ -28,6 +28,14 @@ import type { BrowserWindow } from 'electron'
 type Handler = (...args: never[]) => void
 
 describe('application window lifecycle', () => {
+  it('keeps the final state drain inside the shutdown watchdog', async () => {
+    const drain = vi.fn(() => new Promise<void>(() => {}))
+    const log = vi.fn()
+    await settleShutdown([], { watchdogMs: 5, drain, log })
+    expect(drain).toHaveBeenCalledOnce()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('did not finish'))
+  })
+
   it('gives migration failures a dedicated actionable startup dialog', () => {
     const migration = new StateMigrationError(
       'Legacy authority retirement failed.',
