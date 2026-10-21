@@ -406,6 +406,18 @@ describe('sidebar session visibility', () => {
     expect(container.querySelector<HTMLButtonElement>('.project-row__collapse')?.disabled).toBe(true)
   })
 
+  it('keeps session options in the viewport and dismisses their stale position on scroll', async () => {
+    await renderSessions(1)
+    const button = container.querySelector<HTMLButtonElement>('.session-row__more')!
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({ bottom: window.innerHeight - 5, right: 230 } as DOMRect)
+    await press(button)
+    const menu = container.querySelector<HTMLElement>('.session-row__menu')!
+    expect(menu.style.position).toBe('fixed')
+    expect(Number.parseFloat(menu.style.top)).toBeLessThanOrEqual(window.innerHeight - 80)
+    await act(async () => document.dispatchEvent(new Event('scroll')))
+    expect(container.querySelector('.session-row__menu')).toBeNull()
+  })
+
   it('reveals seven more sessions at a time and can return to the initial batch', async () => {
     await renderSessions(22)
     expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(7)
