@@ -54,7 +54,7 @@ Group the combined signals into sections. Common ones (use only what applies):
 - **Response style**: length, tone, format.
 - **Autonomy**: how much to do without asking; MCP tool use.
 - **Understand first**: which skills to reach for when scoping or investigating a change.
-- **Subagents**: default, parallelism, model-to-task, specialized workflows.
+- **Subagents**: parallelism, inherited session model, explicitly requested overrides, specialized workflows.
 - **Prose / code discipline**: principles, lint tools, style guides.
 - **Review and verify**: repro posture, verification skills, live-testing tools.
 - **Process**: git worktrees, commits, PRs, review/merge tooling.
