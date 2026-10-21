@@ -443,7 +443,7 @@ export class RpcRuntime {
     let value: unknown
     try { value = JSON.parse(line) } catch {
       this.chunks.dispose()
-      this.emit({ type: 'transport_error', error: `${this.adapter.agentName} emitted malformed JSON` })
+      this.emit({ type: 'transport_limit', kind: 'frame', error: `${this.adapter.agentName} emitted malformed JSON` })
       return
     }
     this.handleFrame(value)
@@ -467,7 +467,7 @@ export class RpcRuntime {
       this.pending.delete(raw.id)
       if (raw.command !== pending.command) {
         pending.reject(new Error(`${this.adapter.agentName} returned a mismatched response for ${pending.command}`))
-        this.emit({ type: 'transport_error', error: `${this.adapter.agentName} returned a mismatched RPC response` })
+        this.emit({ type: 'transport_limit', kind: 'response', error: `${this.adapter.agentName} returned a mismatched RPC response` })
         return
       }
       if (raw.success !== true) {

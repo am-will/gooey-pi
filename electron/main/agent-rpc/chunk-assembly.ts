@@ -114,7 +114,7 @@ export class RpcChunkAssembler {
     let value: unknown
     try { value = JSON.parse(Buffer.concat(current.parts).toString('utf8')) } catch {
       this.dispose()
-      this.host.emit({ type: 'transport_error', error: `${this.host.agentName} emitted a malformed chunked frame` })
+      this.host.emit({ type: 'transport_limit', kind: 'frame', error: `${this.host.agentName} emitted a malformed chunked frame` })
       return
     }
     this.host.deliver(value)

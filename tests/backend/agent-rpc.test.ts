@@ -836,9 +836,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   it('rejects a response whose command does not match its request', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'follow_up', success: true }")
     const manager = managerFor(fake.executable)
+    const delivered: RpcObject[] = []
+    manager.setEventSink(({ event }) => delivered.push(event))
     const runtime = await manager.start({ cwd: fake.cwd })
 
     await expect(manager.command(runtime.runtimeId, { type: 'prompt', message: 'hello' })).rejects.toThrow(/mismatched response/)
+    expect(delivered.filter((event) => event.type === 'transport_error')).toEqual([])
+    expect(delivered).toContainEqual(expect.objectContaining({ type: 'transport_limit', kind: 'response' }))
+    await expect(manager.command(runtime.runtimeId, { type: 'get_state' })).resolves.toMatchObject({ success: true })
   })
 
   it('does not admit a runtime when the handshake fails', async () => {

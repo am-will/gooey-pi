@@ -889,7 +889,8 @@ describe('OMP RPC chunked frames', () => {
     expect(reconstructed.view.chunks.sweepTimer).toBeNull()
     expect(reconstructed.timing.activeTimers()).toHaveLength(0)
     expect(reconstructed.events).toContainEqual(expect.objectContaining({
-      type: 'transport_error',
+      type: 'transport_limit',
+      kind: 'frame',
       error: expect.stringMatching(/malformed chunked frame/i),
     }))
 
@@ -901,7 +902,8 @@ describe('OMP RPC chunked frames', () => {
     expect(raw.view.chunks.sweepTimer).toBeNull()
     expect(raw.timing.activeTimers()).toHaveLength(0)
     expect(raw.events).toContainEqual(expect.objectContaining({
-      type: 'transport_error',
+      type: 'transport_limit',
+      kind: 'frame',
       error: expect.stringMatching(/malformed JSON/i),
     }))
   })
