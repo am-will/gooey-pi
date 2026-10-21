@@ -13,7 +13,8 @@
 .pet-orb--failed { filter: grayscale(.55); animation: none; }
 .pet-orb.is-reduced-motion, .pet-orb.is-reduced-motion::after { animation: none; }
 
-.desktop-pet { position: fixed; z-index: 120; width: var(--pet-surface-width, 96px); min-height: var(--pet-surface-min-height, 122px); display: flex; align-items: center; flex-direction: column; color: var(--text); user-select: none; filter: drop-shadow(0 12px 14px color-mix(in srgb, #000 20%, transparent)); }
+.desktop-pet { position: fixed; pointer-events: none; z-index: 120; width: var(--pet-surface-width, 96px); min-height: var(--pet-surface-min-height, 122px); display: flex; align-items: center; flex-direction: column; color: var(--text); user-select: none; filter: drop-shadow(0 12px 14px color-mix(in srgb, #000 20%, transparent)); }
+.desktop-pet > * { pointer-events: auto; }
 .desktop-pet__drag-target { width: calc(var(--pet-avatar-size, 72px) + 16px); min-height: var(--pet-avatar-size, 72px); display: flex; align-items: center; flex-direction: column; justify-content: flex-end; padding: 0 8px; border-radius: 18px; outline: 0; touch-action: none; cursor: grab; }
 .desktop-pet__avatar { position: relative; display: inline-flex; }
 .desktop-pet__drag-target:active { cursor: grabbing; }
