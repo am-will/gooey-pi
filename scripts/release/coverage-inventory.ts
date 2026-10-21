@@ -22,6 +22,10 @@ export interface CoverageTechnicalExclusion {
   compensatingVerification: readonly string[]
 }
 
+export type SafetyModuleCoverage =
+  | { kind: 'measured'; file: string; thresholds: CoverageFamilyThresholds }
+  | { kind: 'worker-compensated'; file: string; reason: string; compensatingVerification: readonly string[] }
+
 interface CoverageInventoryOptions {
   families?: readonly CoverageFamily[]
   exclusions?: readonly CoverageTechnicalExclusion[]
@@ -163,6 +167,31 @@ export function familyCoverageThresholds(families: readonly CoverageFamily[] = C
     const pattern = `${familyRoot}/**`
     if (pattern in thresholds) throw new Error(`duplicate coverage family root: ${familyRoot}`)
     thresholds[pattern] = { ...family.thresholds }
+  }
+  return thresholds
+}
+
+/** Exact-file floors overlap family/global gates without removing any measured file. */
+export function safetyCoverageThresholds(modules: readonly SafetyModuleCoverage[], inventory: CoverageInventory): Record<string, CoverageFamilyThresholds> {
+  const included = new Set(inventory.includedFiles)
+  const classified = new Set<string>()
+  const thresholds: Record<string, CoverageFamilyThresholds> = {}
+  for (const module of modules) {
+    const file = normalizeRepositoryPath(module.file, 'safety coverage file')
+    if (classified.has(file)) throw new Error(`duplicate safety coverage classification: ${file}`)
+    if (!included.has(file)) throw new Error(`safety coverage file must remain included: ${file}`)
+    classified.add(file)
+    if (module.kind === 'worker-compensated') {
+      if (module.reason.trim().length < 40 || module.compensatingVerification.length === 0 || module.compensatingVerification.some((value) => !value.trim())) {
+        throw new Error(`worker coverage ${file} requires a reason and compensating verification`)
+      }
+      continue
+    }
+    for (const metric of ['statements', 'branches', 'functions', 'lines'] as const) {
+      const value = module.thresholds[metric]
+      if (!Number.isInteger(value) || value < 1 || value > 100) throw new Error(`safety coverage ${file} requires a positive integer percentage for ${metric}`)
+    }
+    thresholds[escapeCoverageIncludePath(file)] = { ...module.thresholds }
   }
   return thresholds
 }
