@@ -1,6 +1,8 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
 import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, type LocalePreference, type ProjectSortMode } from '../../src/types/api'
+import { isDeepStrictEqual } from 'node:util'
+import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import type { JsonStateStore } from './store'
 import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
@@ -123,32 +125,11 @@ export class SettingsService {
       voiceLocalWhisperModel: (value) => requireString(value, 'voiceLocalWhisperModel', { max: 4_096, trim: true }),
       voiceRealtimeModel: (value) => this.voiceModel(value, 'voiceRealtimeModel'),
       voiceRealtimeVoice: (value) => this.voiceModel(value, 'voiceRealtimeVoice'),
-      disabledProviders: (value) => {
-        if (!Array.isArray(value) || value.length > 128) throw new TypeError('disabledProviders must be a bounded array')
-        return [...new Set(value.map((entry, index) => {
-          const id = requireString(entry, `disabledProviders[${index}]`, { min: 1, max: 128, trim: true })
-          if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`disabledProviders[${index}] is not a valid provider ID`)
-          return id
-        }))]
-      },
+      disabledProviders: (value) => this.disabledProviders(value, 'disabledProviders'),
       disabledModels: (value) => this.disabledModels(value, 'disabledModels'),
-      ompDisabledProviders: (value) => {
-        if (!Array.isArray(value) || value.length > 256) throw new TypeError('ompDisabledProviders must be a bounded array')
-        return [...new Set(value.map((entry, index) => {
-          const id = requireString(entry, `ompDisabledProviders[${index}]`, { min: 1, max: 128, trim: true })
-          if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`ompDisabledProviders[${index}] is not a valid provider ID`)
-          return id
-        }))]
-      },
+      ompDisabledProviders: (value) => this.disabledProviders(value, 'ompDisabledProviders'),
       ompDisabledModels: (value) => this.disabledModels(value, 'ompDisabledModels'),
-      piDisabledProviders: (value) => {
-        if (!Array.isArray(value) || value.length > 256) throw new TypeError('piDisabledProviders must be a bounded array')
-        return [...new Set(value.map((entry, index) => {
-          const id = requireString(entry, `piDisabledProviders[${index}]`, { min: 1, max: 128, trim: true })
-          if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`piDisabledProviders[${index}] is not a valid provider ID`)
-          return id
-        }))]
-      },
+      piDisabledProviders: (value) => this.disabledProviders(value, 'piDisabledProviders'),
       piDisabledModels: (value) => this.disabledModels(value, 'piDisabledModels'),
       lastSelectedModels: (value) => {
         if (!isRecord(value)) throw new TypeError('lastSelectedModels must be an object')
@@ -176,7 +157,17 @@ export class SettingsService {
       Object.assign(state.settings, next)
       return state.settings
     })
-    await this.onDidUpdate(previous!, next)
+    try {
+      await this.onDidUpdate(previous!, next)
+    } catch (error) {
+      // Revert the saved patch so it matches what the renderer reverts to; keys a newer write changed are kept.
+      await this.store.update((state) => {
+        for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
+          if (isDeepStrictEqual(state.settings[key], next[key])) Object.assign(state.settings, { [key]: previous![key] })
+        }
+      })
+      throw error
+    }
     return next
   }
 
@@ -184,6 +175,15 @@ export class SettingsService {
     const model = requireString(value, label, { min: 1, max: 128, trim: true })
     if (!/^[a-z0-9][a-z0-9._:-]{0,127}$/i.test(model)) throw new TypeError(`${label} is not valid`)
     return model
+  }
+
+  private disabledProviders(value: unknown, label: string): string[] {
+    if (!Array.isArray(value) || value.length > MAX_CATALOG_PROVIDERS) throw new TypeError(`${label} must be a bounded array`)
+    return [...new Set(value.map((entry, index) => {
+      const id = requireString(entry, `${label}[${index}]`, { min: 1, max: 128, trim: true })
+      if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`${label}[${index}] is not a valid provider ID`)
+      return id
+    }))]
   }
 
   private disabledModels(value: unknown, label: string): string[] {

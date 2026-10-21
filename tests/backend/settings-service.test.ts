@@ -121,7 +121,7 @@ describe('SettingsService.update', () => {
     await expect(service.update({ askUserEnabled: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ browserHome: 'javascript:alert(1)' })).rejects.toThrow(/scheme/)
     await expect(service.update({ disabledProviders: ['../evil'] })).rejects.toThrow(/provider ID/)
-    await expect(service.update({ disabledProviders: Array.from({ length: 129 }, () => 'p') })).rejects.toThrow(/bounded/)
+    await expect(service.update({ disabledProviders: Array.from({ length: 257 }, () => 'p') })).rejects.toThrow(/bounded/)
     await expect(service.update({ disabledModels: ['../evil'] })).rejects.toThrow(/model key/)
     await expect(service.update({ disabledModels: Array.from({ length: 5_001 }, () => 'openai/gpt') })).rejects.toThrow(/bounded/)
     await expect(service.update({ ompDisabledProviders: ['../evil'] })).rejects.toThrow(/provider ID/)
@@ -161,6 +161,15 @@ describe('SettingsService.update', () => {
     await expect(service.update({ voiceSelfHostedUrl: 'https://speech.example.test/v1' })).resolves.toMatchObject({ voiceSelfHostedUrl: 'https://speech.example.test/v1' })
   })
 
+  it('accepts disabled-provider lists up to the provider catalog cap for every harness', async () => {
+    const service = makeService()
+    const ids = Array.from({ length: 256 }, (_, index) => `p${index}`)
+    for (const key of ['disabledProviders', 'ompDisabledProviders', 'piDisabledProviders'] as const) {
+      await expect(service.update({ [key]: ids.slice(0, 129) })).resolves.toMatchObject({ [key]: ids.slice(0, 129) })
+      await expect(service.update({ [key]: ids })).resolves.toMatchObject({ [key]: ids })
+    }
+  })
+
   it('accepts the pi harness and dedupes piDisabledProviders', async () => {
     const service = makeService()
     const next = await service.update({ activeHarness: 'pi', piDisabledProviders: ['openai', 'openai', 'anthropic'] })
@@ -198,6 +207,15 @@ describe('SettingsService.update', () => {
     const next = await service.update({ keepRunningInBackground: true })
     expect(onDidUpdate).toHaveBeenCalledWith(before, next)
     expect(next.keepRunningInBackground).toBe(true)
+  })
+
+  it('reverts the saved patch when a lifecycle integration rejects it', async () => {
+    const onDidUpdate = vi.fn(() => { throw new Error('macOS needs your approval') })
+    const service = makeService(undefined, onDidUpdate)
+
+    await expect(service.update({ launchAtLogin: true })).rejects.toThrow(/approval/)
+    expect(onDidUpdate).toHaveBeenCalledOnce()
+    expect(service.get().launchAtLogin).toBe(false)
   })
 })
 

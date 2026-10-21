@@ -197,6 +197,8 @@ export const SAMPLE_SCHEDULES: AutomationScheduleRecord[] = [
 export function formatRelative(value?: string | number): string {
   if (!value) return ''
   const timestamp = typeof value === 'number' ? value : new Date(value).getTime()
+  // Intl.RelativeTimeFormat throws on non-finite values, which would crash the rendering subtree.
+  if (!Number.isFinite(timestamp)) return ''
   const seconds = Math.round((timestamp - Date.now()) / 1000)
   const abs = Math.abs(seconds)
   if (abs < 60) return 'now'
@@ -207,6 +209,7 @@ export function formatRelative(value?: string | number): string {
   return formatter.format(Math.round(seconds / 604800), 'week')
 }
 
+/** Last path segment for POSIX and Windows separators, ignoring trailing separators. */
 export function basename(path: string): string {
-  return path.split(/[/]/).filter(Boolean).at(-1) ?? path
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,7 @@ import {
   UnsupportedStateVersionError,
 } from '../../electron/main/store'
 import type { JsonStateStoreFileHandle, JsonStateStoreFileSystem } from '../../electron/main/store'
+import { renameWithWindowsRetry, WINDOWS_RENAME_RETRY_DELAYS_MS } from '../../electron/main/lib/durable-write'
 import { SessionService } from '../../electron/main/sessions'
 
 const dirs: string[] = []
@@ -39,6 +40,14 @@ const realFileSystem: JsonStateStoreFileSystem = {
   open: (path, flags, mode) => open(path, flags, mode),
   rename,
   unlink,
+}
+
+function recordingFileSystem(events: string[]): JsonStateStoreFileSystem {
+  return {
+    open: async (path, flags, mode) => { events.push(`open:${flags}`); return open(path, flags, mode) },
+    rename: async (from, to) => { events.push('rename'); await rename(from, to) },
+    unlink: async (path) => { events.push('unlink'); await unlink(path) },
+  }
 }
 
 describe('JsonStateStore', () => {
@@ -312,6 +321,71 @@ describe('JsonStateStore', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['succeeded'])
   })
 
+  it('retries a transiently locked Windows state replace and publishes the update', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeValidState(path)
+    let attempts = 0
+    const store = new JsonStateStore(path, {
+      ...realFileSystem,
+      rename: async (from, to) => {
+        if (to === path && ++attempts <= 2) throw Object.assign(new Error('injected sharing violation'), { code: 'EPERM' })
+        await rename(from, to)
+      },
+    }, undefined, 'win32')
+    await store.ready()
+
+    await store.update((state) => { state.archivedSessions.push('after-retry') })
+    expect(attempts).toBe(3)
+    expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['after-retry'])
+    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('gives up on a persistently locked Windows state replace and removes the temp file', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeValidState(path)
+    const before = readFileSync(path, 'utf8')
+    let attempts = 0
+    const store = new JsonStateStore(path, {
+      ...realFileSystem,
+      rename: async (from, to) => {
+        if (to !== path) return rename(from, to)
+        attempts += 1
+        throw Object.assign(new Error('injected persistent lock'), { code: 'EBUSY' })
+      },
+    }, undefined, 'win32')
+    await store.ready()
+
+    await expect(store.update((state) => { state.archivedSessions.push('lost') })).rejects.toThrow('injected persistent lock')
+    expect(attempts).toBe(WINDOWS_RENAME_RETRY_DELAYS_MS.length + 1)
+    expect(store.snapshot().archivedSessions).toEqual([])
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('rejects an update that would exceed the load limit before touching the file system', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeValidState(path)
+    const events: string[] = []
+    const store = new JsonStateStore(path, recordingFileSystem(events))
+    await store.ready()
+    const before = readFileSync(path)
+
+    await expect(store.update((state) => { state.archivedSessions.push('x'.repeat(65 * 1024 * 1024)) })).rejects.toThrow(/exceed/)
+    // Under the limit in UTF-16 code units, over it in UTF-8 bytes.
+    await expect(store.update((state) => { state.archivedSessions.push('é'.repeat(33 * 1024 * 1024)) })).rejects.toThrow(/exceed/)
+
+    expect(events).toEqual([])
+    expect(store.snapshot().archivedSessions).toEqual([])
+    expect(readFileSync(path).equals(before)).toBe(true)
+    expect(new JsonStateStore(path).snapshot().archivedSessions).toEqual([])
+
+    await store.update((state) => { state.archivedSessions.push('small') })
+    expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['small'])
+  }, 60_000)
+
   it('creates private state files and directories', async () => {
     const dir = makeDirectory()
     const stateDirectory = join(dir, 'nested')
@@ -378,6 +452,36 @@ describe('JsonStateStore', () => {
     expect(archived).toEqual(['/sessions/kept.jsonl'])
     archived.push('/sessions/tampered.jsonl')
     expect(store.getArchivedSessions()).toEqual(['/sessions/kept.jsonl'])
+  })
+
+  it('returns detached copies of values handed back by an update mutator', async () => {
+    const dir = makeDirectory()
+    const path = join(dir, 'state.json')
+    writeFileSync(path, JSON.stringify({
+      version: 4,
+      projects: [{ id: 'p1', harness: 'omp', name: 'One', path: '/one', folders: ['/one'], primaryFolder: '/one' }],
+      settings: defaultSettings(),
+      archivedSessions: [],
+      dismissedProjectPaths: [],
+      schedules: [],
+    }))
+    const store = new JsonStateStore(path)
+
+    const settings = await store.update((state) => state.settings)
+    settings.theme = 'dark'
+    expect(store.getSettings().theme).toBe(defaultSettings().theme)
+
+    const project = await store.update((state) => state.projects[0])
+    project.folders.push('/x')
+    expect(store.getProjects()[0].folders).toEqual(['/one'])
+
+    const before = readFileSync(path, 'utf8')
+    await expect(store.update((state) => {
+      state.archivedSessions.push('uncloneable-result')
+      return () => 1
+    })).rejects.toThrow(/cloned/)
+    expect(store.snapshot().archivedSessions).toEqual([])
+    expect(readFileSync(path, 'utf8')).toBe(before)
   })
 
   it('migrates version 2 state: projects gain the prime harness and settings gain harness defaults', () => {
@@ -878,10 +982,63 @@ describe('JsonStateStore', () => {
     expect(readdirSync(dir).some((name) => name.startsWith('state.json.corrupt-'))).toBe(true)
     expect(JSON.parse(readFileSync(path, 'utf8')).archivedSessions).toEqual(['after-recovery'])
   })
+
+  for (const withLegacy of [false, true]) {
+    it(`fails readiness and leaves state it cannot read in place${withLegacy ? ' during migration' : ''}`, async () => {
+      const dir = makeDirectory()
+      const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+      const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+      // stat succeeds and the read throws EISDIR on every platform, including as root.
+      mkdirSync(path)
+      const events: string[] = []
+      const store = new JsonStateStore(path, recordingFileSystem(events), withLegacy ? legacyPath : undefined, 'linux')
+
+      const readiness = store.ready()
+      if (withLegacy) {
+        await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+        await expect(readiness).rejects.toThrow(/could not read desktop state.*left unchanged/)
+      } else {
+        await expect(readiness).rejects.toMatchObject({ code: 'EISDIR' })
+      }
+      await expect(store.update((state) => { state.archivedSessions.push('lost') })).rejects.toThrow()
+      expect(events).toEqual([])
+      expect(statSync(path).isDirectory()).toBe(true)
+      expect(readdirSync(dir).filter((name) => name.includes('.corrupt-'))).toEqual([])
+    })
+
+    it(`fails readiness instead of resetting when corrupt state cannot be backed up${withLegacy ? ' during migration' : ''}`, async () => {
+      const dir = makeDirectory()
+      const path = join(dir, CURRENT_DESKTOP_STATE_FILENAME)
+      const legacyPath = join(dir, LEGACY_DESKTOP_STATE_FILENAME)
+      const legacyRaw = JSON.stringify({ version: 2, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] })
+      writeFileSync(path, '{broken')
+      if (withLegacy) writeFileSync(legacyPath, legacyRaw)
+      // A directory at the backup name makes the quarantine rename fail.
+      mkdirSync(`${path}.corrupt-1700000000000`)
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+      const events: string[] = []
+      let store: JsonStateStore
+      try {
+        store = new JsonStateStore(path, recordingFileSystem(events), withLegacy ? legacyPath : undefined, 'linux')
+      } finally {
+        now.mockRestore()
+      }
+
+      const readiness = store.ready()
+      if (withLegacy) {
+        await expect(readiness).rejects.toBeInstanceOf(StateMigrationError)
+        await expect(readiness).rejects.toThrow(/could not preserve unreadable desktop state/)
+      } else {
+        await expect(readiness).rejects.toThrow(/corrupt-1700000000000/)
+      }
+      expect(events).toEqual([])
+      expect(readFileSync(path, 'utf8')).toBe('{broken')
+      if (withLegacy) expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
+    })
+  }
   it('archives and restores session visibility metadata without touching the transcript', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-session-')); dirs.push(dir)
     const sessionRoot = join(dir, 'sessions')
-    const { mkdirSync } = await import('node:fs')
     mkdirSync(sessionRoot)
     const transcript = join(sessionRoot, 'session.jsonl')
     writeFileSync(transcript, '{"type":"session"}\n')
@@ -898,4 +1055,38 @@ describe('JsonStateStore', () => {
     expect(readFileSync(transcript, 'utf8')).toBe('{"type":"session"}\n')
   })
 
+})
+
+describe('renameWithWindowsRetry', () => {
+  function failingRename(codes: string[]) {
+    const attempts: string[] = []
+    const renameFn = async (from: string, to: string): Promise<void> => {
+      attempts.push(`${from}->${to}`)
+      const code = codes.shift()
+      if (code) throw Object.assign(new Error(`injected ${code}`), { code })
+    }
+    return { attempts, renameFn }
+  }
+
+  it('retries retryable Windows codes until the rename succeeds', async () => {
+    const { attempts, renameFn } = failingRename(['EPERM', 'EACCES'])
+    await renameWithWindowsRetry(renameFn, 'a.tmp', 'a', 'win32', [0, 0])
+    expect(attempts).toEqual(['a.tmp->a', 'a.tmp->a', 'a.tmp->a'])
+  })
+
+  it('rejects after the last delay when the target stays locked', async () => {
+    const { attempts, renameFn } = failingRename(['EBUSY', 'EBUSY', 'EBUSY', 'EBUSY'])
+    await expect(renameWithWindowsRetry(renameFn, 'a.tmp', 'a', 'win32', [0, 0])).rejects.toThrow('injected EBUSY')
+    expect(attempts).toHaveLength(3)
+  })
+
+  it('does not retry other codes on Windows or any code elsewhere', async () => {
+    const windows = failingRename(['EIO'])
+    await expect(renameWithWindowsRetry(windows.renameFn, 'a.tmp', 'a', 'win32', [0, 0])).rejects.toThrow('injected EIO')
+    expect(windows.attempts).toHaveLength(1)
+
+    const linux = failingRename(['EPERM'])
+    await expect(renameWithWindowsRetry(linux.renameFn, 'a.tmp', 'a', 'linux', [0, 0])).rejects.toThrow('injected EPERM')
+    expect(linux.attempts).toHaveLength(1)
+  })
 })

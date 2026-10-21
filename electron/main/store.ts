@@ -4,6 +4,8 @@ import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type LocalePreference, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { renameWithWindowsRetry } from './lib/durable-write'
+import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
 import { isRecord } from './validation'
 
@@ -279,17 +281,11 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
     browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,
     computerUseEnabled: typeof value.computerUseEnabled === 'boolean' ? value.computerUseEnabled : defaults.computerUseEnabled,
-    disabledProviders: Array.isArray(value.disabledProviders)
-      ? [...new Set(value.disabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 128)
-      : defaults.disabledProviders,
+    disabledProviders: parseDisabledProviders(value.disabledProviders, defaults.disabledProviders),
     disabledModels: parseDisabledModels(value.disabledModels, defaults.disabledModels),
-    ompDisabledProviders: Array.isArray(value.ompDisabledProviders)
-      ? [...new Set(value.ompDisabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 256)
-      : defaults.ompDisabledProviders,
+    ompDisabledProviders: parseDisabledProviders(value.ompDisabledProviders, defaults.ompDisabledProviders),
     ompDisabledModels: parseDisabledModels(value.ompDisabledModels, defaults.ompDisabledModels),
-    piDisabledProviders: Array.isArray(value.piDisabledProviders)
-      ? [...new Set(value.piDisabledProviders.filter((item): item is string => typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)))].slice(0, 256)
-      : defaults.piDisabledProviders,
+    piDisabledProviders: parseDisabledProviders(value.piDisabledProviders, defaults.piDisabledProviders),
     piDisabledModels: parseDisabledModels(value.piDisabledModels, defaults.piDisabledModels),
     lastSelectedModels,
     activeHarness,
@@ -309,6 +305,13 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     voiceRealtimeModel: boundedString(value.voiceRealtimeModel, 128) ? value.voiceRealtimeModel : defaults.voiceRealtimeModel,
     voiceRealtimeVoice: boundedString(value.voiceRealtimeVoice, 64) ? value.voiceRealtimeVoice : defaults.voiceRealtimeVoice,
   }
+}
+
+function parseDisabledProviders(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback
+  return [...new Set(value.filter((item): item is string => (
+    typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)
+  )))].slice(0, MAX_CATALOG_PROVIDERS)
 }
 
 function parseDisabledModels(value: unknown, fallback: string[]): string[] {
@@ -478,6 +481,7 @@ export class JsonStateStore {
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
     let sourcePath = filePath
     let sourceKind: 'current' | 'legacy' = 'current'
+    let stateRead = false
     try {
       let size: number
       try {
@@ -503,6 +507,7 @@ export class JsonStateStore {
         throw new StateCompatibilityError(`Desktop state file at ${sourcePath} is ${size} bytes, which exceeds the ${MAX_STATE_FILE_BYTES}-byte safe parse limit. It was left unchanged; use the GooeyPi version that created it, or move it aside only after making a backup.`)
       }
       const rawState = readFileSync(sourcePath)
+      stateRead = true
       const serializedState: unknown = JSON.parse(rawState.toString('utf8'))
       if (this.platform === 'win32' && sourceKind === 'legacy') {
         const tombstone = parseWindowsLegacyTombstone(serializedState)
@@ -541,20 +546,37 @@ export class JsonStateStore {
         }
         return
       }
+      if (!stateRead && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        // A stat or read failure is not evidence of corruption, so the file is never quarantined for it.
+        this.scheduleInitializationOperation(
+          () => Promise.reject(error),
+          `GooeyPi could not read desktop state at ${sourcePath}; the file was left unchanged`,
+        )
+        return
+      }
       let recoveryPath: string | undefined
       let preservationFailure: unknown
       try {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          console.error(`GooeyPi desktop state was reset and backed up: ${error instanceof Error ? error.message : String(error)}`)
           recoveryPath = `${sourcePath}.corrupt-${Date.now()}`
           renameSync(sourcePath, recoveryPath)
+          console.error(`GooeyPi desktop state was reset and backed up to ${recoveryPath}: ${error instanceof Error ? error.message : String(error)}`)
         }
       } catch (failure) {
         preservationFailure = failure
         recoveryPath = undefined
       }
-      if (this.platform === 'win32' && legacyFilePath) this.scheduleWindowsRecoveryInitialization(sourceKind, recoveryPath, preservationFailure)
-      else this.scheduleInitialization(true, legacyFilePath !== undefined, 'GooeyPi desktop state could not be rewritten after the reset')
+      if (this.platform === 'win32' && legacyFilePath) {
+        this.scheduleWindowsRecoveryInitialization(sourceKind, recoveryPath, preservationFailure)
+      } else if (preservationFailure) {
+        // Never persist defaults over state that could not be backed up first.
+        this.scheduleInitializationOperation(
+          () => Promise.reject(preservationFailure),
+          `GooeyPi could not preserve unreadable desktop state at ${sourcePath} before reset`,
+        )
+      } else {
+        this.scheduleInitialization(true, legacyFilePath !== undefined, 'GooeyPi desktop state could not be rewritten after the reset')
+      }
     }
   }
 
@@ -592,9 +614,11 @@ export class JsonStateStore {
       const draft = structuredClone(this.state)
       const result = mutator(draft)
       capUnboundedCollections(draft)
+      // Detach before persisting: callers never hold live state, and an uncloneable result aborts the write.
+      const detached = structuredClone(result)
       await this.persist(draft)
       this.state = draft
-      return result
+      return detached
     })
     this.queue = operation.then(() => undefined, () => undefined)
     return operation
@@ -887,7 +911,7 @@ export class JsonStateStore {
     }, null, 2)}\n`
     try {
       await this.writeDurableFile(temp, serialized, 'wx')
-      await this.fileSystem.rename(temp, this.legacyFilePath)
+      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
     } finally {
       await this.fileSystem.unlink(temp).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -953,17 +977,23 @@ export class JsonStateStore {
   }
 
   private async persist(state: DesktopState, requireDirectorySync = false): Promise<void> {
+    // The write cap matches the read cap so a saved file is always loadable on the next launch.
+    const serialized = `${JSON.stringify(state, null, 2)}\n`
+    const bytes = Buffer.byteLength(serialized, 'utf8')
+    if (bytes > MAX_STATE_FILE_BYTES) {
+      throw new Error(`Desktop state would be ${bytes} bytes, exceeding the ${MAX_STATE_FILE_BYTES}-byte safe size limit; the change was not saved`)
+    }
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
     try {
       const file = await this.fileSystem.open(temp, 'w', 0o600)
       try {
-        await file.writeFile(`${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8' })
+        await file.writeFile(serialized, { encoding: 'utf8' })
         await file.sync()
       } finally {
         await file.close()
       }
 
-      await this.fileSystem.rename(temp, this.filePath)
+      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.filePath, this.platform)
 
       await this.syncParentDirectory(this.filePath, requireDirectorySync)
     } finally {
