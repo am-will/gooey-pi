@@ -370,3 +370,18 @@ describe('Composer sendSignal', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 })
+
+
+it('submits modified Enter as steer with a visible mention menu', async () => {
+  const sessions: SessionRecord[] = [{
+    id: 'child', harness: 'prime', filePath: '/sessions/child.jsonl', projectPath: '/project', title: 'Browser',
+    createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', status: 'idle', depth: 0,
+  }]
+  const onSend = vi.fn(async () => undefined)
+  renderComposer({ sessions, onSend })
+  await setDraft('@brow')
+  const textarea = container.querySelector('textarea')!
+  expect(textarea.getAttribute('aria-expanded')).toBe('true')
+  await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })) })
+  expect(onSend).toHaveBeenCalledWith('@brow', [], 'steer')
+})

@@ -637,3 +637,49 @@ describe('Composer memoization', () => {
     expect(container.querySelector('.model-picker__trigger')?.textContent).toContain('Vision')
   })
 })
+
+
+describe('Composer suggestion keyboard behavior', () => {
+  function input(value: string) {
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, value)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    return textarea
+  }
+  function key(target: EventTarget, value: string) {
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true })) })
+  }
+  it('cycles command options, selects a command and dismisses from textarea or document', () => {
+    renderComposer()
+    const textarea = input('/')
+    const initial = textarea.getAttribute('aria-activedescendant')
+    key(textarea, 'ArrowUp')
+    expect(textarea.getAttribute('aria-activedescendant')).toMatch(/-option-4$/)
+    key(textarea, 'ArrowDown')
+    expect(textarea.getAttribute('aria-activedescendant')).toBe(initial)
+    key(textarea, 'ArrowDown')
+    expect(textarea.getAttribute('aria-activedescendant')).toMatch(/-option-1$/)
+    key(textarea, 'Escape')
+    expect(container.querySelector('.composer-menu')).toBeNull()
+    input('/re')
+    expect(container.querySelector('.composer-menu')?.textContent).toContain('/review')
+    key(document, 'Escape')
+    expect(container.querySelector('.composer-menu')).toBeNull()
+    input('/rev')
+    key(textarea, 'Enter')
+    expect(textarea.value).toBe('/review ')
+  })
+  it.each(['omp', 'pi'] as const)('omits Prime-only commands for %s', (harness) => {
+    renderComposer(vi.fn(), true, false, 'queue', undefined, undefined, harness)
+    input('/mcp')
+    expect(container.querySelector('.composer-menu')).toBeNull()
+  })
+  it('offers the Prime-only mcp command', () => {
+    renderComposer()
+    input('/mcp')
+    expect(container.querySelector('.composer-menu')?.textContent).toContain('/mcp')
+  })
+
+})
