@@ -23,7 +23,7 @@ export function useTranscriptScroll(messages: TranscriptMessage[], shortName: st
     if (firstLoadedTranscript) {
       frame = requestAnimationFrame(() => scroller && typeof scroller.scrollTo === 'function' && scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' }))
       pinnedToBottomRef.current = true
-    } else if (streaming && pinnedToBottomRef.current) {
+    } else if (pinnedToBottomRef.current && (streaming || messages.length > previousCountRef.current)) {
       frame = requestAnimationFrame(() => scroller && typeof scroller.scrollTo === 'function' && scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' }))
     }
     if (previousStreamingRef.current && !streaming) setAnnouncement(t('transcript.announcement.responseComplete', { name: shortName }))
