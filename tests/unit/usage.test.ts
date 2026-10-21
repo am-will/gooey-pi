@@ -18,6 +18,8 @@ describe('harness session usage', () => {
   it('preserves complete breakdowns and zero costs', () => {
     expect(parseSessionUsage({ cost: 0, tokens })).toEqual({ cost: 0, tokens })
     expect(parseSessionUsage({ tokens })).toEqual({ cost: null, tokens })
+    expect(parseSessionUsage({ cost: null })).toEqual({ cost: null })
+    expect(parseSessionUsage({})).toBeNull()
   })
   it.each([NaN, Infinity, -1, '1', null, undefined])('keeps cost unknown instead of coercing %s', (cost) => {
     expect(parseSessionUsage({ cost, tokens })).toEqual({ cost: null, tokens })

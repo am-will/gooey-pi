@@ -29,6 +29,7 @@ describe('session usage events', () => {
     expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: 0.42, tokens } })).toEqual({ cost: 0.42, tokens })
     expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: 0.42 } })).toEqual({ cost: 0.42 })
     expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: null, tokens } })).toEqual({ cost: null, tokens })
+    expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: null } })).toEqual({ cost: null })
   })
 
   it('rejects malformed, negative, and unrelated payloads', () => {

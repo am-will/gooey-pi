@@ -34,6 +34,6 @@ export function parseSessionUsage(raw: unknown): SessionUsage | null {
   if (!isRecord(raw)) return null
   const cost = typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? raw.cost : null
   const tokens = parseSessionUsageTokens(raw.tokens)
-  if (cost === null && tokens === undefined) return null
+  if (cost === null && tokens === undefined && raw.cost !== null) return null
   return tokens ? { cost, tokens } : { cost }
 }
