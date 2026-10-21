@@ -18,6 +18,28 @@ function deferred() {
 }
 
 describe('settings IPC transition ownership', () => {
+  it('retires capabilities retained after a partially refused login-item update', async () => {
+    const handlers = new Map<string, (event: unknown, patch: unknown) => Promise<AppSettings>>()
+    electron.ipcMain.handle.mockImplementation((channel, handler) => { handlers.set(channel, handler) })
+    const state = { settings: { ...defaultSettings(), browserEnabled: true, launchAtLogin: false } }
+    const store = {
+      getSettings: () => structuredClone(state.settings),
+      update: async (mutate: (state: DesktopState) => unknown) => structuredClone(mutate(state as DesktopState)),
+    }
+    const settings = new SettingsService(store as unknown as JsonStateStore, () => '/bin/sh', undefined, () => { throw new Error('macOS refused login item') })
+    const refresh = vi.fn(async () => {})
+    const services = ipcServiceStubs()
+    services.settings = settings
+    services.agents = { ...services.agents as object, requestRuntimeEnvironmentRefresh: refresh }
+    const url = 'prime-work://app/'
+    const sender = { id: 1, getURL: () => url, mainFrame: { url }, isDestroyed: () => false }
+    registration = registerIpc(services as never, url)
+    registration.authorize(sender as never)
+    await expect(handlers.get('settings:update')!({ sender, senderFrame: sender.mainFrame }, { browserEnabled: false, launchAtLogin: true })).rejects.toThrow('macOS refused login item')
+    expect(settings.get()).toMatchObject({ browserEnabled: false, launchAtLogin: false })
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['browserEnabled', false, true, false],
     ['askUserEnabled', false, true, false],
