@@ -8,11 +8,16 @@ import { fileURLToPath } from 'node:url'
 async function closeFixture(application: ElectronApplication): Promise<void> {
   const child = application.process()
   let timer: ReturnType<typeof setTimeout> | undefined
+  const closeEvent = application.waitForEvent('close', { timeout: 15_000 }).then(() => undefined, () => undefined)
   try {
-    await Promise.race([
-      application.close().catch(() => undefined),
-      new Promise<void>((resolve) => { timer = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); resolve() }, 5_000) }),
+    const closedGracefully = await Promise.race([
+      application.close().then(() => true, () => false),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5_000) }),
     ])
+    if (!closedGracefully) {
+      if (child.exitCode === null) child.kill('SIGKILL')
+      await closeEvent
+    }
   } finally { clearTimeout(timer) }
 }
 
