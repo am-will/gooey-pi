@@ -1,10 +1,13 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
-import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, type LocalePreference, type ProjectSortMode } from '../../src/types/api'
+import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, OMP_APPROVAL_MODES, BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, } from '../../src/types/api'
+import { MAX_CATALOG_PROVIDERS } from './model-catalog'
+import { createKeyedMutex } from './lib/async'
 import type { JsonStateStore } from './store'
-import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
+import { isProviderId, isModelKey, isOneOf, isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
 export class SettingsService {
+  private readonly updates = createKeyedMutex<'settings'>()
   constructor(
     private readonly store: JsonStateStore,
     private readonly validateShell: (shell: unknown) => string,
@@ -21,28 +24,28 @@ export class SettingsService {
     // never be silently rejected or silently dropped.
     const validators: { [K in keyof AppSettings]: (value: unknown) => AppSettings[K] } = {
       theme: (value) => {
-        if (value !== 'system' && value !== 'light' && value !== 'dark') throw new TypeError('Invalid theme')
+        if (!isOneOf(THEME_MODES, value)) throw new TypeError('Invalid theme')
         return value
       },
       locale: (value) => {
         // Derived from the same tuple the renderer's language picker is built
         // from: a locale the picker can offer can never be rejected here.
-        if (!LOCALE_PREFERENCES.includes(value as LocalePreference)) throw new TypeError('Invalid locale')
-        return value as LocalePreference
+        if (!isOneOf(LOCALE_PREFERENCES, value)) throw new TypeError('Invalid locale')
+        return value
       },
       interfaceFontScale: (value) => {
-        if (!INTERFACE_FONT_SCALES.includes(value as AppSettings['interfaceFontScale'])) throw new TypeError('Invalid interface font scale')
-        return value as AppSettings['interfaceFontScale']
+        if (!isOneOf(INTERFACE_FONT_SCALES, value)) throw new TypeError('Invalid interface font scale')
+        return value
       },
       projectSortMode: (value) => {
-        if (!PROJECT_SORT_MODES.includes(value as ProjectSortMode)) throw new TypeError('Invalid project sort mode')
-        return value as ProjectSortMode
+        if (!isOneOf(PROJECT_SORT_MODES, value)) throw new TypeError('Invalid project sort mode')
+        return value
       },
       sidebarOpen: (value) => requireBoolean(value, 'sidebarOpen'),
       inspectorOpen: (value) => requireBoolean(value, 'inspectorOpen'),
       showFileChangesPopup: (value) => requireBoolean(value, 'showFileChangesPopup'),
       checkoutStrategy: (value) => {
-        if (value !== 'worktree' && value !== 'branch') throw new TypeError('Invalid checkout strategy')
+        if (!isOneOf(CHECKOUT_STRATEGIES, value)) throw new TypeError('Invalid checkout strategy')
         return value
       },
       keepRunningInBackground: (value) => requireBoolean(value, 'keepRunningInBackground'),
@@ -52,17 +55,16 @@ export class SettingsService {
       reduceMotion: (value) => requireBoolean(value, 'reduceMotion'),
       showReasoningSummaries: (value) => requireBoolean(value, 'showReasoningSummaries'),
       showToolCalls: (value) => requireBoolean(value, 'showToolCalls'),
-      telemetry: (value) => requireBoolean(value, 'telemetry'),
       askUserEnabled: (value) => requireBoolean(value, 'askUserEnabled'),
       askUserTimeoutMs: (value) => requireInteger(value, 'askUserTimeoutMs', 0, 1_800_000),
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),
       computerUseEnabled: (value) => requireBoolean(value, 'computerUseEnabled'),
       defaultInspectorTab: (value) => {
-        if (value !== 'summary' && value !== 'changes' && value !== 'browser' && value !== 'files') throw new TypeError('Invalid inspector tab')
+        if (!isOneOf(INSPECTOR_TABS, value)) throw new TypeError('Invalid inspector tab')
         return value
       },
       messageEnterAction: (value) => {
-        if (value !== 'queue' && value !== 'steer') throw new TypeError('Invalid message Enter action')
+        if (!isOneOf(MESSAGE_ENTER_ACTIONS, value)) throw new TypeError('Invalid message Enter action')
         return value
       },
       runtimePaths: (value) => {
@@ -76,23 +78,14 @@ export class SettingsService {
         }
         return paths
       },
-      enabledHarnesses: (value) => {
-        if (!Array.isArray(value) || value.length > HARNESS_IDS.length) throw new TypeError('enabledHarnesses must be a bounded array')
-        const enabled = [...new Set(value.map((entry, index) => {
-          if (entry !== 'prime' && entry !== 'omp' && entry !== 'pi') throw new TypeError(`enabledHarnesses[${index}] is invalid`)
-          return entry
-        }))]
-        if (!enabled.length) throw new TypeError('At least one harness must be enabled')
-        return enabled
-      },
       browserHome: (value) => requireWebUrl(value),
       terminalShell: (value) => this.validateShell(value),
       activeHarness: (value) => {
-        if (value !== 'prime' && value !== 'omp' && value !== 'pi') throw new TypeError('Invalid harness')
+        if (!isOneOf(HARNESS_IDS, value)) throw new TypeError('Invalid harness')
         return value
       },
       ompApprovalMode: (value) => {
-        if (value !== 'inherit' && value !== 'always-ask' && value !== 'write' && value !== 'yolo') throw new TypeError('Invalid OMP approval mode')
+        if (!isOneOf(OMP_APPROVAL_MODES, value)) throw new TypeError('Invalid OMP approval mode')
         return value
       },
       petEnabled: (value) => requireBoolean(value, 'petEnabled'),
@@ -123,32 +116,11 @@ export class SettingsService {
       voiceLocalWhisperModel: (value) => requireString(value, 'voiceLocalWhisperModel', { max: 4_096, trim: true }),
       voiceRealtimeModel: (value) => this.voiceModel(value, 'voiceRealtimeModel'),
       voiceRealtimeVoice: (value) => this.voiceModel(value, 'voiceRealtimeVoice'),
-      disabledProviders: (value) => {
-        if (!Array.isArray(value) || value.length > 128) throw new TypeError('disabledProviders must be a bounded array')
-        return [...new Set(value.map((entry, index) => {
-          const id = requireString(entry, `disabledProviders[${index}]`, { min: 1, max: 128, trim: true })
-          if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`disabledProviders[${index}] is not a valid provider ID`)
-          return id
-        }))]
-      },
+      disabledProviders: (value) => this.disabledProviders(value, 'disabledProviders'),
       disabledModels: (value) => this.disabledModels(value, 'disabledModels'),
-      ompDisabledProviders: (value) => {
-        if (!Array.isArray(value) || value.length > 256) throw new TypeError('ompDisabledProviders must be a bounded array')
-        return [...new Set(value.map((entry, index) => {
-          const id = requireString(entry, `ompDisabledProviders[${index}]`, { min: 1, max: 128, trim: true })
-          if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`ompDisabledProviders[${index}] is not a valid provider ID`)
-          return id
-        }))]
-      },
+      ompDisabledProviders: (value) => this.disabledProviders(value, 'ompDisabledProviders'),
       ompDisabledModels: (value) => this.disabledModels(value, 'ompDisabledModels'),
-      piDisabledProviders: (value) => {
-        if (!Array.isArray(value) || value.length > 256) throw new TypeError('piDisabledProviders must be a bounded array')
-        return [...new Set(value.map((entry, index) => {
-          const id = requireString(entry, `piDisabledProviders[${index}]`, { min: 1, max: 128, trim: true })
-          if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`piDisabledProviders[${index}] is not a valid provider ID`)
-          return id
-        }))]
-      },
+      piDisabledProviders: (value) => this.disabledProviders(value, 'piDisabledProviders'),
       piDisabledModels: (value) => this.disabledModels(value, 'piDisabledModels'),
       lastSelectedModels: (value) => {
         if (!isRecord(value)) throw new TypeError('lastSelectedModels must be an object')
@@ -156,7 +128,7 @@ export class SettingsService {
         const models = {} as AppSettings['lastSelectedModels']
         for (const harness of HARNESS_IDS) {
           const model = requireString(value[harness], `lastSelectedModels.${harness}`, { max: 385, trim: true })
-          if (model && !/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(model)) throw new TypeError(`lastSelectedModels.${harness} is not a valid model key`)
+          if (model && !isModelKey(model)) throw new TypeError(`lastSelectedModels.${harness} is not a valid model key`)
           models[harness] = model
         }
         return models
@@ -169,15 +141,24 @@ export class SettingsService {
       if (raw[key] !== undefined) patch[key] = validators[key](raw[key])
     }
     for (const key of keys) applyField(key)
-    let previous: AppSettings | undefined
-    const next = await this.store.update((state) => {
-      previous = structuredClone(state.settings)
-      const next = { ...state.settings, ...patch }
-      Object.assign(state.settings, next)
-      return state.settings
+    return this.updates.run('settings', async () => {
+      let previous: AppSettings | undefined
+      const next = await this.store.update((state) => {
+        previous = structuredClone(state.settings)
+        Object.assign(state.settings, patch)
+        return state.settings
+      })
+      try {
+        await this.onDidUpdate(previous!, next)
+      } catch (error) {
+        // Tray and other settings have already applied; only the refused login-item change failed.
+        if (patch.launchAtLogin !== undefined && previous!.launchAtLogin !== next.launchAtLogin) {
+          await this.store.update((state) => { state.settings.launchAtLogin = previous!.launchAtLogin })
+        }
+        throw error
+      }
+      return next
     })
-    await this.onDidUpdate(previous!, next)
-    return next
   }
 
   private voiceModel(value: unknown, label: string): string {
@@ -186,11 +167,20 @@ export class SettingsService {
     return model
   }
 
+  private disabledProviders(value: unknown, label: string): string[] {
+    if (!Array.isArray(value) || value.length > MAX_CATALOG_PROVIDERS) throw new TypeError(`${label} must be a bounded array`)
+    return [...new Set(value.map((entry, index) => {
+      const id = requireString(entry, `${label}[${index}]`, { min: 1, max: 128, trim: true })
+      if (!isProviderId(id)) throw new TypeError(`${label}[${index}] is not a valid provider ID`)
+      return id
+    }))]
+  }
+
   private disabledModels(value: unknown, label: string): string[] {
     if (!Array.isArray(value) || value.length > 5_000) throw new TypeError(`${label} must be a bounded array`)
     return [...new Set(value.map((entry, index) => {
       const key = requireString(entry, `${label}[${index}]`, { min: 3, max: 385, trim: true })
-      if (!/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(key)) throw new TypeError(`${label}[${index}] is not a valid model key`)
+      if (!isModelKey(key)) throw new TypeError(`${label}[${index}] is not a valid model key`)
       return key
     }))]
   }

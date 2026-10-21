@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { probeHarnessExecutable } from '../../electron/main/harness-discovery'
 import { HARNESSES } from '../../electron/main/harness'
-import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, nvmHarnessExecutableCandidates, primeAgentCandidates, primeAgentExecutableName, processFailureReason, processOutcome, runProcess, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
+import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, primeAgentCandidates, primeAgentExecutableName, processFailureReason, processOutcome, runProcess, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
 import { waitUntil } from '../helpers/wait'
 
 const spawnOverride = vi.hoisted(() => ({ current: null as null | ((...args: unknown[]) => unknown) }))
@@ -22,6 +22,42 @@ vi.mock('node:child_process', async (importOriginal) => {
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'prime-work-process-')); dirs.push(dir); return dir }
+describe('Windows Git executable resolution', () => {
+  it('ignores implicit cwd, relative PATH entries and project-local executables', () => {
+    const canonicalExecutable = vi.fn((path: string) => path)
+    expect(resolveGitExecutable('C:\\repo', {
+      Path: '.;bin;C:tools;\\tools;C:\\REPO;C:\\repo\\bin;"C:\\Program Files\\Git\\cmd"',
+    }, { platform: 'win32', canonicalExecutable })).toBe('C:\\Program Files\\Git\\cmd\\git.exe')
+    expect(canonicalExecutable).toHaveBeenCalledExactlyOnceWith('C:\\Program Files\\Git\\cmd\\git.exe')
+  })
+
+  it('searches both PATH spellings and preserves explicit directory order', () => {
+    const canonicalExecutable = vi.fn((path: string) => path === 'D:\\tools\\git.exe' ? path : undefined)
+    expect(resolveGitExecutable('C:\\repo', { Path: 'C:\\missing', PATH: 'C:\\MISSING;D:\\tools' }, {
+      platform: 'win32', canonicalExecutable,
+    })).toBe('D:\\tools\\git.exe')
+    expect(canonicalExecutable.mock.calls.map(([path]) => path)).toEqual(['C:\\missing\\git.exe', 'D:\\tools\\git.exe'])
+  })
+
+  it('fails closed instead of returning a bare name or searching the project', () => {
+    const canonicalExecutable = vi.fn((path: string) => path)
+    expect(() => resolveGitExecutable('C:\\repo', { PATH: '.;C:\\repo' }, {
+      platform: 'win32', canonicalExecutable,
+    })).toThrow('outside this project')
+    expect(canonicalExecutable).not.toHaveBeenCalled()
+  })
+
+  it.each(['C:\\repo\\git.exe', '\\\\?\\C:\\repo\\git.exe'])('rejects a PATH alias resolving into %s', (target) => {
+    const canonicalExecutable = (path: string) => path.startsWith('C:\\alias') ? target : path
+    expect(resolveGitExecutable('C:\\repo', { PATH: 'C:\\alias;D:\\tools' }, {
+      platform: 'win32', canonicalExecutable,
+    })).toBe('D:\\tools\\git.exe')
+  })
+
+  it('retains POSIX executable lookup', () => {
+    expect(resolveGitExecutable('/repo', {}, { platform: 'darwin' })).toBe('git')
+  })
+})
 describe('runProcess resource bounds', () => {
   it('runs a pnpm CLI under a Finder-style minimal PATH', async () => {
     const home = temp()

@@ -367,6 +367,9 @@ describe('broad project root authorization', () => {
     ['Windows UNC share root', '\\\\server\\share', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
     ['Windows extended UNC share root', '\\\\?\\UNC\\server\\share\\', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
     ['Windows home directory case-insensitively', 'c:\\users\\alice', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['macOS home ancestor', '/Users', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['Linux home ancestor', '/home', { platform: 'linux', homePath: '/home/alice' }],
+    ['Windows home ancestor case-insensitively', 'c:\\USERS', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
   ] as const)('classifies %s as too broad', (_label, path, options) => {
     expect(isBroadProjectRoot(path, options)).toBe(true)
   })

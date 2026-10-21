@@ -46,12 +46,12 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['agent', 'stop', 'agent:stop', ['runtime']],
   ['agent', 'list', 'agent:list', []],
   ['providers', 'catalog', 'providers:catalog', [true, 'omp']],
-  ['providers', 'saveApiKey', 'providers:save-api-key', ['openai', 'secret']],
-  ['providers', 'logout', 'providers:logout', ['openai']],
+  ['providers', 'saveApiKey', 'providers:save-api-key', ['openai', 'secret', 'prime']],
+  ['providers', 'logout', 'providers:logout', ['openai', 'prime']],
   ['providers', 'setEnabled', 'providers:set-enabled', ['openai', false, 'omp']],
   ['providers', 'setDisabled', 'providers:set-disabled', [['openai'], 'omp']],
   ['providers', 'setModelEnabled', 'providers:set-model-enabled', ['openai/model', true, 'omp']],
-  ['providers', 'startOAuth', 'providers:start-oauth', ['openai']],
+  ['providers', 'startOAuth', 'providers:start-oauth', ['openai', 'prime']],
   ['providers', 'respondOAuth', 'providers:respond-oauth', ['flow', 'prompt', 'value']],
   ['providers', 'cancelOAuth', 'providers:cancel-oauth', ['flow']],
   ['voice', 'credentialStatus', 'voice:credential-status', []],
@@ -79,7 +79,6 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['plugins', 'connectMcp', 'plugins:connect-mcp', [{ name: 'docs' }, 'omp']],
   ['plugins', 'setMcpEnabled', 'plugins:set-mcp-enabled', [{ name: 'docs', enabled: true }, 'omp']],
   ['plugins', 'mutateCapability', 'plugins:mutate-capability', [{ kind: 'mcp', action: 'remove' }, 'omp']],
-  ['plugins', 'refresh', 'plugins:refresh', ['omp']],
   ['settings', 'get', 'settings:get', []],
   ['settings', 'update', 'settings:update', [{ theme: 'dark' }]],
   ['settings', 'resetBrowserData', 'settings:reset-browser-data', []],
@@ -92,7 +91,6 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['heartbeats', 'list', 'heartbeats:list', []],
   ['heartbeats', 'manage', 'heartbeats:manage', ['heartbeat', 'pause']],
   ['schedules', 'list', 'schedules:list', ['omp']],
-  ['schedules', 'get', 'schedules:get', ['schedule']],
   ['schedules', 'preview', 'schedules:preview', [{ kind: 'once', at: '2026-08-26T00:00:00Z' }, 3]],
   ['schedules', 'create', 'schedules:create', [{ prompt: 'work' }, 'omp']],
   ['schedules', 'update', 'schedules:update', ['schedule', { title: 'Updated' }]],
@@ -184,8 +182,8 @@ describe('preload bridge contract', () => {
   })
 
 
-  it('unwraps recognized Electron invoke errors while retaining diagnostics and error type', async () => {
-    const original = new TypeError("Error invoking remote method 'voice:transcribe': TypeError: Invalid voice URL")
+  it('unwraps the real Electron invoke error shape and logs the original', async () => {
+    const original = new Error("Error invoking remote method 'voice:transcribe': TypeError: Invalid voice URL")
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     electronMocks.ipcRenderer.invoke.mockRejectedValueOnce(original)
     const api = electronMocks.api as { voice: { transcribe(request: unknown): Promise<unknown> } }
@@ -193,9 +191,8 @@ describe('preload bridge contract', () => {
     const rejection = api.voice.transcribe({})
     await expect(rejection).rejects.toMatchObject({ message: 'Invalid voice URL' })
     await rejection.catch((error: unknown) => {
-      expect(error).toBeInstanceOf(TypeError)
+      expect(error).toBeInstanceOf(Error)
       expect(error).not.toBe(original)
-      expect((error as Error).cause).toBe(original)
     })
     expect(errorSpy).toHaveBeenCalledWith('Electron IPC invocation failed:', original)
     errorSpy.mockRestore()

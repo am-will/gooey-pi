@@ -4,12 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
 import { PrivacySettings } from '../../src/pages/settings/PrivacySettings'
-import { HARNESS_IDS, type HarnessId } from '../../src/types/api'
-
-const TELEMETRY_VALUES = [false, true] as const
-const HARNESS_TELEMETRY_CASES = HARNESS_IDS.flatMap((harness) => (
-  TELEMETRY_VALUES.map((telemetry) => ({ harness, telemetry }))
-)) satisfies Array<{ harness: HarnessId; telemetry: boolean }>
+import { HARNESS_IDS } from '../../src/types/api'
 
 let root: Root
 let container: HTMLDivElement
@@ -28,9 +23,9 @@ afterEach(() => {
 })
 
 describe('PrivacySettings', () => {
-  it.each(HARNESS_TELEMETRY_CASES)('shows agent-neutral copy without an inert diagnostics control for $harness with telemetry=$telemetry', ({ harness, telemetry }) => {
+  it.each(HARNESS_IDS)('shows agent-neutral copy without an inert diagnostics control for %s', (harness) => {
     const onUpdate = vi.fn()
-    act(() => root.render(<PrivacySettings settings={{ ...DEFAULT_SETTINGS, activeHarness: harness, telemetry }} onUpdate={onUpdate} />))
+    act(() => root.render(<PrivacySettings settings={{ ...DEFAULT_SETTINGS, activeHarness: harness }} onUpdate={onUpdate} />))
 
     expect(container.textContent).toContain('Understand how GooeyPi stores settings and connects to agents.')
     expect(container.textContent).toContain('Settings stay on this device')

@@ -19,7 +19,7 @@ function inferredId(path: string): string {
   return `inferred-${createHash('sha256').update(path).digest('hex').slice(0, 24)}`
 }
 
-/** Filesystem roots too broad to grant as a project: volume/share roots and the user's home. */
+/** Filesystem roots too broad to grant: volume/share roots, home, and home ancestors. */
 export function isBroadProjectRoot(
   pathValue: string,
   options: { platform?: NodeJS.Platform; homePath?: string } = {},
@@ -36,7 +36,7 @@ export function isBroadProjectRoot(
   // Node's win32 parser treats an extended-length UNC namespace as the root;
   // identify its server/share boundary explicitly as well.
   const extendedUncShareRoot = platform === 'win32' && /^\\\\\?\\unc\\[^\\]+\\[^\\]+\\?$/i.test(path)
-  return path === root || path === home || extendedUncShareRoot
+  return path === root || path === home || home.startsWith(`${path}${pathApi.sep}`) || extendedUncShareRoot
 }
 
 interface VerifiedFolderIdentity {

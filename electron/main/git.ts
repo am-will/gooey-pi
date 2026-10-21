@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { GitDiff, GitFileChange, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
-import { restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
+import { resolveGitExecutable, restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
 import { errorMessage, requireGitPath, requireString, stripAnsi } from './validation'
 
 interface Numstat { additions: number; deletions: number }
@@ -37,7 +37,7 @@ function hardenedGitArgs(args: readonly string[], extraConfig: readonly string[]
 }
 
 function runGit(cwd: string, args: readonly string[], options: { timeoutMs: number; maxBytes: number; input?: string }, extraConfig: readonly string[] = []): Promise<ProcessResult> {
-  return runProcess('git', hardenedGitArgs(args, extraConfig), { cwd, ...options, env: restrictedGitEnvironment() })
+  return runProcess(resolveGitExecutable(cwd), hardenedGitArgs(args, extraConfig), { cwd, ...options, env: restrictedGitEnvironment() })
 }
 
 function resultDetail(result: ProcessResult): string {
@@ -233,7 +233,7 @@ async function readGlobalConfigValue(cwd: string, key: 'user.name' | 'user.email
     const value = process.env[name]
     if (value !== undefined) env[name] = value
   }
-  const result = await runProcess('git', hardenedGitArgs(['config', '--global', '--no-includes', '--get', key]), {
+  const result = await runProcess(resolveGitExecutable(cwd), hardenedGitArgs(['config', '--global', '--no-includes', '--get', key]), {
     cwd,
     timeoutMs: 5_000,
     maxBytes: GIT_CONFIG_OUTPUT_LIMIT,
@@ -449,13 +449,16 @@ export async function validateGitBranch(cwd: string, branchValue: unknown): Prom
 export async function createGitWorktree(cwd: string, targetPath: string, branchValue: unknown): Promise<void> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
   const branch = await validateGitBranch(repositoryRoot, branchValue)
+  if (filterOverridesFromConfig(await repositoryConfig(repositoryRoot)).length) {
+    throw new Error('Git worktree creation is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
+  }
   const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT })
   requireProcessSuccess('Git worktree creation', result)
 }
 
 export async function listLocalGitBranches(cwd: string): Promise<LocalGitBranch[]> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
-  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:short)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
+  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:lstrip=2)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
     timeoutMs: 10_000,
     maxBytes: GIT_BRANCH_OUTPUT_LIMIT,
   })
