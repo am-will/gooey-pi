@@ -1,4 +1,6 @@
-import type { HarnessId, PrimeContextUsage, PrimeImplementation, RuntimeInfo, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
+import { parseContextUsage } from '../../../src/lib/usage'
+export { parseContextUsage, parseSessionUsage } from '../../../src/lib/usage'
+import type { HarnessId, PrimeContextUsage, PrimeImplementation, RuntimeInfo, SessionActionSnapshot } from '../../../src/types/api'
 import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
 import { MAX_QUEUED_ACTIONS, consumeDeliveredPrompt } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
@@ -71,40 +73,6 @@ export interface HarnessRpcAdapter {
   buildServiceTierCommand?(serviceTier: 'default' | 'priority'): RpcObject
   /** Reads harness-specific state fields out of get_state data. */
   readState(data: RpcObject): HarnessStateReading
-}
-
-export function parseContextUsage(raw: unknown): PrimeContextUsage | null {
-  if (!isRecord(raw) || !Number.isSafeInteger(raw.contextWindow) || Number(raw.contextWindow) <= 0) return null
-  const tokens = raw.tokens === null ? null : Number.isSafeInteger(raw.tokens) && Number(raw.tokens) >= 0 ? Number(raw.tokens) : undefined
-  const percent = raw.percent === null ? null : typeof raw.percent === 'number' && Number.isFinite(raw.percent) && raw.percent >= 0 ? raw.percent : undefined
-  if (tokens === undefined || percent === undefined) return null
-  return { tokens, contextWindow: Number(raw.contextWindow), percent }
-}
-
-const SESSION_TOKEN_FIELDS: Array<keyof SessionUsageTokens> = ['input', 'output', 'cacheRead', 'cacheWrite', 'total']
-
-function parseSessionUsageTokens(raw: unknown): SessionUsageTokens | undefined {
-  if (!isRecord(raw)) return undefined
-  const tokens: Partial<SessionUsageTokens> = {}
-  for (const field of SESSION_TOKEN_FIELDS) {
-    const value = raw[field]
-    if (!Number.isSafeInteger(value) || Number(value) < 0) return undefined
-    tokens[field] = Number(value)
-  }
-  return tokens as SessionUsageTokens
-}
-
-/**
- * Reads the cost/token totals out of get_session_stats data. A missing or
- * malformed cost becomes null (older harness builds omit it); malformed token
- * fields drop the breakdown. Returns null only when neither is present.
- */
-export function parseSessionUsage(raw: unknown): SessionUsage | null {
-  if (!isRecord(raw)) return null
-  const cost = typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? raw.cost : null
-  const tokens = parseSessionUsageTokens(raw.tokens)
-  if (cost === null && tokens === undefined) return null
-  return tokens ? { cost, tokens } : { cost }
 }
 
 const unsafeArgValue = (value: string): boolean => value.startsWith('-') || /[\r\n]/.test(value)
