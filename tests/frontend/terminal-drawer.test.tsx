@@ -4,14 +4,15 @@ import { act, type RefObject } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TerminalDrawer, type TerminalDrawerHandle } from '../../src/components/TerminalDrawer'
-import type { PrimeWorkApi, TerminalExitEvent } from '../../src/types/api'
+import type { PrimeWorkApi, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 describe('TerminalDrawer project command handle', () => {
   let root: Root
   let container: HTMLDivElement
-  let terminalExitListeners: Array<(event: TerminalExitEvent) => void>
+  let terminalExitListeners: Set<(event: TerminalExitEvent) => void>
+  let terminalDataListeners: Set<(event: TerminalDataEvent) => void>
   let create: ReturnType<typeof vi.fn>
   let kill: ReturnType<typeof vi.fn>
   let createdTerminalIds: string[]
@@ -25,7 +26,8 @@ describe('TerminalDrawer project command handle', () => {
       configurable: true,
       value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn() }),
     })
-    terminalExitListeners = []
+    terminalExitListeners = new Set()
+    terminalDataListeners = new Set()
     createdTerminalIds = []
     onError = vi.fn()
     let nextTerminalId = 0
@@ -40,10 +42,10 @@ describe('TerminalDrawer project command handle', () => {
       terminal: {
         create,
         kill,
-        onData: vi.fn(() => () => undefined),
+        onData: vi.fn((callback: (event: TerminalDataEvent) => void) => { terminalDataListeners.add(callback); return () => { terminalDataListeners.delete(callback) } }),
         onExit: vi.fn((callback: (event: TerminalExitEvent) => void) => {
-          terminalExitListeners.push(callback)
-          return () => undefined
+          terminalExitListeners.add(callback)
+          return () => { terminalExitListeners.delete(callback) }
         }),
         bindSession: vi.fn(async () => undefined),
         input: vi.fn(),
@@ -127,6 +129,8 @@ describe('TerminalDrawer project command handle', () => {
       await Promise.resolve()
     })
 
+    expect(terminalDataListeners.size).toBe(1)
+    expect(terminalExitListeners.size).toBe(1)
     expect(onError).toHaveBeenCalledWith('spawn failed')
     expect(onExit).toHaveBeenCalledOnce()
     expect(onExit).toHaveBeenCalledWith(undefined)
