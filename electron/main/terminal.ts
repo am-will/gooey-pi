@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import * as pty from 'node-pty'
 import type { TerminalActiveContext, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
+import { TERMINAL_CONTEXT_MAX_CHARS } from '../../src/lib/terminal-context'
 import type { WorkspaceUseLease, WorkspaceUseOwner } from './repository-use-gate'
 import { killProcessTree, safeChildEnvironment } from './process-utils'
 import { canonicalSessionPath } from './session-paths'
@@ -60,7 +61,7 @@ function systemShells(): Set<string> {
 const MAX_TERMINAL_OUTPUT_BYTES_PER_SECOND = 16 * 1024 * 1024
 const MAX_TOTAL_TERMINAL_OUTPUT_BYTES_PER_SECOND = 32 * 1024 * 1024
 const MAX_TERMINAL_IPC_CHUNK_BYTES = 1024 * 1024
-const MAX_TERMINAL_CONTEXT_CHARS = 48 * 1024
+const MAX_TERMINAL_INPUT_CHARS = 1024 * 1024
 
 const execFileAsync = promisify(execFile)
 
@@ -200,8 +201,8 @@ export class TerminalService {
 
   input(owner: WebContents, idValue: unknown, dataValue: unknown): void {
     const terminal = this.owned(owner, idValue)
-    const data = requireString(dataValue, 'terminal data', { max: 64 * 1024 })
-    terminal.terminal.write(data)
+    if (typeof dataValue !== 'string' || dataValue.length > MAX_TERMINAL_INPUT_CHARS) throw new TypeError('terminal data must be a string at most 1 MiB characters')
+    terminal.terminal.write(dataValue)
   }
 
   async bindSession(owner: WebContents, idValue: unknown, sessionPathValue: unknown): Promise<boolean> {
@@ -225,7 +226,7 @@ export class TerminalService {
     const context = requireRecord(raw, 'terminal context')
     rejectUnknownKeys(context, ['label', 'content', 'truncated'], 'terminal context')
     const label = requireString(context.label, 'terminal label', { min: 1, max: 128, trim: true })
-    const content = requireString(context.content, 'terminal content', { max: MAX_TERMINAL_CONTEXT_CHARS })
+    const content = requireString(context.content, 'terminal content', { max: TERMINAL_CONTEXT_MAX_CHARS })
     if (typeof context.truncated !== 'boolean') throw new TypeError('terminal context truncated must be a boolean')
     terminal.activeContext = { label, content, truncated: context.truncated }
     this.activeBySession.set(terminal.sessionPath, requireString(idValue, 'terminalId', { min: 1, max: 128 }))

@@ -153,3 +153,22 @@ describe('terminal capacity admission', () => {
     expect(native.spawn).toHaveBeenCalledOnce()
   })
 })
+
+
+describe('terminal raw input', () => {
+  it('preserves NUL and large pasted Unicode without slicing code units', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    const renderer = owner()
+    const { terminalId } = await service.create(renderer, { cwd })
+    const terminal = native.spawn.mock.results[0].value as ReturnType<typeof fakePty>
+    const pasted = '\0' + '😀'.repeat(100_000)
+    service.input(renderer, terminalId, pasted)
+    expect(terminal.write).toHaveBeenCalledWith(pasted)
+    expect(() => service.input(renderer, terminalId, 'x'.repeat(1024 * 1024 + 1))).toThrow(/terminal data/)
+    expect(() => service.input(renderer, terminalId, 1)).toThrow(/terminal data/)
+    expect(() => service.input(owner(101), terminalId, pasted)).toThrow(/not found/)
+    expect(terminal.write).toHaveBeenCalledOnce()
+  })
+})
