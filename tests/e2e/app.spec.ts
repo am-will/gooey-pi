@@ -580,6 +580,9 @@ test.describe('Prime Work desktop smoke', () => {
         for (const target of app.windows()) attachDiagnostics(target)
         page = await app.firstWindow({ timeout: 15_000 })
         attachDiagnostics(page)
+        // Desktop smoke cases share a wide layout; responsive cases resize explicitly.
+        await page.setViewportSize({ width: 1440, height: 920 })
+        await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeGreaterThan(980)
         await expect(page.locator('.app-shell')).toHaveAttribute('data-ready', 'true', { timeout: 20_000 })
         return
       } catch (error) {
