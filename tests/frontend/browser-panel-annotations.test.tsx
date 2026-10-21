@@ -319,3 +319,19 @@ it('loads a mount-time terminal link directly without a home request or duplicat
   await makeDomReady()
   expect(loadURL).not.toHaveBeenCalled()
 })
+
+
+it('reconciles SPA route annotations without stopping the picker and ignores subframe navigation', async () => {
+  await act(async () => root.render(<Harness />))
+  await makeDomReady()
+  act(() => { latestApi.add({ comment: 'Route note', element: { selector: '#hero', tagName: 'div', id: 'hero', classes: [], text: '', rect: { x: 0, y: 0, width: 10, height: 10 } }, pageUrl: 'https://example.com/', pageTitle: 'Example' }) })
+  await toggleAnnotate()
+  webviewUrl = 'https://example.com/cart'
+  await act(async () => { webviewElement().dispatchEvent(Object.assign(new Event('did-navigate-in-page'), { isMainFrame: true })) })
+  expect(latestApi.annotations[0].stale).toBe(true)
+  expect(executed.at(-1)).toContain('setMarkers([])')
+  expect(container.querySelector('.annotation-hint')).not.toBeNull()
+  webviewUrl = 'https://example.com/'
+  await act(async () => { webviewElement().dispatchEvent(Object.assign(new Event('did-navigate-in-page'), { isMainFrame: false })) })
+  expect(latestApi.annotations[0].stale).toBe(true)
+})

@@ -224,6 +224,11 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         /* webview not ready */
       }
     }
+    const didNavigateInPage = (event: Event) => {
+      if ('isMainFrame' in event && event.isMainFrame === false) return
+      sync()
+      try { annotationsRef.current.handleNavigation(view.getURL()) } catch { /* guest not ready */ }
+    }
     // dom-ready is the earliest point at which executeJavaScript is legal;
     // it fires again for every subsequent document, so markers re-apply.
     const onDomReady = () => {
@@ -235,13 +240,13 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     view.addEventListener('did-start-loading', didStart)
     view.addEventListener('did-stop-loading', didStop)
     view.addEventListener('did-navigate', didNavigate)
-    view.addEventListener('did-navigate-in-page', sync)
+    view.addEventListener('did-navigate-in-page', didNavigateInPage)
     return () => {
       view.removeEventListener('dom-ready', onDomReady)
       view.removeEventListener('did-start-loading', didStart)
       view.removeEventListener('did-stop-loading', didStop)
       view.removeEventListener('did-navigate', didNavigate)
-      view.removeEventListener('did-navigate-in-page', sync)
+      view.removeEventListener('did-navigate-in-page', didNavigateInPage)
     }
   }, [home])
 
