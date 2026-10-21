@@ -1,3 +1,4 @@
+import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
@@ -233,24 +234,7 @@ export const Composer = memo(function Composer({
     if (!terminalSelection?.text) setTerminalSelectionOpen(false)
   }, [terminalSelection?.text])
 
-  useEffect(() => {
-    if (!menu) return
-    const close = (event: MouseEvent) => {
-      const target = event.target
-      if (!(target instanceof Node) || menuRef.current?.contains(target)) return
-      if (target instanceof Element && target.closest('[data-composer-menu-trigger]')) return
-      setMenu(null)
-    }
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenu(null)
-    }
-    document.addEventListener('mousedown', close)
-    document.addEventListener('keydown', onEscape)
-    return () => {
-      document.removeEventListener('mousedown', close)
-      document.removeEventListener('keydown', onEscape)
-    }
-  }, [menu])
+  useDismissableLayer(Boolean(menu), (target) => target instanceof Node && Boolean(menuRef.current?.contains(target) || target instanceof Element && target.closest('[data-composer-menu-trigger]')), () => setMenu(null))
 
 
   // Ctrl/Cmd+Enter in the annotation popover bumps sendSignal to submit the
