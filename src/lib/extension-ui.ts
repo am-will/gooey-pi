@@ -1,3 +1,5 @@
+import type { ExtensionUiQuestionnaireProgress } from '../types/api'
+
 export interface ExtensionUiQuestionnaireMeta {
   groupId: string
   index: number
@@ -28,6 +30,19 @@ export type ExtensionUiRequest =
   | { method: 'editor'; id: string; title: string; prefill?: string }
   | ExtensionUiQuestionnaireRequest
 
+export type QuestionnaireSelectRequest = Extract<ExtensionUiRequest, { method: 'select' }> & { questionnaire: ExtensionUiQuestionnaireMeta }
+
+/** UI positions include only unanswered questions; protocol indexes stay on the requests. */
+export function questionnaireContents(requests: readonly QuestionnaireSelectRequest[], progress?: ExtensionUiQuestionnaireProgress): Pick<ExtensionUiQuestionnaireRequest, 'questions' | 'total' | 'complete'> {
+  const expected = progress?.total ?? requests[0]?.questionnaire.total ?? 0
+  const settled = new Set(progress?.settled ?? [])
+  const arrived = new Set([...(progress?.arrived ?? []), ...requests.map((request) => request.questionnaire.index)])
+  const questions = requests.filter((request) => !settled.has(request.questionnaire.index))
+    .sort((left, right) => left.questionnaire.index - right.questionnaire.index)
+    .map((request, index) => ({ id: request.id, title: request.title, options: request.options, index }))
+  return { questions, total: expected - settled.size, complete: expected > 0 && Array.from({ length: expected }, (_, index) => arrived.has(index) || settled.has(index)).every(Boolean) }
+}
+
 const MAX_TITLE_LENGTH = 4_000
 const MAX_OPTION_LENGTH = 500
 const MAX_OPTIONS = 32
@@ -54,6 +69,14 @@ function questionnaireMeta(value: string): ExtensionUiQuestionnaireMeta | undefi
   return { groupId, index, total }
 }
 
+const DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor'])
+
+/** A malformed recognized dialog can still be released when its response id is valid. */
+export function extensionUiDialogId(raw: Record<string, unknown>): string | undefined {
+  return raw.type === 'extension_ui_request' && typeof raw.method === 'string' && DIALOG_METHODS.has(raw.method)
+    ? stringValue(raw.id, 200) : undefined
+}
+
 export function parseExtensionUiRequest(raw: Record<string, unknown>): ExtensionUiRequest | undefined {
   if (raw.type !== 'extension_ui_request') return undefined
   const id = stringValue(raw.id, 200)
@@ -63,9 +86,12 @@ export function parseExtensionUiRequest(raw: Record<string, unknown>): Extension
 
   if (method === 'select') {
     if (!Array.isArray(raw.options) || raw.options.length < 1 || raw.options.length > MAX_OPTIONS) return undefined
-    const options = raw.options.map((option) => stringValue(option, MAX_OPTION_LENGTH))
-    if (options.some((option): option is undefined => option === undefined)) return undefined
-    const parsedOptions = options as string[]
+    const parsedOptions: string[] = []
+    for (const value of raw.options) {
+      const option = stringValue(value, MAX_OPTION_LENGTH)
+      if (option === undefined) return undefined
+      parsedOptions.push(option)
+    }
     const questionnaire = questionnaireMeta(parsedOptions[0])
     const visibleOptions = questionnaire ? parsedOptions.slice(1) : parsedOptions
     if (visibleOptions.length < 1) return undefined

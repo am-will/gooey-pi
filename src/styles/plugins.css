@@ -55,7 +55,6 @@ button.plugin-toggle.is-enabled:not(:disabled):hover .plugin-toggle__disable, bu
 .capability-compatibility-note { display: flex; align-items: flex-start; gap: 6px; margin: 13px 0 0; color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
 .capability-compatibility-note > svg { flex: 0 0 auto; margin-top: 1px; color: var(--warning); }
 .capability-compatibility-note button { padding: 0; color: var(--prime); background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
-.inline-help-link { padding: 0; color: var(--prime); background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .field-help { display: block; margin-top: 5px; color: var(--text-tertiary); font-size: 10px; line-height: 1.45; }
 .field-help code { color: var(--text-secondary); }
 .field > span small { color: var(--text-tertiary); font-size: 9.5px; font-weight: 400; }

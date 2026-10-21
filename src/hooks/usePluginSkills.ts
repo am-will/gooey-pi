@@ -19,6 +19,7 @@ export function usePluginSkills({ bridge, harness, scope, generation, initialSki
   const scopeKey = `${harness}:${scope ?? ''}`
   const scopeRef = useRef(scopeKey)
   const generationRef = useRef(generation)
+  const catalogScopeRef = useRef<{ key: string; bridge: PrimeWorkApi | null } | null>(null)
   useLayoutEffect(() => {
     scopeRef.current = scopeKey
     generationRef.current = generation
@@ -44,10 +45,12 @@ export function usePluginSkills({ bridge, harness, scope, generation, initialSki
 
   useEffect(() => {
     setLoading(false)
-    if (bridge) { setSkills([]); setWarnings([]) }
+    const previous = catalogScopeRef.current
+    catalogScopeRef.current = { key: scopeKey, bridge }
+    if (bridge && (previous?.key !== scopeKey || previous.bridge !== bridge)) { setSkills([]); setWarnings([]) }
     void load(scope, harness)
     return () => { requestGuardRef.current.invalidate() }
-  }, [generation, harness, load, scope])
+  }, [bridge, generation, harness, load, scope, scopeKey])
 
   const refresh = useCallback(async () => { await load(scope, harness, true) }, [harness, load, scope])
   return { skills, warnings, loading, refresh }

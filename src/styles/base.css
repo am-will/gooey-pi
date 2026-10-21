@@ -161,7 +161,6 @@ kbd { color: var(--text-tertiary); font: 10.5px/1.2 "SFMono-Regular", "SF Mono",
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drag-region { -webkit-app-region: drag; }
 .no-drag, .drag-region button, .drag-region input { -webkit-app-region: no-drag; }
-.prime-color { color: var(--prime); }
 
 .scroll-area { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .scroll-area::-webkit-scrollbar { width: 7px; height: 7px; }

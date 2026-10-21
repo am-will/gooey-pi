@@ -3,6 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { I18nProvider, translate } from '../../src/lib/i18n'
 import { ExtensionUiModal } from '../../src/components/ExtensionUiModal'
 import type { ExtensionUiRequest } from '../../src/lib/extension-ui'
 
@@ -154,4 +155,12 @@ describe('extension select request', () => {
     await act(async () => { root.render(<ExtensionUiModal request={select} onRespond={vi.fn()} />) })
     expect(document.querySelector('.extension-question .modal-intro')?.textContent).toBe('Choose an option to let the agent continue.')
   })
+})
+
+it('translates the generated questionnaire heading on an interface-language switch', async () => {
+  const render = (preference: 'en' | 'ja') => act(async () => { root.render(<I18nProvider preference={preference}><ExtensionUiModal request={request} onRespond={async () => undefined} /></I18nProvider>) })
+  await render('en')
+  expect(document.querySelector('[role="dialog"] h2')?.textContent).toBe(translate('en', 'extensionUi.answerTitle', { count: 2 }))
+  await render('ja')
+  expect(document.querySelector('[role="dialog"] h2')?.textContent).toBe(translate('ja', 'extensionUi.answerTitle', { count: 2 }))
 })

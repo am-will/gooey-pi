@@ -101,6 +101,7 @@ export function useFocusTrap<T extends HTMLElement>(active: boolean, onEscape?: 
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const container = containerRef.current
     const focusInitial = () => {
+      if (container.contains(document.activeElement)) return
       const preferred = container.querySelector<HTMLElement>('[autofocus]')
       const first = preferred ?? container.querySelector<HTMLElement>(focusableSelector)
       first?.focus()

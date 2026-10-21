@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseExtensionUiCancel, parseExtensionUiRequest } from '../../src/lib/extension-ui'
+import { extensionUiDialogId, parseExtensionUiCancel, parseExtensionUiRequest } from '../../src/lib/extension-ui'
 import { pendingExtensionUiForRuntime, type PendingExtensionUi } from '../../src/hooks/useExtensionUi'
 
 describe('extension UI request parsing', () => {
@@ -118,4 +118,11 @@ describe('pending extension UI ownership', () => {
     expect(pendingExtensionUiForRuntime(pending, 'runtime-missing')).toBeNull()
     expect(pendingExtensionUiForRuntime(pending)).toBeNull()
   })
+})
+
+
+it('identifies recognized dialog ids even when their bodies cannot render', () => {
+  for (const method of ['select', 'confirm', 'input', 'editor']) expect(extensionUiDialogId({ type: 'extension_ui_request', method, id: 'answer-me', title: '' })).toBe('answer-me')
+  for (const method of ['notify', 'setTitle', 'cancel', 'unknown']) expect(extensionUiDialogId({ type: 'extension_ui_request', method, id: 'x' })).toBeUndefined()
+  expect(extensionUiDialogId({ type: 'extension_ui_request', method: 'select', id: '' })).toBeUndefined()
 })

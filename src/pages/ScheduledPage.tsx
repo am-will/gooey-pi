@@ -1,3 +1,6 @@
+import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
+import { useStableCallback } from '@/hooks/useStableCallback'
+import { DEVICE_TIME_ZONE, defaultForm, formFromSchedule, timingFromForm, targetFromForm, executionFromForm, validTimeZone, rruleParts, isAuthorized, type Frequency, type ScheduleForm } from '@/lib/schedule-form'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -20,7 +23,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type {
   AutomationScheduleRecord,
   HarnessId,
@@ -29,12 +32,10 @@ import type {
   PrimeModelDescriptor,
   PrimeThinkingLevel,
   ProjectRecord,
-  ScheduleExecution,
   ScheduleInput,
   SchedulePatch,
   SchedulePreview,
   ScheduleRunRecord,
-  ScheduleTarget,
   ScheduleTiming,
   SessionRecord,
 } from '@/types/api'
@@ -46,31 +47,17 @@ import { errorMessage } from '@/lib/errors'
 import { RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '@/lib/prime-compat'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { sessionTitleText } from '@/lib/session-title'
-import { CREATED_BY_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTION_THINKING_KEYS, RUN_STATUS_KEYS, RUN_TRIGGER_KEYS } from '@/lib/schedule-labels'
+import { CREATED_BY_KEYS, HEARTBEAT_STATUS_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTION_THINKING_KEYS, RUN_STATUS_KEYS, RUN_TRIGGER_KEYS } from '@/lib/schedule-labels'
 import { EmptyState, Modal, Segmented } from '@/components/ui'
 
 type ScheduleFilter = 'active' | 'paused' | 'attention' | 'all'
-type Frequency = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'advanced'
-type EditorMode = 'create' | 'edit'
+type ScheduleEditor = { mode: 'create' } | { mode: 'edit'; scheduleId: string; revision: number }
 
-type ScheduleForm = {
-  title: string
-  prompt: string
-  targetKind: 'project' | 'session'
-  projectId: string
-  sessionId: string
-  timingKind: 'once' | 'recurring'
-  date: string
-  time: string
-  timeZone: string
-  frequency: Frequency
-  interval: string
-  weekdays: string[]
-  advancedRrule: string
-  model: string
-  thinking: 'auto' | PrimeThinkingLevel
-  fast: boolean
-}
+type ScheduleConfirmation =
+  | { kind: 'discard' }
+  | { kind: 'delete'; id: string; title: string }
+  | { kind: 'stop'; heartbeat: NativeHeartbeatRecord }
+  | { kind: 'archive'; id: string; files: string[] }
 
 interface ScheduledPageProps {
   harness: HarnessId
@@ -86,6 +73,7 @@ interface ScheduledPageProps {
   initialProjectId?: string
   initialSessionId?: string
   selectedScheduleId?: string | null
+  onFocusHandled?(id: string): void
   onCreate(input: ScheduleInput): Promise<void>
   onUpdate(id: string, patch: SchedulePatch): Promise<void>
   onPause(id: string): Promise<void>
@@ -102,7 +90,7 @@ interface ScheduledPageProps {
 // the component instead of calling useI18n() outside a component body.
 type Translate = ReturnType<typeof useI18n>['t']
 
-const DEVICE_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
 const WEEKDAYS = [
   { value: 'MO', label: 'schedule.weekday.short.monday', long: 'schedule.weekday.monday' },
   { value: 'TU', label: 'schedule.weekday.short.tuesday', long: 'schedule.weekday.tuesday' },
@@ -112,17 +100,8 @@ const WEEKDAYS = [
   { value: 'SA', label: 'schedule.weekday.short.saturday', long: 'schedule.weekday.saturday' },
   { value: 'SU', label: 'schedule.weekday.short.sunday', long: 'schedule.weekday.sunday' },
 ] as const satisfies ReadonlyArray<{ value: string; label: MessageKey; long: MessageKey }>
-const DAY_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'] as const
+
 const THINKING_LEVELS: readonly PrimeThinkingLevel[] = PRIME_THINKING_LEVELS
-const THINKING_LEVEL_KEYS = {
-  off: 'schedule.thinking.off',
-  minimal: 'schedule.thinking.minimal',
-  low: 'schedule.thinking.low',
-  medium: 'schedule.thinking.medium',
-  high: 'schedule.thinking.high',
-  xhigh: 'schedule.thinking.xhigh',
-  max: 'schedule.thinking.max',
-} as const satisfies Record<PrimeThinkingLevel, MessageKey>
 const FREQUENCIES: Array<{ value: Frequency; label: MessageKey }> = [
   { value: 'hourly', label: 'schedule.frequency.hourly' },
   { value: 'daily', label: 'schedule.frequency.daily' },
@@ -153,143 +132,6 @@ const CADENCE_INTERVAL_KEYS: Record<CadenceUnit, MessageKey> = {
   week: 'schedule.timing.everyWeeks',
   month: 'schedule.timing.everyMonths',
   cycle: 'schedule.timing.everyCycles',
-}
-
-const pad = (value: number) => String(value).padStart(2, '0')
-
-function localParts(value: Date) {
-  return {
-    date: `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`,
-    time: `${pad(value.getHours())}:${pad(value.getMinutes())}`,
-  }
-}
-
-function defaultStart() {
-  const value = new Date(Date.now() + 60 * 60 * 1000)
-  value.setMinutes(0, 0, 0)
-  return localParts(value)
-}
-
-function isAuthorized(project: ProjectRecord) {
-  return !project.inferred
-}
-
-function projectForSession(session: SessionRecord, projects: ProjectRecord[]) {
-  return projects.find((project) => project.path === session.projectPath)
-}
-
-function defaultScheduleModel(models: PrimeModelDescriptor[], lastSelectedModel: string): string {
-  return models.find((model) => model.key === lastSelectedModel && model.enabled !== false && model.available)?.key
-    ?? models.find((model) => model.enabled !== false && model.available)?.key
-    ?? ''
-}
-
-function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[], models: PrimeModelDescriptor[], lastSelectedModel: string, initialProjectId?: string, initialSessionId?: string): ScheduleForm {
-  const authorizedProjects = projects.filter(isAuthorized)
-  const initialSession = sessions.find((session) => session.id === initialSessionId && !session.archived)
-  const sessionProject = initialSession ? projectForSession(initialSession, authorizedProjects) : undefined
-  const selectedProject = sessionProject
-    ?? authorizedProjects.find((project) => project.id === initialProjectId)
-    ?? authorizedProjects[0]
-  const start = defaultStart()
-  return {
-    title: '',
-    prompt: '',
-    targetKind: initialSession && sessionProject ? 'session' : 'project',
-    projectId: selectedProject?.id ?? '',
-    sessionId: initialSession && sessionProject ? initialSession.id : '',
-    timingKind: 'recurring',
-    date: start.date,
-    time: start.time,
-    timeZone: DEVICE_TIME_ZONE,
-    frequency: 'daily',
-    interval: '1',
-    weekdays: [DAY_CODES[new Date().getDay()]],
-    advancedRrule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: defaultScheduleModel(models, lastSelectedModel),
-    thinking: 'auto',
-    fast: false,
-  }
-}
-
-function rruleParts(rrule: string) {
-  return new Map(rrule.replace(/^RRULE:/i, '').split(';').map((part) => {
-    const [key, ...value] = part.split('=')
-    return [key.toUpperCase(), value.join('=')]
-  }))
-}
-
-function formFromSchedule(item: AutomationScheduleRecord, models: PrimeModelDescriptor[], lastSelectedModel: string): ScheduleForm {
-  const start = item.timing.kind === 'once'
-    ? localParts(new Date(item.timing.at))
-    : { date: item.timing.dtstartLocal.slice(0, 10), time: item.timing.dtstartLocal.slice(11, 16) }
-  const parts = item.timing.kind === 'rrule' ? rruleParts(item.timing.rrule) : new Map<string, string>()
-  const rawFrequency = parts.get('FREQ')?.toLowerCase()
-  const frequency = rawFrequency === 'hourly' || rawFrequency === 'daily' || rawFrequency === 'weekly' || rawFrequency === 'monthly'
-    ? rawFrequency
-    : 'advanced'
-  return {
-    title: item.title,
-    prompt: item.prompt,
-    targetKind: item.target.kind,
-    projectId: item.target.projectId,
-    sessionId: item.target.kind === 'session' ? item.target.sessionId : '',
-    timingKind: item.timing.kind === 'once' ? 'once' : 'recurring',
-    date: start.date,
-    time: start.time,
-    timeZone: item.timing.kind === 'rrule' ? item.timing.timeZone : DEVICE_TIME_ZONE,
-    frequency,
-    interval: parts.get('INTERVAL') ?? '1',
-    weekdays: parts.get('BYDAY')?.split(',').filter(Boolean) ?? [DAY_CODES[new Date().getDay()]],
-    advancedRrule: item.timing.kind === 'rrule' ? item.timing.rrule : 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: item.execution.model === 'auto' ? defaultScheduleModel(models, lastSelectedModel) : item.execution.model,
-    thinking: item.execution.thinking,
-    fast: item.execution.speed === 'fast',
-  }
-}
-
-function validTimeZone(timeZone: string) {
-  try {
-    new Intl.DateTimeFormat(undefined, { timeZone }).format()
-    return true
-  } catch {
-    return false
-  }
-}
-
-function timingFromForm(form: ScheduleForm): ScheduleTiming | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date) || !/^\d{2}:\d{2}$/.test(form.time)) return null
-  if (form.timingKind === 'once') {
-    const at = new Date(`${form.date}T${form.time}:00`)
-    return Number.isNaN(at.getTime()) ? null : { kind: 'once', at: at.toISOString() }
-  }
-  if (!validTimeZone(form.timeZone.trim())) return null
-  let rrule = form.advancedRrule.trim().replace(/^RRULE:/i, '')
-  if (form.frequency !== 'advanced') {
-    const interval = Math.max(1, Number.parseInt(form.interval, 10) || 1)
-    rrule = `FREQ=${form.frequency.toUpperCase()};INTERVAL=${interval}`
-    if (form.frequency === 'weekly') {
-      if (!form.weekdays.length) return null
-      rrule += `;BYDAY=${form.weekdays.join(',')}`
-    }
-  }
-  if (!/(^|;)FREQ=[A-Z]+/i.test(rrule)) return null
-  return {
-    kind: 'rrule',
-    dtstartLocal: `${form.date}T${form.time}:00`,
-    timeZone: form.timeZone.trim(),
-    rrule,
-  }
-}
-
-function targetFromForm(form: ScheduleForm): ScheduleTarget {
-  return form.targetKind === 'session'
-    ? { kind: 'session', projectId: form.projectId, sessionId: form.sessionId }
-    : { kind: 'project', projectId: form.projectId }
-}
-
-function executionFromForm(form: ScheduleForm): ScheduleExecution {
-  return { model: form.model, thinking: form.thinking, speed: form.fast ? 'fast' : 'normal' }
 }
 
 // Date order, month names, and clock style follow the device's regional format.
@@ -351,14 +193,17 @@ function runIcon(status: ScheduleRunRecord['status']) {
 }
 
 
-export function ScheduledPage({
-  harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId,
+export const ScheduledPage = memo(function ScheduledPage({
+  harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId, onFocusHandled,
   onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat, onArchiveSessions,
 }: ScheduledPageProps) {
   const { t } = useI18n()
+  const previewTiming = useStableCallback(onPreview)
+  const focusHandled = useStableCallback((id: string) => onFocusHandled?.(id))
+  const appliedFocusRef = useRef<string | null>(null)
   const [filter, setFilter] = useState<ScheduleFilter>('active')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [editor, setEditor] = useState<{ mode: EditorMode; scheduleId?: string } | null>(null)
+  const [editor, setEditor] = useState<ScheduleEditor | null>(null)
   const [form, setForm] = useState<ScheduleForm>(() => defaultForm(projects, sessions, models, lastSelectedModel, initialProjectId, initialSessionId))
   const [baseline, setBaseline] = useState('')
   const [saving, setSaving] = useState(false)
@@ -367,8 +212,10 @@ export function ScheduledPage({
   const [previewError, setPreviewError] = useState('')
   const [previewing, setPreviewing] = useState(false)
   const [action, setAction] = useState<string | null>(null)
+  const actionPendingRef = useRef(false)
+  const [confirmation, setConfirmation] = useState<ScheduleConfirmation | null>(null)
   const [actionError, setActionError] = useState('')
-  const [actionNotice, setActionNotice] = useState('')
+  const [actionNotice, setActionNotice] = useState<MessageKey | null>(null)
   const previewRequest = useRef(0)
   const heartbeatPauseUnavailable = primeImplementation === 'rust' ? RUST_PRIME_HEARTBEAT_PAUSE_DETAIL : undefined
 
@@ -377,9 +224,12 @@ export function ScheduledPage({
   const sessionMap = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [sessions])
   const selected = schedules.find((item) => item.id === selectedId) ?? null
   useEffect(() => {
-    if (selectedScheduleId && schedules.some((item) => item.id === selectedScheduleId)) setSelectedId(selectedScheduleId)
-  }, [schedules, selectedScheduleId])
-  const editingSchedule = editor?.mode === 'edit' ? schedules.find((item) => item.id === editor.scheduleId) : undefined
+    if (!selectedScheduleId) { appliedFocusRef.current = null; return }
+    if (appliedFocusRef.current === selectedScheduleId || !schedules.some((item) => item.id === selectedScheduleId)) return
+    appliedFocusRef.current = selectedScheduleId
+    setSelectedId(selectedScheduleId)
+    focusHandled(selectedScheduleId)
+  }, [focusHandled, schedules, selectedScheduleId])
   const selectedProject = projectMap.get(form.projectId)
   const eligibleSessions = useMemo(() => {
     const project = projects.find((item) => item.id === form.projectId)
@@ -408,7 +258,7 @@ export function ScheduledPage({
     const request = ++previewRequest.current
     setPreviewing(true); setPreviewError('')
     const timer = window.setTimeout(() => {
-      void onPreview(currentTiming).then((result) => {
+      void previewTiming(currentTiming).then((result) => {
         if (previewRequest.current === request) { setPreview(result); setPreviewing(false) }
       }).catch((reason) => {
         if (previewRequest.current === request) { setPreview(null); setPreviewError(errorMessage(reason)); setPreviewing(false) }
@@ -420,7 +270,7 @@ export function ScheduledPage({
       previewRequest.current += 1
       window.clearTimeout(timer)
     }
-  }, [currentTiming, editor, onPreview])
+  }, [currentTiming, editor, previewTiming])
 
   const openCreate = () => {
     const next = defaultForm(projects, sessions, models, lastSelectedModel, initialProjectId, initialSessionId)
@@ -428,11 +278,11 @@ export function ScheduledPage({
   }
   const openEdit = (item: AutomationScheduleRecord) => {
     const next = formFromSchedule(item, models, lastSelectedModel)
-    setForm(next); setBaseline(JSON.stringify(next)); setFormError(''); setPreview(null); setEditor({ mode: 'edit', scheduleId: item.id })
+    setForm(next); setBaseline(JSON.stringify(next)); setFormError(''); setPreview(null); setEditor({ mode: 'edit', scheduleId: item.id, revision: item.revision })
   }
   const closeEditor = () => {
     if (saving) return
-    if (JSON.stringify(form) !== baseline && !window.confirm(t('schedule.confirm.discard'))) return
+    if (JSON.stringify(form) !== baseline) { setConfirmation({ kind: 'discard' }); return }
     setEditor(null); setFormError('')
   }
   const setProject = (projectId: string) => {
@@ -456,6 +306,7 @@ export function ScheduledPage({
     if (!form.projectId || !authorizedProjects.some((project) => project.id === form.projectId)) return t('schedule.error.project')
     if (form.targetKind === 'session' && !eligibleSessions.some((session) => session.id === form.sessionId)) return t('schedule.error.session')
     if (!currentTiming) {
+      if (form.timingKind === 'once') return t('schedule.error.dateTime')
       if (form.timingKind === 'recurring' && !validTimeZone(form.timeZone.trim())) return t('schedule.error.timeZone')
       if (form.frequency === 'weekly' && !form.weekdays.length) return t('schedule.error.weekday')
       return form.frequency === 'advanced' ? t('schedule.error.rrule') : t('schedule.error.dateTime')
@@ -464,7 +315,7 @@ export function ScheduledPage({
   }
   const save = async (event: FormEvent) => {
     event.preventDefault()
-    if (saving) return
+    if (saving || !editor) return
     const validationError = validate()
     if (validationError || !currentTiming) { setFormError(validationError); return }
     setSaving(true); setFormError('')
@@ -473,23 +324,44 @@ export function ScheduledPage({
       timing: currentTiming, execution: executionFromForm(form),
     }
     try {
-      if (editor?.mode === 'edit' && editingSchedule) await onUpdate(editingSchedule.id, { revision: editingSchedule.revision, ...values })
+      if (editor.mode === 'edit') await onUpdate(editor.scheduleId, { revision: editor.revision, ...values })
       else await onCreate(values)
       setEditor(null)
     } catch (reason) { setFormError(errorMessage(reason)) }
     finally { setSaving(false) }
   }
-  const perform = async (key: string, work: () => Promise<void>, success: string, after?: () => void) => {
-    if (action) return
-    setAction(key); setActionError(''); setActionNotice('')
+  const perform = async (key: string, work: () => Promise<void>, success: MessageKey | null, after?: () => void) => {
+    if (actionPendingRef.current) return
+    actionPendingRef.current = true
+    setAction(key); setActionError(''); setActionNotice(null)
     try { await work(); setActionNotice(success); after?.() }
     catch (reason) { setActionError(errorMessage(reason)) }
-    finally { setAction(null) }
+    finally { actionPendingRef.current = false; setAction(null) }
   }
-  const deleteSchedule = (item: AutomationScheduleRecord) => {
-    if (!window.confirm(t('schedule.confirm.delete', { title: item.title }))) return
-    void perform(`delete:${item.id}`, () => onDelete(item.id), t('schedule.notice.deleted'), () => setSelectedId(null))
+  const deleteSchedule = (item: AutomationScheduleRecord) => setConfirmation({ kind: 'delete', id: item.id, title: item.title })
+  const confirmAction = () => {
+    const pending = confirmation
+    if (!pending) return
+    setConfirmation(null)
+    if (pending.kind === 'discard') { setEditor(null); setFormError(''); return }
+    if (pending.kind === 'delete') {
+      void perform(`delete:${pending.id}`, () => onDelete(pending.id), 'schedule.notice.deleted', () => setSelectedId(null))
+    } else if (pending.kind === 'stop') {
+      void perform(`heartbeat:${pending.heartbeat.id}`, () => onManageHeartbeat(pending.heartbeat.id, 'stop'), 'schedule.notice.heartbeatStopped')
+    } else {
+      const current = schedules.find((item) => item.id === pending.id)
+      const eligible = current ? archivableScheduleSessions(current, sessions).filter((session) => pending.files.includes(session.filePath)) : []
+      if (eligible.length && onArchiveSessions) void perform(`archive:${pending.id}`, () => onArchiveSessions(eligible), null)
+    }
   }
+  const confirmationModal = confirmation ? (
+    <Modal title={t('common.confirm')} onClose={() => setConfirmation(null)} footer={<>
+      <button type="button" className="button" onClick={() => setConfirmation(null)}>{t('common.cancel')}</button>
+      <button type="button" className="button button--danger" onClick={confirmAction}>{confirmation.kind === 'delete' ? t('common.delete') : confirmation.kind === 'stop' ? t('schedule.action.stop') : confirmation.kind === 'discard' ? t('schedule.confirm.discardAction') : t('common.confirm')}</button>
+    </>}>
+      <p>{confirmation.kind === 'discard' ? t('schedule.confirm.discard') : confirmation.kind === 'delete' ? t('schedule.confirm.delete', { title: confirmation.title }) : confirmation.kind === 'stop' ? t('schedule.confirm.stop', { title: confirmation.heartbeat.label || t(confirmation.heartbeat.source === 'heartbeat' ? 'schedule.heartbeats.thread' : 'schedule.heartbeats.agent') }) : t('schedule.history.archiveConfirm', { count: confirmation.files.length })}</p>
+    </Modal>
+  ) : null
 
   const editorModal = editor ? (
     <Modal title={editor.mode === 'create' ? t('schedule.editor.create') : t('schedule.editor.editTitle')} onClose={closeEditor} footer={(
@@ -570,20 +442,20 @@ export function ScheduledPage({
     const busy = Boolean(action)
     return (
       <div className="page scroll-area"><div className="page-container schedule-page schedule-page--detail">
-        <button type="button" className="schedule-back" onClick={() => { setSelectedId(null); setActionError(''); setActionNotice('') }}><ArrowLeft size={15} /> {t('schedule.detail.all')}</button>
+        <button type="button" className="schedule-back" onClick={() => { setSelectedId(null); setActionError(''); setActionNotice(null) }}><ArrowLeft size={15} /> {t('schedule.detail.all')}</button>
         <header className="schedule-detail__header">
           <div className={`schedule-detail__mark schedule-detail__mark--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusIcon(selected, 18)}</div>
           <div><span className={`schedule-state schedule-state--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusLabel(t, selected)}</span><h1>{selected.title}</h1><p>{t('schedule.detail.revision', { revision: selected.revision, updated: formatRelative(selected.updatedAt) })}</p></div>
         </header>
         <div className="schedule-detail__actions" aria-label={t('schedule.actions.aria')}>
-          <button type="button" className="button button--primary" disabled={busy || selected.status === 'completed'} onClick={() => void perform(`run:${selected.id}`, () => onRunNow(selected.id), t('schedule.notice.runQueued'))}><Play size={13} />{action === `run:${selected.id}` ? t('schedule.action.queuing') : t('schedule.action.runNow')}</button>
+          <button type="button" className="button button--primary" disabled={busy || selected.status === 'completed'} onClick={() => void perform(`run:${selected.id}`, () => onRunNow(selected.id), 'schedule.notice.runQueued')}><Play size={13} />{action === `run:${selected.id}` ? t('schedule.action.queuing') : t('schedule.action.runNow')}</button>
           <button type="button" className="button" disabled={busy} onClick={() => openEdit(selected)}><Pencil size={13} /> {t('common.edit')}</button>
-          {selected.status === 'active' || selected.status === 'blocked' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`pause:${selected.id}`, () => onPause(selected.id), t('schedule.notice.paused'))}><Pause size={13} />{action === `pause:${selected.id}` ? t('schedule.action.pausing') : t('schedule.action.pause')}</button> : selected.status === 'paused' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`resume:${selected.id}`, () => onResume(selected.id), t('schedule.notice.resumed'))}><RotateCw size={13} />{action === `resume:${selected.id}` ? t('schedule.action.resuming') : t('schedule.action.resume')}</button> : null}
+          {selected.status === 'active' || selected.status === 'blocked' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`pause:${selected.id}`, () => onPause(selected.id), 'schedule.notice.paused')}><Pause size={13} />{action === `pause:${selected.id}` ? t('schedule.action.pausing') : t('schedule.action.pause')}</button> : selected.status === 'paused' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`resume:${selected.id}`, () => onResume(selected.id), 'schedule.notice.resumed')}><RotateCw size={13} />{action === `resume:${selected.id}` ? t('schedule.action.resuming') : t('schedule.action.resume')}</button> : null}
           <button type="button" className="button schedule-delete" disabled={busy} onClick={() => deleteSchedule(selected)}><Trash2 size={13} /> {t('common.delete')}</button>
         </div>
         {error ? <p className="page-inline-error" role="alert">{t('schedule.error.catalog', { error })}</p> : null}
         {actionError ? <p className="page-inline-error" role="alert">{actionError}</p> : null}
-        {actionNotice ? <p className="schedule-action-notice" role="status"><CheckCircle2 size={14} />{actionNotice}</p> : null}
+        {actionNotice ? <p className="schedule-action-notice" role="status"><CheckCircle2 size={14} />{t(actionNotice)}</p> : null}
         {selected.blockedReason ? <div className="schedule-blocked" role="status"><AlertTriangle size={16} /><div><strong>{t('schedule.detail.needsAttention')}</strong><p>{selected.blockedReason}</p></div></div> : null}
 
         <div className="schedule-detail__grid">
@@ -595,7 +467,7 @@ export function ScheduledPage({
 
         <section className="schedule-history">
           <header><div><History size={15} /><h2>{t('schedule.history.title')}</h2></div><span>{t('schedule.history.summary', { count: selected.runs.length })}</span>{onArchiveSessions && finishedSessions.length > 0 ? <button type="button" className="button" disabled={busy} onClick={() => {
-            if (window.confirm(t('schedule.history.archiveConfirm', { count: finishedSessions.length }))) void perform(`archive:${selected.id}`, () => onArchiveSessions(finishedSessions), '')
+            setConfirmation({ kind: 'archive', id: selected.id, files: finishedSessions.map((session) => session.filePath) })
           }}><Archive size={13} />{action === `archive:${selected.id}` ? t('schedule.history.archiving') : t('schedule.history.archiveFinished', { count: finishedSessions.length })}</button> : null}</header>
           {recentRuns.length ? <div className="schedule-history__list">{recentRuns.map((run) => {
             const runSession = sessions.find((session) => session.filePath === run.sessionFile) ?? (run.sessionId ? sessionMap.get(run.sessionId) : undefined)
@@ -608,6 +480,7 @@ export function ScheduledPage({
           })}</div> : <div className="schedule-history__empty"><History size={20} /><p>{t('schedule.history.empty')}</p></div>}
         </section>
         {editorModal}
+        {confirmationModal}
       </div></div>
     )
   }
@@ -626,7 +499,7 @@ export function ScheduledPage({
       {visible.length ? <div className="schedule-ledger">{visible.map((item) => {
         const project = projectMap.get(item.target.projectId)
         const targetSession = item.target.kind === 'session' ? sessionMap.get(item.target.sessionId) : undefined
-        return <button type="button" key={item.id} className="schedule-row" onClick={() => { setSelectedId(item.id); setActionError(''); setActionNotice('') }} aria-label={t('schedule.open', { title: item.title })}>
+        return <button type="button" key={item.id} className="schedule-row" onClick={() => { setSelectedId(item.id); setActionError(''); setActionNotice(null) }} aria-label={t('schedule.open', { title: item.title })}>
           <span className={`schedule-row__status schedule-row__status--${needsAttention(item) ? 'attention' : item.status}`}>{statusIcon(item)}</span>
           <span className="schedule-row__main"><span><strong>{item.title}</strong><i className={`schedule-state schedule-state--${needsAttention(item) ? 'attention' : item.status}`}>{statusLabel(t, item)}</i></span><small>{item.prompt}</small><span className="schedule-row__tags"><span><FolderKanban size={11} />{targetSession?.title ?? project?.name ?? t('schedule.target.unavailable')}</span><span><Repeat2 size={11} />{timingLabel(t, item.timing)}</span><span><Gauge size={11} />{models.find((model) => model.key === item.execution.model)?.name ?? item.execution.model}</span></span></span>
           <span className="schedule-row__next"><small>{t('schedule.row.next')}</small><strong>{item.nextRunAt ? formatDateTime(t, item.nextRunAt) : '—'}</strong><span>{item.nextRunAt ? formatRelative(item.nextRunAt) : t('schedule.row.noFutureRun')}</span></span>
@@ -634,15 +507,16 @@ export function ScheduledPage({
         </button>
       })}</div> : <EmptyState icon={<CalendarClock size={24} />} title={t(EMPTY_TITLE_KEYS[filter])} action={schedules.length ? undefined : <button type="button" className="button button--primary" onClick={openCreate}><Plus size={13} /> {t('schedule.editor.create')}</button>}> {schedules.length ? t('schedule.empty.filterHint') : t('schedule.empty.createHint', { harness: HARNESS_SHORT_NAMES[harness] })}</EmptyState>}
       {nativeHeartbeats.length ? <section className="native-heartbeats" aria-labelledby="native-heartbeats-title">
-        <div className="native-heartbeats__header"><div><span className="schedule-page__kicker">Prime Agent</span><h2 id="native-heartbeats-title">Agent heartbeats</h2></div><small>Auto-discovered; the owning runtime is authoritative</small></div>
+        <div className="native-heartbeats__header"><div><span className="schedule-page__kicker">Prime Agent</span><h2 id="native-heartbeats-title">{t('schedule.heartbeats.title')}</h2></div><small>{t('schedule.heartbeats.note')}</small></div>
         {heartbeatPauseUnavailable ? <p className="native-heartbeats__note">{heartbeatPauseUnavailable}</p> : null}
         <div className="native-heartbeats__list">{nativeHeartbeats.map((heartbeat) => <article key={heartbeat.id} className="native-heartbeat">
           <span className={`schedule-row__status schedule-row__status--${heartbeat.status}`}><CalendarClock size={15} /></span>
-          <div className="native-heartbeat__main"><span><strong>{heartbeat.label || (heartbeat.source === 'heartbeat' ? 'Thread heartbeat' : 'Agent heartbeat')}</strong><i className={`schedule-state schedule-state--${heartbeat.status}`}>{heartbeat.status}</i></span><p>{heartbeat.prompt}</p><small>{heartbeat.schedule}{heartbeat.nextRunAt ? ` · next ${formatRelative(heartbeat.nextRunAt)}` : ''}</small></div>
-          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'Heartbeat paused.')}>Pause</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'Heartbeat resumed.')}>Resume</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'stop'), 'Heartbeat stopped.')}>Stop</button></div>
+          <div className="native-heartbeat__main"><span><strong>{heartbeat.label || (t(heartbeat.source === 'heartbeat' ? 'schedule.heartbeats.thread' : 'schedule.heartbeats.agent'))}</strong><i className={`schedule-state schedule-state--${heartbeat.status}`}>{t(HEARTBEAT_STATUS_KEYS[heartbeat.status])}</i></span><p>{heartbeat.prompt}</p><small>{heartbeat.schedule}{heartbeat.nextRunAt ? ` · ${t('schedule.heartbeats.next', { next: formatRelative(heartbeat.nextRunAt) })}` : ''}</small></div>
+          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'schedule.notice.heartbeatPaused')}>{t('schedule.action.pause')}</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'schedule.notice.heartbeatResumed')}>{t('schedule.action.resume')}</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => setConfirmation({ kind: 'stop', heartbeat })}>{t('schedule.action.stop')}</button></div>
         </article>)}</div>
       </section> : null}
       {editorModal}
+      {confirmationModal}
     </div></div>
   )
-}
+})

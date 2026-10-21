@@ -734,6 +734,8 @@ export const englishCatalog = {
   'schedule.action.stop': 'Stop',
   'schedule.actions.aria': 'Schedule actions',
   'schedule.confirm.delete': 'Delete “{title}”? Run history for this schedule will no longer be available here.',
+  'schedule.confirm.discardAction': 'Discard changes',
+  'schedule.confirm.stop': 'Stop “{title}”?',
   'schedule.confirm.discard': 'Discard your unsaved schedule changes?',
   'schedule.count': { one: '{count} schedule', other: '{count} schedules' },
   'schedule.detail.all': 'All schedules',
