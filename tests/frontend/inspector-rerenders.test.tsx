@@ -9,7 +9,7 @@ import type { InspectorProps } from '../../src/components/Inspector'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const observed = vi.hoisted(() => ({ inspectorProps: [] as unknown[], changesPanelRenders: 0 }))
+const observed = vi.hoisted(() => ({ inspectorProps: [] as unknown[], changesPanelRenders: 0, activityRenders: 0 }))
 
 // Wraps the memoized Inspector, so every App render is observed even when the
 // memo (correctly) skips the inspector subtree.
@@ -22,6 +22,11 @@ vi.mock('../../src/components/Inspector', async (importOriginal) => {
       return <actual.Inspector {...props} />
     },
   }
+})
+
+vi.mock('../../src/pages/ActivityPage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/pages/ActivityPage')>()
+  return { ...actual, ActivityPage(props: Parameters<typeof actual.ActivityPage>[0]) { observed.activityRenders++; return <actual.ActivityPage {...props} /> } }
 })
 
 // Rendered inside the memo, so its render count is exactly the number of times
@@ -43,6 +48,7 @@ let root: Root
 beforeEach(() => {
   observed.inspectorProps = []
   observed.changesPanelRenders = 0
+  observed.activityRenders = 0
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
@@ -152,4 +158,16 @@ describe('useBrowserAnnotations identity', () => {
     expect(updated).not.toBe(stable)
     expect(updated.annotations).toHaveLength(1)
   })
+})
+
+it('keeps the full-page view element stable during unrelated shell updates', async () => {
+  await import('../../src/pages/ActivityPage')
+  await import('../../src/components/CommandPalette')
+  await renderApp()
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.sidebar__primary button')].find((button) => button.textContent?.includes('Activity'))!.click())
+  expect(observed.activityRenders).toBeGreaterThan(0)
+  const before = observed.activityRenders
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true })))
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  expect(observed.activityRenders).toBe(before)
 })
