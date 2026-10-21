@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import type { CapabilityMutationInput, HarnessId, McpConnectionInput, McpStateInput, ProcessOutcome } from '../../../src/types/api'
 import { isAppManageableLocalMcpKey, isNetworkMcpDefinition, MAX_MCP_DEFINITION_KEY_LENGTH, NETWORK_MCP_UNAVAILABLE_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '../../../src/lib/mcp-policy'
 import { errorCode, isPathWithin, isRecord, requireString } from '../validation'
+import { isPackageDisabled, packageSource } from './package-entries'
 import { readAtMost } from './file-io'
 
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
@@ -494,11 +495,11 @@ export async function removeMcpDefinition(
 
 export async function updatePackageState(
   target: string | ProjectSettingsPath,
-  input: Pick<CapabilityMutationInput, 'source' | 'action'>,
+  input: { source: string; action: 'enable' | 'disable' },
   fingerprint: FingerprintSettings = settingsFingerprint,
   options: { agentName?: string } = {},
 ): Promise<ProcessOutcome> {
-  const source = input.source!
+  const source = input.source
   const agentName = options.agentName ?? 'Prime Agent'
   const settingsPath = typeof target === 'string' ? target : target.path
   const verify = typeof target === 'string' ? undefined : target.verify
@@ -507,7 +508,7 @@ export async function updatePackageState(
     for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
       const snapshot = await readSettingsForUpdate(settingsPath, agentName)
       const packages = Array.isArray(snapshot.settings.packages) ? snapshot.settings.packages : []
-      const index = packages.findIndex((item) => item === source || (isRecord(item) && item.source === source))
+      const index = packages.findIndex((item) => packageSource(item) === source)
       if (index < 0) return { ok: false, reason: 'blocked', output: `Package “${source}” was not found in this scope.` }
       const saved = isRecord(snapshot.settings.gooeypiDisabledPackages) ? { ...snapshot.settings.gooeypiDisabledPackages } : {}
       const next = [...packages]
@@ -515,18 +516,15 @@ export async function updatePackageState(
         if (saved[source] === undefined) saved[source] = next[index]
         next[index] = { source, extensions: [], skills: [], prompts: [], themes: [] }
       } else if (input.action === 'enable') {
-        if (saved[source] === undefined) return { ok: true, output: `Package “${source}” is already enabled.` }
-        next[index] = saved[source]
-        delete saved[source]
-      } else {
-        next.splice(index, 1)
+        if (saved[source] === undefined && !isPackageDisabled(next[index])) return { ok: true, output: `Package “${source}” is already enabled.` }
+        next[index] = saved[source] ?? source
         delete saved[source]
       }
       snapshot.settings.packages = next
       if (Object.keys(saved).length) snapshot.settings.gooeypiDisabledPackages = saved
       else delete snapshot.settings.gooeypiDisabledPackages
       if (await writeSettingsAtomically(settingsPath, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
-        const verb = input.action === 'enable' ? 'Enabled' : input.action === 'disable' ? 'Disabled' : 'Removed'
+        const verb = input.action === 'enable' ? 'Enabled' : 'Disabled'
         return { ok: true, output: `${verb} package “${source}”.` }
       }
     }

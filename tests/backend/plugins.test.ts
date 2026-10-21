@@ -1006,6 +1006,22 @@ describe('PluginService MCP connections', () => {
     expect(JSON.parse(readFileSync(join(agentDir, 'settings.json'), 'utf8')).mcpServers).toEqual({})
   })
 
+  it('enables an externally disabled package without changing partially filtered packages', async () => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    mkdirSync(agentDir)
+    const settingsPath = join(agentDir, 'settings.json')
+    const partial = { source: 'npm:partial', extensions: [], skills: ['skills/review'], prompts: [], themes: [] }
+    writeFileSync(settingsPath, JSON.stringify({ packages: [{ source: 'npm:disabled', extensions: [], skills: [], prompts: [], themes: [] }, partial] }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir })
+    const before = await service.list()
+    expect(before.skills.find((skill) => skill.source === 'npm:disabled')?.enabled).toBe(false)
+    expect(before.skills.find((skill) => skill.source === 'npm:partial')?.enabled).toBe(true)
+    expect((await service.mutateCapability({ kind: 'package', action: 'enable', name: 'disabled', source: 'npm:disabled', scope: 'user' })).ok).toBe(true)
+    expect((await service.mutateCapability({ kind: 'package', action: 'enable', name: 'partial', source: 'npm:partial', scope: 'user' })).ok).toBe(true)
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).packages).toEqual(['npm:disabled', partial])
+  })
+
   it('disables and restores a package while preserving its original filters', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')

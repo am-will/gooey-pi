@@ -15,6 +15,7 @@ import {
 import { HARNESSES } from '../harness'
 import { mapLimit } from '../lib/async'
 import { errorCode, isPathWithin, isRecord } from '../validation'
+import { isPackageDisabled, packageSource } from './package-entries'
 import { readAtMost } from './file-io'
 
 type Kind = SkillRecord['kind']
@@ -287,11 +288,11 @@ async function addPackageSettingsMetadata(
   if (Array.isArray(settings.packages)) {
     for (const raw of settings.packages) {
       if (output.length >= MAX_DISCOVERY_RECORDS) break
-      const sourceValue = typeof raw === 'string' ? raw : isRecord(raw) && typeof raw.source === 'string' ? raw.source : undefined
+      const sourceValue = packageSource(raw)
       if (!sourceValue) continue
       const source = sourceValue.slice(0, 2_048)
       const metadata = await packageMetadata(sourceValue, settingsPath)
-      const enabled = !(isRecord(raw) && ['extensions', 'skills', 'prompts', 'themes'].every((key) => Array.isArray(raw[key]) && raw[key].length === 0))
+      const enabled = !isPackageDisabled(raw)
       output.push({ id: idFor('package', location, sourceValue), ...metadata, kind: 'package', location, enabled, source })
     }
   }

@@ -8,6 +8,7 @@ import { createAdmissionQueue, createSingleFlight } from './lib/async'
 import { resolveExecutable, type ExecutableSource } from './process-utils'
 import { isRecord, requireString } from './validation'
 import { discoverPlugins } from './plugins/catalog'
+import { isPackageDisabled, packageSource } from './plugins/package-entries'
 import { readAtMost } from './plugins/file-io'
 import { acquireSettingsLock, prepareProjectSettingsPath, removeMcpDefinition, settingsFingerprint, updateMcpSettings, updateMcpState, updatePackageState, validateCapabilityMutation, validateMcpConnection, validateMcpStateInput } from './plugins/mcp'
 import type { ProjectSettingsPath } from './plugins/mcp'
@@ -393,7 +394,7 @@ export class PluginService {
           if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
           return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source!, safeProjectPath)
         }
-        if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, input, (path) => this.settingsFingerprint(path), { agentName })
+        if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, { source: input.source!, action: input.action }, (path) => this.settingsFingerprint(path), { agentName })
         const agentPath = resolveExecutable(this.agentPath)
         if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
         return this.harness === 'pi'
@@ -419,10 +420,9 @@ export class PluginService {
       const value = JSON.parse(content) as unknown
       if (!isRecord(value) || !Array.isArray(value.packages)) return undefined
       for (const raw of value.packages) {
-        const source = typeof raw === 'string' ? raw : isRecord(raw) && typeof raw.source === 'string' ? raw.source : ''
+        const source = packageSource(raw) ?? ''
         if (!isOfficialPiMcpAdapterSource(source)) continue
-        const enabled = typeof raw === 'string' || !['extensions', 'skills', 'prompts', 'themes']
-          .every((key) => Array.isArray(raw[key]) && raw[key].length === 0)
+        const enabled = !isPackageDisabled(raw)
         return { source, enabled }
       }
       return undefined
