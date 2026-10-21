@@ -276,6 +276,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'composer.error.restoredImages': '（送信済み画像 {count} 枚を含む）',
   'composer.error.restoreOmitted': 'メッセージを送信できませんでした。下書きは復元されました{restored}。ただし、送信済み画像 {count} 枚は添付の上限に達しているため復元できませんでした。',
   'composer.error.restoreDraftAndImages': 'メッセージを送信できませんでした。下書きと画像は復元されました。',
+  'composer.error.queuedRestore': 'キューのメッセージを送信できませんでした。入力欄に復元しました。',
   'composer.error.restoreDraft': 'メッセージを送信できませんでした。下書きは復元されました。',
   'composer.error.tooManyFiles': '添付できるファイルは最大 {count} 件です。',
   'composer.error.imagesTooLarge': '画像のサイズが大きすぎて送信できません。合計 1.3 MB 程度の小さい画像を添付してください。',

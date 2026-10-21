@@ -290,6 +290,7 @@ export const englishCatalog = {
   'composer.error.restoredImages': { one: ' along with {count} submitted image', other: ' along with {count} submitted images' },
   'composer.error.restoreOmitted': { one: 'Message was not sent. Your draft was restored{restored}, but {count} submitted image could not be restored because the attachment limits are full.', other: 'Message was not sent. Your draft was restored{restored}, but {count} submitted images could not be restored because the attachment limits are full.' },
   'composer.error.restoreDraftAndImages': 'Message was not sent. Your draft and images were restored.',
+  'composer.error.queuedRestore': 'Queued message was not sent. It was restored to the composer.',
   'composer.error.restoreDraft': 'Message was not sent. Your draft was restored.',
   'composer.error.tooManyFiles': 'You can attach up to {count} files.',
   'composer.error.imagesTooLarge': 'These images are too large to send. Attach smaller images (about 1.3 MB total).',

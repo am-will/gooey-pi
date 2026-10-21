@@ -447,7 +447,12 @@ export const Composer = memo(function Composer({
     try {
       await onSend(queued.text, [], 'steer')
     } catch {
-      // sendPrompt reports failures itself; there is no composer draft to restore.
+      if (!mountedRef.current) {
+        if (draftKey) { const draft = readComposerDraft(draftKey); saveComposerDraft(draftKey, { ...draft, text: draft?.text.trim() ? `${draft.text.trimEnd()}\n\n${queued.text}` : queued.text }) }
+        return
+      }
+      setValue((current) => current.trim() ? `${current.trimEnd()}\n\n${queued.text}` : queued.text)
+      setAttachmentError(t('composer.error.queuedRestore'))
     }
   }
 
