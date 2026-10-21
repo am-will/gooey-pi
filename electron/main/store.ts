@@ -1,408 +1,14 @@
-import { DEFAULT_SETTINGS } from '../../src/lib/default-settings'
-import { randomUUID } from 'node:crypto'
+import { LegacyStateMigrator, parseWindowsLegacyTombstone, type WindowsLegacyTombstone } from './store/legacy-migration'
+import { DurableStateFile, nodeFileSystem, type JsonStateStoreFileSystem } from './store/durable-file'
+export type { JsonStateStoreFileHandle, JsonStateStoreFileSystem } from './store/durable-file'
+import { CURRENT_DESKTOP_STATE_FILENAME, LEGACY_DESKTOP_STATE_FILENAME, CURRENT_DESKTOP_STATE_VERSION, StateCompatibilityError, StateMigrationError, MAX_STATE_FILE_BYTES, defaultState, parseState, capUnboundedCollections, type DesktopState, type PersistedProject } from './store/state-schema'
+export { CURRENT_DESKTOP_STATE_FILENAME, LEGACY_DESKTOP_STATE_FILENAME, StateCompatibilityError, UnsupportedStateVersionError, StateMigrationError, MAX_SCHEDULED_TASKS } from './store/state-schema'
+export type { DesktopState, FolderIdentity, PersistedProject } from './store/state-schema'
+export { defaultSettings } from './store/settings-schema'
 import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
-import { open, rename, unlink } from 'node:fs/promises'
-import type { FileHandle } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join } from 'node:path'
-import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, HARNESS_IDS, OMP_APPROVAL_MODES, SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
-import { renameWithWindowsRetry } from './lib/durable-write'
-import { MAX_CATALOG_PROVIDERS } from './model-catalog'
-import { normalizeScheduleRunHistory } from './schedules/retention'
-import { errorCode, isProviderId, isModelKey, isOneOf, isRecord } from './validation'
-
-export interface FolderIdentity {
-  dev: string
-  ino: string
-  /** Stable across filesystem device-number changes caused by a remount. */
-  birthtimeNs?: string
-}
-
-export interface PersistedProject extends Omit<ProjectRecord, 'sessionCount' | 'gitBranch' | 'inferred'> {
-  folderIdentities?: Record<string, FolderIdentity>
-}
-
-export interface DesktopState {
-  version: 4
-  projects: PersistedProject[]
-  settings: AppSettings
-  archivedSessions: string[]
-  dismissedProjectPaths: string[]
-  schedules: AutomationScheduleRecord[]
-}
-
-export const CURRENT_DESKTOP_STATE_FILENAME = 'prime-work-state-v4.json'
-export const LEGACY_DESKTOP_STATE_FILENAME = 'prime-work-state.json'
-const CURRENT_DESKTOP_STATE_VERSION = 4 as const
-type SupportedDesktopStateVersion = 1 | 2 | 3 | typeof CURRENT_DESKTOP_STATE_VERSION
-
-export class StateCompatibilityError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'StateCompatibilityError'
-  }
-}
-
-export class UnsupportedStateVersionError extends StateCompatibilityError {
-  constructor(
-    readonly stateVersion: number,
-    readonly statePath: string,
-  ) {
-    super(`Desktop state schema version ${stateVersion} at ${statePath} is newer than supported version ${CURRENT_DESKTOP_STATE_VERSION}. Upgrade GooeyPi to a compatible version; the state file was left unchanged.`)
-    this.name = 'UnsupportedStateVersionError'
-  }
-}
-
-export class StateMigrationError extends Error {
-  constructor(
-    message: string,
-    readonly currentStatePath: string,
-    readonly legacyStatePath: string,
-    readonly backupStatePath?: string,
-  ) {
-    const backup = backupStatePath ? ` Byte-exact recovery copy: ${backupStatePath}.` : ''
-    super(`${message} Startup stopped before state became writable. Retry after checking that the state directory is writable. Current v4 state: ${currentStatePath}. Legacy compatibility state: ${legacyStatePath}.${backup} Do not delete or edit these files without making a separate backup.`)
-    this.name = 'StateMigrationError'
-  }
-}
-
-type WindowsLegacyTombstoneReason = 'fresh' | 'migration' | 'quarantine'
-
-interface WindowsLegacyTombstone {
-  schemaVersion: 1
-  status: 'pending' | 'complete'
-  currentStateFile: typeof CURRENT_DESKTOP_STATE_FILENAME
-  backupFile: string | null
-  reason: WindowsLegacyTombstoneReason
-}
-
-const WINDOWS_LEGACY_TOMBSTONE_KEY = 'gooeyPiV4Migration'
-
-function parseWindowsLegacyTombstone(value: unknown): WindowsLegacyTombstone | null {
-  if (!isRecord(value) || value.version !== 3) return null
-  if (!Array.isArray(value.projects) || value.projects.length !== 0 || !Array.isArray(value.schedules) || value.schedules.length !== 0) return null
-  const marker = value[WINDOWS_LEGACY_TOMBSTONE_KEY]
-  if (!isRecord(marker) || marker.schemaVersion !== 1 || marker.currentStateFile !== CURRENT_DESKTOP_STATE_FILENAME) return null
-  if (marker.status !== 'pending' && marker.status !== 'complete') return null
-  if (marker.reason !== 'fresh' && marker.reason !== 'migration' && marker.reason !== 'quarantine') return null
-  const backupFile = marker.backupFile
-  if (backupFile !== null && (typeof backupFile !== 'string' || basename(backupFile) !== backupFile || !backupFile.startsWith(`${LEGACY_DESKTOP_STATE_FILENAME}.migrated-v4-`) || backupFile.length > 512)) return null
-  if (marker.reason === 'fresh' && backupFile !== null) return null
-  if (marker.reason === 'migration' && backupFile === null) return null
-  if (marker.reason === 'quarantine' && (marker.status !== 'complete' || backupFile === null)) return null
-  return {
-    schemaVersion: 1,
-    status: marker.status,
-    currentStateFile: CURRENT_DESKTOP_STATE_FILENAME,
-    backupFile,
-    reason: marker.reason,
-  }
-}
-
-export function defaultSettings(): AppSettings {
-  const defaultShell = process.platform === 'win32'
-    ? (process.env.ComSpec && isAbsolute(process.env.ComSpec) ? process.env.ComSpec : 'C:\\Windows\\System32\\cmd.exe')
-    : (process.env.SHELL?.startsWith('/') ? process.env.SHELL : '/bin/zsh')
-  return { ...structuredClone(DEFAULT_SETTINGS), terminalShell: defaultShell }
-}
-
-function defaultState(): DesktopState {
-  return { version: CURRENT_DESKTOP_STATE_VERSION, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] }
-}
-
-/** Versions 1 and 2 predate harness scoping, so only an absent value migrates to Prime. */
-function parseHarness(value: unknown, preHarnessState: boolean): HarnessId | null {
-  if (isOneOf(HARNESS_IDS, value)) return value
-  return preHarnessState && value === undefined ? 'prime' : null
-}
-
-function validDate(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value))
-}
-function parseProjectScripts(value: unknown): ProjectScripts | undefined {
-  if (!isRecord(value)) return undefined
-  const setup = boundedString(value.setup, 64 * 1024, true) && !value.setup.includes('\0') ? value.setup : ''
-  const run = boundedString(value.run, 64 * 1024, true) && !value.run.includes('\0') ? value.run : ''
-  const setupLastExitCode = Number.isSafeInteger(value.setupLastExitCode)
-    ? Number(value.setupLastExitCode)
-    : undefined
-  const setupLastRun = setupLastExitCode !== undefined && boundedString(value.setupLastRun, 64 * 1024, true) && !value.setupLastRun.includes('\0')
-    ? value.setupLastRun
-    : undefined
-  return { setup, run, setupLastRun, setupLastExitCode }
-}
-
-
-function parseProject(value: unknown, preHarnessState: boolean): PersistedProject | null {
-  if (!isRecord(value)) return null
-  if (typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.path !== 'string') return null
-  const folders = Array.isArray(value.folders) ? value.folders.filter((item): item is string => typeof item === 'string') : [value.path]
-  if (!folders.length || typeof value.primaryFolder !== 'string') return null
-  const harness = parseHarness(value.harness, preHarnessState)
-  if (!harness) return null
-  const now = new Date().toISOString()
-  const folderIdentities: Record<string, FolderIdentity> = {}
-  if (isRecord(value.folderIdentities)) {
-    for (const [path, identity] of Object.entries(value.folderIdentities)) {
-      if (isRecord(identity) && typeof identity.dev === 'string' && typeof identity.ino === 'string') {
-        folderIdentities[path] = {
-          dev: identity.dev,
-          ino: identity.ino,
-          birthtimeNs: typeof identity.birthtimeNs === 'string' && /^\d{1,40}$/.test(identity.birthtimeNs) ? identity.birthtimeNs : undefined,
-        }
-      }
-    }
-  }
-  return {
-    id: value.id || randomUUID(),
-    harness,
-    name: value.name,
-    path: value.path,
-    folders,
-    primaryFolder: value.primaryFolder,
-    pinned: typeof value.pinned === 'boolean' ? value.pinned : false,
-    createdAt: validDate(value.createdAt) ? value.createdAt : now,
-    lastOpenedAt: validDate(value.lastOpenedAt) ? value.lastOpenedAt : now,
-    folderIdentities: Object.keys(folderIdentities).length ? folderIdentities : undefined,
-    scripts: parseProjectScripts(value.scripts),
-  }
-}
-
-function parseSettings(value: unknown, legacyState = false): AppSettings {
-  const defaults = defaultSettings()
-  if (!isRecord(value)) return defaults
-  const parseRuntimePath = (path: unknown, fallback: string): string => (
-    typeof path === 'string' && path.length <= 4_096 && (!path || isAbsolute(path)) ? path : fallback
-  )
-  const runtimePaths = isRecord(value.runtimePaths)
-    ? {
-        prime: parseRuntimePath(value.runtimePaths.prime, defaults.runtimePaths.prime),
-        omp: parseRuntimePath(value.runtimePaths.omp, defaults.runtimePaths.omp),
-        pi: parseRuntimePath(value.runtimePaths.pi, defaults.runtimePaths.pi),
-      }
-    : defaults.runtimePaths
-  const activeHarness = isOneOf(HARNESS_IDS, value.activeHarness)
-    ? value.activeHarness
-    : legacyState ? 'prime' : defaults.activeHarness
-  const parseLastSelectedModel = (model: unknown, fallback: string): string => (
-    typeof model === 'string' && model.length <= 385 && (!model || isModelKey(model))
-      ? model
-      : fallback
-  )
-  const lastSelectedModels = isRecord(value.lastSelectedModels)
-    ? {
-        prime: parseLastSelectedModel(value.lastSelectedModels.prime, defaults.lastSelectedModels.prime),
-        omp: parseLastSelectedModel(value.lastSelectedModels.omp, defaults.lastSelectedModels.omp),
-        pi: parseLastSelectedModel(value.lastSelectedModels.pi, defaults.lastSelectedModels.pi),
-      }
-    : defaults.lastSelectedModels
-  return {
-    theme: isOneOf(THEME_MODES, value.theme) ? value.theme : defaults.theme,
-    // Derived from the shared tuple so a locale the renderer can select is never
-    // rewritten to the default when the state file is read back.
-    locale: isOneOf(LOCALE_PREFERENCES, value.locale) ? value.locale : defaults.locale,
-    interfaceFontScale: isOneOf(INTERFACE_FONT_SCALES, value.interfaceFontScale) ? value.interfaceFontScale : defaults.interfaceFontScale,
-    projectSortMode: isOneOf(PROJECT_SORT_MODES, value.projectSortMode) ? value.projectSortMode : defaults.projectSortMode,
-    sidebarOpen: typeof value.sidebarOpen === 'boolean' ? value.sidebarOpen : defaults.sidebarOpen,
-    inspectorOpen: typeof value.inspectorOpen === 'boolean' ? value.inspectorOpen : defaults.inspectorOpen,
-    showFileChangesPopup: typeof value.showFileChangesPopup === 'boolean' ? value.showFileChangesPopup : defaults.showFileChangesPopup,
-    checkoutStrategy: isOneOf(CHECKOUT_STRATEGIES, value.checkoutStrategy) ? value.checkoutStrategy : defaults.checkoutStrategy,
-    keepRunningInBackground: typeof value.keepRunningInBackground === 'boolean' ? value.keepRunningInBackground : defaults.keepRunningInBackground,
-    launchAtLogin: typeof value.launchAtLogin === 'boolean' ? value.launchAtLogin : defaults.launchAtLogin,
-    terminalOpen: typeof value.terminalOpen === 'boolean' ? value.terminalOpen : defaults.terminalOpen,
-    defaultInspectorTab: isOneOf(INSPECTOR_TABS, value.defaultInspectorTab) ? value.defaultInspectorTab : defaults.defaultInspectorTab,
-    browserHome: typeof value.browserHome === 'string' ? value.browserHome : defaults.browserHome,
-    browserAskForDownloads: typeof value.browserAskForDownloads === 'boolean' ? value.browserAskForDownloads : defaults.browserAskForDownloads,
-    terminalShell: typeof value.terminalShell === 'string' ? value.terminalShell : defaults.terminalShell,
-    reduceMotion: typeof value.reduceMotion === 'boolean' ? value.reduceMotion : defaults.reduceMotion,
-    showReasoningSummaries: typeof value.showReasoningSummaries === 'boolean' ? value.showReasoningSummaries : defaults.showReasoningSummaries,
-    showToolCalls: typeof value.showToolCalls === 'boolean' ? value.showToolCalls : defaults.showToolCalls,
-    messageEnterAction: isOneOf(MESSAGE_ENTER_ACTIONS, value.messageEnterAction) ? value.messageEnterAction : defaults.messageEnterAction,
-    runtimePaths,
-    askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
-    askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
-    browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,
-    computerUseEnabled: typeof value.computerUseEnabled === 'boolean' ? value.computerUseEnabled : defaults.computerUseEnabled,
-    disabledProviders: parseDisabledProviders(value.disabledProviders, defaults.disabledProviders),
-    disabledModels: parseDisabledModels(value.disabledModels, defaults.disabledModels),
-    ompDisabledProviders: parseDisabledProviders(value.ompDisabledProviders, defaults.ompDisabledProviders),
-    ompDisabledModels: parseDisabledModels(value.ompDisabledModels, defaults.ompDisabledModels),
-    piDisabledProviders: parseDisabledProviders(value.piDisabledProviders, defaults.piDisabledProviders),
-    piDisabledModels: parseDisabledModels(value.piDisabledModels, defaults.piDisabledModels),
-    lastSelectedModels,
-    activeHarness,
-    ompApprovalMode: isOneOf(OMP_APPROVAL_MODES, value.ompApprovalMode) ? value.ompApprovalMode : defaults.ompApprovalMode,
-    petEnabled: typeof value.petEnabled === 'boolean' ? value.petEnabled : defaults.petEnabled,
-    petId: boundedString(value.petId, 128) && /^[a-z0-9][a-z0-9._/-]{0,127}$/i.test(value.petId) ? value.petId : defaults.petId,
-    petSize: Number.isInteger(value.petSize) && (value.petSize as number) >= 50 && (value.petSize as number) <= 125 ? value.petSize as number : defaults.petSize,
-    voiceTranscriptionProvider: value.voiceTranscriptionProvider === 'openai-live' || value.voiceTranscriptionProvider === 'openai' || value.voiceTranscriptionProvider === 'groq' || value.voiceTranscriptionProvider === 'deepgram' || value.voiceTranscriptionProvider === 'self-hosted' || value.voiceTranscriptionProvider === 'local-whisper' ? value.voiceTranscriptionProvider : defaults.voiceTranscriptionProvider,
-    voiceOpenAiLiveTranscriptionModel: boundedString(value.voiceOpenAiLiveTranscriptionModel, 128) ? value.voiceOpenAiLiveTranscriptionModel : defaults.voiceOpenAiLiveTranscriptionModel,
-    voiceOpenAiTranscriptionModel: boundedString(value.voiceOpenAiTranscriptionModel, 128) ? value.voiceOpenAiTranscriptionModel : defaults.voiceOpenAiTranscriptionModel,
-    voiceGroqTranscriptionModel: boundedString(value.voiceGroqTranscriptionModel, 128) ? value.voiceGroqTranscriptionModel : defaults.voiceGroqTranscriptionModel,
-    voiceDeepgramTranscriptionModel: boundedString(value.voiceDeepgramTranscriptionModel, 128) ? value.voiceDeepgramTranscriptionModel : defaults.voiceDeepgramTranscriptionModel,
-    voiceSelfHostedUrl: boundedString(value.voiceSelfHostedUrl, 2_048, true) ? value.voiceSelfHostedUrl : defaults.voiceSelfHostedUrl,
-    voiceSelfHostedModel: boundedString(value.voiceSelfHostedModel, 128, true) ? value.voiceSelfHostedModel : defaults.voiceSelfHostedModel,
-    voiceLocalWhisperExecutable: boundedString(value.voiceLocalWhisperExecutable, 4096, true) ? value.voiceLocalWhisperExecutable : defaults.voiceLocalWhisperExecutable,
-    voiceLocalWhisperModel: boundedString(value.voiceLocalWhisperModel, 4096, true) ? value.voiceLocalWhisperModel : defaults.voiceLocalWhisperModel,
-    voiceRealtimeModel: boundedString(value.voiceRealtimeModel, 128) ? value.voiceRealtimeModel : defaults.voiceRealtimeModel,
-    voiceRealtimeVoice: boundedString(value.voiceRealtimeVoice, 64) ? value.voiceRealtimeVoice : defaults.voiceRealtimeVoice,
-  }
-}
-
-function parseDisabledProviders(value: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback
-  return [...new Set(value.filter((item): item is string => (
-    typeof item === 'string' && isProviderId(item)
-  )))].slice(0, MAX_CATALOG_PROVIDERS)
-}
-
-function parseDisabledModels(value: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback
-  return [...new Set(value.filter((item): item is string => (
-    typeof item === 'string' && isModelKey(item)
-  )))].slice(0, 5_000)
-}
-
-const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
-
-function boundedString(value: unknown, max: number, allowEmpty = false): value is string {
-  return typeof value === 'string' && value.length <= max && (allowEmpty || value.trim().length > 0)
-}
-
-function parseScheduleTarget(value: unknown): ScheduleTarget | null {
-  if (!isRecord(value) || !boundedString(value.projectId, 256)) return null
-  if (value.kind === 'project') return { kind: 'project', projectId: value.projectId }
-  if (value.kind === 'session' && boundedString(value.sessionId, 256)) return { kind: 'session', projectId: value.projectId, sessionId: value.sessionId }
-  return null
-}
-
-function parseScheduleTiming(value: unknown): ScheduleTiming | null {
-  if (!isRecord(value)) return null
-  if (value.kind === 'once' && validDate(value.at)) return { kind: 'once', at: value.at }
-  if (value.kind === 'rrule' && boundedString(value.dtstartLocal, 64) && boundedString(value.timeZone, 128) && boundedString(value.rrule, 2_048)) {
-    return { kind: 'rrule', dtstartLocal: value.dtstartLocal, timeZone: value.timeZone, rrule: value.rrule }
-  }
-  return null
-}
-
-function parseScheduleExecution(value: unknown): ScheduleExecution | null {
-  if (!isRecord(value) || !boundedString(value.model, 512) || !THINKING_LEVELS.has(String(value.thinking))) return null
-  if (value.speed !== 'normal' && value.speed !== 'fast') return null
-  return { model: value.model, thinking: value.thinking as ScheduleExecution['thinking'], speed: value.speed }
-}
-
-function parseScheduleRun(value: unknown): ScheduleRunRecord | null {
-  if (!isRecord(value) || !boundedString(value.id, 256) || !boundedString(value.taskId, 256)) return null
-  if (!Number.isSafeInteger(value.taskRevision) || Number(value.taskRevision) < 1 || !isOneOf(SCHEDULE_RUN_STATUSES, value.status)) return null
-  if ((value.trigger !== 'scheduled' && value.trigger !== 'manual') || !validDate(value.scheduledFor) || !validDate(value.queuedAt)) return null
-  const execution = parseScheduleExecution(value.execution)
-  if (!execution) return null
-  return {
-    id: value.id,
-    taskId: value.taskId,
-    taskRevision: Number(value.taskRevision),
-    trigger: value.trigger,
-    scheduledFor: value.scheduledFor,
-    queuedAt: value.queuedAt,
-    startedAt: validDate(value.startedAt) ? value.startedAt : undefined,
-    finishedAt: validDate(value.finishedAt) ? value.finishedAt : undefined,
-    status: value.status,
-    execution,
-    sessionId: boundedString(value.sessionId, 256) ? value.sessionId : undefined,
-    sessionFile: boundedString(value.sessionFile, 4_096) ? value.sessionFile : undefined,
-    error: boundedString(value.error, 4_000, true) ? value.error : undefined,
-    skippedCount: Number.isSafeInteger(value.skippedCount) && Number(value.skippedCount) > 0 ? Number(value.skippedCount) : undefined,
-  }
-}
-
-function parseSchedule(value: unknown, preHarnessState: boolean): AutomationScheduleRecord | null {
-  if (!isRecord(value) || value.schemaVersion !== 1 || !boundedString(value.id, 256)) return null
-  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1 || !boundedString(value.title, 200) || !boundedString(value.prompt, 1024 * 1024)) return null
-  const target = parseScheduleTarget(value.target)
-  const timing = parseScheduleTiming(value.timing)
-  const execution = parseScheduleExecution(value.execution)
-  const harness = parseHarness(value.harness, preHarnessState)
-  if (!target || !timing || !execution || !harness || !isOneOf(SCHEDULE_DEFINITION_STATUSES, value.status)) return null
-  if ((value.createdBy !== 'user' && value.createdBy !== 'agent') || !validDate(value.createdAt) || !validDate(value.updatedAt)) return null
-  const runs = Array.isArray(value.runs) ? value.runs.map(parseScheduleRun).filter((run): run is ScheduleRunRecord => run !== null) : []
-  return {
-    schemaVersion: 1,
-    id: value.id,
-    harness,
-    revision: Number(value.revision),
-    title: value.title,
-    prompt: value.prompt,
-    target,
-    timing,
-    execution,
-    status: value.status,
-    createdBy: value.createdBy,
-    createdAt: value.createdAt,
-    updatedAt: value.updatedAt,
-    nextRunAt: validDate(value.nextRunAt) ? value.nextRunAt : undefined,
-    blockedReason: boundedString(value.blockedReason, 4_000, true) ? value.blockedReason : undefined,
-    runs,
-  }
-}
-
-const MAX_ARCHIVED_SESSIONS = 5_000
-const MAX_DISMISSED_PROJECT_PATHS = 1_024
-export const MAX_SCHEDULED_TASKS = 500
-const MAX_STATE_FILE_BYTES = 64 * 1024 * 1024
-
-/** Normalize every persisted collection against its deterministic retention invariant. */
-function capUnboundedCollections(state: DesktopState): void {
-  if (state.archivedSessions.length > MAX_ARCHIVED_SESSIONS) state.archivedSessions = state.archivedSessions.slice(-MAX_ARCHIVED_SESSIONS)
-  if (state.dismissedProjectPaths.length > MAX_DISMISSED_PROJECT_PATHS) state.dismissedProjectPaths = state.dismissedProjectPaths.slice(-MAX_DISMISSED_PROJECT_PATHS)
-  normalizeScheduleRunHistory(state.schedules)
-}
-
-function parseStateVersion(value: Record<string, unknown>, statePath: string): SupportedDesktopStateVersion {
-  if (!Number.isSafeInteger(value.version)) throw new Error('Desktop state is missing a supported integer schema version')
-  const version = Number(value.version)
-  if (version > CURRENT_DESKTOP_STATE_VERSION) throw new UnsupportedStateVersionError(version, statePath)
-  if (version !== 1 && version !== 2 && version !== 3 && version !== CURRENT_DESKTOP_STATE_VERSION) {
-    throw new Error(`Desktop state schema version ${version} is not supported`)
-  }
-  return version
-}
-
-function parseState(value: unknown, statePath: string): { sourceVersion: SupportedDesktopStateVersion; state: DesktopState } {
-  if (!isRecord(value)) throw new Error('Desktop state is missing a supported integer schema version')
-  const version = parseStateVersion(value, statePath)
-  const preHarnessProjectState = version === 1 || version === 2
-  const preHarnessScheduleState = version === 2
-  // Versions 1 and 2 predate harness scoping. Their absent harness fields are
-  // the only project records allowed to inherit Prime; schedules first existed
-  // in v2, so a v1 schedule is never eligible for legacy authority migration.
-  const state: DesktopState = {
-    version: CURRENT_DESKTOP_STATE_VERSION,
-    projects: Array.isArray(value.projects) ? value.projects.map((project) => parseProject(project, preHarnessProjectState)).filter((item): item is PersistedProject => item !== null) : [],
-    settings: parseSettings(value.settings, preHarnessProjectState),
-    archivedSessions: Array.isArray(value.archivedSessions) ? value.archivedSessions.filter((item): item is string => typeof item === 'string') : [],
-    dismissedProjectPaths: Array.isArray(value.dismissedProjectPaths) ? value.dismissedProjectPaths.filter((item): item is string => typeof item === 'string') : [],
-    schedules: version !== 1 && Array.isArray(value.schedules) ? value.schedules.map((schedule) => parseSchedule(schedule, preHarnessScheduleState)).filter((item): item is AutomationScheduleRecord => item !== null).slice(0, MAX_SCHEDULED_TASKS) : [],
-  }
-  capUnboundedCollections(state)
-  return { sourceVersion: version, state }
-}
-
-export interface JsonStateStoreFileHandle {
-  writeFile(data: string | Uint8Array, options: { encoding: 'utf8' }): Promise<void>
-  sync(): Promise<void>
-  close(): Promise<void>
-}
-
-export interface JsonStateStoreFileSystem {
-  open(path: string, flags: string, mode?: number): Promise<JsonStateStoreFileHandle>
-  rename(oldPath: string, newPath: string): Promise<void>
-  unlink(path: string): Promise<void>
-}
-
-const nodeFileSystem: JsonStateStoreFileSystem = {
-  open: (path, flags, mode) => open(path, flags, mode) as Promise<FileHandle>,
-  rename,
-  unlink,
-}
+import { dirname, join } from 'node:path'
+import type { AppSettings, AutomationScheduleRecord } from '../../src/types/api'
+import { errorMessage, errorCode } from './validation'
 
 export class JsonStateStore {
   private state: DesktopState = defaultState()
@@ -411,13 +17,20 @@ export class JsonStateStore {
   private incompatibility: StateCompatibilityError | null = null
   private initializationFailure: Error | null = null
   private closed = false
+  private readonly durable: DurableStateFile
+  private readonly legacy: LegacyStateMigrator
 
   constructor(
-    private readonly filePath: string,
-    private readonly fileSystem: JsonStateStoreFileSystem = nodeFileSystem,
+    filePath: string,
+    fileSystem: JsonStateStoreFileSystem = nodeFileSystem,
     private readonly legacyFilePath?: string,
     private readonly platform: NodeJS.Platform = process.platform,
   ) {
+    this.durable = new DurableStateFile(filePath, fileSystem, platform)
+    this.legacy = new LegacyStateMigrator(filePath, legacyFilePath, platform, fileSystem, this.durable,
+      () => this.durable.persist(this.state),
+      (state) => { this.state = state },
+    )
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
     let sourcePath = filePath
     let sourceKind: 'current' | 'legacy' = 'current'
@@ -437,7 +50,7 @@ export class JsonStateStore {
         try {
           size = statSync(sourcePath).size
         } catch (legacyError) {
-          if ((legacyError as NodeJS.ErrnoException).code !== 'ENOENT') throw legacyError
+          if (errorCode(legacyError) !== 'ENOENT') throw legacyError
           if (this.platform === 'win32') this.scheduleWindowsFreshInitialization()
           else this.scheduleFreshInitialization()
           return
@@ -473,7 +86,7 @@ export class JsonStateStore {
         if (legacyFilePath && sourceKind === 'current') {
           if (this.platform === 'win32') {
             this.scheduleInitializationOperation(
-              () => this.ensureWindowsLegacyProtection(false),
+              () => this.legacy.ensureWindowsLegacyProtection(false),
               'GooeyPi could not protect incompatible v4 state from a downgraded Windows binary',
             )
           } else {
@@ -566,7 +179,7 @@ export class JsonStateStore {
       capUnboundedCollections(draft)
       // Detach before persisting: callers never hold live state, and an uncloneable result aborts the write.
       const detached = structuredClone(result)
-      await this.persist(draft)
+      await this.durable.persist(draft)
       this.state = draft
       return detached
     })
@@ -585,93 +198,42 @@ export class JsonStateStore {
 
   private scheduleInitialization(persistState: boolean, retireLegacy: boolean, failurePrefix: string): void {
     this.scheduleInitializationOperation(async () => {
-      if (persistState) await this.persist(this.state, true)
-      if (retireLegacy) await this.retireLegacyState()
+      if (persistState) await this.durable.persist(this.state, true)
+      if (retireLegacy) await this.legacy.retireLegacyState()
     }, failurePrefix)
   }
 
   private scheduleFreshInitialization(): void {
     this.scheduleInitializationOperation(
-      () => this.persist(this.state),
+      () => this.durable.persist(this.state),
       'GooeyPi desktop state could not be initialized',
     )
   }
 
   private scheduleWindowsFreshInitialization(): void {
     this.scheduleInitializationOperation(
-      () => this.initializeWindowsFreshState(),
+      () => this.legacy.initializeWindowsFreshState(),
       'GooeyPi could not establish the Windows v4 compatibility marker',
     )
   }
 
-  private async initializeWindowsFreshState(): Promise<void> {
-    const pending = this.windowsLegacyTombstone('pending', null, 'fresh')
-    await this.publishWindowsLegacyTombstone(pending)
-    await this.persist(this.state)
-    await this.publishWindowsLegacyTombstone({ ...pending, status: 'complete' })
-  }
-
   private scheduleWindowsLegacyMigration(rawLegacyState: Uint8Array): void {
-    const backupPath = this.nextLegacyBackupPath()
-    const pending = this.windowsLegacyTombstone('pending', basename(backupPath), 'migration')
-    this.scheduleInitializationOperation(async () => {
-      try {
-        await this.writeDurableFile(backupPath, rawLegacyState, 'wx')
-        await this.publishWindowsLegacyTombstone(pending)
-        await this.persist(this.state)
-        await this.publishWindowsLegacyTombstone({ ...pending, status: 'complete' })
-      } catch (error) {
-        if (error instanceof StateCompatibilityError || error instanceof StateMigrationError) throw error
-        throw this.migrationError(`The Windows desktop-state migration was interrupted: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
-      }
-    }, 'GooeyPi could not complete the Windows desktop-state migration')
+    this.scheduleInitializationOperation(
+      () => this.legacy.migrateWindowsLegacy(rawLegacyState),
+      'GooeyPi could not complete the Windows desktop-state migration',
+    )
   }
 
   private scheduleWindowsTombstoneRecovery(tombstone: WindowsLegacyTombstone): void {
     this.scheduleInitializationOperation(
-      () => this.resumeWindowsTombstone(tombstone),
+      () => this.legacy.resumeWindowsTombstone(tombstone),
       'GooeyPi could not resume the interrupted Windows desktop-state migration',
     )
   }
 
-  private async resumeWindowsTombstone(tombstone: WindowsLegacyTombstone): Promise<void> {
-    if (tombstone.status === 'complete') {
-      const verifiedBackup = tombstone.backupFile
-        ? this.verifiedBackupFile(join(dirname(this.legacyFilePath!), tombstone.backupFile))
-        : undefined
-      throw this.migrationError('The completed Windows compatibility marker exists, but the authoritative v4 state is missing. Automatic import was refused to avoid restoring stale grants', verifiedBackup)
-    }
-    if (tombstone.backupFile) {
-      const backupPath = join(dirname(this.legacyFilePath!), tombstone.backupFile)
-      try {
-        const { size } = statSync(backupPath)
-        if (size > MAX_STATE_FILE_BYTES) {
-          throw new StateCompatibilityError(`Desktop state recovery file at ${backupPath} is ${size} bytes, which exceeds the ${MAX_STATE_FILE_BYTES}-byte safe parse limit. It was left unchanged.`)
-        }
-        const recovered = parseState(JSON.parse(readFileSync(backupPath, 'utf8')), backupPath)
-        this.state = recovered.state
-      } catch (error) {
-        if (error instanceof StateCompatibilityError) throw error
-        throw this.migrationError(`The pending Windows migration backup at ${backupPath} could not be read safely: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
-      }
-    } else if (tombstone.reason !== 'fresh') {
-      throw this.migrationError('The pending Windows compatibility marker has no recovery backup')
-    }
-    try {
-      await this.persist(this.state)
-      await this.publishWindowsLegacyTombstone({ ...tombstone, status: 'complete' })
-    } catch (error) {
-      if (error instanceof StateCompatibilityError || error instanceof StateMigrationError) throw error
-      const verifiedBackup = tombstone.backupFile
-        ? this.verifiedBackupFile(join(dirname(this.legacyFilePath!), tombstone.backupFile))
-        : undefined
-      throw this.migrationError(`The interrupted Windows migration could not publish recovered v4 state: ${this.errorMessage(error)}`, verifiedBackup)
-    }
-  }
-
   private scheduleWindowsLegacyProtection(): void {
     this.scheduleInitializationOperation(
-      () => this.ensureWindowsLegacyProtection(true),
+      () => this.legacy.ensureWindowsLegacyProtection(true),
       'GooeyPi could not protect v4 state from a downgraded Windows binary',
     )
   }
@@ -683,20 +245,20 @@ export class JsonStateStore {
   ): void {
     this.scheduleInitializationOperation(async () => {
       if (preservationFailure) {
-        throw this.migrationError(`The unreadable ${sourceKind} state could not be preserved before recovery: ${this.errorMessage(preservationFailure)}`)
+        throw this.legacy.migrationError(`The unreadable ${sourceKind} state could not be preserved before recovery: ${errorMessage(preservationFailure)}`)
       }
       if (sourceKind === 'current') {
-        await this.recoverWindowsAfterCorruptCurrent(recoveryPath)
+        await this.legacy.recoverWindowsAfterCorruptCurrent(recoveryPath)
         return
       }
-      await this.initializeWindowsFreshState()
+      await this.legacy.initializeWindowsFreshState()
     }, 'GooeyPi desktop state could not be safely rewritten after reset')
   }
 
   private scheduleInitializationOperation(operation: () => Promise<void>, failurePrefix: string): void {
     const initialization = operation().catch((failure: unknown) => {
       if (failure instanceof StateCompatibilityError || failure instanceof StateMigrationError) throw failure
-      if (this.legacyFilePath) throw this.migrationError(`${failurePrefix}: ${this.errorMessage(failure)}`)
+      if (this.legacyFilePath) throw this.legacy.migrationError(`${failurePrefix}: ${errorMessage(failure)}`)
       throw failure
     })
     this.readyPromise = initialization
@@ -704,268 +266,6 @@ export class JsonStateStore {
       this.initializationFailure = failure instanceof Error ? failure : new Error(String(failure))
       console.error(`${failurePrefix}: ${failure instanceof Error ? failure.message : String(failure)}`)
     })
-  }
-
-  private async retireLegacyState(): Promise<void> {
-    if (!this.legacyFilePath) return
-    const backupPath = this.nextLegacyBackupPath()
-    try {
-      await this.fileSystem.rename(this.legacyFilePath, backupPath)
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT' && !this.pathExists(backupPath)) return
-      throw this.migrationError(`Legacy desktop state could not be retired before startup: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
-    }
-    try {
-      await this.syncParentDirectory(this.legacyFilePath, true)
-    } catch (retirementSyncError) {
-      try {
-        await this.fileSystem.rename(backupPath, this.legacyFilePath)
-      } catch (rollbackRenameError) {
-        throw this.migrationError(`Legacy desktop state retirement was not durable: ${this.errorMessage(retirementSyncError)}; rollback rename failed: ${this.errorMessage(rollbackRenameError)}`, this.verifiedBackupFile(backupPath))
-      }
-      try {
-        await this.syncParentDirectory(this.legacyFilePath, true)
-      } catch (rollbackSyncError) {
-        throw this.migrationError(`Legacy desktop state retirement was not durable: ${this.errorMessage(retirementSyncError)}; the legacy filename was restored, but rollback directory sync failed: ${this.errorMessage(rollbackSyncError)}`)
-      }
-      throw this.migrationError(`Legacy desktop state retirement was not durable: ${this.errorMessage(retirementSyncError)}; the legacy filename was restored and synchronized for a safe retry`)
-    }
-  }
-
-  private async recoverWindowsAfterCorruptCurrent(corruptBackupPath?: string): Promise<void> {
-    if (!this.legacyFilePath) return
-    let size: number
-    try {
-      size = statSync(this.legacyFilePath).size
-    } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error
-      await this.initializeWindowsFreshState()
-      return
-    }
-
-    const recoveryDetail = corruptBackupPath
-      ? ` The unreadable v4 bytes were preserved at ${corruptBackupPath}.`
-      : ''
-    if (size > MAX_STATE_FILE_BYTES) {
-      throw this.migrationError(`The current v4 state was corrupt and the legacy state is too large to classify safely; automatic recovery was refused.${recoveryDetail}`, corruptBackupPath)
-    }
-
-    let serializedLegacy: unknown
-    try {
-      serializedLegacy = JSON.parse(readFileSync(this.legacyFilePath, 'utf8'))
-    } catch (error) {
-      throw this.migrationError(`The current v4 state was corrupt and the legacy state is unreadable; both were preserved for explicit recovery: ${this.errorMessage(error)}.${recoveryDetail}`, corruptBackupPath)
-    }
-
-    const tombstone = parseWindowsLegacyTombstone(serializedLegacy)
-    if (tombstone) {
-      if (tombstone.status === 'pending') {
-        await this.resumeWindowsTombstone(tombstone)
-        return
-      }
-      const markerBackup = tombstone.backupFile
-        ? this.verifiedBackupFile(join(dirname(this.legacyFilePath), tombstone.backupFile))
-        : undefined
-      throw this.migrationError(`The current v4 state was corrupt while a completed Windows compatibility marker was present. Automatic restoration of an older backup was refused to avoid restoring stale grants.${recoveryDetail}`, markerBackup ?? corruptBackupPath)
-    }
-
-    try {
-      parseState(serializedLegacy, this.legacyFilePath)
-    } catch (error) {
-      const classification = error instanceof StateCompatibilityError
-        ? error.message
-        : `the legacy state is not a supported schema: ${this.errorMessage(error)}`
-      throw this.migrationError(`The current v4 state was corrupt and ${classification}. Both files were preserved for explicit recovery.${recoveryDetail}`, corruptBackupPath)
-    }
-    throw this.migrationError(`The current v4 state was corrupt and an unmarked legacy state was also present. Automatic import was refused because it may have been recreated by a downgraded binary; both files were preserved for explicit recovery.${recoveryDetail}`, corruptBackupPath)
-  }
-
-  private async ensureWindowsLegacyProtection(currentIsAuthoritative: boolean): Promise<void> {
-    if (!this.legacyFilePath) return
-    let size: number
-    try {
-      size = statSync(this.legacyFilePath).size
-    } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error
-      await this.publishWindowsLegacyTombstone(this.windowsLegacyTombstone('complete', null, 'fresh'))
-      return
-    }
-
-    if (size <= MAX_STATE_FILE_BYTES) {
-      try {
-        const tombstone = parseWindowsLegacyTombstone(JSON.parse(readFileSync(this.legacyFilePath, 'utf8')))
-        if (tombstone) {
-          if (tombstone.status === 'complete') return
-          if (!currentIsAuthoritative) return
-          if (tombstone.backupFile) {
-            const expectedBackup = join(dirname(this.legacyFilePath), tombstone.backupFile)
-            if (!this.pathExists(expectedBackup)) {
-              throw this.migrationError(`The pending migration marker names a backup that is missing at ${expectedBackup}; completion was refused`)
-            }
-          }
-          await this.publishWindowsLegacyTombstone({ ...tombstone, status: 'complete' })
-          return
-        }
-      } catch (error) {
-        if (error instanceof StateMigrationError) throw error
-        // Invalid JSON or a non-marker legacy file is quarantined below.
-      }
-    }
-
-    const backupPath = this.nextLegacyBackupPath()
-    try {
-      await this.fileSystem.rename(this.legacyFilePath, backupPath)
-    } catch (renameError) {
-      const verifiedBackup = this.verifiedBackupFile(backupPath)
-      throw this.migrationError(`Quarantine rename failed for a legacy state recreated by a downgraded binary: ${this.errorMessage(renameError)}`, verifiedBackup)
-    }
-    try {
-      await this.syncExistingFile(backupPath)
-    } catch (syncError) {
-      try {
-        await this.fileSystem.rename(backupPath, this.legacyFilePath)
-      } catch (rollbackError) {
-        const verifiedBackup = this.verifiedBackupFile(backupPath)
-        const location = verifiedBackup
-          ? 'the byte-exact backup remains available'
-          : this.pathExists(this.legacyFilePath)
-            ? 'the legacy filename exists despite the reported rollback failure'
-            : 'neither the backup nor legacy filename could be verified'
-        throw this.migrationError(`Quarantine backup sync failed: ${this.errorMessage(syncError)}; rollback rename failed: ${this.errorMessage(rollbackError)}; ${location}`, verifiedBackup)
-      }
-      throw this.migrationError(`Quarantine backup sync failed: ${this.errorMessage(syncError)}; the legacy filename was restored for a safe retry`)
-    }
-    const marker = this.windowsLegacyTombstone('complete', basename(backupPath), 'quarantine')
-    try {
-      await this.publishWindowsLegacyTombstone(marker)
-    } catch (error) {
-      throw this.migrationError(`The downgraded legacy state was quarantined, but its zero-authority marker could not be published: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
-    }
-  }
-
-  private windowsLegacyTombstone(status: WindowsLegacyTombstone['status'], backupFile: string | null, reason: WindowsLegacyTombstoneReason): WindowsLegacyTombstone {
-    return { schemaVersion: 1, status, currentStateFile: CURRENT_DESKTOP_STATE_FILENAME, backupFile, reason }
-  }
-
-  private async publishWindowsLegacyTombstone(marker: WindowsLegacyTombstone): Promise<void> {
-    if (!this.legacyFilePath) return
-    const temp = `${this.legacyFilePath}.${process.pid}.${randomUUID()}.tombstone.tmp`
-    const serialized = `${JSON.stringify({
-      version: 3,
-      projects: [],
-      settings: {},
-      archivedSessions: [],
-      dismissedProjectPaths: [],
-      schedules: [],
-      [WINDOWS_LEGACY_TOMBSTONE_KEY]: marker,
-    }, null, 2)}\n`
-    try {
-      await this.writeDurableFile(temp, serialized, 'wx')
-      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
-    } finally {
-      await this.fileSystem.unlink(temp).catch((error: unknown) => {
-        if (errorCode(error) !== 'ENOENT') throw error
-      })
-    }
-  }
-
-  private async writeDurableFile(path: string, data: string | Uint8Array, flags: string): Promise<void> {
-    let completed = false
-    try {
-      const file = await this.fileSystem.open(path, flags, 0o600)
-      try {
-        await file.writeFile(data, { encoding: 'utf8' })
-        await file.sync()
-      } finally {
-        await file.close()
-      }
-      completed = true
-    } finally {
-      if (!completed) {
-        await this.fileSystem.unlink(path).catch((error: unknown) => {
-          if (errorCode(error) !== 'ENOENT') throw error
-        })
-      }
-    }
-  }
-
-  private async syncExistingFile(path: string): Promise<void> {
-    const file = await this.fileSystem.open(path, 'r+')
-    try { await file.sync() } finally { await file.close() }
-  }
-
-  private nextLegacyBackupPath(): string {
-    return `${this.legacyFilePath}.migrated-v4-${Date.now()}-${randomUUID()}`
-  }
-
-  private pathExists(path: string): boolean {
-    try {
-      statSync(path)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  private verifiedBackupFile(path: string): string | undefined {
-    return this.pathExists(path) ? basename(path) : undefined
-  }
-
-  private migrationError(message: string, backupPathOrFile?: string): StateMigrationError {
-    return new StateMigrationError(
-      message,
-      this.filePath,
-      this.legacyFilePath!,
-      backupPathOrFile
-        ? (isAbsolute(backupPathOrFile) ? backupPathOrFile : join(dirname(this.legacyFilePath!), backupPathOrFile))
-        : undefined,
-    )
-  }
-
-  private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
-  }
-
-  private async persist(state: DesktopState, requireDirectorySync = false): Promise<void> {
-    // The write cap matches the read cap so a saved file is always loadable on the next launch.
-    const serialized = `${JSON.stringify(state, null, 2)}\n`
-    const bytes = Buffer.byteLength(serialized, 'utf8')
-    if (bytes > MAX_STATE_FILE_BYTES) {
-      throw new Error(`Desktop state would be ${bytes} bytes, exceeding the ${MAX_STATE_FILE_BYTES}-byte safe size limit; the change was not saved`)
-    }
-    const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
-    try {
-      const file = await this.fileSystem.open(temp, 'w', 0o600)
-      try {
-        await file.writeFile(serialized, { encoding: 'utf8' })
-        await file.sync()
-      } finally {
-        await file.close()
-      }
-
-      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.filePath, this.platform)
-
-      await this.syncParentDirectory(this.filePath, requireDirectorySync)
-    } finally {
-      await this.fileSystem.unlink(temp).catch((error: unknown) => {
-        if (errorCode(error) !== 'ENOENT') throw error
-      })
-    }
-  }
-
-  private async syncParentDirectory(path: string, required = false): Promise<void> {
-    if (this.platform === 'win32') return
-    try {
-      const directory = await this.fileSystem.open(dirname(path), 'r')
-      try { await directory.sync() } finally { await directory.close() }
-    } catch (error) {
-      if (required) {
-        throw new Error(`Desktop state directory could not be synchronized: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      // Ordinary updates retain the pre-v4 best-effort behavior on filesystems
-      // that cannot open or sync directory handles. Authority migration passes
-      // `required` and fails readiness instead of claiming false durability.
-    }
   }
 }
 

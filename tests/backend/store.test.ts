@@ -249,7 +249,7 @@ describe('JsonStateStore', () => {
   })
 
   for (const stage of ['open', 'write', 'file-sync', 'file-close', 'rename'] as const) {
-    it(`does not publish state and attempts temp cleanup when ${stage} fails`, async () => {
+    it(`does not publish state and only cleans up acquired files when ${stage} fails`, async () => {
       const dir = makeDirectory()
       const path = join(dir, 'state.json')
       writeValidState(path)
@@ -283,7 +283,7 @@ describe('JsonStateStore', () => {
       const store = new JsonStateStore(path, fileSystem)
 
       await expect(store.update((state) => { state.archivedSessions.push('lost') })).rejects.toThrow('injected')
-      expect(events.at(-1)).toBe('unlink')
+      expect(events.at(-1)).toBe(stage === 'open' ? 'open' : 'unlink')
       expect(store.snapshot().archivedSessions).toEqual([])
     })
   }

@@ -7,6 +7,7 @@ export type { ChildSession, ChildRoster, ChildHistoryOptions, ChildHistoryPage }
  * exactly, or webview attach is silently blocked.
  */
 export const BROWSER_PARTITION = 'persist:prime-work-browser'
+export const PREVIEW_TAB_ID = 'preview'
 
 export const THEME_MODES = ['system', 'light', 'dark'] as const
 export type ThemeMode = (typeof THEME_MODES)[number]
@@ -184,8 +185,8 @@ export interface TranscriptMessage {
   role: 'user' | 'assistant' | 'agent' | 'goal' | 'tool' | 'system'
   /** Renderer-local steering lifecycle. Persisted transcripts remain harness-owned. */
   steerState?: 'accepted' | 'read'
-  /** Neutral system row: a renderer-only steer-read boundary, or a notice (provider fallback, branch summary) that never reads as a failure. */
-  kind?: 'steer-read-marker' | 'notice'
+  /** Renderer-owned steering boundary, neutral notice, or failure row. */
+  kind?: 'steer-read-marker' | 'notice' | 'error'
   notice?: { kind: 'branch-summary' }
   timestamp?: string | number
   agentName?: string
@@ -217,6 +218,8 @@ export interface SessionUsage {
 }
 
 export interface RuntimeInfo {
+  /** Outstanding harness dialogs that can be restored after a renderer reload. */
+  pendingExtensionUi?: Record<string, unknown>[]
   runtimeId: string
   harness: HarnessId
   sessionId?: string
@@ -423,6 +426,8 @@ export interface GitFileChange {
   deletions: number
 }
 export interface GitStatus {
+  /** Absolute repository root against which file paths are relative. */
+  root?: string
   isRepo: boolean
   branch?: string
   upstream?: string

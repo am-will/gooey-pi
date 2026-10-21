@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import type { SettingsUpdate } from './contracts'
 import { useI18n } from '@/lib/i18n'
 import {
   createDraftState,
@@ -15,7 +16,7 @@ interface DraftSettingFieldProps {
   committedValue: string
   validate(value: string): string
   normalize?(value: string): string
-  onCommit(value: string): Promise<void> | void
+  onCommit(value: string): ReturnType<SettingsUpdate>
   className?: string
 }
 
