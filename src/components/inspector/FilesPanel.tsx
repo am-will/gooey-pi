@@ -237,11 +237,18 @@ export function FilesPanel({
   const [truncated, setTruncated] = useState(false)
   const [visibleLimit, setVisibleLimit] = useState(1_000)
   const loadToken = useRef(0)
+  const loadedDirectories = useRef(new Set<string>())
+  const loadingDirectories = useRef(new Set<string>())
+  const recursiveListing = useRef(false)
+  const isSearching = Boolean(query.trim())
 
-  const load = async () => {
+  const load = async (recursive = isSearching, expand = false) => {
     const token = ++loadToken.current
     setTreeRoots([])
     setExpandedIds(new Set())
+    loadedDirectories.current.clear()
+    loadingDirectories.current.clear()
+    recursiveListing.current = recursive
     setError('')
     setSkipped(0)
     setTruncated(false)
@@ -253,7 +260,7 @@ export function FilesPanel({
       const groups = await Promise.all(
         roots.map(async (root) => ({
           root,
-          listing: await window.prime.projects.listFiles(root, project.harness),
+          listing: await window.prime.projects.listFiles(root, project.harness, recursive ? undefined : 'children'),
         })),
       )
       if (loadToken.current !== token) return
@@ -261,6 +268,8 @@ export function FilesPanel({
       setTruncated(groups.some((group) => group.listing.truncated))
       const builtTree = buildProjectTree(groups, project.primaryFolder)
       setTreeRoots(builtTree)
+      if (expand) setExpandedIds(collectDirectoryIds(builtTree))
+      for (const root of roots) loadedDirectories.current.add(root)
     } catch (reason) {
       if (loadToken.current === token) setError(errorMessage(reason))
     } finally {
@@ -273,14 +282,13 @@ export function FilesPanel({
     return () => {
       loadToken.current += 1
     }
-  }, [project?.id, project?.primaryFolder, project?.folders.join('\0'), project?.harness])
+  }, [project?.id, project?.primaryFolder, project?.folders.join('\0'), project?.harness, isSearching])
 
   const changed = useMemo(
     () => new Map(git.files.map((file) => [file.path, file.status])),
     [git.files],
   )
 
-  const isSearching = Boolean(query.trim())
   const filteredTree = useMemo(() => filterFileTree(treeRoots, query), [treeRoots, query])
   const visibleNodes = useMemo(
     () => flattenVisibleTree(filteredTree, expandedIds, isSearching),
@@ -290,16 +298,39 @@ export function FilesPanel({
 
   const allDirIds = useMemo(() => collectDirectoryIds(treeRoots), [treeRoots])
 
-  const toggleExpand = (id: string) => {
+  const toggleExpand = async (node: FileTreeNode) => {
+    const id = node.id
+    const opening = !expandedIds.has(id)
     setExpandedIds((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
+      if (opening) next.add(id)
+      else next.delete(id)
       return next
     })
+    if (!opening || node.children.length > 0 || recursiveListing.current || loadedDirectories.current.has(id) || loadingDirectories.current.has(id) || !window.prime || !project) return
+    const token = loadToken.current
+    loadingDirectories.current.add(id)
+    try {
+      const listing = await window.prime.projects.listFiles(node.fullPath, project.harness, 'children')
+      if (loadToken.current !== token) return
+      const prefix = node.path ? `${node.path}/` : ''
+      const entries = listing.entries.map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }))
+      const children = buildTreeFromEntries(entries, node.root, node.depth + 1 - (node.path ? node.path.split('/').length : 0))
+      // Entries are relative to the project; the builder supplies their ancestor path.
+      let descendants = children
+      if (node.path) {
+        for (const segment of node.path.split('/')) descendants = descendants.find((child) => child.name === segment)?.children ?? []
+      }
+      const replace = (nodes: FileTreeNode[]): FileTreeNode[] => nodes.map((item) => item.id === id ? { ...item, children: descendants } : { ...item, children: replace(item.children) })
+      setTreeRoots(replace)
+      setSkipped((count) => count + listing.skipped)
+      setTruncated((value) => value || listing.truncated === true)
+      loadedDirectories.current.add(id)
+    } catch (reason) {
+      if (loadToken.current === token) setError(errorMessage(reason))
+    } finally {
+      if (loadToken.current === token) loadingDirectories.current.delete(id)
+    }
   }
 
   const collapseAll = () => {
@@ -307,7 +338,8 @@ export function FilesPanel({
   }
 
   const expandAll = () => {
-    setExpandedIds(new Set(allDirIds))
+    if (recursiveListing.current) setExpandedIds(new Set(allDirIds))
+    else void load(true, true)
   }
 
   if (!project) {
@@ -391,14 +423,14 @@ export function FilesPanel({
                     style={{ paddingLeft: `${8 + node.depth * 14}px` }}
                     title={node.path || node.name}
                     aria-expanded={isExpanded}
-                    onClick={isSearching ? undefined : () => toggleExpand(node.id)}
+                    onClick={isSearching ? undefined : () => void toggleExpand(node)}
                     onDoubleClick={(e) => {
                       e.stopPropagation()
                       onReveal(node.fullPath)
                     }}
                   >
                     <span className="file-tree__chevron">
-                      {node.children.length > 0 ? (
+                      {(!recursiveListing.current && !loadedDirectories.current.has(node.id)) || node.children.length > 0 ? (
                         isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />
                       ) : (
                         <span className="file-tree__expander-placeholder" />
