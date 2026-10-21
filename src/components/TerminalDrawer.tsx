@@ -280,6 +280,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         if (earlyExit !== undefined) announceExit(earlyExit)
       }).catch((error: unknown) => {
         if (cancelled) return
+        offData?.()
+        offExit?.()
+        offData = undefined
+        offExit = undefined
+        bufferedData.clear()
+        bufferedExits.clear()
         const message = error instanceof Error ? error.message : t('terminal.error.start')
         terminal.writeln(`\x1b[31m${message}\x1b[0m`)
         onErrorRef.current?.(message)
