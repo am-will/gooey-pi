@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyTool, formatWorkedDuration } from '../../src/components/Transcript'
+import { classifyTool, formatWorkedDuration } from '../../src/components/transcript/timeline'
 
 describe('transcript activity presentation', () => {
   it('formats only the elapsed units that are needed', () => {

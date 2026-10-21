@@ -1,21 +1,22 @@
-import { Fragment, memo, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { scanAtMentions } from '@/lib/at-mentions'
+import { Fragment, memo, useMemo, useId, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, Target } from 'lucide-react'
 import type { HarnessId, MessagePart, TranscriptMessage } from '@/types/api'
 import { splitAnnotationBlock } from '@/lib/browser-annotations'
 import { splitCapabilityRouting } from '@/lib/capability-mentions'
 import { routedSessionReferences, splitSessionRouting, type RoutedSessionReference } from '@/lib/session-mentions'
 import { splitTerminalContextBlock } from '@/lib/terminal-context'
-import { writeClipboardText } from '@/lib/clipboard'
+import { useCopyFeedback } from '@/hooks/useCopyFeedback'
 import { boundText } from '@/lib/render-bounds'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { isSystemReport } from '@/lib/system-rows'
 import { useI18n } from '@/lib/i18n'
 import { transcriptText } from '@/lib/transcript-notes'
 import { MarkdownText } from '../MarkdownText'
-import { OmpMark, PiMark, PrimeMark } from '../ui'
+import { HarnessMark } from '../HarnessMark'
 import { InlineText } from './syntax'
 import { TranscriptImage } from './TranscriptImage'
-import { ThinkingDots, WorkDisclosure, WorkTimeline } from './timeline'
+import { WorkDisclosure, WorkTimeline } from './timeline'
 
 function imageSource(part: Extract<MessagePart, { type: 'image' }>): string | undefined {
   if (part.dataTruncated || !part.data || !part.mimeType || !/^image\/(png|jpeg|gif|webp)$/i.test(part.mimeType) || !/^[a-z\d+/=\s]+$/i.test(part.data)) return undefined
@@ -26,7 +27,7 @@ function imageSource(part: Extract<MessagePart, { type: 'image' }>): string | un
 // unavailable notice can be localised through the hook.
 function ImageAttachment({ part }: { part: Extract<MessagePart, { type: 'image' }> }) {
   const { t } = useI18n()
-  const source = imageSource(part)
+  const source = useMemo(() => imageSource(part), [part.data, part.dataTruncated, part.mimeType])
   return source ? (
     <TranscriptImage source={source} alt={t('transcript.userAttachment')} />
   ) : (
@@ -108,50 +109,23 @@ function messageText(message: TranscriptMessage): string {
 
 function MessageActions({ message, text: suppliedText }: { message: TranscriptMessage; text?: string }) {
   const { t } = useI18n()
-  const [copied, setCopied] = useState(false)
-  const resetTimerRef = useRef<number | null>(null)
+  const { copied, copy } = useCopyFeedback()
   const text = suppliedText ?? messageText(message)
   const roleKey = message.role === 'assistant' ? 'transcript.role.assistant' : message.role === 'agent' ? 'transcript.role.agent' : 'transcript.role.user'
 
-  useEffect(
-    () => () => {
-      if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
-    },
-    [],
-  )
-
   if (!text) return null
-
-  const copyMessage = async () => {
-    try {
-      await writeClipboardText(text)
-      setCopied(true)
-      if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
-      resetTimerRef.current = window.setTimeout(() => setCopied(false), 1_500)
-    } catch {
-      setCopied(false)
-    }
-  }
 
   return (
     <div className="message-actions">
-      <button type="button" disabled={!text} aria-label={t('transcript.copyMessage', { action: t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy'), role: t(roleKey) })} onClick={() => void copyMessage()}>
+      <button type="button" disabled={!text} aria-label={t('transcript.copyMessage', { action: t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy'), role: t(roleKey) })} onClick={() => void copy(text)}>
         {copied ? <Check size={12} /> : <Copy size={12} />} {t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy')}
       </button>
     </div>
   )
 }
 
-const HARNESS_MARKS = { omp: OmpMark, prime: PrimeMark, pi: PiMark } satisfies Record<HarnessId, unknown>
-
-function AssistantHarnessMark({ harness, size = 24 }: { harness: HarnessId; size?: number }) {
-  const Mark = HARNESS_MARKS[harness]
-  return <Mark size={size} />
-}
-
 export const AssistantMessage = memo(
   function AssistantMessage({ message, harness = 'prime', showReasoning, showTools }: { message: TranscriptMessage; harness?: HarnessId; showReasoning: boolean; showTools: boolean }) {
-    const { t } = useI18n()
     const isActivity = (part: MessagePart) => part.type === 'thinking' || part.type === 'toolCall' || part.type === 'toolResult' || part.type === 'agentMessage' || part.type === 'compaction'
     const firstActivity = message.parts.findIndex(isActivity)
     let lastActivity = -1
@@ -175,7 +149,7 @@ export const AssistantMessage = memo(
     return (
       <article className="message message--assistant">
         <div className="assistant-mark">
-          <AssistantHarnessMark harness={harness} />
+          <HarnessMark harness={harness} />
         </div>
         <div className="message__content">
           {renderNarrative(before, 'before', message.streaming)}
@@ -185,11 +159,6 @@ export const AssistantMessage = memo(
             renderNarrative(hiddenMiddleNarrative, 'middle', message.streaming)
           )}
           {renderNarrativeWithActivity(after, 'after', showReasoning, showTools, message.streaming)}
-          {message.streaming && !hasVisibleActivity ? (
-            <div className="streaming-state" aria-live="polite">
-              <ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}
-            </div>
-          ) : null}
           {!message.streaming ? <MessageActions message={message} text={copyableText} /> : null}
         </div>
       </article>
@@ -206,40 +175,23 @@ function SessionReferenceText({ text, references, onOpen }: { text: string; refe
   return <>{lines.map((line, lineIndex) => {
     const parts: ReactNode[] = []
     let cursor = 0
-    while (cursor < line.length) {
-      let foundIndex = -1
-      let found: RoutedSessionReference | undefined
-      for (let index = cursor; index < line.length; index += 1) {
-        const before = line[index - 1]
-        found = ordered.find((reference) => {
-          const after = line[index + reference.label.length]
-          return (before === undefined || /[\s([{"'`]/.test(before))
-            && line.startsWith(reference.label, index)
-            && (after === undefined || /[\s.,!?;:()[\]{}"'`]/.test(after))
-        })
-        if (found) { foundIndex = index; break }
-      }
-      if (!found || foundIndex < 0) { parts.push(line.slice(cursor)); break }
-      if (foundIndex > cursor) parts.push(line.slice(cursor, foundIndex))
-      const reference = found
-      parts.push(<button
-        type="button"
-        key={`${reference.harness}:${reference.sessionId}:${foundIndex}`}
-        className="session-reference"
-        aria-label={t('transcript.openSession', { label: reference.label.slice(1) })}
-        onClick={() => onOpen?.(reference.sessionId, reference.harness)}
-      >{reference.label}</button>)
-      cursor = foundIndex + reference.label.length
+    for (const mention of scanAtMentions(line, ordered, (reference) => reference.label.slice(1), { caseSensitive: true })) {
+      if (mention.start > cursor) parts.push(line.slice(cursor, mention.start))
+      const reference = mention.candidate
+      parts.push(<button type="button" key={`${reference.harness}:${reference.sessionId}:${mention.start}`} className="session-reference" aria-label={t('transcript.openSession', { label: reference.label.slice(1) })} onClick={() => onOpen?.(reference.sessionId, reference.harness)}>{mention.text}</button>)
+      cursor = mention.end
     }
+    if (cursor < line.length) parts.push(line.slice(cursor))
     return <Fragment key={`${lineIndex}-${line.slice(0, 12)}`}>{parts}{lineIndex < lines.length - 1 ? <br /> : null}</Fragment>
   })}</>
 }
 
-function visibleUserText(text: string): string {
+function parseUserPrompt(text: string) {
   const terminal = splitTerminalContextBlock(text)
   const annotations = splitAnnotationBlock(terminal.text)
   const capability = splitCapabilityRouting(annotations.text)
-  return splitSessionRouting(capability.text).text
+  const sessions = splitSessionRouting(capability.text)
+  return { terminal, annotations, capability, sessions, references: routedSessionReferences(sessions.block) }
 }
 
 function UserText({ text, onOpenSessionReference }: { text: string; onOpenSessionReference?(sessionId: string, harness: HarnessId): void }) {
@@ -247,11 +199,7 @@ function UserText({ text, onOpenSessionReference }: { text: string; onOpenSessio
   // Sent prompts can carry verbose model-facing context blocks. Keep both
   // attachments collapsed and capability routing hidden while preserving the
   // user's own message.
-  const terminal = splitTerminalContextBlock(text)
-  const annotations = splitAnnotationBlock(terminal.text)
-  const capability = splitCapabilityRouting(annotations.text)
-  const sessions = splitSessionRouting(capability.text)
-  const references = routedSessionReferences(sessions.block)
+  const { terminal, annotations, capability, sessions, references } = useMemo(() => parseUserPrompt(text), [text])
   if (!sessions.block && !capability.block && !annotations.block && !terminal.block) return <InlineText text={text} />
   return (
     <>
@@ -274,7 +222,7 @@ function UserText({ text, onOpenSessionReference }: { text: string; onOpenSessio
 
 export const UserMessage = memo(function UserMessage({ message, onOpenSessionReference }: { message: TranscriptMessage; onOpenSessionReference?(sessionId: string, harness: HarnessId): void }) {
   const { t } = useI18n()
-  const copyableText = message.parts.filter((part) => part.type === 'text').map((part) => visibleUserText(part.text)).filter(Boolean).join('\n')
+  const copyableText = message.parts.filter((part) => part.type === 'text').map((part) => parseUserPrompt(part.text).sessions.text).filter(Boolean).join('\n')
   return (
     <article className="message message--user">
       <div className="user-bubble">
@@ -333,7 +281,7 @@ export const AgentMessage = memo(function AgentMessage({ message }: { message: T
   return (
     <article className={`message message--agent ${open ? 'is-open' : ''}`}>
       <button type="button" className="agent-message__summary" aria-expanded={open} aria-controls={contentId} aria-label={label} onClick={() => setOpen((value) => !value)}>
-        <PrimeMark size={18} />
+        <HarnessMark harness="prime" size={18} />
         <span className="agent-message__label">{t('transcript.agentMessage')}</span>
         {message.agentName ? <span className="agent-message__name">{message.agentName}</span> : null}
         {open ? <ChevronDown className="agent-message__chevron" size={13} /> : <ChevronRight className="agent-message__chevron" size={13} />}

@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ErrorBoundary } from '../../src/components/ErrorBoundary'
 import { Transcript } from '../../src/components/Transcript'
-import { saveComposerDraftFromDom, takeComposerDraft } from '../../src/lib/composer-draft'
+import { saveComposerDraftFromDom, readComposerDraft, clearComposerDraft } from '../../src/lib/composer-draft'
 import type { TranscriptMessage } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -62,8 +62,8 @@ describe('transcript per-message boundary', () => {
     await act(async () => {
       root.render(<Transcript
         messages={[{ id: 'user-pending-steer', role: 'user', steerState: 'accepted', timestamp: 1, parts: [{ type: 'text', text: 'redirect' }] }]}
-        git={{ isRepo: false, files: [] }}
-        onOpenChanges={vi.fn()}
+
+
         onSuggestion={vi.fn()}
       />)
     })
@@ -77,8 +77,8 @@ describe('transcript per-message boundary', () => {
     await act(async () => {
       root.render(<Transcript
         messages={[good, broken]}
-        git={{ isRepo: false, files: [] }}
-        onOpenChanges={vi.fn()}
+
+
         onSuggestion={vi.fn()}
       />)
     })
@@ -88,17 +88,20 @@ describe('transcript per-message boundary', () => {
 })
 
 describe('composer draft preservation', () => {
-  it('saves the composer DOM value on catch and restores it once', () => {
+  it('saves the composer DOM value only into its owned scope', () => {
     const composer = document.createElement('div')
     composer.className = 'composer'
+    composer.dataset.draftScope = 'project:session'
     const textarea = document.createElement('textarea')
     textarea.value = 'half-written prompt'
     composer.append(textarea)
     document.body.append(composer)
     try {
       saveComposerDraftFromDom()
-      expect(takeComposerDraft()).toBe('half-written prompt')
-      expect(takeComposerDraft()).toBe('')
+      expect(readComposerDraft('project:session')?.text).toBe('half-written prompt')
+      expect(readComposerDraft('project:other')).toBeNull()
+      clearComposerDraft('project:session')
+      expect(readComposerDraft('project:session')).toBeNull()
     } finally {
       composer.remove()
     }
@@ -107,6 +110,7 @@ describe('composer draft preservation', () => {
   it('seeds a remounted Composer with the preserved draft', async () => {
     const composer = document.createElement('div')
     composer.className = 'composer'
+    composer.dataset.draftScope = 'project:session'
     const source = document.createElement('textarea')
     source.value = 'draft before crash'
     composer.append(source)
@@ -117,6 +121,7 @@ describe('composer draft preservation', () => {
     const { Composer } = await import('../../src/components/Composer')
     await act(async () => {
       root.render(<Composer
+        draftKey="project:session"
         busy={false}
         model="auto"
         effort="medium"
@@ -137,6 +142,6 @@ describe('composer draft preservation', () => {
       />)
     })
     expect(container.querySelector('textarea')?.value).toBe('draft before crash')
-    expect(window.sessionStorage.length).toBe(0)
+    expect(readComposerDraft('project:session')?.text).toBe('draft before crash')
   })
 })

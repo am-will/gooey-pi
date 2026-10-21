@@ -1,3 +1,5 @@
+import type { PrimeEventReplayStats } from '../../src/lib/events/reduce'
+import { resetTranscriptIdsForTests } from '../../src/lib/events/ids'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PendingAgentEvent } from '../../src/app/agent-events'
 import { createScopedRequestGuard } from '../../src/app/scoped-request'
@@ -8,7 +10,7 @@ import {
   updateActivityCriteria,
   type ActivityViewState,
 } from '../../src/pages/ActivityPage'
-import { applyPrimeEvent, createPrimeEventBuffer, createSteerAcceptedEvent, createSteerPickupEvent, replayPrimeEvents, resetTranscriptIdsForTests, type PrimeEventReplayStats } from '../../src/lib/events'
+import { applyPrimeEvent, createPrimeEventBuffer, createSteerAcceptedEvent, createSteerPickupEvent, replayPrimeEvents } from '../../src/lib/events'
 import { reconcileTranscripts } from '../../src/app/transcript-reconcile'
 import { createSidebarActionProxy } from '../../src/hooks/useSidebarActions'
 import { mergeSessionCatalog } from '../../src/hooks/useBootstrap'
@@ -216,6 +218,36 @@ describe('batched Prime event reduction', () => {
     expect(result[5]).toMatchObject({ kind: 'steer-read-marker' })
     expect(result[6]?.streaming).toBe(true)
     expect(result[6]?.parts).toEqual([{ type: 'text', text: 'continued after both pickups', partId: expect.any(String) }])
+  })
+
+  it.each([false, true])('keeps tool execution in its owning segment across an accepted steer (delta first: %s)', (deltaFirst) => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const start = deltaFirst
+      ? { type: 'message_update', assistantMessageEvent: { type: 'toolcall_end', toolCall: { id: 't1', name: 'Read', arguments: { path: 'a' } } } }
+      : { type: 'tool_execution_start', toolCallId: 't1', toolName: 'Read', args: { path: 'a' } }
+    const events = [start, createSteerAcceptedEvent({ id: 'queued', text: 'redirect', intent: 'steer', timestamp: 2 }),
+      { type: 'tool_execution_start', toolCallId: 't1', toolName: 'Read' },
+      { type: 'tool_execution_update', toolCallId: 't1', toolName: 'Read', partialResult: 'partial' },
+      { type: 'tool_execution_end', toolCallId: 't1', toolName: 'Read', result: 'done' }]
+    resetTranscriptIdsForTests()
+    const batched = replayPrimeEvents(transcript(), events)
+    resetTranscriptIdsForTests()
+    const sequential = events.reduce((current, event) => applyPrimeEvent(current, event), transcript())
+    expect(batched).toEqual(sequential)
+    expect(batched.map(({ role }) => role)).toEqual(['assistant', 'user'])
+    expect(batched.flatMap(({ parts }) => parts).filter((part) => part.type === 'toolCall')).toHaveLength(1)
+    expect(batched[0]?.parts.at(-1)).toMatchObject({ type: 'toolResult', text: 'done' })
+  })
+
+  it('does not reuse a completed id-less tool from before a steer', () => {
+    const result = replayPrimeEvents(transcript(), [
+      { type: 'tool_execution_start', toolName: 'bash' }, { type: 'tool_execution_end', toolName: 'bash', result: 'one-done' },
+      createSteerAcceptedEvent({ id: 'queued', text: 'redirect', intent: 'steer', timestamp: 2 }),
+      { type: 'tool_execution_start', toolName: 'bash' }, { type: 'tool_execution_end', toolName: 'bash', result: 'two-done' },
+    ])
+    expect(result.map(({ role }) => role)).toEqual(['assistant', 'user', 'assistant'])
+    expect(result[0]?.parts.at(-1)).toMatchObject({ type: 'toolResult', text: 'one-done' })
+    expect(result[2]?.parts.at(-1)).toMatchObject({ type: 'toolResult', text: 'two-done' })
   })
 
   it('is equivalent to ordered single-event reduction across text, thinking, and tool merges', () => {

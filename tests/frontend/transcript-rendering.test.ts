@@ -12,16 +12,13 @@ vi.mock('../../src/components/ui', async () => {
   return { ...actual, PrimeMark: ({ size = 24 }: { size?: number }) => element('span', { className: 'prime-mark', style: { width: size, height: size } }) }
 })
 
-const git = { isRepo: false, files: [] }
 const noop = () => undefined
 
 function render(messages: TranscriptMessage[], active = false, showTools = true): string {
   return renderToStaticMarkup(createElement(Transcript, {
     messages,
-    git,
     active,
     showTools,
-    onOpenChanges: noop,
     onSuggestion: noop,
   }))
 }
@@ -181,11 +178,9 @@ describe('transcript rendering', () => {
         { id: 'user-queued-steer', role: 'user', steerState: 'accepted', timestamp: 2_000, parts: [{ type: 'text', text: 'Pick this up' }] },
         { id: 'active', role: 'assistant', timestamp: 2_001, streaming: true, parts: [] },
       ],
-      git,
-      harness,
+        harness,
       active: true,
-      onOpenChanges: noop,
-      onSuggestion: noop,
+        onSuggestion: noop,
     }))
 
     expect(html).toContain('Current response')
@@ -228,16 +223,15 @@ describe('transcript rendering', () => {
   })
 
 
-  it('renders one file changes card in the pinned transcript footer', () => {
+  it('reserves docked change clearance without mounting a second changes card', () => {
     const html = renderToStaticMarkup(createElement(Transcript, {
       messages: [{ id: 'assistant', role: 'assistant', parts: [{ type: 'text', text: 'Done' }] }],
-      git: { isRepo: true, files: [{ path: 'src/App.tsx', status: 'modified', additions: 2, deletions: 1, staged: false }] },
-      onOpenChanges: noop,
-      onSuggestion: noop,
+      bottomDockHasChanges: true,
+        onSuggestion: noop,
     }))
-    expect(html).toContain('transcript-changes-pin')
-    expect(html.match(/class="changes-card"/g)).toHaveLength(1)
-    expect(html).toContain('1 file changed')
+    expect(html).toContain('has-docked-changes')
+    expect(html).not.toContain('class="changes-card"')
+    expect(html).toContain('Done')
   })
 
   it('renders valid user images and keeps truncated history as a safe placeholder', () => {

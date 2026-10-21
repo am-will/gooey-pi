@@ -1,10 +1,8 @@
 /* Transcript */
 .transcript { position: absolute; inset: 0; overflow-y: auto; padding: 30px 0 max(170px, calc(var(--dock-h, 0px) + 26px)); }
-.transcript.has-pinned-changes { padding-bottom: max(245px, calc(var(--dock-h, 0px) + 26px)); }
 .transcript.has-docked-changes { padding-bottom: max(250px, calc(var(--dock-h, 0px) + 26px)); }
 .transcript.has-queued-messages { padding-bottom: max(325px, calc(var(--dock-h, 0px) + 26px)); }
 .transcript.has-docked-changes.has-queued-messages { padding-bottom: max(405px, calc(var(--dock-h, 0px) + 26px)); }
-.transcript-changes-pin { z-index: 9; bottom: 137px; }
 .conversation-pane .changes-card { margin: 0; box-shadow: 0 4px 18px color-mix(in srgb, #000 12%, transparent); }
 .transcript__inner { min-height: 100%; padding: 0 24px; }
 .transcript__show-earlier { min-height: 30px; display: block; margin: 16px auto 26px; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; color: var(--text-secondary); background: var(--surface-raised); font-size: 11px; }
@@ -31,7 +29,7 @@
 .user-annotations > summary::-webkit-details-marker { display: none; }
 .user-annotations > summary:hover { background: color-mix(in srgb, var(--annotation) 14%, transparent); }
 .user-annotations[open] > summary { margin-bottom: 5px; }
-.user-annotations > pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-secondary); font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.user-annotations > pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 10.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message--assistant { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; }
 .assistant-mark { padding-top: 1px; }
 .message__content { min-width: 0; font-size: 14px; line-height: 1.62; }

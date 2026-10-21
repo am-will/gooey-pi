@@ -160,6 +160,23 @@ describe('Composer session mentions', () => {
     expect(textarea.getAttribute('aria-expanded')).toBe('true')
   })
 
+  it.each(['hello world', 'hello world\nnext line'])('inserts a mention at the caret without deleting the suffix: %s', async (draft) => {
+    const sessions: SessionRecord[] = [{ id: 'session', harness: 'omp', filePath: '/session.jsonl', projectPath: '/project', title: 'Session Title', createdAt: '', updatedAt: '', status: 'idle', depth: 0 }]
+    renderComposer({ sessions })
+    await setDraft(draft)
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      textarea.setRangeText('@sess', 6, 6, 'end')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(textarea.getAttribute('aria-expanded')).toBe('true')
+    const option = [...container.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((node) => node.textContent?.includes('@Session Title'))
+    expect(option).toBeDefined()
+    await act(async () => option?.click())
+    expect(textarea.value).toBe(draft.replace('hello ', 'hello @Session Title '))
+    expect(textarea.selectionStart).toBe('hello @Session Title '.length)
+  })
+
   it('suggests sidebar sessions by title and sends a stable UUID routing block', async () => {
     const sessions: SessionRecord[] = [{
       id: '019f0000-0000-7000-8000-000000000002', harness: 'pi', filePath: '/sessions/api.jsonl', projectPath: '/project', title: 'API owner',
@@ -352,4 +369,19 @@ describe('Composer sendSignal', () => {
     })
     expect(onSend).not.toHaveBeenCalled()
   })
+})
+
+
+it('submits modified Enter as steer with a visible mention menu', async () => {
+  const sessions: SessionRecord[] = [{
+    id: 'child', harness: 'prime', filePath: '/sessions/child.jsonl', projectPath: '/project', title: 'Browser',
+    createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', status: 'idle', depth: 0,
+  }]
+  const onSend = vi.fn(async () => undefined)
+  renderComposer({ sessions, onSend })
+  await setDraft('@brow')
+  const textarea = container.querySelector('textarea')!
+  expect(textarea.getAttribute('aria-expanded')).toBe('true')
+  await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })) })
+  expect(onSend).toHaveBeenCalledWith('@brow', [], 'steer')
 })

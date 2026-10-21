@@ -1,18 +1,15 @@
 import { useMemo } from 'react'
 import { LoaderCircle } from 'lucide-react'
-import type { GitStatus, HarnessId, TranscriptMessage } from '@/types/api'
-import { ChangesCard } from './ChangesCard'
+import type { HarnessId, TranscriptMessage } from '@/types/api'
 import { ErrorBoundary } from './ErrorBoundary'
 import { MarkdownText } from './MarkdownText'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { useI18n } from '@/lib/i18n'
-import { OmpMark, PiMark, PrimeMark } from './ui'
+import { HarnessMark } from './HarnessMark'
 import { ActivityMessage, AgentMessage, AssistantMessage, GoalMessage, SteerReadMarker, UserMessage } from './transcript/messages'
 import { useTranscriptScroll } from './transcript/scroll'
 import { LiveElapsed, ThinkingDots, WorkDisclosure } from './transcript/timeline'
 
-export { classifyTool, formatWorkedDuration } from './transcript/timeline'
-export { tokenizeSyntax } from './transcript/syntax'
 
 export function coalesceAssistantTurns(messages: TranscriptMessage[]): TranscriptMessage[] {
   let changed = false
@@ -37,18 +34,14 @@ export function coalesceAssistantTurns(messages: TranscriptMessage[]): Transcrip
 
 interface TranscriptProps {
   messages: TranscriptMessage[]
-  git: GitStatus
   /** Active harness; brands the assistant marks and working copy. */
   harness?: HarnessId
   loading?: boolean
   active?: boolean
   showReasoning?: boolean
   showTools?: boolean
-  onOpenChanges(): void
   onSuggestion(prompt: string): void
   suggestionsDisabled?: boolean
-  /** Render the pinned changes card here; the app docks it beside the composer when false. */
-  showPinnedChanges?: boolean
   /** Reserve room for bottom-docked changes and queued-message affordances. */
   bottomDockHasChanges?: boolean
   queuedMessageCount?: number
@@ -56,23 +49,17 @@ interface TranscriptProps {
 }
 
 
-const ASSISTANT_MARKS = { omp: OmpMark, prime: PrimeMark, pi: PiMark } satisfies Record<HarnessId, unknown>
-function AssistantMark({ harness, size = 24 }: { harness: HarnessId; size?: number }) {
-  const Mark = ASSISTANT_MARKS[harness]
-  return <Mark size={size} />
-}
-
 function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: { message: TranscriptMessage; harness: HarnessId; showReasoning: boolean; showTools: boolean }) {
   const { t } = useI18n()
   const visibleActivity = message.parts.some((part) => part.type === 'thinking' && showReasoning || (part.type === 'toolCall' || part.type === 'toolResult') && showTools || part.type === 'agentMessage')
   return (
     <article className="message message--assistant">
-      <div className="assistant-mark"><AssistantMark harness={harness} /></div>
+      <div className="assistant-mark"><HarnessMark harness={harness} /></div>
       <div className="message__content">
         {visibleActivity
           ? <WorkDisclosure message={message} parts={message.parts} showReasoning={showReasoning} showTools={showTools} running />
           : <>
-            {message.parts.map((part, index) => part.type === 'text' ? <MarkdownText key={index} text={part.text} /> : null)}
+            {message.parts.map((part, index) => part.type === 'text' ? <MarkdownText key={index} text={part.text} streaming={Boolean(message.streaming)} /> : null)}
             <div className="streaming-state" aria-live="polite"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })} <LiveElapsed since={message.startedAt ?? message.timestamp} /></div>
           </>}
       </div>
@@ -82,7 +69,7 @@ function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: 
 
 
 
-export function Transcript({ messages, git, harness = 'prime', loading, active = false, showReasoning = true, showTools = true, onOpenChanges, onSuggestion, suggestionsDisabled, showPinnedChanges = true, bottomDockHasChanges = false, queuedMessageCount = 0, onOpenSessionReference }: TranscriptProps) {
+export function Transcript({ messages, harness = 'prime', loading, active = false, showReasoning = true, showTools = true, onSuggestion, suggestionsDisabled, bottomDockHasChanges = false, queuedMessageCount = 0, onOpenSessionReference }: TranscriptProps) {
   const { t } = useI18n()
   const groupedMessages = useMemo(() => coalesceAssistantTurns(messages), [messages])
   const { announcement, hiddenCount, scrollRef, showEarlier, updatePinnedState, visibleMessages } = useTranscriptScroll(groupedMessages, HARNESS_SHORT_NAMES[harness])
@@ -90,7 +77,6 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
   const transcriptClasses = [
     'transcript',
     'scroll-area',
-    showPinnedChanges && git.files.length ? 'has-pinned-changes' : '',
     bottomDockHasChanges ? 'has-docked-changes' : '',
     queuedMessageCount > 0 ? 'has-queued-messages' : '',
   ].filter(Boolean).join(' ')
@@ -101,7 +87,7 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
       <div className="transcript__inner">
         {loading ? <div className="transcript-loading"><LoaderCircle className="spin" size={16} /> {t('transcript.loadingSession')}</div> : null}
         {!loading && messages.length === 0 ? <div className="session-welcome">
-          <AssistantMark harness={harness} size={34} />
+          <HarnessMark harness={harness} size={34} />
           <h1>{t('transcript.welcome.title')}</h1>
           <p>{t('transcript.welcome.description', { harness: HARNESS_SHORT_NAMES[harness] })}</p>
           <div className="prompt-suggestions">
@@ -123,11 +109,10 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
             : <div className={`message message--${message.role}`}>{message.parts.map((part, partIndex) => part.type === 'text' ? <span key={partIndex}>{part.text}</span> : null)}</div>}
         </ErrorBoundary>)}
         {active && !activeAssistantId ? <article className="message message--assistant transcript-active-placeholder" aria-live="polite">
-          <div className="assistant-mark"><AssistantMark harness={harness} /></div><div className="streaming-state"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}</div>
+          <div className="assistant-mark"><HarnessMark harness={harness} /></div><div className="streaming-state"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}</div>
         </article> : null}
         <div />
       </div>
     </div>
-    {showPinnedChanges && git.files.length ? <div className="transcript-changes-pin"><ChangesCard git={git} onOpenChanges={onOpenChanges} /></div> : null}
   </>
 }

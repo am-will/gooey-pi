@@ -54,6 +54,17 @@ describe('timeline part identity', () => {
     expect(writeText).toHaveBeenCalledWith('Primary final report.')
   })
 
+  it('defers full argument serialization until a tool is expanded', () => {
+    const toJSON = vi.fn(() => ({ payload: 'large input' }))
+    const message: TranscriptMessage = { id: 'lazy-tool', role: 'assistant', parts: [{ type: 'toolCall', id: 'tool', name: 'Custom', args: { toJSON } }, { type: 'toolResult', text: 'output' }] }
+    renderTimeline(message)
+    renderTimeline({ ...message, parts: [...message.parts, { type: 'text', text: 'streaming elsewhere' }] })
+    expect(toJSON).not.toHaveBeenCalled()
+    act(() => container.querySelector<HTMLButtonElement>('.activity-tool__summary')?.click())
+    expect(toJSON).toHaveBeenCalledOnce()
+    expect(container.querySelector('.activity-tool__contents')?.textContent).toContain('large input')
+  })
+
   it('only shows the tool copy action after expanding and copies its contents', async () => {
     const writeText = vi.fn(async () => undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
