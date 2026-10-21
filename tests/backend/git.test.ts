@@ -30,6 +30,17 @@ const untrackedNestedRepository = (cwd: string, name: string) => {
 }
 
 describe('GitService', () => {
+  it('keeps large changed-path sets readable beyond the attribute config-size budget', async () => {
+    const cwd = repository('gooeypi-git-large-attributes-')
+    const directory = join(cwd, 'a'.repeat(120), 'b'.repeat(120)); mkdirSync(directory, { recursive: true })
+    for (let index = 0; index < 1_500; index++) writeFileSync(join(directory, `${'c'.repeat(115)}-${index}.txt`), 'new')
+    const status = await new GitService(async (path) => realpathSync(path)).status(cwd)
+    expect(status.error).toBeUndefined()
+    expect(status.files).toHaveLength(GIT_STATUS_ENTRY_LIMIT)
+    expect(status.truncated).toBe(true)
+    expect(status.root).toBe(realpathSync(cwd))
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')

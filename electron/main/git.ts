@@ -10,6 +10,7 @@ import { errorMessage, requireGitPath, requireString, stripAnsi } from './valida
 export const GIT_DIFF_LINE_LIMIT = 5_000
 const GIT_STATUS_OUTPUT_LIMIT = 4 * 1024 * 1024
 const GIT_CONFIG_OUTPUT_LIMIT = 512 * 1024
+const CHECK_ATTR_RECORD_OVERHEAD = Buffer.byteLength('\0filter\0unspecified\0')
 const GIT_DIFF_OUTPUT_LIMIT = 2 * 1024 * 1024
 const GIT_ERROR_LIMIT = 2_000
 const GIT_IDENTITY_VALUE_LIMIT = 320
@@ -224,10 +225,11 @@ async function rejectFilteredPaths(cwd: string, paths: readonly string[], overri
   // Feed the paths to one bounded process. Status output and direct mutation inputs
   // are capped, so this inspects every path without an attacker causing an
   // unbounded sequence of check-attr subprocesses.
+  const input = `${paths.join('\0')}\0`
   const result = await runGit(cwd, ['check-attr', '-z', '--stdin', 'filter'], {
     timeoutMs: 10_000,
-    maxBytes: GIT_CONFIG_OUTPUT_LIMIT,
-    input: `${paths.join('\0')}\0`,
+    maxBytes: Buffer.byteLength(input) + paths.length * CHECK_ATTR_RECORD_OVERHEAD + GIT_CONFIG_OUTPUT_LIMIT,
+    input,
   }, overrides)
   requireProcessSuccess('Git filter attribute inspection', result)
   const affected: string[] = []
@@ -372,7 +374,7 @@ export type GitBranchChangeResult =
   | Extract<GitWorktreeCleanliness, { kind: 'dirty' }>
 
 async function inspectGitWorktreeCleanAtRoot(repositoryRoot: string, overrides: readonly string[]): Promise<GitWorktreeCleanliness> {
-  const result = await runGit(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
+  const result = await runGit(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all', '-z'], {
     timeoutMs: 10_000,
     maxBytes: GIT_STATUS_OUTPUT_LIMIT,
   }, overrides)
@@ -475,7 +477,7 @@ export class GitService {
       ])
       requireProcessSuccess('Git unstaged statistics', unstagedResult)
       requireProcessSuccess('Git staged statistics', stagedResult)
-      return parseStatus(statusResult.stdout, parseNumstat(stagedResult.stdout), parseNumstat(unstagedResult.stdout))
+      return { ...parseStatus(statusResult.stdout, parseNumstat(stagedResult.stdout), parseNumstat(unstagedResult.stdout)), root: cwd }
     } catch (error) {
       const message = errorMessage(error).slice(0, GIT_ERROR_LIMIT)
       // Only a genuine "not a repository" detection may claim there is no repo.
