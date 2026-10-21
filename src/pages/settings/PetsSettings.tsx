@@ -1,3 +1,4 @@
+import { clearPetSpriteCache } from '@/lib/pet-sprite-cache'
 import { selectPet } from '@/lib/pets'
 import { PawPrint, RefreshCw, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
@@ -18,6 +19,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
   const [loadError, setLoadError] = useState<MessageKey | null>(null)
   const refresh = useCallback(async () => {
     if (!pets) return
+    clearPetSpriteCache(pets)
     setLoading(true)
     setLoadError(null)
     try {
