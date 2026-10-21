@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { Transcript } from '../../src/components/Transcript'
-import { LiveElapsed } from '../../src/components/transcript/timeline'
+import { LiveElapsed, WorkTimeline } from '../../src/components/transcript/timeline'
 import { replayPrimeEvents } from '../../src/lib/events/reduce'
 import type { TranscriptMessage } from '../../src/types/api'
 
@@ -24,6 +24,22 @@ function render(messages: TranscriptMessage[], active = false, showTools = true)
 }
 
 describe('transcript rendering', () => {
+  it.each([false, true])('keeps grouped question prompts in the activity summary when completed=%s', (completed) => {
+    const events = [
+      { type: 'tool_execution_start', toolCallId: 'ask-2', toolName: 'ask_user', args: { questions: [
+        { question: 'Which release channel?', options: ['Stable', 'Beta'] },
+        { question: 'What should I optimize for?', options: ['Speed', 'Safety'] },
+      ] } },
+      ...(completed ? [{ type: 'tool_execution_end', toolCallId: 'ask-2', toolName: 'ask_user', result: { values: { answer: 'Safety' } } }] : []),
+    ]
+    const messages = replayPrimeEvents([], events)
+    const html = renderToStaticMarkup(createElement(WorkTimeline, { parts: messages.flatMap((message) => message.parts), showReasoning: true, showTools: true }))
+    expect(html).toContain('activity-line--question')
+    expect(html).toContain('Which release channel?')
+    expect(html).toContain('What should I optimize for?')
+    expect(html).not.toContain('activity-tool__contents')
+  })
+
   it('streams reasoning inside a distinct process rail with animated thinking dots', () => {
     const html = render([{
       id: 'active',
