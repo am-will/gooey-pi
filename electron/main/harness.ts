@@ -1,5 +1,6 @@
 import { join, win32 } from 'node:path'
 
+import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '../../src/lib/harness'
 import type { HarnessId } from '../../src/types/api'
 
 /**
@@ -23,13 +24,15 @@ export interface HarnessDescriptor {
   windowsNpmShim?: { shim: string; entrypoint: readonly string[] }
   agentDir: (home: string) => string
   sessionRoot: (home: string) => string
+  /** Project-relative directory (as path segments) that holds the harness's project agent state. */
+  projectAgentSegments: readonly string[]
 }
 
 export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
   prime: {
     id: 'prime',
-    productName: 'Prime Work',
-    agentName: 'Prime Agent',
+    productName: HARNESS_PRODUCT_NAMES.prime,
+    agentName: HARNESS_AGENT_NAMES.prime,
     executableName: (platform) => platform === 'win32' ? 'prime-agent.exe' : 'prime-agent',
     binaryEnvVar: 'PRIME_AGENT_BINARY',
     bundledResourceDirs: [['agent'], ['agent', 'bin']],
@@ -41,11 +44,12 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     windowsNpmShim: { shim: 'prime-agent.cmd', entrypoint: ['prime-agent', 'dist', 'bundle', 'cli.js'] },
     agentDir: (home) => join(home, '.prime', 'agent'),
     sessionRoot: (home) => join(home, '.prime', 'agent', 'sessions'),
+    projectAgentSegments: ['.prime', 'agent'],
   },
   omp: {
     id: 'omp',
-    productName: 'OMP Work',
-    agentName: 'OMP',
+    productName: HARNESS_PRODUCT_NAMES.omp,
+    agentName: HARNESS_AGENT_NAMES.omp,
     executableName: (platform) => platform === 'win32' ? 'omp.exe' : 'omp',
     binaryEnvVar: 'OMP_BINARY',
     bundledResourceDirs: [],
@@ -55,11 +59,12 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     },
     agentDir: (home) => join(home, '.omp', 'agent'),
     sessionRoot: (home) => join(home, '.omp', 'agent', 'sessions'),
+    projectAgentSegments: ['.omp'],
   },
   pi: {
     id: 'pi',
-    productName: 'Pi Work',
-    agentName: 'Pi',
+    productName: HARNESS_PRODUCT_NAMES.pi,
+    agentName: HARNESS_AGENT_NAMES.pi,
     executableName: (platform) => platform === 'win32' ? 'pi.exe' : 'pi',
     binaryEnvVar: 'PI_BINARY',
     bundledResourceDirs: [],
@@ -69,5 +74,6 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     windowsNpmShim: { shim: 'pi.cmd', entrypoint: ['@earendil-works', 'pi-coding-agent', 'dist', 'cli.js'] },
     agentDir: (home) => join(home, '.pi', 'agent'),
     sessionRoot: (home) => join(home, '.pi', 'agent', 'sessions'),
+    projectAgentSegments: ['.pi'],
   },
 }

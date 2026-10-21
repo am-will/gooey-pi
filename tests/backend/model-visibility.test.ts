@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { withModelVisibility } from '../../electron/main/model-visibility'
-import type { PrimeModelCatalog } from '../../src/types/api'
+import { HARNESS_VISIBILITY_KEYS, harnessVisibility, withModelVisibility } from '../../electron/main/model-visibility'
+import { defaultSettings } from '../../electron/main/store'
+import { type AppSettings, HARNESS_IDS, type PrimeModelCatalog } from '../../src/types/api'
 
 const catalog: PrimeModelCatalog = {
   primeVersion: 'test',
@@ -27,5 +28,47 @@ describe('withModelVisibility', () => {
     const empty = withModelVisibility(catalog, new Set(), new Set(['openai/alpha', 'openai/beta']))
     expect(empty.providers[0].enabled).toBe(false)
     expect(empty.models.map((model) => model.enabled)).toEqual([false, false])
+  })
+})
+
+describe('harnessVisibility', () => {
+  const settings: AppSettings = {
+    ...defaultSettings(),
+    disabledProviders: ['prime-provider'],
+    disabledModels: ['prime-provider/model'],
+    ompDisabledProviders: ['omp-provider'],
+    ompDisabledModels: ['omp-provider/model'],
+    piDisabledProviders: ['pi-provider'],
+    piDisabledModels: ['pi-provider/model'],
+  }
+
+  it('maps every harness to its own settings keys', () => {
+    expect(Object.keys(HARNESS_VISIBILITY_KEYS).sort()).toEqual([...HARNESS_IDS].sort())
+    expect(HARNESS_VISIBILITY_KEYS).toEqual({
+      prime: { providers: 'disabledProviders', models: 'disabledModels' },
+      omp: { providers: 'ompDisabledProviders', models: 'ompDisabledModels' },
+      pi: { providers: 'piDisabledProviders', models: 'piDisabledModels' },
+    })
+  })
+
+  it.each(HARNESS_IDS)('reads only the %s disabled provider and model lists', (harness) => {
+    const visibility = harnessVisibility(settings, harness)
+    expect([...visibility.disabledProviders]).toEqual([`${harness}-provider`])
+    expect([...visibility.disabledModels]).toEqual([`${harness}-provider/model`])
+  })
+
+  it('returns fresh sets that do not alias the settings arrays', () => {
+    const visibility = harnessVisibility(settings, 'omp')
+    visibility.disabledProviders.add('extra')
+    expect(settings.ompDisabledProviders).toEqual(['omp-provider'])
+    expect(harnessVisibility(settings, 'omp').disabledProviders.has('extra')).toBe(false)
+  })
+
+  it('feeds withModelVisibility for the selected harness only', () => {
+    const hidden = { ...settings, piDisabledModels: ['openai/beta'] }
+    const pi = harnessVisibility(hidden, 'pi')
+    expect(withModelVisibility(catalog, pi.disabledProviders, pi.disabledModels).models.map((model) => model.enabled)).toEqual([true, false])
+    const prime = harnessVisibility(hidden, 'prime')
+    expect(withModelVisibility(catalog, prime.disabledProviders, prime.disabledModels).models.map((model) => model.enabled)).toEqual([true, true])
   })
 })

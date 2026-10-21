@@ -1,4 +1,22 @@
-import type { PrimeModelCatalog } from '../../src/types/api'
+import type { AppSettings, HarnessId, PrimeModelCatalog } from '../../src/types/api'
+
+/** The per-harness settings keys holding GooeyPi's disabled provider ids and model keys. */
+export const HARNESS_VISIBILITY_KEYS = {
+  prime: { providers: 'disabledProviders', models: 'disabledModels' },
+  omp: { providers: 'ompDisabledProviders', models: 'ompDisabledModels' },
+  pi: { providers: 'piDisabledProviders', models: 'piDisabledModels' },
+} as const satisfies Record<HarnessId, { providers: keyof AppSettings; models: keyof AppSettings }>
+
+export type HarnessVisibilityKey = (typeof HARNESS_VISIBILITY_KEYS)[HarnessId][keyof (typeof HARNESS_VISIBILITY_KEYS)[HarnessId]]
+
+/** Fresh copies of one harness's disabled provider/model lists, ready for withModelVisibility or a catalog call. */
+export function harnessVisibility(
+  settings: Pick<AppSettings, HarnessVisibilityKey>,
+  harness: HarnessId,
+): { disabledProviders: Set<string>; disabledModels: Set<string> } {
+  const keys = HARNESS_VISIBILITY_KEYS[harness]
+  return { disabledProviders: new Set(settings[keys.providers]), disabledModels: new Set(settings[keys.models]) }
+}
 
 /** Applies GooeyPi's synchronized provider/model visibility policy to a raw harness catalog. */
 export function withModelVisibility(

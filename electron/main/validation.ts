@@ -1,11 +1,21 @@
 import { isIPv6 } from 'node:net'
 import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export type JsonObject = Record<string, unknown>
 
 export function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Type guard over a readonly `as const` array, so enum checks need neither hand-written literals nor casts. */
+export function isOneOf<T extends readonly unknown[]>(values: T, value: unknown): value is T[number] {
+  return (values as readonly unknown[]).includes(value)
+}
+
+/** Lenient load-time check: a string of at most `max` characters that, unless `allowEmpty`, is not blank. */
+export function isBoundedString(value: unknown, max: number, allowEmpty = false): value is string {
+  return typeof value === 'string' && value.length <= max && (allowEmpty || value.trim().length > 0)
 }
 
 export function requireRecord(value: unknown, label = 'value'): JsonObject {
@@ -40,6 +50,24 @@ export function requireInteger(value: unknown, label: string, min: number, max: 
   return value as number
 }
 
+// Shared provider/model identifier grammar. No `g` flag: `.test()` on a shared regex must stay stateless.
+export const PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/i
+export const MODEL_ID = /^[a-z0-9._:/+-]{1,256}$/i
+/** `provider/model-id`; at most 128 + 1 + 256 = 385 characters. */
+export const MODEL_KEY = /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i
+
+export function isProviderId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && PROVIDER_ID.test(value)
+}
+
+export function isModelId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 && MODEL_ID.test(value)
+}
+
+export function isModelKey(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 385 && MODEL_KEY.test(value)
+}
+
 export function rejectUnknownKeys(value: JsonObject, allowed: readonly string[], label = 'value'): void {
   const allowedSet = new Set(allowed)
   const unknown = Object.keys(value).find((key) => !allowedSet.has(key))
@@ -48,22 +76,26 @@ export function rejectUnknownKeys(value: JsonObject, allowed: readonly string[],
 
 export function isPathWithin(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate))
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  // Compare the first segment, not a prefix: a child named `..cache` is inside the root.
+  return rel === '' || !(rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+}
+
+/** A bounded, NUL-free absolute path string. Lexical only: it neither resolves symlinks nor requires the path to exist. */
+export function requireAbsolutePath(value: unknown, label = 'path'): string {
+  const input = requireString(value, label, { min: 1, max: 4096 })
+  if (!isAbsolute(input)) throw new TypeError(`${label} must be absolute`)
+  return input
 }
 
 export async function requireExistingDirectory(value: unknown, label = 'path'): Promise<string> {
-  const input = requireString(value, label, { min: 1, max: 4096 })
-  if (!isAbsolute(input)) throw new TypeError(`${label} must be absolute`)
-  const path = await realpath(input)
+  const path = await realpath(requireAbsolutePath(value, label))
   const stat = await lstat(path)
   if (!stat.isDirectory()) throw new TypeError(`${label} must be a directory`)
   return path
 }
 
 export async function requireExistingPath(value: unknown, label = 'path'): Promise<string> {
-  const input = requireString(value, label, { min: 1, max: 4096 })
-  if (!isAbsolute(input)) throw new TypeError(`${label} must be absolute`)
-  return realpath(input)
+  return realpath(requireAbsolutePath(value, label))
 }
 
 export function requireWebUrl(value: unknown, options: { mailto?: boolean; max?: number } = {}): string {
@@ -123,11 +155,44 @@ export function requireGitPath(value: unknown, label = 'path'): string {
   return input
 }
 
+/**
+ * Runs attempts in order and returns the first success. If every attempt fails, rethrows the FIRST
+ * attempt's error, so callers keep the primary domain's rejection shape and text. Each attempt is
+ * invoked inside the try, so a synchronous throw counts as a rejection too.
+ */
+export async function firstAccepted<T>(attempts: ReadonlyArray<() => T | Promise<T>>): Promise<T> {
+  if (attempts.length === 0) throw new Error('firstAccepted requires at least one attempt')
+  let first: { error: unknown } | undefined
+  for (const attempt of attempts) {
+    try {
+      return await attempt()
+    } catch (error) {
+      first ??= { error }
+    }
+  }
+  throw first!.error
+}
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** The errno-style string `code` of a thrown value (e.g. 'ENOENT'), or '' when there is none; safe for non-object throws. */
+export function errorCode(error: unknown): string {
+  return isRecord(error) && typeof error.code === 'string' ? error.code : ''
+}
+
+/** A single-line, length-capped error message for logs and dialogs; `fallback` replaces an empty message. */
+export function boundedErrorMessage(error: unknown, maxLength = 512, fallback = 'Unknown error'): string {
+  return errorMessage(error).replace(/[\r\n\t]+/g, ' ').slice(0, maxLength) || fallback
+}
+
+/**
+ * Removes OSC strings (`ESC ] ... BEL` or `ESC ] ... ESC \`, e.g. hyperlinks and titles), CSI sequences
+ * and two-byte escapes. Branch order matters: OSC and CSI must be tried before the two-byte form,
+ * whose `[@-_]` range also matches `]` and `[` and would otherwise leave the payload behind.
+ */
 export function stripAnsi(input: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the ANSI escape introducer is a control character by definition
-  return input.replace(/\u001B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+  return input.replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g, '')
 }
