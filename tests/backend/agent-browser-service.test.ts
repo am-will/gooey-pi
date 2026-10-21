@@ -40,7 +40,7 @@ class FakeGuest extends EventEmitter {
     },
   }
   scriptResult: (code: string) => unknown = (code) => {
-    if (code.includes('readyState')) {
+    if (code.includes('innerWidth')) {
       return JSON.stringify({ url: this.url, title: this.title, innerWidth: 640, innerHeight: 480, scrollY: 0, scrollHeight: 900, readyState: 'complete' })
     }
     return JSON.stringify({})
@@ -150,6 +150,25 @@ describe('AgentBrowserService', () => {
     }
     await expect(service.pressKey('/sessions/a.jsonl', { tabId, key: 'Enter', modifiers: ['constructor'] })).rejects.toThrow(/modifiers may/)
     expect(guest.inputEvents).toEqual([])
+  })
+
+  it('validates coordinate actions against the current viewport', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    for (const params of [{ x: 640, y: 10 }, { x: 1, y: 480 }, { x: Infinity, y: 1 }]) {
+      await expect(service.click('/sessions/a.jsonl', { tabId, ...params })).rejects.toThrow(/viewport|coordinates/)
+    }
+    await expect(service.scroll('/sessions/a.jsonl', { tabId, direction: 'down', x: 900, y: 10 })).rejects.toThrow(/viewport/)
+    expect(guest.inputEvents).toEqual([])
+  })
+
+  it('rounds finite element centers before validating the viewport', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    const original = guest.scriptResult
+    guest.scriptResult = (code) => code.includes('__primeWorkAgentRefs') ? JSON.stringify({ x: 12.2, y: 34.4 }) : original(code)
+    await service.click('/sessions/a.jsonl', { tabId, ref: 0 })
+    expect(guest.inputEvents.find((event) => event.type === 'mousePressed')).toMatchObject({ x: 12, y: 34 })
   })
 
   it('bounds oversized script responses before parsing them', async () => {
