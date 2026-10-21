@@ -9,6 +9,7 @@ import type { GitWorktree, HarnessId, ProjectFileListing, ProjectRecord, Project
 import { listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
+import { aggregateSessionProjectStats, persistedProjectRecord } from './projects/records'
 import { listProjectFiles } from './project-files'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
 import { isPathWithin, rejectUnknownKeys, requireAbsolutePath, requireBoolean, requireExistingDirectory, requireExistingPath, requireId, requireInteger, requireRecord, requireString } from './validation'
@@ -62,35 +63,6 @@ interface AuthorizationContext {
   canonicalSessionPaths: Map<string, string>
   persisted: PersistedAuthorizationContext[]
   discoveredSessionRoots: Array<{ canonical: string; identity: FolderIdentity }>
-}
-
-interface SessionProjectStats {
-  count: number
-  earliestCreatedAt: string
-  latestUpdatedAt: string
-}
-
-function aggregateSessionProjectStats(
-  sessions: readonly SessionRecord[],
-  canonicalSessionPaths: ReadonlyMap<string, string>,
-): Map<string, SessionProjectStats> {
-  const stats = new Map<string, SessionProjectStats>()
-  for (const session of sessions) {
-    const projectPath = canonicalSessionPaths.get(session.projectPath)!
-    const current = stats.get(projectPath)
-    if (!current) {
-      stats.set(projectPath, {
-        count: 1,
-        earliestCreatedAt: session.createdAt,
-        latestUpdatedAt: session.updatedAt,
-      })
-      continue
-    }
-    current.count += 1
-    if (session.createdAt < current.earliestCreatedAt) current.earliestCreatedAt = session.createdAt
-    if (session.updatedAt > current.latestUpdatedAt) current.latestUpdatedAt = session.updatedAt
-  }
-  return stats
 }
 
 export interface FolderIdentityFilesystem {
@@ -479,12 +451,7 @@ export class ProjectService {
       if (nestedWorktreePaths.has(resolve(project.path))) continue
       let sessionCount = 0
       for (const folder of folders) sessionCount += sessionStats.get(folder)?.count ?? 0
-      const record: ProjectRecord = {
-        id: project.id, harness: project.harness, name: project.name, path: project.path, folders: project.folders, primaryFolder: project.primaryFolder,
-        pinned: project.pinned, createdAt: project.createdAt, lastOpenedAt: project.lastOpenedAt, scripts: project.scripts ? { ...project.scripts } : undefined,
-        sessionCount,
-        gitBranch: undefined,
-      }
+      const record = persistedProjectRecord(project, sessionCount)
       records.push(record)
       if (primaryGranted) branchTargets.push({ record, cwd: project.primaryFolder })
     }
@@ -601,7 +568,9 @@ export class ProjectService {
     this.authorizationRevision += 1
     this.authorizedRoots.set(path, identity)
     const sessions = knownSessions ?? await this.sessionProvider()
-    return { ...project, sessionCount: sessions.filter((session) => resolve(session.projectPath) === path).length, gitBranch: await this.branchProvider(path) }
+    const canonical = await this.canonicalizeSessionPaths(sessions)
+    const folders = new Set(project.folders.map((folder) => resolve(folder)))
+    return persistedProjectRecord(project, sessions.filter((session) => folders.has(canonical.get(session.projectPath)!)).length, await this.branchProvider(path))
   }
 
   private async persistWorktree(parentCwd: string, path: string, identity: FolderIdentity, expectedParentId: string): Promise<ProjectRecord> {
@@ -650,11 +619,8 @@ export class ProjectService {
     this.authorizedRoots.set(path, identity)
     const sessions = await this.sessionProvider()
     const granted = new Set(project.folders.map((folder) => resolve(folder)))
-    return {
-      ...project,
-      sessionCount: sessions.filter((session) => granted.has(resolve(session.projectPath))).length,
-      gitBranch: await this.branchProvider(project.primaryFolder),
-    }
+    const canonical = await this.canonicalizeSessionPaths(sessions)
+    return persistedProjectRecord(project, sessions.filter((session) => granted.has(canonical.get(session.projectPath)!)).length, await this.branchProvider(project.primaryFolder))
   }
 
   async add(): Promise<ProjectRecord | null> {

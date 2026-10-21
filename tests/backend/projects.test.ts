@@ -66,7 +66,8 @@ function deferred<T>() {
 
 describe('ProjectService list enrichment', () => {
   it('skips discovery on an explicit cached authorization miss', async () => {
-    const { root, service } = setup()
+    const { root, service, store } = setup()
+    await store.ready()
     const sessions = vi.fn(async () => [])
     service.bindProviders({ sessions, branch: async () => undefined })
     await expect(service.authorizeReadOnlyCwd(root, { refreshOnMiss: false })).rejects.toThrow(/not inside/)
@@ -74,7 +75,8 @@ describe('ProjectService list enrichment', () => {
   })
 
   it('rejects coerced and relative inferred grants and file roots at the boundary', async () => {
-    const { service } = setup()
+    const { service, store } = setup()
+    await store.ready()
     for (const input of [{ toString: () => '/tmp' }, 123, 'relative']) {
       await expect(service.grantInferred(input)).rejects.toThrow()
       await expect(service.listFiles(input)).rejects.toThrow()
@@ -1111,6 +1113,7 @@ describe('ProjectService worktrees', () => {
     const transition = await checkouts.execute('project', { strategy: 'worktree', operation: 'open', path: realpathSync(linked) })
     if (transition.kind !== 'applied') throw new Error(`Expected applied transition, received ${transition.kind}`)
     const opened = transition.project
+    expect(opened).not.toHaveProperty('folderIdentities')
     expect(opened.id).toBe('project')
     expect(opened.path).toBe(root)
     expect(opened.primaryFolder).toBe(realpathSync(linked))
