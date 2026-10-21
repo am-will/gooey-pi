@@ -1,7 +1,7 @@
 import { accessSync, constants as fsConstants, readdirSync, realpathSync, statSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import { delimiter, posix, win32 } from 'node:path'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions, type SpawnOptionsWithoutStdio } from 'node:child_process'
 import { homedir } from 'node:os'
 import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 export { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
@@ -54,12 +54,19 @@ const processAdmission = createAdmissionQueue({
   pendingLimitError: () => new Error(`Process queue limit of ${PROCESS_QUEUE_LIMIT} exceeded`),
   closedError: () => new Error('Process admission is closed during shutdown'),
 })
-let processAdmissionClosed = false
-
 export function beginProcessShutdown(): void {
-  if (processAdmissionClosed) return
-  processAdmissionClosed = true
   processAdmission.close()
+}
+
+/** Registers long-lived probes with shutdown cleanup without consuming one-shot slots. */
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptionsWithoutStdio & { stdio?: 'pipe' | ['pipe', 'pipe', 'pipe'] }): ChildProcessWithoutNullStreams
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptions): ChildProcess
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptions): ChildProcess {
+  if (processAdmission.isClosed) throw new Error('Process admission is closed during shutdown')
+  const child = spawn(file, args, options)
+  activeChildren.add(child)
+  child.once('close', () => activeChildren.delete(child))
+  return child
 }
 
 export interface KillLadderRung {
@@ -551,7 +558,6 @@ export function runProcess(file: string, args: readonly string[], options: {
   env?: NodeJS.ProcessEnv
   input?: string
 } = {}): Promise<ProcessResult> {
-  if (processAdmissionClosed) return Promise.reject(new Error('Process admission is closed during shutdown'))
   const timeoutMs = options.timeoutMs ?? 30_000
   const maxBytes = options.maxBytes ?? 16 * 1024 * 1024
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new TypeError('timeoutMs must be positive'))
@@ -562,7 +568,7 @@ export function runProcess(file: string, args: readonly string[], options: {
 
   return processAdmission.run(() => new Promise((resolve, reject) => {
     const invocation = prepareExecutableSpawn(file, args, options.env ?? safeChildEnvironment())
-    const child = spawn(invocation.file, invocation.args, {
+    const child = spawnTrackedChild(invocation.file, invocation.args, {
       cwd: options.cwd,
       env: invocation.env,
       shell: false,
@@ -570,7 +576,6 @@ export function runProcess(file: string, args: readonly string[], options: {
       windowsHide: true,
       detached: process.platform !== 'win32',
     })
-    activeChildren.add(child)
     if (options.input !== undefined) child.stdin?.on('error', () => { /* child close/error reports the process result */ })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []

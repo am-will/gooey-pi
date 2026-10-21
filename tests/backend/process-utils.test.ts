@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { probeHarnessExecutable } from '../../electron/main/harness-discovery'
 import { HARNESSES } from '../../electron/main/harness'
-import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, processFailureReason, processOutcome, runProcess, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
+import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, processFailureReason, processOutcome, runProcess, spawnTrackedChild, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
 import { waitUntil } from '../helpers/wait'
 
 const spawnOverride = vi.hoisted(() => ({ current: null as null | ((...args: unknown[]) => unknown) }))
@@ -193,6 +193,15 @@ console.log('done')
     }
   })
 
+  it('tracks direct probe children for shutdown cleanup', async () => {
+    const child = spawnTrackedChild(process.execPath, ['-e', 'process.stdout.write("tracked"); setInterval(() => {}, 1000)'], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
+    await new Promise<void>((resolve) => child.stdout.once('data', () => resolve()))
+    const exited = new Promise<void>((resolve) => child.once('close', () => resolve()))
+    child.kill()
+    await exited
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+  })
+
   it('closes queued admission and still terminates every active child during shutdown', async () => {
     const dir = temp()
     const active = Array.from({ length: PROCESS_CONCURRENCY_LIMIT }, (_, index) => runProcess(process.execPath, ['-e', `
@@ -205,9 +214,13 @@ setInterval(() => {}, 1000)
 
     const deniedMarker = join(dir, 'queued-ran')
     const queued = runProcess(process.execPath, ['-e', `require('node:fs').writeFileSync(process.argv.at(-1), 'unexpected')`, deniedMarker])
+    const probe = spawnTrackedChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: process.platform !== 'win32', stdio: 'ignore' })
+    const probeExited = new Promise<void>((resolve) => probe.once('close', () => resolve()))
     const cleanup = stopChildProcesses()
     await expect(queued).rejects.toThrow(/admission is closed/)
     await cleanup
+    await probeExited
+    expect(() => spawnTrackedChild(process.execPath, ['-e', ''], {})).toThrow(/admission is closed/)
     const completed = await Promise.all(active)
 
     expect(completed.every((result) => result.signal === 'SIGKILL' || result.signal === 'SIGTERM')).toBe(true)
