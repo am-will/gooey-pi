@@ -39,6 +39,8 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['sessions', 'followUp', 'sessions:follow-up', ['/session.jsonl', 'next', 'queue']],
   ['sessions', 'rename', 'sessions:rename', ['/session.jsonl', 'Title']],
   ['sessions', 'archive', 'sessions:archive', ['/session.jsonl', true]],
+  ['subagents', 'list', 'subagents:list', ['/parent.jsonl', 'omp']],
+  ['subagents', 'history', 'subagents:history', ['/parent.jsonl', 'opaque-child', { cursor: 'opaque-cursor', direction: 'older' }, 'omp']],
   ['agent', 'start', 'agent:start', [{ cwd: '/repo' }]],
   ['agent', 'command', 'agent:command', ['runtime', { type: 'abort' }]],
   ['agent', 'stop', 'agent:stop', ['runtime']],
