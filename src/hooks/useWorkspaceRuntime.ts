@@ -111,6 +111,16 @@ export function useWorkspaceRuntime({
   const chunkedFlushTimerRef = useRef<number | null>(null)
   const reconcileOnVisibleRef = useRef(false)
 
+  const commitActiveQueue = useCallback((next: QueuedPrompt[]) => {
+    pendingQueuedPromptsRef.current = next
+    const owner = activeQueuedPromptOwnerRef.current
+    if (owner) {
+      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
+      else queuedPromptsByOwnerRef.current.delete(owner)
+    }
+    setPendingQueuedPrompts(next)
+  }, [])
+
   const flushAgentEvents = useCallback(() => {
     if (agentEventFrameRef.current !== null) {
       cancelAnimationFrame(agentEventFrameRef.current)
@@ -162,10 +172,8 @@ export function useWorkspaceRuntime({
       if (previousQueueOwner?.includes(':new:') || previousQueueOwner?.includes(':runtime:')) {
         queuedPromptsByOwnerRef.current.delete(previousQueueOwner)
       }
-      if (nextQueueOwner && nextQueue.length) queuedPromptsByOwnerRef.current.set(nextQueueOwner, nextQueue)
       activeQueuedPromptOwnerRef.current = nextQueueOwner
-      pendingQueuedPromptsRef.current = nextQueue
-      setPendingQueuedPrompts(nextQueue)
+      commitActiveQueue(nextQueue)
     }
     if (next?.sessionFile) {
       runtimeSessionsRef.current.set(next.runtimeId, next.sessionFile)
@@ -175,7 +183,7 @@ export function useWorkspaceRuntime({
     runtimeIdRef.current = next?.runtimeId ?? null
     runtimeOwnerRef.current = next ? { runtimeId: next.runtimeId, generation } : null
     setRuntime(next)
-  }, [])
+  }, [commitActiveQueue])
 
   const replaceActiveProject = useCallback((previousId: string, granted: ProjectRecord) => {
     const selected = workspaceRef.current
@@ -227,9 +235,8 @@ export function useWorkspaceRuntime({
     const queueOwner = queuedPromptOwner(project, session, nextRuntime, generation)
     const queuedPrompts = queueOwner ? queuedPromptsByOwnerRef.current.get(queueOwner) ?? [] : []
     activeQueuedPromptOwnerRef.current = queueOwner
-    pendingQueuedPromptsRef.current = queuedPrompts
     setWorkspaceGeneration(generation)
-    setPendingQueuedPrompts(queuedPrompts)
+    commitActiveQueue(queuedPrompts)
     setActiveProjectId(project?.id)
     setActiveSessionId(session?.id)
     setViewKey(session?.id ?? `new:${generation}`)
@@ -239,7 +246,7 @@ export function useWorkspaceRuntime({
       setLoadingSession(Boolean(session?.filePath))
     }
     return generation
-  }, [attachRuntime, bridge])
+  }, [attachRuntime, bridge, commitActiveQueue])
 
   const reconcileRuntime = useCallback(async (generation: number) => {
     if (!bridge) return
@@ -433,24 +440,15 @@ export function useWorkspaceRuntime({
   const queuePrompt = useCallback((text: string, intent: PromptDeliveryIntent, parts?: MessagePart[], timestamp = Date.now()): string => {
     const queued: QueuedPrompt = { id: nextQueuedPromptId(), text, intent, timestamp, ...(parts ? { parts } : {}) }
     const next = [...pendingQueuedPromptsRef.current, queued]
-    pendingQueuedPromptsRef.current = next
-    const owner = activeQueuedPromptOwnerRef.current
-    if (owner) queuedPromptsByOwnerRef.current.set(owner, next)
-    setPendingQueuedPrompts(next)
+    commitActiveQueue(next)
     return queued.id
-  }, [])
+  }, [commitActiveQueue])
   const removeQueuedPrompt = useCallback((id: string) => {
     observedSteerIdsRef.current.delete(id)
     const current = pendingQueuedPromptsRef.current
     const next = current.filter((prompt) => prompt.id !== id)
     if (next.length !== current.length) {
-      pendingQueuedPromptsRef.current = next
-      const owner = activeQueuedPromptOwnerRef.current
-      if (owner) {
-        if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
-        else queuedPromptsByOwnerRef.current.delete(owner)
-      }
-      setPendingQueuedPrompts(next)
+      commitActiveQueue(next)
       return
     }
     for (const [owner, prompts] of queuedPromptsByOwnerRef.current) {
@@ -464,7 +462,7 @@ export function useWorkspaceRuntime({
       setPendingQueuedPrompts([...pendingQueuedPromptsRef.current])
       return
     }
-  }, [])
+  }, [commitActiveQueue])
   const updateQueuedPrompts = useCallback((transform: (prompt: QueuedPrompt) => QueuedPrompt) => {
     const update = (prompts: QueuedPrompt[]) => {
       let changed = false
@@ -477,14 +475,13 @@ export function useWorkspaceRuntime({
     }
     const nextActive = update(pendingQueuedPromptsRef.current)
     if (nextActive !== pendingQueuedPromptsRef.current) {
-      pendingQueuedPromptsRef.current = nextActive
-      setPendingQueuedPrompts(nextActive)
+      commitActiveQueue(nextActive)
     }
     for (const [owner, prompts] of queuedPromptsByOwnerRef.current) {
       const next = update(prompts)
       if (next !== prompts) queuedPromptsByOwnerRef.current.set(owner, next)
     }
-  }, [])
+  }, [commitActiveQueue])
   const markQueuedPromptFlushFailed = useCallback((id: string) => {
     updateQueuedPrompts((prompt) => prompt.id === id && !prompt.flushAttemptFailed
       ? { ...prompt, flushAttemptFailed: true }
@@ -509,14 +506,11 @@ export function useWorkspaceRuntime({
       const next = prompts.filter((prompt) => prompt.intent !== 'steer')
       if (next.length === prompts.length) continue
       for (const prompt of prompts) if (prompt.intent === 'steer') observedSteerIdsRef.current.delete(prompt.id)
-      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
+      if (owner === activeQueuedPromptOwnerRef.current) commitActiveQueue(next)
+      else if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
       else queuedPromptsByOwnerRef.current.delete(owner)
-      if (owner === activeQueuedPromptOwnerRef.current) {
-        pendingQueuedPromptsRef.current = next
-        setPendingQueuedPrompts(next)
-      }
     }
-  }, [])
+  }, [commitActiveQueue])
   const acceptSteer = useCallback((id: string) => {
     const prompt = pendingQueuedPromptsRef.current.find((candidate) => candidate.id === id && candidate.intent === 'steer')
     if (prompt) {
@@ -557,20 +551,14 @@ export function useWorkspaceRuntime({
     const pickedUp = snapshot.active?.kind === 'turn' ? settled : []
     const settledIds = new Set(settled.map((prompt) => prompt.id))
     const next = pendingQueuedPromptsRef.current.filter((prompt) => !settledIds.has(prompt.id))
-    pendingQueuedPromptsRef.current = next
-    const owner = activeQueuedPromptOwnerRef.current
-    if (owner) {
-      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
-      else queuedPromptsByOwnerRef.current.delete(owner)
-    }
+    commitActiveQueue(next)
     for (const prompt of settled) observedSteerIdsRef.current.delete(prompt.id)
-    setPendingQueuedPrompts(next)
 
     // Keep the pickup boundary in the same ordered event buffer as preceding
     // tool output. Directly mutating messages here would let an unflushed tool
     // event jump below the newly inserted user row.
     if (pickedUp.length) queueAgentEvent(createSteerPickupEvent(pickedUp))
-  }, [queueAgentEvent])
+  }, [commitActiveQueue, queueAgentEvent])
 
   const acknowledgeSteer = useCallback((id: string, snapshot: SessionActionSnapshot) => {
     if (!pendingQueuedPromptsRef.current.some((prompt) => prompt.id === id && prompt.intent === 'steer')) return
