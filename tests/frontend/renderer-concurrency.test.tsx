@@ -135,8 +135,9 @@ describe('settings queue reconciliation', () => {
     const update = vi.fn()
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise)
+    let persisted = DEFAULT_SETTINGS
     const bridge = {
-      settings: { get: async () => DEFAULT_SETTINGS, update },
+      settings: { get: async () => persisted, update },
     } as unknown as PrimeWorkApi
     const errors: unknown[] = []
     const reportError = (error: unknown) => { errors.push(error) }
@@ -156,7 +157,7 @@ describe('settings queue reconciliation', () => {
     expect([state.sidebarOpen, state.inspectorOpen, state.terminalOpen]).toEqual([false, true, true])
 
     const saved = { ...DEFAULT_SETTINGS, sidebarOpen: false, inspectorOpen: false, terminalOpen: false }
-    await act(async () => { first.resolve(saved); await firstMutation })
+    await act(async () => { persisted = saved; first.resolve(saved); await firstMutation })
     await act(async () => { second.reject(new Error('save failed')); await secondMutation })
 
     expect([state.sidebarOpen, state.inspectorOpen, state.terminalOpen]).toEqual([false, false, false])

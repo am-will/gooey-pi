@@ -71,16 +71,23 @@ export function useAppSettings({ bridge, reportError }: UseAppSettingsOptions) {
       return true
     }
     const operation = settingsQueueRef.current.catch(() => undefined).then(async () => {
-      const saved = await bridge.settings.update(patch)
-      confirmedSettingsRef.current = saved
-      if (settingsMutationRef.current === mutation) applySettings(saved, takeConfirmedPanelPatch(saved))
+      try {
+        const saved = await bridge.settings.update(patch)
+        confirmedSettingsRef.current = saved
+        if (settingsMutationRef.current === mutation) applySettings(saved, takeConfirmedPanelPatch(saved))
+      } catch (error) {
+        // Main may retain unrelated fields when an operating-system setting fails.
+        // Read that authority before the next queued write can start.
+        try { confirmedSettingsRef.current = await bridge.settings.get() } catch { /* Keep the last confirmed snapshot and the original failure. */ }
+        if (settingsMutationRef.current === mutation) applySettings(confirmedSettingsRef.current, takeConfirmedPanelPatch(confirmedSettingsRef.current))
+        throw error
+      }
     })
     settingsQueueRef.current = operation.catch(() => undefined)
     try {
       await operation
       return true
     } catch (error) {
-      if (settingsMutationRef.current === mutation) applySettings(confirmedSettingsRef.current, takeConfirmedPanelPatch(confirmedSettingsRef.current))
       reportError(error)
       return false
     }
