@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from '../../src/types/agent-command'
 // @vitest-environment jsdom
 
 import { act, type ReactNode, useState } from 'react'
@@ -1235,4 +1236,33 @@ it('cancels recognized malformed dialogs instead of leaving the harness waiting'
   })
   expect(command.mock.calls).toEqual(['select', 'confirm', 'input', 'editor'].map((id) => ['runtime', { type: 'extension_ui_response', id, cancelled: true }]))
   expect(state.extensionUi).toBeNull()
+})
+
+
+it('sends questionnaire answers concurrently and releases only failed response ids', async () => {
+  const first = deferred<unknown>()
+  const second = deferred<unknown>()
+  const command = vi.fn((_runtimeId: string, payload: AgentRpcCommand) => {
+    if (payload.type === 'extension_ui_response' && !('cancelled' in payload)) return payload.id === 'q1' ? first.promise : second.promise
+    return Promise.resolve({})
+  })
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const reportError = vi.fn()
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  let state!: ReturnType<typeof useExtensionUi>
+  function ExtensionProbe() {
+    state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError })
+    return null
+  }
+  await act(async () => root.render(<ExtensionProbe />))
+  await act(async () => {
+    for (const [index, id] of ['q1', 'q2'].entries()) state.showExtensionUi('runtime', { type: 'extension_ui_request', method: 'select', id, title: id, options: [`__prime_ask_user__group:${index}:2`, 'A'] })
+  })
+  let reply: Promise<void> | undefined
+  act(() => { reply = state.respondToExtensionUi({ values: { q1: 'A', q2: 'A' } }) })
+  expect(command).toHaveBeenCalledTimes(2)
+  const error = new Error('q1 transport failed')
+  await act(async () => { first.reject(error); second.resolve({}); await reply })
+  expect(command.mock.calls.filter(([, payload]) => payload.type === 'extension_ui_response' && 'cancelled' in payload)).toEqual([['runtime', { type: 'extension_ui_response', id: 'q1', cancelled: true }]])
+  expect(reportError).toHaveBeenCalledExactlyOnceWith(error)
 })

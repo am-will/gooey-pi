@@ -113,23 +113,14 @@ export function useExtensionUi({
     if (!bridge) return
     try {
       if (pending.request.method === 'questionnaire') {
-        if ('values' in response) {
-          for (const request of pending.requests ?? []) {
-            await bridge.agent.command(pending.runtimeId, {
-              type: 'extension_ui_response',
-              id: request.id,
-              value: response.values[request.id] ?? '',
-            })
-          }
-        } else {
-          for (const id of requestIds(pending)) {
-            await bridge.agent.command(pending.runtimeId, {
-              type: 'extension_ui_response',
-              id,
-              cancelled: true,
-            })
-          }
-        }
+        const requests = pending.requests ?? []
+        const results = await Promise.allSettled(requests.map((request) => bridge.agent.command(pending.runtimeId, {
+          type: 'extension_ui_response', id: request.id,
+          ...('values' in response ? { value: response.values[request.id] ?? '' } : { cancelled: true }),
+        })))
+        const failed = results.flatMap((result, index) => result.status === 'rejected' ? [{ id: requests[index].id, error: result.reason }] : [])
+        await Promise.allSettled(failed.map(({ id }) => bridge.agent.command(pending.runtimeId, { type: 'extension_ui_response', id, cancelled: true })))
+        if (failed.length) throw failed[0].error
         return
       }
       await bridge.agent.command(pending.runtimeId, {
