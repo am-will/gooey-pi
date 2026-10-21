@@ -1,3 +1,4 @@
+import { errorCode } from './validation'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,7 +57,7 @@ function probeFailureDetail(failure: HarnessProbeFailure): string {
 }
 
 function spawnFailure(error: unknown): HarnessProbeFailure {
-  const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : 'UNKNOWN'
+  const code = errorCode(error) || 'UNKNOWN'
   const detail = code === 'ENOENT'
     ? 'path does not exist'
     : code === 'EACCES' || code === 'EPERM'
