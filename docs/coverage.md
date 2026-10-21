@@ -33,6 +33,6 @@ shared logic.
 
 Coverage is reported with `reportOnFailure: true`, so the report and every threshold are still evaluated when unrelated tests fail; a failing suite can never silently skip the gate.
 
-Some release CLI entry points are deliberately exercised in bounded child-process tests, whose V8 data is not merged into the parent Vitest report. They remain in the denominator as uncovered code instead of receiving exclusions. This makes the aggregate conservative and ensures growth in those entry points consumes coverage headroom.
+Some release CLI entry points and recurrence-worker paths run in bounded child processes or workers, whose V8 data is not merged into the parent Vitest report. They remain in the denominator as uncovered code instead of receiving exclusions. This makes the aggregate conservative and ensures growth in those entry points consumes coverage headroom.
 
 When changing a family, reporter, threshold, or technical exclusion, repeat the before/after denominator, artifact-size, and wall-clock measurement and place commit-addressed pass evidence in the pull request or release record as described in the [validation guide](validation.md#recording-evidence).
