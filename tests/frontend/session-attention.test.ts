@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activityNotificationSignature, applySessionLifecycleEvent, readClearedActivity, readClearedAttention, sessionAttentionSignature, sessionCompanionNotificationSignature, sessionShowsCompanionNotification, signatureCleared } from '../../src/app/session-attention'
+import { activityClearEntry, companionClearEntry, activityNotificationSignature, applySessionLifecycleEvent, readClearedActivity, readClearedAttention, sessionAttentionSignature, sessionCompanionNotificationSignature, sessionShowsCompanionNotification, signatureCleared } from '../../src/app/session-attention'
 import { mergeSessionCatalog } from '../../src/hooks/useBootstrap'
 import type { SessionRecord } from '../../src/types/api'
 
@@ -347,4 +347,16 @@ describe('cleared-attention store', () => {
     expect(readClearedActivity('not json')).toEqual({})
     expect(readClearedActivity('{"session":"complete:3","bad":false}')).toEqual({ session: 'complete:3' })
   })
+})
+
+it('keeps earlier-launch clears until genuinely newer activity arrives', () => {
+  const earlier = '2026-01-01T00:00:00.000Z'
+  const later = '2026-01-02T00:00:00.000Z'
+  expect(signatureCleared('complete:3', `complete:3@old@${later}`, false, earlier)).toBe(true)
+  expect(signatureCleared('complete:3', `complete:3@old@${earlier}`, false, later)).toBe(false)
+  expect(signatureCleared('complete:3', `failed:3@old@${later}`, false, earlier)).toBe(true)
+  expect(signatureCleared('failed:3', `idle:3@old@${later}`, false, earlier)).toBe(false)
+  const current: SessionRecord = { ...session(), status: 'waiting', eventRevision: 3 }
+  expect(signatureCleared(sessionAttentionSignature(current), companionClearEntry(current), false, current.updatedAt)).toBe(true)
+  expect(signatureCleared('waiting:4', activityClearEntry(current), false, current.updatedAt)).toBe(false)
 })

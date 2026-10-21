@@ -2,6 +2,8 @@ import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { parseExtensionUiRequest } from '@/lib/extension-ui'
 import type { SessionRecord, SessionStatus } from '@/types/api'
 
+const LAUNCH_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+
 interface SessionLifecycleChange {
   status: SessionStatus
   markUnread?: boolean
@@ -67,8 +69,16 @@ export function sessionCompanionNotificationSignature(session: SessionRecord): s
   return session.unread ? `unread:${revision}` : undefined
 }
 
-export function signatureCleared(signature: string | undefined, clearedSignature: string | undefined, unread = false): boolean {
+export function signatureCleared(signature: string | undefined, clearedSignature: string | undefined, unread = false, updatedAt?: string): boolean {
   if (!signature || !clearedSignature) return false
+  const [core, launch, clearedUpdatedAt] = clearedSignature.split('@')
+  if (launch && launch !== LAUNCH_ID) {
+    const status = signature.slice(0, signature.indexOf(':'))
+    const clearedStatus = core.slice(0, core.indexOf(':'))
+    return Boolean(updatedAt && clearedUpdatedAt && Date.parse(updatedAt) <= Date.parse(clearedUpdatedAt)
+      && (status === clearedStatus || status === 'idle' || status === 'complete' && !unread))
+  }
+  clearedSignature = core
   if (signature === clearedSignature) return true
   const separator = signature.indexOf(':')
   const clearedSeparator = clearedSignature.indexOf(':')
@@ -80,12 +90,22 @@ export function signatureCleared(signature: string | undefined, clearedSignature
 export function sessionShowsCompanionNotification(session: SessionRecord, clearedSignature?: string): boolean {
   if (session.archived) return false
   const signature = sessionCompanionNotificationSignature(session)
-  return Boolean(signature && !signatureCleared(signature, clearedSignature, session.unread))
+  return Boolean(signature && !signatureCleared(signature, clearedSignature, session.unread, session.updatedAt))
 }
 
 export function activityNotificationSignature(session: SessionRecord): string | undefined {
   if (session.archived || session.status === 'running') return undefined
   return `${session.status}:${session.eventRevision ?? session.updatedAt}`
+}
+
+export function companionClearEntry(session: SessionRecord): string | undefined {
+  const signature = sessionCompanionNotificationSignature(session)
+  return signature ? `${signature}@${LAUNCH_ID}@${session.updatedAt}` : undefined
+}
+
+export function activityClearEntry(session: SessionRecord): string | undefined {
+  const signature = activityNotificationSignature(session)
+  return signature ? `${signature}@${LAUNCH_ID}@${session.updatedAt}` : undefined
 }
 
 function parseClearedSignatures(raw: string | null): Record<string, string> {

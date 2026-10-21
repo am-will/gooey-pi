@@ -206,7 +206,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
   const { activeSessions, sessionsByProject } = useMemo(() => indexSidebarSessions(projects, sessions), [projects, sessions])
   const needsAttention = (session: SessionRecord) => {
     const signature = sessionAttentionSignature(session)
-    return Boolean(signature && !signatureCleared(signature, clearedAttention[session.id], session.unread))
+    return Boolean(signature && !signatureCleared(signature, clearedAttention[session.id], session.unread, session.updatedAt))
   }
   const unreadCount = activeSessions.reduce((count, session) => count + Number(needsAttention(session)), 0)
   const newSessionShortcut = shortcutLabel(platform, ['Primary', 'N'])

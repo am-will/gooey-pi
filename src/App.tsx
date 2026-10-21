@@ -9,7 +9,7 @@ import { ResizeHandle } from '@/components/ResizeHandle'
 import { NoHarnessPrompt } from '@/components/NoHarnessPrompt'
 import { createAppKeydownHandler } from '@/lib/app-shortcuts'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
-import { activityNotificationSignature, readClearedActivity, readClearedAttention, sessionCompanionNotificationSignature } from '@/app/session-attention'
+import { activityClearEntry, companionClearEntry, readClearedActivity, readClearedAttention } from '@/app/session-attention'
 import { errorMessage } from '@/lib/errors'
 import { LoadingPanel, TerminalLoadingPanel, VIEW_LOADING_KEYS } from '@/app/loading'
 import { I18nProvider, useLocaleTranslator } from '@/lib/i18n'
@@ -145,7 +145,7 @@ export default function App() {
     window.localStorage.setItem('prime-work.cleared-activity', JSON.stringify(clearedActivity))
   }, [clearedActivity])
   const clearSessionAttention = useCallback((session: SessionRecord) => {
-    const signature = sessionCompanionNotificationSignature(session)
+    const signature = companionClearEntry(session)
     if (!signature) return
     setClearedAttention((current) => current[session.id] === signature ? current : { ...current, [session.id]: signature })
   }, [])
@@ -155,7 +155,7 @@ export default function App() {
     setClearedActivity((current) => {
       const next = { ...current }
       for (const session of activitySessions) {
-        const signature = activityNotificationSignature(session)
+        const signature = activityClearEntry(session)
         if (signature) next[session.id] = signature
       }
       return next
@@ -163,7 +163,7 @@ export default function App() {
     setClearedAttention((current) => {
       const next = { ...current }
       for (const session of activitySessions) {
-        const signature = sessionCompanionNotificationSignature(session)
+        const signature = companionClearEntry(session)
         if (signature) next[session.id] = signature
       }
       return next
