@@ -10,7 +10,7 @@ import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
-import { loadInitialRenderer, mainWindowChromeOptions, isMacWindowCloseShortcut, popupApplicationMenu, resolvedWindowTheme, setTitleBarTheme } from './main-window'
+import { loadInitialRenderer, mainWindowChromeOptions, isMacWindowCloseShortcut, popupApplicationMenu, resolvedWindowTheme, setTitleBarTheme, windowCanvasColor } from './main-window'
 import { mainWindowBounds } from './window-bounds'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
@@ -142,7 +142,7 @@ async function createWindow(): Promise<BrowserWindow | null> {
   const window = new BrowserWindow({
     ...bounds,
     show: false,
-    backgroundColor: '#f5f5f4',
+    backgroundColor: windowCanvasColor(resolvedWindowTheme(store?.getSettings().theme)),
     icon: appIconPath(),
     ...mainWindowChromeOptions(process.platform, resolvedWindowTheme(store?.getSettings().theme)),
     webPreferences: {

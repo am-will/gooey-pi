@@ -18,10 +18,14 @@ export async function loadInitialRenderer(window: InitialRendererWindow, rendere
 
 type ResolvedTheme = Exclude<ThemeMode, 'system'>
 
+export function windowCanvasColor(theme: ResolvedTheme): string {
+  return theme === 'dark' ? '#171716' : '#ffffff'
+}
+
 function windowsTitleBarOverlay(theme: ResolvedTheme): { color: string; symbolColor: string; height: number } {
   return theme === 'dark'
-    ? { color: '#171716', symbolColor: '#f1f1ee', height: 32 }
-    : { color: '#ffffff', symbolColor: '#20201e', height: 32 }
+    ? { color: windowCanvasColor(theme), symbolColor: '#f1f1ee', height: 32 }
+    : { color: windowCanvasColor(theme), symbolColor: '#20201e', height: 32 }
 }
 
 export function resolvedWindowTheme(theme: ThemeMode | undefined): ResolvedTheme {

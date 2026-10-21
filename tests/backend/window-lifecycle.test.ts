@@ -20,7 +20,7 @@ const electron = vi.hoisted(() => ({
 vi.mock('electron', () => electron)
 
 import '../../electron/main/index'
-import { isMacWindowCloseShortcut, loadInitialRenderer, mainWindowChromeOptions } from '../../electron/main/main-window'
+import { isMacWindowCloseShortcut, loadInitialRenderer, mainWindowChromeOptions, windowCanvasColor } from '../../electron/main/main-window'
 import { hardenRenderer, resolveRendererAssetPath } from '../../electron/main/renderer-security'
 import { activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/app-lifecycle'
 import { StateMigrationError, UnsupportedStateVersionError } from '../../electron/main/store'
@@ -30,6 +30,12 @@ import type { BrowserWindow } from 'electron'
 type Handler = (...args: never[]) => void
 
 describe('application window lifecycle', () => {
+  it('uses the same canvas color for the initial window and native caption background', () => {
+    expect(windowCanvasColor('dark')).toBe('#171716')
+    expect(windowCanvasColor('light')).toBe('#ffffff')
+    expect(mainWindowChromeOptions('win32', 'dark').titleBarOverlay).toMatchObject({ color: windowCanvasColor('dark') })
+  })
+
   it('keeps the final state drain inside the shutdown watchdog', async () => {
     const drain = vi.fn(() => new Promise<void>(() => {}))
     const log = vi.fn()
