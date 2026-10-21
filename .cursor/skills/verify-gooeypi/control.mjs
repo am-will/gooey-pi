@@ -88,7 +88,7 @@ async function launch() {
   try {
     const env = verificationEnvironment(home, fixtureRoot)
     if (process.platform === 'linux' && !env.DISPLAY) throw new Error('No DISPLAY set. Run under `xvfb-run -a` or an X server.')
-  
+
     app = await electron.launch({
       args: ['.', `--user-data-dir=${userData}`],
       cwd: REPO_ROOT,
