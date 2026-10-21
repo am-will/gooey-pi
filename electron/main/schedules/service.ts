@@ -109,6 +109,7 @@ export class AutomationService {
   private recurrence: ScheduleRecurrence
   private timer: NodeJS.Timeout | null = null
   private closed = false
+  private started = false
   private activeRuns = 0
   private retryNotBefore = 0
   private initialization: Promise<void> | null = null
@@ -123,6 +124,7 @@ export class AutomationService {
 
   async start(): Promise<void> {
     if (this.initialization) return this.initialization
+    if (this.started) return
     if (this.closed) this.recurrence = this.options.recurrence?.() ?? new BoundedRecurrenceEvaluator()
     this.closed = false
     const operation = (async () => {
@@ -131,6 +133,8 @@ export class AutomationService {
       await this.blockInvalidActivePrompts()
       if (this.closed) return
       await this.recoverMissed()
+      if (this.closed) return
+      this.started = true
       this.armTimer()
     })()
     this.initialization = operation
@@ -183,6 +187,7 @@ export class AutomationService {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.started = false
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.pending.splice(0)

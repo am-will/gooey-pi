@@ -100,6 +100,23 @@ describe('AutomationService', () => {
     } finally { release(); await service.stop() }
   })
 
+  it('does not reconcile this process own active runs when startup is called twice', async () => {
+    let finish!: () => void
+    const service = new AutomationService(store(), {
+      validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: () => new Promise((resolve) => { finish = () => resolve({}) }),
+      now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    try {
+      await service.start()
+      const task = await service.create({ prompt: 'Review', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+      await service.runNow(task.id)
+      await eventually(() => expect(service.get(task.id).runs[0].status).toBe('running'))
+      await service.start()
+      expect(service.get(task.id).runs[0].status).toBe('running')
+    } finally { finish?.(); await service.stop() }
+  })
+
   it('keeps an edited paused schedule paused until explicitly resumed', async () => {
     const service = new AutomationService(store(), {
       validateTarget: async () => undefined, validateExecution: async () => undefined,
