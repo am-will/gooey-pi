@@ -21,9 +21,13 @@ export type HarnessId = (typeof HARNESS_IDS)[number]
 export const OMP_APPROVAL_MODES = ['inherit', 'always-ask', 'write', 'yolo'] as const
 export type OmpApprovalMode = (typeof OMP_APPROVAL_MODES)[number]
 
+export type PrimeImplementation = 'typescript' | 'rust'
+
 export interface HarnessStatus {
   path: string | null
   version: string | null
+  /** Prime only: whether the discovered executable is the TypeScript or the Rust build. */
+  implementation?: PrimeImplementation
   problem?: {
     path: string
     reason: string
@@ -137,7 +141,7 @@ export interface BrowserAnnotation {
   createdAt: number
 }
 
-export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'requested'
+export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'requested' | 'idle' | 'incomplete'
 export type PrimeCompactionStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type PrimeCompactionOutcome = 'failed' | 'cancelled' | 'skipped'
 
@@ -153,6 +157,7 @@ export type MessagePart =
       partId?: string
       status: PrimeCompactionStatus
       reason?: PrimeCompactionReason
+      action?: string
       outcome?: PrimeCompactionOutcome
       tokensBefore?: number
       firstKeptEntryId?: string
@@ -167,8 +172,8 @@ export interface TranscriptMessage {
   role: 'user' | 'assistant' | 'agent' | 'goal' | 'tool' | 'system'
   /** Renderer-local steering lifecycle. Persisted transcripts remain harness-owned. */
   steerState?: 'accepted' | 'read'
-  /** Lightweight renderer-only boundary showing where an accepted steer was consumed. */
-  kind?: 'steer-read-marker'
+  /** Neutral system row: a renderer-only steer-read boundary, or a notice (provider fallback, branch summary) that never reads as a failure. */
+  kind?: 'steer-read-marker' | 'notice'
   timestamp?: string | number
   agentName?: string
   startedAt?: string | number
@@ -350,7 +355,8 @@ export interface ExtensionInstallInput {
 }
 
 export interface ProjectFileEntry { path: string; type: 'file' | 'directory' }
-export interface ProjectFileListing { entries: ProjectFileEntry[]; skipped: number }
+export interface ProjectFileListing { entries: ProjectFileEntry[]; skipped: number; truncated: boolean }
+export const PROJECT_FILE_LISTING_LIMIT = 25_000
 
 export interface GitWorktree {
   path: string
@@ -752,7 +758,7 @@ export interface AgentBrowserPointerEvent {
 }
 
 export interface PrimeWorkApi {
-  app: { getMeta(): Promise<AppMeta>; refreshHarnesses(): Promise<{ meta: AppMeta; settings: AppSettings }>; openExternal(url: string): Promise<boolean>; revealPath(path: string): Promise<boolean>; popupMenu(menu: ApplicationMenuName, x: number, y: number): Promise<boolean>; setTitleBarTheme(theme: Exclude<ThemeMode, 'system'>): Promise<boolean>; onOpenSettings(callback: () => void): () => void }
+  app: { getMeta(): Promise<AppMeta>; refreshHarnesses(): Promise<{ meta: AppMeta; settings: AppSettings }>; openExternal(url: string): Promise<boolean>; revealPath(path: string): Promise<boolean>; popupMenu(menu: ApplicationMenuName, x: number, y: number): Promise<boolean>; setTitleBarTheme(theme: Exclude<ThemeMode, 'system'>): Promise<boolean>; onOpenSettings(callback: () => void): () => void; onHarnessesChanged(callback: () => void): () => void }
   updates: {
     getState(): Promise<AppUpdateState>
     check(): Promise<AppUpdateState>

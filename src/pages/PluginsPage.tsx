@@ -1,8 +1,9 @@
 import { AlertTriangle, ArrowLeft, BookOpen, Check, ChevronRight, FileCode2, FileText, GitFork, Globe2, Package, Palette, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Trash2, WandSparkles, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { CapabilityMutationInput, ExtensionInstallInput, HarnessId, McpConnectionInput, McpStateInput, PluginWarning, SkillRecord } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, HarnessId, McpConnectionInput, McpStateInput, PluginWarning, PrimeImplementation, SkillRecord } from '@/types/api'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { NETWORK_MCP_UNAVAILABLE_DETAIL } from '@/lib/mcp-policy'
+import { primeCapabilityAvailable, primeUnavailableCapabilitiesNotice, RUST_PRIME_EXTENSIONS_DETAIL } from '@/lib/prime-compat'
 import { EmptyState, Modal } from '@/components/ui'
 
 const MCP_STDIO_HELP: Record<HarnessId, string> = {
@@ -23,6 +24,15 @@ const PACKAGE_HELP: Record<HarnessId, string> = {
 }
 const GITHUB_ISSUES_URL = 'https://github.com/am-will/gooey-pi/issues/new'
 
+/**
+ * Why a record cannot be offered, when it cannot. Computer use is the one
+ * unavailable capability that stays actionable: enabling it opens the driver
+ * installer instead.
+ */
+function unavailableDetail(skill: SkillRecord): string | undefined {
+  return skill.availability?.available === false && skill.id !== 'gooeypi-computer-use' ? skill.availability.detail : undefined
+}
+
 function capabilityDetailId(skill: SkillRecord): string {
   return `capability-detail-${skill.id.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128)}`
 }
@@ -40,6 +50,8 @@ function SkillIcon({ skill }: { skill: SkillRecord }) {
 
 interface PluginsPageProps {
   harness: HarnessId
+  /** Detected Prime build; Rust Prime lists the capabilities it does not offer. */
+  primeImplementation?: PrimeImplementation
   skills: SkillRecord[]
   warnings: PluginWarning[]
   loading: boolean
@@ -60,7 +72,7 @@ interface PluginsPageProps {
   onMutateCapability?(input: CapabilityMutationInput): Promise<{ ok: boolean; output: string }>
 }
 
-export function PluginsPage({ harness, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
+export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
   const [tab, setTab] = useState<DirectoryTab>('plugins')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -85,6 +97,8 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
   const [confirmRemove, setConfirmRemove] = useState<SkillRecord | null>(null)
   const [capabilityAlert, setCapabilityAlert] = useState('')
   const piMcpAdapterInstalled = skills.some((skill) => skill.id === 'gooeypi-pi-mcp' && skill.enabled)
+  const primeLimits = harness === 'prime' ? primeUnavailableCapabilitiesNotice(primeImplementation) : undefined
+  const extensionsOffered = harness !== 'prime' || primeCapabilityAvailable(primeImplementation, 'typescriptExtensions')
   const canConfigureMcp = harness === 'omp' || harness === 'pi' && piMcpAdapterInstalled
 
   const visible = useMemo(() => skills.map((skill) => skill.id === 'gooeypi-ask-user'
@@ -234,16 +248,17 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
     setConfirmRemove(null)
     await mutate(skill, 'remove')
   }
-  const mcpStatusDetail = (skill: SkillRecord): string | undefined => {
-    if (skill.kind !== 'mcp') return undefined
-    if (skill.availability?.available === false) return skill.availability.detail
-    if (harness === 'pi' && !piMcpAdapterInstalled) return 'Enable Pi MCP Adapter before changing this local MCP server.'
+  const capabilityStatusDetail = (skill: SkillRecord): string | undefined => {
+    const unavailable = unavailableDetail(skill)
+    if (unavailable) return unavailable
+    if (skill.kind === 'mcp' && harness === 'pi' && !piMcpAdapterInstalled) return 'Enable Pi MCP Adapter before changing this local MCP server.'
     return undefined
   }
   const capabilityControl = (skill: SkillRecord) => {
-    if (skill.kind === 'mcp' && skill.availability?.available === false) {
-      const external = skill.availability.detail.includes('managed outside GooeyPi')
-      const label = external ? `Externally managed ${skill.name}` : harness === 'pi' ? `Pi MCP Adapter required for ${skill.name}` : `Unavailable ${skill.name}`
+    const unavailable = unavailableDetail(skill)
+    if (unavailable) {
+      const external = unavailable.includes('managed outside GooeyPi')
+      const label = external ? `Externally managed ${skill.name}` : harness === 'pi' && skill.kind === 'mcp' ? `Pi MCP Adapter required for ${skill.name}` : `Unavailable ${skill.name}`
       return <span className="plugin-toggle" role="img" aria-label={label} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
     }
     if (harness === 'pi' && skill.kind === 'mcp' && !piMcpAdapterInstalled) {
@@ -299,11 +314,12 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
         {harness === 'pi' && mcpSupportAlert ? <p className="page-inline-error" role="alert"><AlertTriangle size={13}/> {mcpSupportAlert}</p> : null}
         {harness === 'pi' && mcpSupportNotice ? <p className="connection-warning" role="status">{mcpSupportUpdating ? <RefreshCw className="spin" size={13}/> : <ShieldCheck size={13}/>} {mcpSupportNotice}</p> : null}
         {harness === 'pi' && !piMcpAdapterInstalled ? <p className="connection-warning"><ShieldCheck size={13}/> Pi core has no MCP client. Enable Pi MCP Adapter below before adding servers.</p> : null}
+        {primeLimits ? <p className="connection-warning"><ShieldCheck size={13}/> {primeLimits}</p> : null}
         <p className="connection-warning"><ShieldCheck size={13}/> {NETWORK_MCP_UNAVAILABLE_DETAIL}</p>
         <div className="directory-heading"><h2>{filter === 'installed' ? 'Installed' : tab === 'plugins' ? 'Capabilities' : 'Skills'}</h2><span>{visible.length} shown</span></div>
         {visible.length ? (
           <div className="directory-list">{visible.map((skill) => {
-            const statusDetail = mcpStatusDetail(skill)
+            const statusDetail = capabilityStatusDetail(skill)
             return <article key={skill.id}>
               <span className={`directory-icon directory-icon--${skill.kind}`}><SkillIcon skill={skill}/></span>
               <div><div><h3>{skill.name}</h3><span>{skill.location}</span></div><p id={statusDetail ? capabilityDetailId(skill) : undefined}>{skill.description}{statusDetail ? ` ${statusDetail}` : ''}</p></div>
@@ -334,8 +350,8 @@ export function PluginsPage({ harness, skills, warnings, loading, activeProjectP
                 <button type="button" onClick={() => selectAddKind('bundle')}>
                   <span><Package size={17}/></span><span><strong>Add {harness === 'omp' ? 'Plugin' : 'Package'}</strong><small>{PACKAGE_HELP[harness]}</small></span><ChevronRight size={15}/>
                 </button>
-                <button type="button" onClick={() => selectAddKind('extension')}>
-                  <span><FileCode2 size={17}/></span><span><strong>Add Extension</strong><small>Install one local JavaScript or TypeScript extension module for {HARNESS_SHORT_NAMES[harness]}.</small></span><ChevronRight size={15}/>
+                <button type="button" disabled={!extensionsOffered} onClick={() => selectAddKind('extension')}>
+                  <span><FileCode2 size={17}/></span><span><strong>Add Extension</strong><small>{extensionsOffered ? `Install one local JavaScript or TypeScript extension module for ${HARNESS_SHORT_NAMES[harness]}.` : RUST_PRIME_EXTENSIONS_DETAIL}</small></span><ChevronRight size={15}/>
                 </button>
                 <p className="capability-compatibility-note"><AlertTriangle size={13}/><span>Not every third-party package, plugin, or extension will work in GooeyPi. If something fails, <button type="button" onClick={() => onOpenExternal(GITHUB_ISSUES_URL)}>create a GitHub issue</button>.</span></p>
               </div>

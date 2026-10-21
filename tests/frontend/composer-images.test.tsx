@@ -5,7 +5,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '../../src/components/Composer'
 import { groupModelsByProvider } from '../../src/hooks/useProviderCatalog'
-import type { PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo, SkillRecord } from '../../src/types/api'
+import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '../../src/lib/harness'
+import type { HarnessId, PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo, SkillRecord } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -41,9 +42,12 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = false, messageEnterAction: 'queue' | 'steer' = 'queue', contextUsage?: PrimeContextUsage, executingModel?: RuntimeInfo['executingModel']) {
+function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = false, messageEnterAction: 'queue' | 'steer' = 'queue', contextUsage?: PrimeContextUsage, executingModel?: RuntimeInfo['executingModel'], harness?: HarnessId) {
   act(() => root.render(<Composer
     busy={busy}
+    harness={harness}
+    agentName={harness && HARNESS_AGENT_NAMES[harness]}
+    shortName={harness && HARNESS_SHORT_NAMES[harness]}
     model="provider/vision"
     effort="medium"
     modelsByProvider={modelsByProvider}
@@ -548,6 +552,16 @@ describe('Composer context usage and stop control', () => {
     expect(dial?.title).toContain('unavailable')
     expect(container.querySelector('button[aria-label="Stop Prime"] .lucide-square')).not.toBeNull()
     expect(container.querySelector('.lucide-circle-stop')).toBeNull()
+  })
+
+  it.each([
+    ['prime', 'Stop Prime'],
+    ['omp', 'Stop OMP'],
+    ['pi', 'Stop Pi'],
+  ] as const)('names the active %s harness on the stop control', (harness, label) => {
+    renderComposer(vi.fn(), true, true, 'queue', undefined, undefined, harness)
+
+    expect(container.querySelector('.send-button--stop')?.getAttribute('aria-label')).toBe(label)
   })
 })
 

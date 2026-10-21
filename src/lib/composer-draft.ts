@@ -45,6 +45,18 @@ export function saveComposerDraft(scope: string, snapshot: ComposerDraftSnapshot
   } catch { /* storage unavailable */ }
 }
 
+/**
+ * Puts back the draft of a send that failed after its composer unmounted,
+ * unless the scope already holds a newer draft typed since.
+ */
+export function restoreComposerDraft(scope: string, snapshot: ComposerDraftSnapshot): void {
+  try {
+    // The scoped key only, not the crash snapshot another scope may have written.
+    if (window.sessionStorage.getItem(composerDraftStorageKey(scope))) return
+  } catch { return }
+  saveComposerDraft(scope, snapshot)
+}
+
 export function readComposerDraft(scope: string): ComposerDraftSnapshot | null {
   try {
     const raw = window.sessionStorage.getItem(composerDraftStorageKey(scope))

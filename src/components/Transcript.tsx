@@ -82,7 +82,7 @@ function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: 
 
 export function Transcript({ messages, git, harness = 'prime', loading, active = false, showReasoning = true, showTools = true, onOpenChanges, onSuggestion, suggestionsDisabled, showPinnedChanges = true, bottomDockHasChanges = false, queuedMessageCount = 0, onOpenSessionReference }: TranscriptProps) {
   const groupedMessages = useMemo(() => coalesceAssistantTurns(messages), [messages])
-  const { announcement, hiddenCount, scrollRef, showEarlier, updatePinnedState, visibleMessages } = useTranscriptScroll(groupedMessages)
+  const { announcement, hiddenCount, scrollRef, showEarlier, updatePinnedState, visibleMessages } = useTranscriptScroll(groupedMessages, HARNESS_SHORT_NAMES[harness])
   const activeAssistantId = useMemo(() => active && groupedMessages.at(-1)?.role === 'assistant' ? groupedMessages.at(-1)?.id : undefined, [active, groupedMessages])
   const transcriptClasses = [
     'transcript',

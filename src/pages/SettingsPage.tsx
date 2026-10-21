@@ -82,7 +82,7 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onC
       case 'general': return <GeneralSettings settings={settings} onUpdate={onUpdate} platform={platform} />
       case 'appearance': return <AppearanceSettings settings={settings} onUpdate={onUpdate} />
       case 'agent': return <AgentSettings settings={settings} meta={meta} onUpdate={onUpdate} onRefreshHarnesses={onRefreshHarnesses} />
-      case 'providers': return <ProvidersSettings harness={settings.activeHarness} catalog={providerCatalog} onRefresh={onRefreshProviders} onSaveApiKey={onSaveProviderApiKey} onLogout={onLogoutProvider} onSetEnabled={onSetProviderEnabled} onSetAllEnabled={onSetAllProvidersEnabled} onSetAllDisabled={onSetAllProvidersDisabled} onSetModelEnabled={onSetModelEnabled} onStartOAuth={onStartProviderOAuth} onOpenDocs={onOpenDocs} />
+      case 'providers': return <ProvidersSettings harness={settings.activeHarness} primeImplementation={meta?.harnesses.prime.implementation} catalog={providerCatalog} onRefresh={onRefreshProviders} onSaveApiKey={onSaveProviderApiKey} onLogout={onLogoutProvider} onSetEnabled={onSetProviderEnabled} onSetAllEnabled={onSetAllProvidersEnabled} onSetAllDisabled={onSetAllProvidersDisabled} onSetModelEnabled={onSetModelEnabled} onStartOAuth={onStartProviderOAuth} onOpenDocs={onOpenDocs} />
       case 'voice': return <VoiceSettings settings={settings} onUpdate={onUpdate} voice={voice} platform={platform} />
       case 'pets': return <PetsSettings settings={settings} onUpdate={onUpdate} pets={pets} />
       case 'browser': return <BrowserSettings settings={settings} onUpdate={onUpdate} onRequestReset={() => { setResetError(''); setConfirmReset(true) }} />

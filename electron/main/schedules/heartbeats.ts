@@ -1,6 +1,7 @@
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import type { NativeHeartbeatRecord } from '../../../src/types/api'
-import type { AgentRpcManager } from '../agent-rpc'
+import { RUST_PRIME_AGENT_NAME, RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '../../../src/lib/prime-compat'
+import type { NativeHeartbeatRecord, PrimeImplementation } from '../../../src/types/api'
+import { UnsupportedRpcCommandError, type AgentRpcManager } from '../agent-rpc'
 import { resolveExecutable, runProcess, type ExecutableSource } from '../process-utils'
 import { isRecord, requireId } from '../validation'
 
@@ -30,8 +31,32 @@ function normalizeHeartbeat(value: unknown, runtimeId?: string): NativeHeartbeat
   }
 }
 
+type HeartbeatAction = 'pause' | 'resume' | 'stop'
+
+/** A runtime whose harness has no heartbeat commands answers nothing; any other failure is real. */
+function unlessUnsupported(error: unknown): undefined {
+  if (error instanceof UnsupportedRpcCommandError) return undefined
+  throw error
+}
+
+/**
+ * Why GooeyPi could not act on a native heartbeat itself. TypeScript Prime
+ * manages a job through the RPC of the session that owns it. Rust Prime's
+ * in-process RPC has no heartbeat commands: only its background service
+ * pauses or resumes a job, and GooeyPi stops one through the CLI.
+ */
+function heartbeatActionUnavailable(action: HeartbeatAction, implementation: PrimeImplementation | undefined): Error {
+  if (implementation !== 'rust') return new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
+  if (action === 'stop') return new Error(`${RUST_PRIME_AGENT_NAME} could not stop this native heartbeat. Check that its background service is running and try again.`)
+  return new Error(RUST_PRIME_HEARTBEAT_PAUSE_DETAIL)
+}
+
 export class HeartbeatService {
-  constructor(private readonly agents: AgentRpcManager, private readonly primeAgentPath: ExecutableSource) {}
+  constructor(
+    private readonly agents: AgentRpcManager,
+    private readonly primeAgentPath: ExecutableSource,
+    private readonly primeImplementation: () => PrimeImplementation | undefined = () => undefined,
+  ) {}
 
   async list(): Promise<NativeHeartbeatRecord[]> {
     const byId = new Map<string, NativeHeartbeatRecord>()
@@ -74,30 +99,33 @@ export class HeartbeatService {
     const runtime = heartbeat.runtimeId
       ? this.agents.list().find((candidate) => candidate.runtimeId === heartbeat.runtimeId)
       : this.agents.getForSession(heartbeat.sessionFile)
-    if (runtime) {
-      const response = await this.agents.command(runtime.runtimeId, {
-        type: 'manage_heartbeat', activeSessionId: heartbeat.activeSessionId, jobId: heartbeat.id, action: actionValue,
-      })
+    // A runtime that cannot run manage_heartbeat (Rust Prime) leaves the job
+    // to the CLI, exactly as if no runtime owned it.
+    const response = runtime && await this.agents.command(runtime.runtimeId, {
+      type: 'manage_heartbeat', activeSessionId: heartbeat.activeSessionId, jobId: heartbeat.id, action: actionValue,
+    }).catch(unlessUnsupported)
+    if (runtime && response) {
       const updated = isRecord(response.data) && response.data.heartbeat !== undefined
         ? normalizeHeartbeat(response.data.heartbeat, runtime.runtimeId)
         : null
-      if (actionValue === 'stop') {
-        // A stop is a deletion, not a stale status update. Returning null makes
-        // every caller drop the row immediately; the follow-up catalog read is
-        // the authoritative orphan check.
-        if ((await this.list()).some((candidate) => candidate.id === id)) throw new Error('Heartbeat stop did not remove the job')
-        return null
-      }
+      if (actionValue === 'stop') return this.confirmStopped(id)
       if (updated) return updated
       return { ...heartbeat, status: actionValue === 'pause' ? 'paused' : 'active' }
     }
     if (actionValue === 'stop' && primeAgentPath) {
       const result = await runProcess(primeAgentPath, ['schedule', 'cancel', heartbeat.id], { timeoutMs: 30_000, maxBytes: 1024 * 1024 })
-      if (result.code === 0 && !result.timedOut && !result.outputExceeded) {
-        if ((await this.list()).some((candidate) => candidate.id === id)) throw new Error('Heartbeat stop did not remove the job')
-        return null
-      }
+      if (result.code === 0 && !result.timedOut && !result.outputExceeded) return this.confirmStopped(id)
     }
-    throw new Error('Open the owning Prime session before pausing or resuming this native heartbeat')
+    throw heartbeatActionUnavailable(actionValue, this.primeImplementation())
+  }
+
+  /**
+   * A stop is a deletion, not a stale status update. Returning null makes
+   * every caller drop the row immediately; the follow-up catalog read is the
+   * authoritative orphan check.
+   */
+  private async confirmStopped(id: string): Promise<null> {
+    if ((await this.list()).some((candidate) => candidate.id === id)) throw new Error('Heartbeat stop did not remove the job')
+    return null
   }
 }

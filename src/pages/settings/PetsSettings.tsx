@@ -1,6 +1,7 @@
 import { PawPrint, RefreshCw, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PetAvatar } from '@/components/PetAvatar'
+import { GOOEYPI_MASCOT_SRC } from '@/lib/assets'
 import type { PetDefinition, PrimeWorkApi } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 import { SettingsToggle } from './SettingsToggle'
@@ -32,7 +33,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
 
   return (
     <>
-      <header><h1>Pets</h1><p>Choose a companion that reacts while OMP or Prime works.</p></header>
+      <header><h1>Pets</h1><p>Choose a companion that reacts while the agent works.</p></header>
       <section className="pet-hero">
         <div className="pet-hero__stage"><PetAvatar pet={selected} pets={pets} activity="speaking" size={Math.round(96 * settings.petSize / 100)} reduceMotion={settings.reduceMotion} /></div>
         <div><span className="pet-kicker"><Sparkles size={12} /> Active companion</span><h2>{selected.displayName}</h2><p>{selected.description}</p><small>Drag the pet around the workspace. It runs while moving, reviews while an agent works, and waves during voice mode.</small></div>
@@ -58,7 +59,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
               onClick={() => { void onUpdate({ petId: pet.id, petEnabled: true }) }}
             >
               <span className="pet-choice__art">
-                {pet.id === 'gooey-pi' ? <img src="/gooeypi-mascot.png" alt="" /> : pet.kind === 'orb' ? <PetAvatar pet={pet} pets={pets} size={48} reduceMotion={settings.reduceMotion} /> : <PawPrint size={24} />}
+                {pet.id === 'gooey-pi' ? <img src={GOOEYPI_MASCOT_SRC} alt="" /> : pet.kind === 'orb' ? <PetAvatar pet={pet} pets={pets} size={48} reduceMotion={settings.reduceMotion} /> : <PawPrint size={24} />}
               </span>
               <span><strong>{pet.displayName}</strong><small>{pet.source === 'built-in' ? 'Built into GooeyPi' : 'Codex pet'}</small></span>
             </button>

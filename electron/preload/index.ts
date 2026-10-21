@@ -40,6 +40,7 @@ const api: PrimeWorkApi = {
     popupMenu: (menu, x, y) => invoke('app:popup-menu', menu, x, y),
     setTitleBarTheme: (theme) => invoke('app:set-title-bar-theme', theme),
     onOpenSettings: (callback) => subscribeSignal('app:open-settings', callback),
+    onHarnessesChanged: (callback) => subscribeSignal('app:harnesses-changed', callback),
   },
   updates: {
     getState: () => invoke('updates:get-state'),

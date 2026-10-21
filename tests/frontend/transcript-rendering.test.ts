@@ -64,6 +64,20 @@ describe('transcript rendering', () => {
     expect(html).toContain('role="status"><span>Working</span>')
   })
 
+  it.each([
+    ['a Prime ipython cell', 'ipython', { code: 'import os\nprint(os.getcwd())' }, 'import os print(os.getcwd())'],
+    ['an OMP eval cell', 'eval', { language: 'py', code: 'x = 1\nprint(x)' }, 'x = 1 print(x)'],
+    ['a bash command', 'bash', { command: 'npm test -- --run' }, 'npm test -- --run'],
+  ])('presents %s as a terminal tool previewing its source', (_description, name, args, preview) => {
+    const html = render([{
+      id: 'active', role: 'assistant', timestamp: 1_000, streaming: true,
+      parts: [{ type: 'toolCall', id: 'tool-1', name, args }],
+    }])
+
+    expect(html).toContain('activity-line--terminal')
+    expect(/<code class="activity-tool__preview">([\s\S]*?)<\/code>/.exec(html)?.[1].replace(/<[^>]+>/g, '')).toBe(preview)
+  })
+
   it.each([[true, 'Working'], [false, 'Thinking']] as const)(
     'uses visible activity when showTools=%s for a completed generic tool',
     (showTools, status) => {
@@ -358,6 +372,30 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('message--system')
   })
 
+  it('renders a notice as a neutral activity line that shows its text', () => {
+    const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }])
+    expect(html).toContain('message--activity')
+    expect(html).toContain('activity-line--note')
+    expect(html).toContain('Switched to anthropic/claude-sonnet due to a provider fallback')
+    expect(html).not.toContain('Prime message')
+    expect(html).not.toContain('failed')
+    expect(html).not.toContain('is-error')
+  })
+
+  it('announces a notice as a note, unlike a failure row', () => {
+    const notice = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: 'Switched to anthropic/claude-sonnet due to a provider fallback' }] }])
+    const failure = render([{ id: 'error', role: 'system', parts: [{ type: 'text', text: '529 overloaded_error: Overloaded' }] }])
+    expect(notice).toContain('class="message message--activity" role="note"')
+    expect(failure).toContain('message--activity')
+    expect(failure).not.toContain('role="note"')
+  })
+
+  it('bounds a long notice like the other activity markdown', () => {
+    const html = render([{ id: 'notice', role: 'system', kind: 'notice', parts: [{ type: 'text', text: `${'a'.repeat(40_000)}NOTICE-TAIL` }] }])
+    expect(html).toContain('[Note truncated in the desktop view.]')
+    expect(html).not.toContain('NOTICE-TAIL')
+  })
+
   it('renders compaction activity and completion separately from system failures', () => {
     const html = render([{
       id: 'compaction',
@@ -370,6 +408,67 @@ describe('transcript rendering', () => {
     expect(html).toContain('99,175 tokens before')
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('Prime message')
+  })
+
+  it('renders a refused manual compaction as a notice, not a failure', () => {
+    const html = render([{
+      id: 'refused',
+      role: 'system',
+      parts: [{ type: 'compaction', status: 'failed', outcome: 'skipped', reason: 'manual', error: 'Nothing to compact (session too small)' }],
+    }])
+    expect(html).toContain('Nothing to compact yet')
+    expect(html).toContain('activity-line--compaction is-skipped')
+    expect(html).toContain('skipped')
+    expect(html).not.toContain('is-failed')
+    expect(html).not.toContain('needs attention')
+    expect(html).not.toContain('Prime message')
+  })
+
+  it('keeps naming other skipped compactions and genuine failures apart', () => {
+    const html = render([
+      { id: 'auto', role: 'system', parts: [{ type: 'compaction', status: 'failed', outcome: 'skipped', reason: 'threshold', error: 'Auto-compaction skipped: no model' }] },
+      { id: 'failed', role: 'system', parts: [{ type: 'compaction', status: 'failed', outcome: 'failed', reason: 'manual', error: 'Compaction failed: Summarization failed' }] },
+    ])
+    expect(html).toContain('Context compaction skipped')
+    expect(html).toContain('Context compaction failed')
+    expect(html.match(/is-skipped/g)).toHaveLength(1)
+    expect(html.match(/is-failed/g)).toHaveLength(1)
+    expect(html.match(/needs attention/g)).toHaveLength(1)
+  })
+
+  it('reads a compaction that completed as done even when its end also reported a skip', () => {
+    const html = render([{ id: 'done', role: 'system', parts: [{ type: 'compaction', status: 'done', outcome: 'skipped', reason: 'threshold', summary: 'Summarized.' }] }])
+    expect(html).toContain('Context compacted')
+    expect(html).toContain('activity-line--compaction is-done')
+    expect(html).not.toContain('skipped')
+  })
+
+  it('names no reason for a compaction whose trigger is unknown', () => {
+    // No harness session file records what triggered a completed compaction.
+    const html = render([{ id: 'reloaded', role: 'system', parts: [{ type: 'compaction', status: 'done', tokensBefore: 188 }] }])
+    expect(html).toContain('Context compacted')
+    expect(html).toContain('188 tokens before')
+    expect(html).not.toContain('activity-compaction__reason')
+  })
+
+  it('labels OMP idle and incomplete-response compactions', () => {
+    const html = render([
+      { id: 'idle', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'idle' }] },
+      { id: 'incomplete', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'incomplete' }] },
+    ])
+    expect(html).toContain('idle maintenance')
+    expect(html).toContain('incomplete response recovery')
+  })
+
+  it('labels manual, threshold and requested compactions', () => {
+    const html = render([
+      { id: 'manual', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'manual' }] },
+      { id: 'threshold', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'threshold' }] },
+      { id: 'requested', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'requested' }] },
+    ])
+    expect(html).toContain('<span class="activity-compaction__reason">manual</span>')
+    expect(html).toContain('<span class="activity-compaction__reason">automatic threshold</span>')
+    expect(html).toContain('<span class="activity-compaction__reason">requested</span>')
   })
 
   it('renders standalone informational output as a collapsed tool row', () => {

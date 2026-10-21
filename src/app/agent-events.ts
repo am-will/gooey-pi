@@ -128,7 +128,8 @@ export function reconcileTranscriptMessages(
       const text = messageText(local)
       return persistedTail.some((message) => message.role === 'user' && messageText(message) === text)
     }
-    return persistedTail.some((message) => message.role === local.role)
+    // A notice and an error are both system rows; one never stands in for the other.
+    return persistedTail.some((message) => message.role === local.role && message.kind === local.kind)
   }
   const additions = localTail.filter((local) => LOCAL_MESSAGE_ID.test(local.id) && !persisted(local))
   return additions.length ? [...incoming, ...additions] : incoming

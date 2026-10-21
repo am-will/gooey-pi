@@ -1,14 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, join, posix, relative, resolve, win32 } from 'node:path'
-import { lstat, readdir, readFile, realpath } from 'node:fs/promises'
-import type { BigIntStats, Dirent } from 'node:fs'
+import { basename, dirname, join, posix, resolve, win32 } from 'node:path'
+import { lstat, readFile, realpath } from 'node:fs/promises'
+import type { BigIntStats } from 'node:fs'
 import { dialog, type BrowserWindow } from 'electron'
 import { homedir } from 'node:os'
 import { sortProjects } from '../../src/lib/project-order'
-import type { GitWorktree, HarnessId, ProjectFileEntry, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
+import type { GitWorktree, HarnessId, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
 import { listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
+import { listProjectFiles } from './project-files'
 import type { FolderIdentity, JsonStateStore, PersistedProject } from './store'
 import { isPathWithin, rejectUnknownKeys, requireBoolean, requireExistingDirectory, requireExistingPath, requireId, requireInteger, requireRecord, requireString } from './validation'
 
@@ -843,50 +844,7 @@ export class ProjectService {
   }
 
   async listFiles(rootValue: unknown): Promise<ProjectFileListing> {
-    const root = await this.authorizeReadOnlyCwd(rootValue as string)
-    const entries: ProjectFileEntry[] = []
-    let skipped = 0
-    const ignoredDirectories = new Set([
-      '.git',
-      'node_modules',
-      'vendor',
-      'out',
-      'dist',
-      'build',
-      'release',
-      'coverage',
-      '.next',
-      '.venv',
-    ])
-    const maxEntries = 5_000
-
-    const visit = async (directory: string): Promise<void> => {
-      if (entries.length >= maxEntries) return
-      let children: Dirent[]
-      try {
-        children = await readdir(directory, { withFileTypes: true })
-      } catch {
-        // An unreadable directory (permissions, races) must not fail the whole
-        // listing; report it so the UI can note the gap.
-        skipped += 1
-        return
-      }
-      children.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
-      for (const child of children) {
-        if (entries.length >= maxEntries) break
-        if (child.isSymbolicLink()) continue
-        if (child.isDirectory() && ignoredDirectories.has(child.name)) continue
-        if (!child.isDirectory() && !child.isFile()) continue
-        const absolutePath = resolve(directory, child.name)
-        const relativePath = relative(root, absolutePath)
-        const path = process.platform === 'win32' ? relativePath.split('\\').join('/') : relativePath
-        entries.push({ path, type: child.isDirectory() ? 'directory' : 'file' })
-        if (child.isDirectory()) await visit(absolutePath)
-      }
-    }
-
-    await visit(root)
-    return { entries, skipped }
+    return listProjectFiles(await this.authorizeReadOnlyCwd(rootValue as string))
   }
 
   private async authorizedRootFor(path: string, options: { readOnly?: boolean } = {}): Promise<string> {

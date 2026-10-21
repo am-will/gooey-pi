@@ -19,6 +19,7 @@ import { waitForVoiceSession } from '@/lib/voice'
 import { activeProjectScriptKind, ProjectScriptBusyError, setupNeedsRun } from '@/lib/project-scripts'
 import { SAMPLE_GIT, SAMPLE_PROJECTS, SAMPLE_SCHEDULES, SAMPLE_SESSIONS, SAMPLE_SKILLS, SAMPLE_TRANSCRIPT } from '@/lib/data'
 import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { harnessOffersFastMode } from '@/lib/prime-compat'
 import { AgentBrowserLayer, type AgentSlotRect } from '@/components/AgentBrowserLayer'
 import { useAgentBrowserTabs } from '@/hooks/useAgentBrowserTabs'
 import { useAgentEvents } from '@/hooks/useAgentEvents'
@@ -27,6 +28,7 @@ import { useAppUpdates } from '@/hooks/useAppUpdates'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import { useBrowserAnnotations } from '@/hooks/useBrowserAnnotations'
 import { useExtensionUi } from '@/hooks/useExtensionUi'
+import { useHarnessRefresh } from '@/hooks/useHarnessRefresh'
 import { INSPECTOR_DEFAULT, INSPECTOR_MIN, TERMINAL_DEFAULT, TERMINAL_MIN, usePanelLayout } from '@/hooks/usePanelLayout'
 import { usePluginSkills } from '@/hooks/usePluginSkills'
 import { useProviderCatalog } from '@/hooks/useProviderCatalog'
@@ -214,14 +216,13 @@ export default function App() {
     && session.depth === 0
     && session.id !== activeSession?.id
     && session.projectPath === activeCwd), [activeCwd, activeSession?.id, sessions])
-  const terminalSessionKey = workspace.activeSessionId
-    ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}`
-    : `${activeProject?.id ?? 'no-project'}:new:${workspace.workspaceGeneration}`
+  // Views mount per opened workspace, not per session id; the transcript also outlives a project grant.
+  const workspaceViewKey = `${activeProject?.id ?? 'no-project'}:${workspace.viewKey}`
   const activeTerminalSessionPath = workspace.runtime?.sessionFile ?? activeSession?.filePath
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionMount[]>([])
   const [terminalDrawerRevision, setTerminalDrawerRevision] = useState(0)
-  const activeTerminalSession = useMemo(() => terminalSessions.find((terminal) => terminal.workspaceKey === terminalSessionKey
-    || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath)), [activeTerminalSessionPath, terminalSessionKey, terminalSessions])
+  const activeTerminalSession = useMemo(() => terminalSessions.find((terminal) => terminal.workspaceKey === workspaceViewKey
+    || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath)), [activeTerminalSessionPath, terminalSessions, workspaceViewKey])
   const terminalOpen = Boolean(activeTerminalSession)
   const git = gitStatusForWorkspace(gitSnapshot, activeCwd)
   useEffect(() => { setChangesCardDismissed(false) }, [activeCwd])
@@ -260,13 +261,6 @@ export default function App() {
     () => meta ? HARNESS_IDS.filter((harness) => Boolean(meta.harnesses[harness].path)) : [],
     [meta],
   )
-  const refreshDetectedHarnesses = useCallback(async () => {
-    const result = await settingsState.reconcileExternalSettings(refreshHarnesses)
-    if (!result) return
-    if (result.settings.activeHarness === activeHarness && result.meta.harnesses[activeHarness].path) {
-      await provider.refresh(true)
-    }
-  }, [activeHarness, provider.refresh, refreshHarnesses, settingsState.reconcileExternalSettings])
   useEffect(() => {
     if (detectedHarnesses.length) setNoHarnessPromptDismissed(false)
   }, [detectedHarnesses.length])
@@ -350,6 +344,9 @@ export default function App() {
   const agentTabVisible = view === 'session' && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
   const pluginScope = activeProject?.primaryFolder && !activeProject.inferred ? activeProject.primaryFolder : undefined
   const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: bridge ? [] : SAMPLE_SKILLS, reportError })
+  const refreshDetectedHarnesses = useHarnessRefresh({
+    bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh, refreshCapabilities: pluginSkills.refresh, reportError,
+  })
   useEffect(() => () => { demoTimerRef.current.forEach(window.clearTimeout) }, [])
 
   const refreshSchedules = useCallback(async () => {
@@ -508,12 +505,12 @@ export default function App() {
       try { await grantProject(activeProject) } catch (error) { reportError(error); return }
     }
     setTerminalSessions((current) => {
-      const existing = current.find((terminal) => terminal.workspaceKey === terminalSessionKey
+      const existing = current.find((terminal) => terminal.workspaceKey === workspaceViewKey
         || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath))
       if (existing) return current
-      return [...current, { id: crypto.randomUUID(), workspaceKey: terminalSessionKey, cwd: activeCwd, sessionPath: activeTerminalSessionPath }]
+      return [...current, { id: crypto.randomUUID(), workspaceKey: workspaceViewKey, cwd: activeCwd, sessionPath: activeTerminalSessionPath }]
     })
-  }, [activeCwd, activeProject, activeTerminalSession, activeTerminalSessionPath, closeTerminal, grantProject, reportError, terminalSessionKey])
+  }, [activeCwd, activeProject, activeTerminalSession, activeTerminalSessionPath, closeTerminal, grantProject, reportError, workspaceViewKey])
   useEffect(() => {
     settingsState.setTerminalOpen(terminalOpen)
   }, [settingsState.setTerminalOpen, terminalOpen])
@@ -569,7 +566,7 @@ export default function App() {
         patchProjectScripts(project.id, scripts)
       }
       const run: ActiveProjectScriptRun = { requestId: crypto.randomUUID(), projectId: project.id, harness: project.harness, kind, command, ownsDrawer: false }
-      const existing = terminalSessions.find((terminal) => terminal.workspaceKey === terminalSessionKey
+      const existing = terminalSessions.find((terminal) => terminal.workspaceKey === workspaceViewKey
         || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath))
       if (existing) {
         const pending = { ...run, drawerId: existing.id, ownsDrawer: false }
@@ -583,7 +580,7 @@ export default function App() {
         setActiveProjectScriptRun(started)
         setTerminalSessions((current) => [...current, {
           id: drawerId,
-          workspaceKey: terminalSessionKey,
+          workspaceKey: workspaceViewKey,
           cwd: activeCwd,
           sessionPath: activeTerminalSessionPath,
           initialCommand: {
@@ -597,7 +594,7 @@ export default function App() {
     } finally {
       projectScriptStartingRef.current = false
     }
-  }, [activeCwd, activeProject, activeTerminalSessionPath, bridge, finishProjectScriptRun, grantProject, patchProjectScripts, terminalSessionKey, terminalSessions])
+  }, [activeCwd, activeProject, activeTerminalSessionPath, bridge, finishProjectScriptRun, grantProject, patchProjectScripts, terminalSessions, workspaceViewKey])
   const saveProjectScripts = useCallback(async (scripts: { setup: string; run: string }) => {
     if (!bridge || !activeProject) throw new Error('Select a project first.')
     const project = activeProject.inferred ? await grantProject(activeProject) : activeProject
@@ -705,10 +702,10 @@ export default function App() {
       .finally(() => { queuedFlushRef.current = false })
   }, [bridge, busy, externalSessionRunning, queuedMessages, sendPrompt, submitting])
 
-  const page = view === 'projects' ? <ProjectsPage projects={projects} sortMode={settingsState.settings.projectSortMode} onAdd={() => void addProject()} onOpen={selectProject} onRemove={(project) => void removeProject(project)} onTogglePin={(project) => void togglePinProject(project)} />
+  const page = view === 'projects' ? <ProjectsPage harness={activeHarness} projects={projects} sortMode={settingsState.settings.projectSortMode} onAdd={() => void addProject()} onOpen={selectProject} onRemove={(project) => void removeProject(project)} onTogglePin={(project) => void togglePinProject(project)} />
     : view === 'activity' ? <ActivityPage sessions={sessions} projects={projects} clearedActivity={clearedActivity} onOpen={selectSession} onClear={clearActivity} />
-    : view === 'scheduled' ? <ScheduledPage harness={activeHarness} schedules={schedules} nativeHeartbeats={activeHarness === 'prime' ? heartbeats : []} projects={projects} sessions={sessions} models={provider.catalog?.models ?? EMPTY_MODELS} lastSelectedModel={provider.model} error={scheduleError} initialProjectId={activeProject?.id} initialSessionId={activeSession?.id} selectedScheduleId={scheduleFocusId} onCreate={createSchedule} onUpdate={updateSchedule} onPause={(id: string) => mutateSchedule(() => bridge!.schedules.pause(id))} onResume={(id: string) => mutateSchedule(() => bridge!.schedules.resume(id))} onDelete={(id: string) => mutateSchedule(() => bridge!.schedules.delete(id))} onRunNow={(id: string) => mutateSchedule(() => bridge!.schedules.runNow(id))} onPreview={async (timing: ScheduleTiming) => bridge ? bridge.schedules.preview(timing, 3) : { timing, occurrences: [] }} onOpenSession={openScheduledSession} onManageHeartbeat={manageHeartbeat} />
-    : view === 'plugins' ? <PluginsPage harness={activeHarness} skills={pluginSkills.skills} warnings={pluginSkills.warnings} loading={pluginSkills.loading} activeProjectPath={activeProject?.primaryFolder} askUserEnabled={settingsState.settings.askUserEnabled} onSetAskUserEnabled={(enabled) => settingsState.updateSettings({ askUserEnabled: enabled })} browserEnabled={settingsState.settings.browserEnabled} onSetBrowserEnabled={(enabled) => settingsState.updateSettings({ browserEnabled: enabled })} computerUseEnabled={settingsState.settings.computerUseEnabled} onSetComputerUseEnabled={(enabled) => settingsState.updateSettings({ computerUseEnabled: enabled })} onOpenExternal={openExternal} onRefresh={pluginSkills.refresh} onInstall={installSkill} onInstallExtension={installExtension} onSetMcpSupport={setMcpSupport} onConnectMcp={connectMcp} onSetMcpEnabled={setMcpEnabled} onMutateCapability={mutateCapability} />
+    : view === 'scheduled' ? <ScheduledPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} schedules={schedules} nativeHeartbeats={activeHarness === 'prime' ? heartbeats : []} projects={projects} sessions={sessions} models={provider.catalog?.models ?? EMPTY_MODELS} lastSelectedModel={provider.model} error={scheduleError} initialProjectId={activeProject?.id} initialSessionId={activeSession?.id} selectedScheduleId={scheduleFocusId} onCreate={createSchedule} onUpdate={updateSchedule} onPause={(id: string) => mutateSchedule(() => bridge!.schedules.pause(id))} onResume={(id: string) => mutateSchedule(() => bridge!.schedules.resume(id))} onDelete={(id: string) => mutateSchedule(() => bridge!.schedules.delete(id))} onRunNow={(id: string) => mutateSchedule(() => bridge!.schedules.runNow(id))} onPreview={async (timing: ScheduleTiming) => bridge ? bridge.schedules.preview(timing, 3) : { timing, occurrences: [] }} onOpenSession={openScheduledSession} onManageHeartbeat={manageHeartbeat} />
+    : view === 'plugins' ? <PluginsPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} skills={pluginSkills.skills} warnings={pluginSkills.warnings} loading={pluginSkills.loading} activeProjectPath={activeProject?.primaryFolder} askUserEnabled={settingsState.settings.askUserEnabled} onSetAskUserEnabled={(enabled) => settingsState.updateSettings({ askUserEnabled: enabled })} browserEnabled={settingsState.settings.browserEnabled} onSetBrowserEnabled={(enabled) => settingsState.updateSettings({ browserEnabled: enabled })} computerUseEnabled={settingsState.settings.computerUseEnabled} onSetComputerUseEnabled={(enabled) => settingsState.updateSettings({ computerUseEnabled: enabled })} onOpenExternal={openExternal} onRefresh={pluginSkills.refresh} onInstall={installSkill} onInstallExtension={installExtension} onSetMcpSupport={setMcpSupport} onConnectMcp={connectMcp} onSetMcpEnabled={setMcpEnabled} onMutateCapability={mutateCapability} />
     : view === 'settings' ? <SettingsPage initialSection={settingsSectionRequest.section} initialSectionRequestId={settingsSectionRequest.id} settings={settingsState.settings} meta={meta} providerCatalog={provider.catalog} voice={bridge?.voice ?? null} pets={bridge?.pets ?? null} onClose={() => navigate('session')} onUpdate={settingsState.updateSettings} onRefreshHarnesses={refreshDetectedHarnesses} onRefreshProviders={() => provider.refresh(true)} onSaveProviderApiKey={provider.saveApiKey} onLogoutProvider={provider.logout} onSetProviderEnabled={provider.setEnabled} onSetAllProvidersEnabled={provider.setAllEnabled} onSetAllProvidersDisabled={provider.setAllDisabled} onSetModelEnabled={provider.setModelEnabled} onStartProviderOAuth={provider.startOAuth} onResetBrowser={async () => {
         if (!bridge) throw new Error('Browser data can only be cleared in the desktop app.')
         if (!await bridge.settings.resetBrowserData()) { const error = new Error('GooeyPi could not clear all browser data. Close active downloads and try again.'); reportError(error); throw error }
@@ -723,10 +720,10 @@ export default function App() {
       <div className="workbench__content">{view === 'session' ? <div ref={layout.workspaceRowRef} className="session-workspace" style={{ '--inspector-width': `${layout.inspectorWidth}px`, '--terminal-height': `${layout.terminalHeight}px` } as CSSProperties}>
         <div ref={layout.sessionWorkspaceRef} className="conversation-column">
           <main className="conversation-pane">
-            <Suspense fallback={<LoadingPanel label="conversation" />}><Transcript key={workspace.activeSessionId ?? 'new-session'} messages={workspace.messages} git={git} harness={activeHarness} loading={workspace.loadingSession} active={busy || activeSession?.status === 'running'} showReasoning={settingsState.settings.showReasoningSummaries} showTools={settingsState.settings.showToolCalls} onOpenChanges={openChanges} onSuggestion={(prompt) => { void sendPrompt(prompt).catch(() => undefined) }} suggestionsDisabled={!activeProject || workspace.loadingSession || submitting} showPinnedChanges={false} bottomDockHasChanges={Boolean(git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed)} queuedMessageCount={queuedMessages.length + harnessQueuedMessageCount} onOpenSessionReference={(sessionId, harness) => { const session = sessions.find((candidate) => candidate.id === sessionId && candidate.harness === harness && !candidate.archived && candidate.depth === 0); if (session) void selectSession(session); else setToast('That referenced session is archived or no longer available.') }} /></Suspense>
+            <Suspense fallback={<LoadingPanel label="conversation" />}><Transcript key={workspace.viewKey} messages={workspace.messages} git={git} harness={activeHarness} loading={workspace.loadingSession} active={busy || activeSession?.status === 'running'} showReasoning={settingsState.settings.showReasoningSummaries} showTools={settingsState.settings.showToolCalls} onOpenChanges={openChanges} onSuggestion={(prompt) => { void sendPrompt(prompt).catch(() => undefined) }} suggestionsDisabled={!activeProject || workspace.loadingSession || submitting} showPinnedChanges={false} bottomDockHasChanges={Boolean(git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed)} queuedMessageCount={queuedMessages.length + harnessQueuedMessageCount} onOpenSessionReference={(sessionId, harness) => { const session = sessions.find((candidate) => candidate.id === sessionId && candidate.harness === harness && !candidate.archived && candidate.depth === 0); if (session) void selectSession(session); else setToast('That referenced session is archived or no longer available.') }} /></Suspense>
             <div className="conversation-bottom-dock">
               {git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed ? <ChangesCard git={git} onOpenChanges={openChanges} onClose={() => setChangesCardDismissed(true)} /> : null}
-              <Composer key={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new:${workspace.workspaceGeneration}`} draftKey={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new`} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={provider.selectedModel?.fastModeSupported ?? false} fastAvailable={workspace.runtime?.fastModeAvailable !== false} checkoutCatalog={checkoutCatalog} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} checkoutsLoading={checkoutsLoading} onExecuteCheckout={bridge && activeProject && !activeProject.inferred && checkoutCatalog ? executeCheckout : undefined} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} executingModel={workspace.runtime?.executingModel} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
+              <Composer key={workspaceViewKey} draftKey={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new`} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={Boolean(provider.selectedModel?.fastModeSupported) && harnessOffersFastMode(activeHarness, meta?.harnesses.prime.implementation)} fastAvailable={workspace.runtime?.fastModeAvailable !== false} checkoutCatalog={checkoutCatalog} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} checkoutsLoading={checkoutsLoading} onExecuteCheckout={bridge && activeProject && !activeProject.inferred && checkoutCatalog ? executeCheckout : undefined} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} executingModel={workspace.runtime?.executingModel} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
             </div>
           </main>
           {terminalSessions.map((terminal) => <Suspense key={terminal.id} fallback={terminal.id === activeTerminalSession?.id ? <TerminalLoadingPanel /> : null}><TerminalDrawer ref={(handle) => { if (handle) terminalDrawerRefs.current.set(terminal.id, handle); else terminalDrawerRefs.current.delete(terminal.id) }} visible={terminal.id === activeTerminalSession?.id} cwd={terminal.cwd} sessionPath={terminal.sessionPath} shell={settingsState.settings.terminalShell} initialCommand={terminal.initialCommand} height={layout.terminalHeight} minHeight={TERMINAL_MIN} maxHeight={layout.terminalMax} defaultHeight={TERMINAL_DEFAULT} onHeightChange={layout.setTerminalHeight} onClose={() => closeTerminal(terminal.id)} onError={reportError} onInitialCommandConsumed={() => setTerminalSessions((current) => current.map((item) => item.id === terminal.id ? { ...item, initialCommand: undefined } : item))} onOpenLink={openTerminalLink} onReady={() => setTerminalDrawerRevision((revision) => revision + 1)} onSelectionChange={(selection) => { if (terminal.id === activeTerminalSession?.id) setTerminalSelection(selection) }} /></Suspense>)}
@@ -739,7 +736,7 @@ export default function App() {
     {voiceOrbOpen && bridge ? <Suspense fallback={null}><VoiceOrb voice={bridge.voice} harness={activeHarness} onClose={() => { setFocusPetVoiceControl(false); setVoiceOrbOpen(false); setRestorePetVoiceFocus(settingsState.settings.petEnabled) }} onTaskStarted={handleVoiceTaskStarted} pet={{ pets: bridge.pets, petId: settingsState.settings.petId, petSize: settingsState.settings.petSize, agentBusy: busy, reduceMotion: settingsState.settings.reduceMotion }} focusPetControl={focusPetVoiceControl} onPetControlFocused={() => setFocusPetVoiceControl(false)} /></Suspense> : null}
     {settingsState.settings.petEnabled && bridge && !voiceOrbOpen ? <Suspense fallback={null}><DesktopPet pets={bridge.pets} petId={settingsState.settings.petId} petSize={settingsState.settings.petSize} agentBusy={busy} voiceActive={false} reduceMotion={settingsState.settings.reduceMotion} focusVoiceControl={restorePetVoiceFocus} onVoiceControlFocused={() => setRestorePetVoiceFocus(false)} onDismiss={() => { setRestorePetVoiceFocus(false); void settingsState.updateSettings({ petEnabled: false }) }} onOpenVoice={() => { setRestorePetVoiceFocus(false); setFocusPetVoiceControl(true); setVoiceOrbOpen(true) }} /></Suspense> : null}
     {paletteOpen ? <Suspense fallback={null}><CommandPalette open onClose={() => setPaletteOpen(false)} onNavigate={navigate} onNewSession={newSession} onToggleSidebar={toggleSidebar} onToggleTerminal={toggleTerminal} onOpenBrowser={openBrowser} platform={platform} /></Suspense> : null}
-    {extension.extensionUi ? <Suspense fallback={<LoadingPanel label="request" />}><ExtensionUiModal request={extension.extensionUi.request} onRespond={(response) => void extension.respondToExtensionUi(response)} platform={platform} /></Suspense> : null}
+    {extension.extensionUi ? <Suspense fallback={<LoadingPanel label="request" />}><ExtensionUiModal request={extension.extensionUi.request} deadline={extension.extensionUi.deadline} onRespond={(response) => void extension.respondToExtensionUi(response)} platform={platform} /></Suspense> : null}
     {provider.authEvent ? <Suspense fallback={<LoadingPanel label="provider login" />}><ProviderAuthModal event={provider.authEvent} onOpen={openExternal} onRespond={provider.respondOAuth} onCancel={provider.cancelOAuth} /></Suspense> : null}
     {meta && !detectedHarnesses.length && !noHarnessPromptDismissed ? (
       <NoHarnessPrompt

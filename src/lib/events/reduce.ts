@@ -1,4 +1,5 @@
 import type { MessagePart, QueuedPrompt, TranscriptMessage } from '@/types/api'
+import { isSystemReport } from '@/lib/system-rows'
 import { applyCompactionEvent, isCompactionEvent } from './compaction'
 import { nextTranscriptId, withPartId } from './ids'
 import { fallbackModelFromRecord, fallbackNoticeText } from './model-fallback'
@@ -320,6 +321,16 @@ export function replayPrimeEvents(
       }
       continue
     }
+    if (type === 'message_end') {
+      // Rust Prime leaves isError off tool_execution_end; the toolResult
+      // message that follows it still carries the flag.
+      const message = record(raw.message)
+      if (message?.role !== 'toolResult' || message.isError !== true || lastStreamingAssistant < 0) continue
+      const draft = draftParts(lastStreamingAssistant)
+      const result = draft.firstToolById.get(effectiveToolId(string(message.toolCallId), string(message.toolName) ?? 'Tool'))?.next
+      if (result?.part.type === 'toolResult' && !result.part.isError) result.part = { ...result.part, isError: true }
+      continue
+    }
     if (type === 'custom_message') {
       const part = agentMessagePart(raw)
       if (part) appendNode(draftParts(assistantIndex()), withPartId(part))
@@ -334,27 +345,30 @@ export function replayPrimeEvents(
       if (!fallback) continue
       const text = fallbackNoticeText(fallback.label, fallback.from)
       const last = next.at(-1)
-      if (last?.role === 'system' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
+      if (last?.kind === 'notice' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
       const timestamp = Date.now()
       finalizeStreaming(timestamp, false)
       copyTranscript()
-      next.push({ id: nextTranscriptId('fallback'), role: 'system', timestamp, parts: [withPartId({ type: 'text', text })] })
+      next.push({ id: nextTranscriptId('fallback'), role: 'system', kind: 'notice', timestamp, parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {
-      const text = string(raw.error) ?? string(raw.message) ?? 'Prime encountered an error.'
+      const text = string(raw.error) ?? string(raw.message) ?? 'The agent encountered an error.'
       finalizeStreaming(Date.now(), false)
-      if (next.at(-1)?.role === 'system') continue
+      // An error right after agent_end says why the run failed, so the turn
+      // must not keep the fallback that reads as a completed empty turn.
+      if (type === 'error' && next.at(-1)?.role === 'assistant') dropTailFallback(next.length - 1)
+      if (isSystemReport(next.at(-1))) continue
       copyTranscript()
       next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'runtime_exit') {
       finalizeStreaming(Date.now(), false)
-      if (raw.expected === true || next.at(-1)?.role === 'system') continue
+      if (raw.expected === true || isSystemReport(next.at(-1))) continue
       const reason = raw.code !== null && raw.code !== undefined ? `exit code ${String(raw.code)}` : string(raw.signal) ?? 'an unknown error'
       copyTranscript()
-      // Harness-neutral: this reducer serves both Prime Agent and OMP events.
+      // Harness-neutral: this reducer serves Pi, OMP, and Prime Agent events.
       next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text: `The agent stopped unexpectedly (${reason}). Send the message again to restart it.` })] })
     }
   }

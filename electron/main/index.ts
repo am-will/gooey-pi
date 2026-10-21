@@ -5,8 +5,9 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
+import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
-import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER } from './agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
@@ -19,6 +20,7 @@ import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-disco
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
+import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
 import { PACKAGED_RENDERER_URL, PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
@@ -29,6 +31,7 @@ import { ScheduledRunExecutor } from './schedules/executor'
 import { HeartbeatService } from './schedules/heartbeats'
 import { AutomationService } from './schedules/service'
 import { AgentScheduleBridge } from './schedules/agent-bridge'
+import { mirrorBundledSkill } from './lib/bundled-skill-mirror'
 import { AgentBrowserBridge } from './browser/agent-bridge'
 import { AgentBrowserService } from './browser/agent-service'
 import { AgentCollaborationBridge } from './collaboration/agent-bridge'
@@ -583,7 +586,7 @@ async function bootstrap(): Promise<void> {
   const primeExecutable = () => discovery.executable('prime')
   const ompExecutable = () => discovery.executable('omp')
   const piExecutable = () => discovery.executable('pi')
-  const sessions = new SessionService(stateStore, primeExecutable)
+  const sessions = new SessionService(stateStore, primeExecutable, undefined, { primeImplementation: () => discovery.primeImplementation() })
   // OMP has no live-CLI overlay (`omp list --json` does not exist), so the OMP
   // catalog is constructed with a null executable and JSONL-only metadata.
   const ompSessions = new SessionService(stateStore, null, undefined, ompSessionServiceOptions())
@@ -631,6 +634,7 @@ async function bootstrap(): Promise<void> {
 
   const providers = new PrimeProviderService({
     openExternal: async (url) => { await shell.openExternal(url, { activate: true }) },
+    executable: primeExecutable, implementation: () => discovery.primeImplementation(),
   })
   providerService = providers
   const disabledProviders = () => new Set(stateStore.getSettings().disabledProviders)
@@ -647,6 +651,7 @@ async function bootstrap(): Promise<void> {
     (path) => sessions.requireSessionPath(path),
     providers,
     disabledProviders,
+    () => primeRpcAdapter(discovery.primeImplementation()),
   )
   agents.setDisabledModelsProvider(disabledModels)
   agents.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
@@ -682,24 +687,9 @@ async function bootstrap(): Promise<void> {
   piManager.setDisabledModelsProvider(piDisabledModels)
   piManager.setWorkspaceUseProvider((cwd, owner, retireIfIdle) => repositoryUseGate.beginWorkspaceUse(cwd, owner, retireIfIdle))
   piAgents = piManager
-  sessions.bindRuntimeHooks({
-    get: (path) => agents?.getForSession(path),
-    all: () => agents?.list() ?? [],
-    stop: async (path) => { await agents?.stopForSession(path) },
-    rename: async (path, title) => agents?.renameForSession(path, title) ?? false,
-  })
-  ompSessions.bindRuntimeHooks({
-    get: (path) => ompAgents?.getForSession(path),
-    all: () => ompAgents?.list() ?? [],
-    stop: async (path) => { await ompAgents?.stopForSession(path) },
-    rename: async (path, title) => ompAgents?.renameForSession(path, title) ?? false,
-  })
-  piSessions.bindRuntimeHooks({
-    get: (path) => piAgents?.getForSession(path),
-    all: () => piAgents?.list() ?? [],
-    stop: async (path) => { await piAgents?.stopForSession(path) },
-    rename: async (path, title) => piAgents?.renameForSession(path, title) ?? false,
-  })
+  sessions.bindRuntimeManager(agents)
+  ompSessions.bindRuntimeManager(ompManager)
+  piSessions.bindRuntimeManager(piManager)
   terminals = new TerminalService(
     authorizeEitherCwd,
     () => stateStore.getSettings().terminalShell,
@@ -765,7 +755,7 @@ async function bootstrap(): Promise<void> {
   const browserProfile = session.fromPartition(BROWSER_PARTITION)
   browserProfile.on('will-download', (event, item, owner) => downloads?.handle(event, item, owner, settings.get().browserAskForDownloads))
   const scheduleSkillPath = app.isPackaged
-    ? join(process.resourcesPath, 'skills', 'prime-work-schedules')
+    ? await mirrorBundledSkill(join(process.resourcesPath, 'skills', 'prime-work-schedules'), join(userDataPath, 'bundled-skills'))
     : join(app.getAppPath(), 'assets', 'skills', 'prime-work-schedules')
   const browserSkillPath = app.isPackaged
     ? join(process.resourcesPath, 'skills', 'prime-work-browser')
@@ -797,6 +787,7 @@ async function bootstrap(): Promise<void> {
     }
   }
   const plugins = new PluginService(primeExecutable, (path) => projects.authorizeProjectRoot(path), {
+    capabilityAvailability: (record) => primeCapabilityRecordAvailability(record, discovery.primeImplementation()),
     builtInSkills: async () => [{
       id: 'prime-work-schedules', name: 'Scheduled tasks',
       description: 'Create and manage durable project and thread schedules from an agent.',
@@ -845,7 +836,7 @@ async function bootstrap(): Promise<void> {
       kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
     }, await computerUseSkill()],
   })
-  const heartbeats = new HeartbeatService(agents, primeExecutable)
+  const heartbeats = new HeartbeatService(agents, primeExecutable, () => discovery.primeImplementation())
   const primeScheduledRuns = new ScheduledRunExecutor(
     projects,
     sessions,
@@ -968,14 +959,9 @@ async function bootstrap(): Promise<void> {
       }
     }
   }
-  agents.setRuntimeEnvironmentProvider((scope) => ({
-    ...scheduleBridge.environmentFor(scope),
-    ...(stateStore.getSettings().browserEnabled ? browserBridge.environmentFor(scope) : {}),
-    ...collaborationBridge.environmentFor({ ...scope, harness: 'prime' }),
-    PRIME_WORK_ASK_USER_EXTENSION_PATH: stateStore.getSettings().askUserEnabled && scope.interactive ? ompAskUserExtensionPath : undefined,
-    GOOEYPI_MANAGES_ASK_USER: '1',
-    GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
-    GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
+  agents.setRuntimeEnvironmentProvider((scope) => primeRuntimeEnvironment(scope, {
+    settings: stateStore.getSettings(), scheduleBridge, browserBridge, collaborationBridge,
+    askUserExtensionPath: ompAskUserExtensionPath, cuaDriver, computerUseSkillPath,
   }))
   agents.setRuntimeStartListener((environment, info) => {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
@@ -1030,6 +1016,7 @@ async function bootstrap(): Promise<void> {
     meta.harnesses = harnesses
     return { meta: structuredClone(meta), settings: currentSettings }
   }
+  agents.setStartRecovery(primeStartRecovery(async () => { await refreshHarnesses(); ipc?.notifyHarnessesChanged(); return discovery.primeImplementation() }))
   trustedRendererUrl = resolveRendererUrl()
   ipc = registerIpc({
     meta, refreshHarnesses, projects, checkouts, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,

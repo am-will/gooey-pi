@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyPrimeEvent, createPrimeEventBuffer, replayPrimeEvents, resetTranscriptIdsForTests } from '../../src/lib/events'
+import { keepLiveCompactionReasons } from '../../src/lib/events/compaction'
 import type { TranscriptMessage } from '../../src/types/api'
 
 const streamingMessage = (): TranscriptMessage => ({
@@ -13,6 +14,12 @@ describe('agent transport events', () => {
     expect(messages[0].streaming).toBe(false)
     expect(messages.at(-1)?.role).toBe('system')
     expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'Malformed agent output' }])
+  })
+
+  it.each(['error', 'extension_error', 'transport_error'])('names no harness when an event of type %s carries no message', (type) => {
+    const messages = applyPrimeEvent([streamingMessage()], { type })
+
+    expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'The agent encountered an error.' }])
   })
 
   it('keeps the stream open when the desktop rate limiter drops events', () => {
@@ -98,6 +105,47 @@ describe('agent transport events', () => {
     })
   })
 
+  it('completes a result-less end that the harness adapter marked completed', () => {
+    const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'threshold' })
+    const finished = applyPrimeEvent(started, { type: 'compaction_end', aborted: false, willRetry: false, completed: true })
+    expect(finished.at(-1)).toMatchObject({ role: 'system', streaming: false })
+    expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'done', reason: 'threshold' })
+    expect(finished.at(-1)?.parts[0]).not.toHaveProperty('outcome', 'failed')
+  })
+
+  it('renders a warning end without a result as skipped', () => {
+    const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'threshold' })
+    const finished = applyPrimeEvent(started, { type: 'compaction_end', aborted: false, willRetry: false, errorSeverity: 'warning' })
+    expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'failed', outcome: 'skipped' })
+  })
+
+  it('keeps OMP idle and incomplete compaction reasons', () => {
+    for (const reason of ['idle', 'incomplete']) {
+      const started = applyPrimeEvent([], { type: 'compaction_start', reason })
+      expect(started.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'running', reason })
+      const finished = applyPrimeEvent([], { type: 'compaction_end', reason, aborted: false, willRetry: false, completed: true })
+      expect(finished.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'done', reason })
+    }
+  })
+
+  it('drops unknown compaction reasons, including inherited object keys', () => {
+    for (const reason of ['unknown', 'toString', '__proto__', 42]) {
+      const started = applyPrimeEvent([], { type: 'compaction_start', reason })
+      expect(started.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'running', reason: undefined })
+    }
+  })
+
+  it('keeps the running row reason and instructions when the end omits them', () => {
+    const started = applyPrimeEvent([streamingMessage()], { type: 'compaction_start', reason: 'manual', customInstructions: 'Keep the API notes.' })
+    const finished = applyPrimeEvent(started, {
+      type: 'compaction_end', aborted: false, willRetry: false,
+      result: { summary: 'Summarized.', tokensBefore: 80_000, firstKeptEntryId: 'kept-2' },
+    })
+    expect(finished.at(-1)?.parts[0]).toMatchObject({
+      type: 'compaction', status: 'done', reason: 'manual', customInstructions: 'Keep the API notes.', summary: 'Summarized.',
+    })
+  })
+
   it('does not duplicate the persisted failure outcome and end event', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_074_279_000)
     const events: Record<string, unknown>[] = [
@@ -117,6 +165,29 @@ describe('agent transport events', () => {
     expect(sequential.filter((message) => message.parts.some((part) => part.type === 'compaction'))).toHaveLength(1)
     expect(sequential.at(-1)?.parts[0]).toMatchObject({ type: 'compaction', status: 'failed', outcome: 'skipped' })
     now.mockRestore()
+  })
+
+  it('keeps each OMP compaction method as its own row when they share a reason', () => {
+    // OMP falls back from a shake pass to context-full for one trigger; both ends carry the stamped start reason.
+    const events: Record<string, unknown>[] = [
+      { type: 'compaction_start', reason: 'threshold', action: 'shake' },
+      {
+        type: 'compaction_end', reason: 'threshold', action: 'shake', aborted: false, willRetry: false, skipped: true, errorSeverity: 'warning',
+        errorMessage: 'Auto-shake found nothing eligible to drop; trying the next preferred compaction method.',
+      },
+      { type: 'compaction_start', reason: 'threshold', action: 'context-full' },
+      { type: 'compaction_end', reason: 'threshold', action: 'context-full', aborted: false, willRetry: false, skipped: true, errorSeverity: 'warning' },
+    ]
+    const compactions = (messages: TranscriptMessage[]) => messages.flatMap((message) => message.parts.filter((part) => part.type === 'compaction'))
+
+    const fallback = events.reduce((current, event) => applyPrimeEvent(current, event), [streamingMessage()])
+    expect(compactions(fallback)).toMatchObject([
+      { status: 'failed', outcome: 'skipped', reason: 'threshold', action: 'shake' },
+      { status: 'failed', outcome: 'skipped', reason: 'threshold', action: 'context-full' },
+    ])
+    // The same method skipping again for the same reason still collapses into one row.
+    const repeated = [...events.slice(2), ...events.slice(2)].reduce((current, event) => applyPrimeEvent(current, event), [streamingMessage()])
+    expect(compactions(repeated)).toHaveLength(1)
   })
 
   it('mints distinct message ids for turns created in the same millisecond', () => {
@@ -164,5 +235,17 @@ describe('agent transport events', () => {
     const result = replayed.replay(loaded)
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('persisted-compaction')
+  })
+
+  it('gives a reloaded compaction only the reason of the same live pass', () => {
+    const live: TranscriptMessage[] = [{ id: 'compaction-1', role: 'system', parts: [{ type: 'compaction', status: 'done', reason: 'manual', firstKeptEntryId: 'kept-2', tokensBefore: 188 }] }]
+    const earlier: TranscriptMessage = { id: 'compact-1', role: 'system', parts: [{ type: 'compaction', status: 'done', firstKeptEntryId: 'kept-1', tokensBefore: 99 }] }
+    const same: TranscriptMessage = { id: 'compact-2', role: 'system', parts: [{ type: 'compaction', status: 'done', firstKeptEntryId: 'kept-2', tokensBefore: 188 }] }
+
+    const reloaded = keepLiveCompactionReasons(live, [earlier, same])
+    expect(reloaded[0]).toBe(earlier)
+    expect(reloaded[1]).toEqual({ ...same, parts: [{ ...same.parts[0], reason: 'manual' }] })
+    const unrelated = [earlier]
+    expect(keepLiveCompactionReasons(live, unrelated)).toBe(unrelated)
   })
 })

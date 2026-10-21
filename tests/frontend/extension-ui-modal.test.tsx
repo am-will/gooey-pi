@@ -123,3 +123,35 @@ describe('extension questionnaire keyboard handling', () => {
     expect(selected.textContent).toContain('Vue')
   })
 })
+
+describe('extension questionnaire countdown', () => {
+  function remainingText(): string | undefined {
+    return document.querySelector('[role="timer"] strong')?.textContent ?? undefined
+  }
+
+  it('counts down to the deadline it is given rather than from mount', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    try {
+      const timed = { ...request, timeout: 120_000 }
+      await act(async () => { root.render(<ExtensionUiModal request={timed} deadline={Date.now() + 60_000} onRespond={vi.fn()} />) })
+      expect(remainingText()).toBe('60s')
+      await act(async () => { vi.advanceTimersByTime(1_000) })
+      expect(remainingText()).toBe('59s')
+
+      await act(async () => { root.render(<ExtensionUiModal request={timed} onRespond={vi.fn()} />) })
+      expect(remainingText()).toBeUndefined()
+      await act(async () => { root.render(<ExtensionUiModal request={timed} deadline={Date.now() + 30_000} onRespond={vi.fn()} />) })
+      expect(remainingText()).toBe('30s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('extension select request', () => {
+  it('asks for a choice without naming a harness', async () => {
+    const select: ExtensionUiRequest = { method: 'select', id: 'pick-1', title: 'Pick a branch', options: ['main', 'dev'] }
+    await act(async () => { root.render(<ExtensionUiModal request={select} onRespond={vi.fn()} />) })
+    expect(document.querySelector('.extension-question .modal-intro')?.textContent).toBe('Choose an option to let the agent continue.')
+  })
+})

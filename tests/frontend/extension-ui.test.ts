@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseExtensionUiRequest } from '../../src/lib/extension-ui'
+import { parseExtensionUiCancel, parseExtensionUiRequest } from '../../src/lib/extension-ui'
 import { pendingExtensionUiForRuntime, type PendingExtensionUi } from '../../src/hooks/useExtensionUi'
 
 describe('extension UI request parsing', () => {
@@ -84,6 +84,16 @@ describe('extension UI request parsing', () => {
     expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit the plan', prefill: 'step one' })).toEqual({ method: 'editor', id: 'editor-1', title: 'Edit the plan', prefill: 'step one' })
     expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit the plan' })).toEqual({ method: 'editor', id: 'editor-1', title: 'Edit the plan', prefill: undefined })
     expect(parseExtensionUiRequest({ type: 'extension_ui_request', id: 'editor-1', method: 'editor', title: 'Edit the plan', prefill: 'x'.repeat(32_001) })).toBeUndefined()
+  })
+
+  it('reads the target of an OMP dialog cancel frame and nothing else', () => {
+    const cancel = { type: 'extension_ui_request', id: 'cancel-1', method: 'cancel', targetId: 'question-1' }
+    expect(parseExtensionUiCancel(cancel)).toBe('question-1')
+    expect(parseExtensionUiRequest(cancel)).toBeUndefined()
+    expect(parseExtensionUiCancel({ ...cancel, targetId: '' })).toBeUndefined()
+    expect(parseExtensionUiCancel({ ...cancel, targetId: 7 })).toBeUndefined()
+    expect(parseExtensionUiCancel({ ...cancel, method: 'notify' })).toBeUndefined()
+    expect(parseExtensionUiCancel({ ...cancel, type: 'extension_ui_response' })).toBeUndefined()
   })
 })
 

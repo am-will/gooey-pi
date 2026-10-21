@@ -122,18 +122,21 @@ describe('preload bridge contract', () => {
     electronMocks.ipcRenderer.send.mockReset()
   })
 
-  it('exposes the main-process Settings signal with a removable listener', () => {
-    const api = electronMocks.api as { app: { onOpenSettings(callback: () => void): () => void } }
-    expect(() => (api.app.onOpenSettings as unknown as (callback: unknown) => unknown)(undefined)).toThrow('callback must be a function')
+  it.each([
+    ['onOpenSettings', 'app:open-settings'],
+    ['onHarnessesChanged', 'app:harnesses-changed'],
+  ] as const)('exposes the main-process app.%s signal with a removable listener', (method, channel) => {
+    const api = electronMocks.api as { app: Record<typeof method, (callback: () => void) => () => void> }
+    expect(() => (api.app[method] as unknown as (callback: unknown) => unknown)(undefined)).toThrow('callback must be a function')
     const callback = vi.fn()
-    const unsubscribe = api.app.onOpenSettings(callback)
+    const unsubscribe = api.app[method](callback)
     const listener = electronMocks.ipcRenderer.on.mock.calls[0]?.[1] as (() => void) | undefined
 
-    expect(electronMocks.ipcRenderer.on).toHaveBeenCalledWith('app:open-settings', expect.any(Function))
+    expect(electronMocks.ipcRenderer.on).toHaveBeenCalledWith(channel, expect.any(Function))
     listener?.()
     expect(callback).toHaveBeenCalledOnce()
     unsubscribe()
-    expect(electronMocks.ipcRenderer.removeListener).toHaveBeenCalledWith('app:open-settings', listener)
+    expect(electronMocks.ipcRenderer.removeListener).toHaveBeenCalledWith(channel, listener)
   })
 
   it('freezes the exposed API and every domain', () => {

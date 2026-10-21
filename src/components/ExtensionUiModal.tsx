@@ -13,8 +13,14 @@ export type ExtensionUiResponse =
 
 interface ExtensionUiModalProps {
   request: ExtensionUiRequest
+  // Epoch ms at which the request expires. A questionnaire counts down to it.
+  deadline?: number
   onRespond(response: ExtensionUiResponse): void
   platform?: NodeJS.Platform
+}
+
+function remainingUntil(deadline: number | undefined): number | undefined {
+  return deadline === undefined ? undefined : Math.max(0, deadline - Date.now())
 }
 
 function questionnaireAnswer(
@@ -38,16 +44,16 @@ function questionnaireAnswer(
   }
 }
 
-export function ExtensionUiModal({ request, onRespond, platform = 'darwin' }: ExtensionUiModalProps) {
+export function ExtensionUiModal({ request, deadline, onRespond, platform = 'darwin' }: ExtensionUiModalProps) {
   const prefill = request.method === 'editor' ? request.prefill : undefined
-  const questionnaireTimeout = request.method === 'questionnaire' ? request.timeout : undefined
+  const questionnaireDeadline = request.method === 'questionnaire' ? deadline : undefined
   const [value, setValue] = useState(prefill ?? '')
   const [selected, setSelected] = useState(0)
   const [questionIndex, setQuestionIndex] = useState(0)
   const [selectedByQuestion, setSelectedByQuestion] = useState<Record<string, number>>({})
   const [answeredByQuestion, setAnsweredByQuestion] = useState<Record<string, boolean>>({})
   const [contexts, setContexts] = useState<Record<string, string>>({})
-  const [remainingMs, setRemainingMs] = useState<number | undefined>(questionnaireTimeout)
+  const [remainingMs, setRemainingMs] = useState(() => remainingUntil(questionnaireDeadline))
   const contextInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const questionnaireRef = useRef<HTMLDivElement | null>(null)
 
@@ -84,16 +90,12 @@ export function ExtensionUiModal({ request, onRespond, platform = 'darwin' }: Ex
   }, [request.id, request.method === 'questionnaire' ? request.complete : false, questionIndex])
 
   useEffect(() => {
-    if (questionnaireTimeout === undefined) {
-      setRemainingMs(undefined)
-      return
-    }
-    const deadline = Date.now() + questionnaireTimeout
-    const updateRemaining = () => setRemainingMs(Math.max(0, deadline - Date.now()))
+    const updateRemaining = () => setRemainingMs(remainingUntil(questionnaireDeadline))
     updateRemaining()
+    if (questionnaireDeadline === undefined) return
     const timer = window.setInterval(updateRemaining, 1_000)
     return () => window.clearInterval(timer)
-  }, [questionnaireTimeout, request.id])
+  }, [questionnaireDeadline])
 
   const cancel = () => onRespond({ cancelled: true })
 
@@ -275,7 +277,7 @@ export function ExtensionUiModal({ request, onRespond, platform = 'darwin' }: Ex
       ) : null}
       {request.method === 'select' ? (
         <div className="extension-question">
-          <p className="modal-intro">Choose an option to let Prime continue.</p>
+          <p className="modal-intro">Choose an option to let the agent continue.</p>
           <div className="extension-question__options" role="listbox" aria-label={request.title}>
             {request.options.map((option, index) => (
               <button

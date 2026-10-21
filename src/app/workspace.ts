@@ -12,5 +12,5 @@ export interface WorkspaceSnapshot {
 export const requestFailureMessage = (error: unknown) => {
   const raw = errorMessage(error)
   const detail = raw.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/i, '').trim()
-  return detail ? `Request failed: ${detail.slice(0, 1_000)}` : 'Prime could not process the request.'
+  return detail ? `Request failed: ${detail.slice(0, 1_000)}` : 'The agent could not process the request.'
 }

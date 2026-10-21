@@ -2,14 +2,10 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentRpcManager, OMP_RPC_ADAPTER } from '../../electron/main/agent-rpc'
+import { AgentRpcManager, OMP_RPC_ADAPTER, UnsupportedRpcCommandError } from '../../electron/main/agent-rpc'
 import type { ProviderCatalog } from '../../electron/main/agent-rpc'
-import {
-  RPC_CHUNK_ASSEMBLY_INACTIVITY_MS,
-  RpcRuntime,
-  type RpcChunkAssemblyTimer,
-  type RpcChunkAssemblyTiming,
-} from '../../electron/main/agent-rpc/runtime'
+import { RPC_CHUNK_ASSEMBLY_INACTIVITY_MS, type RpcChunkAssemblyTimer, type RpcChunkAssemblyTiming } from '../../electron/main/agent-rpc/chunk-assembly'
+import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
 import { RPC_READ_FRAME_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
 import { OmpModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-omp'
 import { ScheduledRunExecutor } from '../../electron/main/schedules/executor'
@@ -51,6 +47,9 @@ const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
 const sessionActions = ${JSON.stringify(options.sessionActions)}
 let negotiated = false
 let streaming = false
+// OMP's contextUsage, served by get_state and get_session_stats; prompt scripts may move it.
+let contextTokens = 12000
+const contextUsage = () => ({ tokens: contextTokens, contextWindow: 200000, percent: contextTokens / 2000 })
 send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2] })
 send({ type: 'available_commands_update', commands: [{ name: 'help' }] })
 send({ type: 'fake_argv', argv: process.argv.slice(2) })
@@ -73,12 +72,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     send({ id: command.id, type: 'response', command: 'get_state', success: true, data: {
       sessionId: 'omp-session', isStreaming: streaming, isCompacting: false, thinkingLevel: 'medium',
       fastModeEnabled: true, model: { provider: 'openai-codex', id: 'gpt-5.6-luna', name: 'Luna GPT-5.6' },
-      contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+      contextUsage: contextUsage(),
       queuedMessageCount: ${options.queuedMessageCount ?? 0},
       ...(sessionActions ? { sessionActions } : {}),
     } })
   } else if (command.type === 'get_session_stats') {
-    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 }, tokens: { input: 9000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
+    send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: contextUsage(), tokens: { input: 9000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
   } else if (command.type === 'branch' || command.type === 'get_branch_messages') {
     send({ id: command.id, type: 'response', command: command.type, success: true, data: { received: command.type, entryId: command.entryId } })
   } else if (command.type === 'fork' || command.type === 'get_fork_messages') {
@@ -131,8 +130,7 @@ interface ChunkRuntimeView {
   handleFrame(frame: Record<string, unknown>): void
   handleLine(line: string): void
   failTransport(error: Error): void
-  chunkAssemblies: Map<string, unknown>
-  chunkAssemblySweepTimer: ControlledChunkTimer | null
+  chunks: { assemblies: Map<string, unknown>; sweepTimer: ControlledChunkTimer | null }
   child: { kill(signal?: NodeJS.Signals): boolean; once(event: 'close', listener: () => void): void }
 }
 
@@ -444,6 +442,7 @@ describe('OMP RPC command translation', () => {
       .rejects.toThrow('RPC command send_message is not supported by the OMP harness')
     await expect(manager.command(runtime.runtimeId, { type: 'clone' }))
       .rejects.toThrow('RPC command clone is not supported by the OMP harness')
+    await expect(manager.command(runtime.runtimeId, { type: 'clone' })).rejects.toBeInstanceOf(UnsupportedRpcCommandError)
   })
 
   it('maps set_service_tier onto set_fast_mode', async () => {
@@ -464,10 +463,12 @@ describe('OMP RPC command translation', () => {
 })
 
 describe('OMP RPC event normalization', () => {
-  it('normalizes auto_compaction events to compaction events', async () => {
+  it('normalizes auto_compaction events to compaction events and stamps the start reason on the end', async () => {
     const fake = fakeOmpAgent({ promptScript: `
-    send({ type: 'auto_compaction_start', reason: 'threshold' })
-    send({ type: 'auto_compaction_end', reason: 'threshold', aborted: false, willRetry: false })
+    send({ type: 'auto_compaction_start', reason: 'threshold', action: 'shake' })
+    send({ type: 'auto_compaction_end', action: 'shake', aborted: false, willRetry: false, skipped: false })
+    send({ type: 'auto_compaction_start', reason: 'idle', action: 'context-full' })
+    send({ type: 'auto_compaction_end', action: 'context-full', aborted: false, willRetry: false, skipped: true })
     send({ type: 'agent_end', isTerminal: true })` })
     const manager = ompManager(fake.executable)
     const events: Array<Record<string, unknown>> = []
@@ -476,11 +477,33 @@ describe('OMP RPC event normalization', () => {
 
     await manager.command(runtime.runtimeId, { type: 'prompt', message: 'continue' })
 
-    await waitUntil(() => events.some((event) => event.type === 'compaction_end'))
-    const start = events.find((event) => event.type === 'compaction_start')
-    expect(start).toMatchObject({ reason: 'threshold' })
+    await waitUntil(() => events.filter((event) => event.type === 'compaction_end').length === 2)
+    expect(events.filter((event) => event.type === 'compaction_start')).toMatchObject([{ reason: 'threshold' }, { reason: 'idle' }])
+    // OMP ends carry no reason; each end reports the reason its start announced.
+    expect(events.filter((event) => event.type === 'compaction_end')).toMatchObject([
+      { reason: 'threshold', completed: true },
+      { reason: 'idle', errorSeverity: 'warning' },
+    ])
     expect(events.some((event) => String(event.type).startsWith('auto_compaction'))).toBe(false)
     expect(manager.list()[0]).toMatchObject({ isStreaming: false, isCompacting: false })
+  })
+
+  it('restates OMP compaction end outcomes in Prime vocabulary', () => {
+    const state = { runtimeId: 'runtime', harness: 'omp' as const, cwd: '/project', isStreaming: false }
+    const end = (fields: Record<string, unknown>) => OMP_RPC_ADAPTER.normalizeEvent({ type: 'auto_compaction_end', action: 'shake', aborted: false, willRetry: false, ...fields }, state)
+
+    // A benign no-op is a warning, not a failure.
+    expect(end({ action: 'context-full', skipped: true })).toEqual({ type: 'compaction_end', action: 'context-full', aborted: false, willRetry: false, skipped: true, errorSeverity: 'warning' })
+    expect(end({ skipped: true, errorMessage: 'Auto-shake found nothing eligible to drop' })).toMatchObject({ errorSeverity: 'warning' })
+    // A shake pass that reclaimed context rewrites history in place and carries no result.
+    expect(end({ skipped: false })).toEqual({ type: 'compaction_end', action: 'shake', aborted: false, willRetry: false, skipped: false, completed: true })
+    expect(end({ willRetry: true })).toMatchObject({ completed: true, willRetry: true })
+    // Results, aborts, and errors keep their own meaning.
+    const result = { summary: 'Earlier work.', tokensBefore: 150_000, firstKeptEntryId: 'kept-1' }
+    expect(end({ action: 'context-full', result })).toEqual({ type: 'compaction_end', action: 'context-full', aborted: false, willRetry: false, result })
+    expect(end({ aborted: true })).not.toHaveProperty('completed')
+    expect(end({ skipped: false, errorMessage: 'shake failed' })).not.toHaveProperty('completed')
+    expect(end({ errorMessage: 'shake failed' })).not.toHaveProperty('errorSeverity')
   })
 
   it('swallows non-terminal agent_end turn boundaries and forwards the terminal one', async () => {
@@ -505,6 +528,94 @@ describe('OMP RPC event normalization', () => {
     const ends = events.filter((event) => event.type === 'agent_end')
     expect(ends).toHaveLength(1)
     expect(ends[0].isTerminal).toBe(true)
+  })
+})
+
+/** A prompt script that runs each JavaScript step on its own tick, so stats requests interleave with events as they do live. */
+function steppedPromptScript(steps: string[]): string {
+  return `streaming = true
+    const steps = [${steps.map((step) => `() => { ${step} }`).join(',\n')}]
+    const next = () => { const step = steps.shift(); if (!step) return; step(); setTimeout(next, 15) }
+    next()`
+}
+
+describe('OMP context usage', () => {
+  // OMP reports the prompt that produced the latest response plus an estimate
+  // of the messages after it: a response's own output (usage.output, which
+  // includes reasoning) only enters the figure once the next prompt replays it.
+  const OUTPUT = 3_000
+  const REPLAYED = 600
+  const TOOL_RESULT = 800
+  const userTurn = `send({ type: 'agent_start' })
+    send({ type: 'message_start', message: { role: 'user', content: 'go' } })
+    send({ type: 'message_end', message: { role: 'user', content: 'go' } })`
+  const contextTokens = (manager: AgentRpcManager) => manager.list()[0]?.contextUsage?.tokens
+
+  it('stays within one response of the real context across a long tool loop', async () => {
+    const steps = [`contextTokens = 20000
+      ${userTurn}
+      send({ type: 'fake_real_context', tokens: 20000 })`]
+    for (let turn = 0; turn < 15; turn += 1) {
+      const prompt = 20_000 + turn * (REPLAYED + TOOL_RESULT)
+      steps.push(
+        `send({ type: 'message_start', message: { role: 'assistant' } })`,
+        `send({ type: 'message_update', message: { role: 'assistant', usage: { output: ${OUTPUT / 2} } }, assistantMessageEvent: { type: 'thinking_delta', delta: 'thinking' } })`,
+        `contextTokens = ${prompt}
+          send({ type: 'fake_real_context', tokens: ${prompt + REPLAYED} })
+          send({ type: 'message_end', message: { role: 'assistant', usage: { output: ${OUTPUT} } } })`,
+        `contextTokens = ${prompt + TOOL_RESULT}
+          send({ type: 'fake_real_context', tokens: ${prompt + REPLAYED + TOOL_RESULT} })
+          send({ type: 'tool_execution_end', toolCallId: 'read-${turn}', toolName: 'read', result: 'ok' })
+          send({ type: 'message_end', message: { role: 'toolResult', content: 'ok' } })
+          send({ type: 'turn_end' })`,
+      )
+    }
+    steps.push(`streaming = false
+      send({ type: 'agent_end', isTerminal: true })`)
+    const fake = fakeOmpAgent({ promptScript: steppedPromptScript(steps) })
+    const manager = ompManager(fake.executable)
+    const events: Array<Record<string, unknown>> = []
+    manager.setEventSink(({ event }) => events.push(event))
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'go' })
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+    // The terminal refresh settles on OMP's own figure.
+    await waitUntil(() => contextTokens(manager) === 20_000 + 14 * (REPLAYED + TOOL_RESULT) + TOOL_RESULT)
+
+    let real: number | undefined
+    let checked = 0
+    for (const event of events) {
+      if (event.type === 'fake_real_context') real = Number(event.tokens)
+      else if (event.type === 'context_usage' && real !== undefined) {
+        expect((event.contextUsage as { tokens: number }).tokens).toBeLessThanOrEqual(real + OUTPUT)
+        checked += 1
+      }
+    }
+    expect(checked).toBeGreaterThan(15)
+  })
+
+  it('reports the post-compaction figure without leftover live output', async () => {
+    const fake = fakeOmpAgent({ promptScript: steppedPromptScript([
+      `contextTokens = 150000
+        ${userTurn}`,
+      `send({ type: 'message_start', message: { role: 'assistant' } })`,
+      `send({ type: 'message_end', message: { role: 'assistant', usage: { output: ${OUTPUT} } } })`,
+      `send({ type: 'auto_compaction_start', reason: 'threshold', action: 'context-full' })`,
+      `contextTokens = 40000
+        send({ type: 'auto_compaction_end', action: 'context-full', aborted: false, willRetry: false, result: { summary: 'Earlier work.', tokensBefore: 153000, firstKeptEntryId: 'kept-1' } })`,
+    ]) })
+    const manager = ompManager(fake.executable)
+    const events: Array<Record<string, unknown>> = []
+    manager.setEventSink(({ event }) => events.push(event))
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'go' })
+    await waitUntil(() => events.some((event) => event.type === 'compaction_end'))
+    // Before compacting, the response's output was projected on top of OMP's figure.
+    expect(events.some((event) => event.type === 'context_usage' && (event.contextUsage as { tokens: number }).tokens === 150_000 + OUTPUT)).toBe(true)
+    await waitUntil(() => contextTokens(manager) === 40_000)
+    expect(events.filter((event) => event.type === 'context_usage').at(-1)?.contextUsage).toEqual({ tokens: 40_000, contextWindow: 200_000, percent: 20 })
   })
 })
 
@@ -556,15 +667,15 @@ describe('OMP RPC chunked frames', () => {
 
     view.handleFrame(chunkFrame('abandoned', 0, 2, Buffer.from('{"type":"partial"')))
 
-    expect(view.chunkAssemblies).toHaveLength(1)
-    expect(view.chunkAssemblySweepTimer).not.toBeNull()
-    expect(view.chunkAssemblySweepTimer?.hasRef()).toBe(false)
+    expect(view.chunks.assemblies).toHaveLength(1)
+    expect(view.chunks.sweepTimer).not.toBeNull()
+    expect(view.chunks.sweepTimer?.hasRef()).toBe(false)
     expect(timing.activeTimers()).toHaveLength(1)
 
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS)
 
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
     expect(events).toContainEqual(expect.objectContaining({
       type: 'transport_limit',
       kind: 'chunk',
@@ -578,10 +689,10 @@ describe('OMP RPC chunked frames', () => {
     for (const chunkId of ['one', 'two', 'three', 'four']) {
       view.handleFrame(chunkFrame(chunkId, 0, 2, Buffer.from(`{"type":"${chunkId}`)))
     }
-    expect(view.chunkAssemblies).toHaveLength(4)
+    expect(view.chunks.assemblies).toHaveLength(4)
 
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS)
-    expect(view.chunkAssemblies).toHaveLength(0)
+    expect(view.chunks.assemblies).toHaveLength(0)
 
     const complete = Buffer.from(JSON.stringify({ type: 'after_expiry', payload: 'accepted' }))
     const splitAt = Math.floor(complete.length / 2)
@@ -590,8 +701,8 @@ describe('OMP RPC chunked frames', () => {
 
     expect(events).toContainEqual({ type: 'after_expiry', payload: 'accepted' })
     expect(events.some((event) => event.error === 'too many concurrent chunk reassemblies')).toBe(false)
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
   })
 
   it('rejects a fifth non-expired assembly without disturbing the four admitted prefixes', () => {
@@ -600,12 +711,12 @@ describe('OMP RPC chunked frames', () => {
     for (const chunkId of ['one', 'two', 'three', 'four']) {
       view.handleFrame(chunkFrame(chunkId, 0, 2, Buffer.from('{')))
     }
-    const ownedTimer = view.chunkAssemblySweepTimer
+    const ownedTimer = view.chunks.sweepTimer
     view.handleFrame(chunkFrame('fifth', 0, 2, Buffer.from('{')))
 
-    expect([...view.chunkAssemblies.keys()]).toEqual(['one', 'two', 'three', 'four'])
-    expect(view.chunkAssemblySweepTimer).not.toBeNull()
-    expect(view.chunkAssemblySweepTimer?.hasRef()).toBe(false)
+    expect([...view.chunks.assemblies.keys()]).toEqual(['one', 'two', 'three', 'four'])
+    expect(view.chunks.sweepTimer).not.toBeNull()
+    expect(view.chunks.sweepTimer?.hasRef()).toBe(false)
     expect(timing.activeTimers()).toHaveLength(1)
     expect(events).toContainEqual(expect.objectContaining({
       type: 'transport_limit',
@@ -620,21 +731,21 @@ describe('OMP RPC chunked frames', () => {
     const complete = Buffer.from(JSON.stringify({ type: 'survived_invalid_ids' }))
     const splitAt = Math.floor(complete.length / 2)
     view.handleFrame(chunkFrame('valid-a', 0, 2, complete.subarray(0, splitAt)))
-    const ownedTimer = view.chunkAssemblySweepTimer
+    const ownedTimer = view.chunks.sweepTimer
 
     view.handleFrame({ type: 'rpc_chunk', chunkId: '', index: 0, count: 2, data: '' })
     view.handleFrame({ type: 'rpc_chunk', chunkId: 'x'.repeat(129), index: 0, count: 2, data: '' })
     view.handleFrame({ type: 'rpc_chunk', index: 0, count: 2, data: '' })
 
-    expect([...view.chunkAssemblies.keys()]).toEqual(['valid-a'])
-    expect(view.chunkAssemblySweepTimer).toBe(ownedTimer)
+    expect([...view.chunks.assemblies.keys()]).toEqual(['valid-a'])
+    expect(view.chunks.sweepTimer).toBe(ownedTimer)
     expect(timing.activeTimers()).toEqual([ownedTimer])
     view.handleFrame(chunkFrame('valid-a', 1, 2, complete.subarray(splitAt)))
 
     expect(events).toContainEqual({ type: 'survived_invalid_ids' })
     expect(events.filter((event) => event.type === 'transport_limit' && event.kind === 'chunk')).toHaveLength(3)
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
   })
 
   it('refreshes the inactivity deadline only after valid byte progress', () => {
@@ -645,11 +756,11 @@ describe('OMP RPC chunked frames', () => {
     view.handleFrame(chunkFrame('progress', 1, 3, Buffer.from('"still-alive"')))
 
     timing.advanceBy(1)
-    expect(view.chunkAssemblies).toHaveLength(1)
+    expect(view.chunks.assemblies).toHaveLength(1)
     expect(events.some((event) => event.type === 'transport_limit')).toBe(false)
 
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS - 1)
-    expect(view.chunkAssemblies).toHaveLength(0)
+    expect(view.chunks.assemblies).toHaveLength(0)
     expect(events).toContainEqual(expect.objectContaining({ type: 'transport_limit', kind: 'chunk' }))
   })
 
@@ -657,15 +768,15 @@ describe('OMP RPC chunked frames', () => {
     const { view, events, timing } = directChunkRuntime()
 
     view.handleFrame(chunkFrame('zero-progress', 0, 3, Buffer.alloc(0)))
-    expect(view.chunkAssemblies).toHaveLength(1)
-    expect(view.chunkAssemblySweepTimer?.hasRef()).toBe(false)
+    expect(view.chunks.assemblies).toHaveLength(1)
+    expect(view.chunks.sweepTimer?.hasRef()).toBe(false)
 
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS - 1)
     view.handleFrame(chunkFrame('zero-progress', 1, 3, Buffer.alloc(0)))
     timing.advanceBy(1)
 
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
     expect(events).toContainEqual(expect.objectContaining({ type: 'transport_limit', kind: 'chunk' }))
   })
 
@@ -678,19 +789,19 @@ describe('OMP RPC chunked frames', () => {
     expect(timing.activeTimers()).toHaveLength(1)
     expect(timing.created).toHaveLength(2)
     expect(timing.created[0]?.cancelled).toBe(true)
-    const earliestTimer = view.chunkAssemblySweepTimer
+    const earliestTimer = view.chunks.sweepTimer
     expect(earliestTimer?.hasRef()).toBe(false)
 
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS - 10_000)
 
-    expect([...view.chunkAssemblies.keys()]).toEqual(['later'])
+    expect([...view.chunks.assemblies.keys()]).toEqual(['later'])
     expect(events.filter((event) => event.type === 'transport_limit')).toHaveLength(1)
     expect(timing.activeTimers()).toHaveLength(1)
-    expect(view.chunkAssemblySweepTimer).not.toBe(earliestTimer)
-    expect(view.chunkAssemblySweepTimer?.hasRef()).toBe(false)
+    expect(view.chunks.sweepTimer).not.toBe(earliestTimer)
+    expect(view.chunks.sweepTimer?.hasRef()).toBe(false)
 
     timing.advanceBy(10_000)
-    expect(view.chunkAssemblies).toHaveLength(0)
+    expect(view.chunks.assemblies).toHaveLength(0)
     expect(events.filter((event) => event.type === 'transport_limit')).toHaveLength(2)
     expect(timing.activeTimers()).toHaveLength(0)
   })
@@ -703,32 +814,32 @@ describe('OMP RPC chunked frames', () => {
     wallClock.mockReturnValue(-5_000_000)
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS)
 
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
   })
 
   it('uses monotonic inactivity when the wall clock jumps forward', () => {
     const wallClock = vi.spyOn(Date, 'now').mockReturnValue(5_000_000)
     const { view, timing } = directChunkRuntime()
     view.handleFrame(chunkFrame('wall-forward', 0, 2, Buffer.from('{')))
-    const earlyTimer = view.chunkAssemblySweepTimer
+    const earlyTimer = view.chunks.sweepTimer
     expect(earlyTimer).not.toBeNull()
 
     wallClock.mockReturnValue(50_000_000)
     timing.fireLate(earlyTimer as ControlledChunkTimer)
 
-    expect(view.chunkAssemblies).toHaveLength(1)
-    expect(view.chunkAssemblySweepTimer).not.toBe(earlyTimer)
-    expect(view.chunkAssemblySweepTimer?.hasRef()).toBe(false)
+    expect(view.chunks.assemblies).toHaveLength(1)
+    expect(view.chunks.sweepTimer).not.toBe(earlyTimer)
+    expect(view.chunks.sweepTimer?.hasRef()).toBe(false)
     timing.advanceBy(RPC_CHUNK_ASSEMBLY_INACTIVITY_MS)
-    expect(view.chunkAssemblies).toHaveLength(0)
+    expect(view.chunks.assemblies).toHaveLength(0)
   })
 
   it('retains the existing chunk-count and decoded-byte bounds', () => {
     const { view, events } = directChunkRuntime()
 
     view.handleFrame(chunkFrame('count-limit', 0, 4_097, Buffer.alloc(0)))
-    expect(view.chunkAssemblies).toHaveLength(0)
+    expect(view.chunks.assemblies).toHaveLength(0)
     expect(events).toContainEqual(expect.objectContaining({
       type: 'transport_limit',
       kind: 'chunk',
@@ -737,9 +848,9 @@ describe('OMP RPC chunked frames', () => {
 
     const atLimit = Buffer.alloc(RPC_READ_FRAME_LIMIT_BYTES)
     view.handleFrame(chunkFrame('byte-limit', 0, 2, atLimit))
-    expect(view.chunkAssemblies).toHaveLength(1)
+    expect(view.chunks.assemblies).toHaveLength(1)
     view.handleFrame(chunkFrame('byte-limit', 1, 2, Buffer.from('x')))
-    expect(view.chunkAssemblies).toHaveLength(0)
+    expect(view.chunks.assemblies).toHaveLength(0)
     expect(events).toContainEqual(expect.objectContaining({
       type: 'transport_limit',
       kind: 'chunk',
@@ -753,16 +864,16 @@ describe('OMP RPC chunked frames', () => {
     const splitAt = Math.floor(complete.length / 2)
 
     view.handleFrame(chunkFrame('complete', 0, 2, complete.subarray(0, splitAt)))
-    expect(view.chunkAssemblySweepTimer).not.toBeNull()
+    expect(view.chunks.sweepTimer).not.toBeNull()
     view.handleFrame(chunkFrame('complete', 1, 2, complete.subarray(splitAt)))
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
 
     view.handleFrame(chunkFrame('malformed', 0, 3, Buffer.from('{')))
-    expect(view.chunkAssemblySweepTimer).not.toBeNull()
+    expect(view.chunks.sweepTimer).not.toBeNull()
     view.handleFrame(chunkFrame('malformed', 2, 3, Buffer.from('}')))
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
   })
 
   it('clears every pending assembly after malformed reconstructed or raw JSON', () => {
@@ -770,8 +881,8 @@ describe('OMP RPC chunked frames', () => {
     reconstructed.view.handleFrame(chunkFrame('pending', 0, 2, Buffer.from('{')))
     reconstructed.view.handleFrame(chunkFrame('bad-json', 0, 1, Buffer.from('{')))
 
-    expect(reconstructed.view.chunkAssemblies).toHaveLength(0)
-    expect(reconstructed.view.chunkAssemblySweepTimer).toBeNull()
+    expect(reconstructed.view.chunks.assemblies).toHaveLength(0)
+    expect(reconstructed.view.chunks.sweepTimer).toBeNull()
     expect(reconstructed.timing.activeTimers()).toHaveLength(0)
     expect(reconstructed.events).toContainEqual(expect.objectContaining({
       type: 'transport_error',
@@ -782,8 +893,8 @@ describe('OMP RPC chunked frames', () => {
     raw.view.handleFrame(chunkFrame('pending', 0, 2, Buffer.from('{')))
     raw.view.handleLine('{')
 
-    expect(raw.view.chunkAssemblies).toHaveLength(0)
-    expect(raw.view.chunkAssemblySweepTimer).toBeNull()
+    expect(raw.view.chunks.assemblies).toHaveLength(0)
+    expect(raw.view.chunks.sweepTimer).toBeNull()
     expect(raw.timing.activeTimers()).toHaveLength(0)
     expect(raw.events).toContainEqual(expect.objectContaining({
       type: 'transport_error',
@@ -794,35 +905,35 @@ describe('OMP RPC chunked frames', () => {
   it('clears the owned timer and buffers on stop and transport failure', async () => {
     const stopped = directChunkRuntime()
     stopped.view.handleFrame(chunkFrame('stop', 0, 2, Buffer.from('{')))
-    expect(stopped.view.chunkAssemblySweepTimer).not.toBeNull()
-    const stoppedTimer = stopped.view.chunkAssemblySweepTimer as ControlledChunkTimer
+    expect(stopped.view.chunks.sweepTimer).not.toBeNull()
+    const stoppedTimer = stopped.view.chunks.sweepTimer as ControlledChunkTimer
 
     const stopping = stopped.runtime.stop()
     expect(stoppedTimer.cancelled).toBe(true)
-    expect(stopped.view.chunkAssemblies).toHaveLength(0)
-    expect(stopped.view.chunkAssemblySweepTimer).toBeNull()
+    expect(stopped.view.chunks.assemblies).toHaveLength(0)
+    expect(stopped.view.chunks.sweepTimer).toBeNull()
     stopped.view.handleFrame(chunkFrame('during-stop', 0, 2, Buffer.from('{')))
-    expect(stopped.view.chunkAssemblies).toHaveLength(0)
-    expect(stopped.view.chunkAssemblySweepTimer).toBeNull()
+    expect(stopped.view.chunks.assemblies).toHaveLength(0)
+    expect(stopped.view.chunks.sweepTimer).toBeNull()
     stopped.timing.fireLate(stoppedTimer)
-    expect(stopped.view.chunkAssemblies).toHaveLength(0)
-    expect(stopped.view.chunkAssemblySweepTimer).toBeNull()
+    expect(stopped.view.chunks.assemblies).toHaveLength(0)
+    expect(stopped.view.chunks.sweepTimer).toBeNull()
     expect(stopped.timing.activeTimers()).toHaveLength(0)
     expect(stopped.events.some((event) => event.type === 'transport_limit')).toBe(false)
     await stopping
 
     const failed = directChunkRuntime()
     failed.view.handleFrame(chunkFrame('failure', 0, 2, Buffer.from('{')))
-    expect(failed.view.chunkAssemblySweepTimer).not.toBeNull()
-    const failedTimer = failed.view.chunkAssemblySweepTimer as ControlledChunkTimer
+    expect(failed.view.chunks.sweepTimer).not.toBeNull()
+    const failedTimer = failed.view.chunks.sweepTimer as ControlledChunkTimer
 
     failed.view.failTransport(new Error('test transport failure'))
     expect(failedTimer.cancelled).toBe(true)
-    expect(failed.view.chunkAssemblies).toHaveLength(0)
-    expect(failed.view.chunkAssemblySweepTimer).toBeNull()
+    expect(failed.view.chunks.assemblies).toHaveLength(0)
+    expect(failed.view.chunks.sweepTimer).toBeNull()
     failed.timing.fireLate(failedTimer)
-    expect(failed.view.chunkAssemblies).toHaveLength(0)
-    expect(failed.view.chunkAssemblySweepTimer).toBeNull()
+    expect(failed.view.chunks.assemblies).toHaveLength(0)
+    expect(failed.view.chunks.sweepTimer).toBeNull()
     expect(failed.timing.activeTimers()).toHaveLength(0)
     expect(failed.events.some((event) => event.type === 'transport_limit')).toBe(false)
     await failed.runtime.stop()
@@ -831,19 +942,19 @@ describe('OMP RPC chunked frames', () => {
   it('clears the owned timer and buffers when the child closes', async () => {
     const { view, events, timing } = directChunkRuntime()
     view.handleFrame(chunkFrame('child-close', 0, 2, Buffer.from('{')))
-    expect(view.chunkAssemblySweepTimer).not.toBeNull()
-    const closedTimer = view.chunkAssemblySweepTimer as ControlledChunkTimer
+    expect(view.chunks.sweepTimer).not.toBeNull()
+    const closedTimer = view.chunks.sweepTimer as ControlledChunkTimer
 
     const closed = new Promise<void>((resolve) => view.child.once('close', resolve))
     view.child.kill('SIGTERM')
     await closed
 
     expect(closedTimer.cancelled).toBe(true)
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
     timing.fireLate(closedTimer)
-    expect(view.chunkAssemblies).toHaveLength(0)
-    expect(view.chunkAssemblySweepTimer).toBeNull()
+    expect(view.chunks.assemblies).toHaveLength(0)
+    expect(view.chunks.sweepTimer).toBeNull()
     expect(timing.activeTimers()).toHaveLength(0)
     expect(events.some((event) => event.type === 'transport_limit')).toBe(false)
   })

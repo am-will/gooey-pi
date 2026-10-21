@@ -221,6 +221,7 @@
 .native-heartbeats__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 9px; }
 .native-heartbeats__header h2 { margin: 0; font-size: 14px; font-weight: 580; }
 .native-heartbeats__header small { color: var(--text-tertiary); font-size: 10px; }
+.native-heartbeats__note { margin: 0 0 9px; color: var(--warning); font-size: 10.5px; }
 .native-heartbeats__list { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
 .native-heartbeat { min-height: 90px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .native-heartbeat:last-child { border-bottom: 0; }

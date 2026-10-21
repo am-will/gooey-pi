@@ -8,6 +8,7 @@ import {
   FileCode2,
   GitFork,
   Globe2,
+  Info,
   Layers3,
   LoaderCircle,
   MessageCircle,
@@ -15,8 +16,9 @@ import {
   TerminalSquare,
   Wrench,
 } from 'lucide-react'
-import type { MessagePart, TranscriptMessage } from '@/types/api'
+import type { MessagePart, PrimeCompactionReason, TranscriptMessage } from '@/types/api'
 import { writeClipboardText } from '@/lib/clipboard'
+import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { boundText } from '@/lib/render-bounds'
 import { MarkdownText } from '../MarkdownText'
 import { SyntaxText } from './syntax'
@@ -42,7 +44,7 @@ export type ToolKind = 'question' | 'terminal' | 'web' | 'git' | 'file' | 'mcp'
 
 export function classifyTool(name: string): ToolKind {
   if (/ask[_\s.-]?user|ask\s+(?:a\s+)?question|ui\.select|request[_\s.-]?input/i.test(name)) return 'question'
-  if (/bash|shell|terminal|command|exec|process/i.test(name)) return 'terminal'
+  if (/bash|shell|terminal|command|exec|process|python|\beval\b/i.test(name)) return 'terminal'
   if (/github|\bgit\b|commit|branch|pull[_\s-]?request/i.test(name)) return 'git'
   if (/browser|web[_\s.-]?search|search[_\s.-]?web|fetch|https?|url|globe/i.test(name)) return 'web'
   if (/read|write|edit|file|path|directory|patch/i.test(name)) return 'file'
@@ -68,7 +70,7 @@ function toolPreview(part: Extract<MessagePart, { type: 'toolCall' }>): string {
   const raw = part.args
   if (raw && typeof raw === 'object') {
     const args = raw as Record<string, unknown>
-    const preferred = args.question ?? args.command ?? args.query ?? args.url ?? args.path ?? args.cwd
+    const preferred = args.question ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
     if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), 180, '…')
   }
   return boundText(serialize(raw).replace(/\s+/g, ' ').trim(), 180, '…')
@@ -78,9 +80,10 @@ function ReasoningPart({ part, streaming = false }: { part: Extract<MessagePart,
   return <div className="activity-line activity-line--reasoning"><MarkdownText text={boundText(part.text, 40_000, '\n… [Reasoning truncated in the desktop view.]')} streaming={streaming} /></div>
 }
 
-export function ThinkingDots({ labelled = false }: { labelled?: boolean }) {
+/** Decorative and hidden from assistive technology: render it beside visible status text. */
+export function ThinkingDots() {
   return (
-    <span className="thinking-dots" role={labelled ? 'status' : undefined} aria-label={labelled ? 'Prime is thinking' : undefined} aria-hidden={labelled ? undefined : true}>
+    <span className="thinking-dots" aria-hidden="true">
       <span /><span /><span />
     </span>
   )
@@ -178,39 +181,58 @@ function AgentActivityPart({ part }: { part: Extract<MessagePart, { type: 'agent
   </div>
 }
 
-function compactionReasonLabel(reason: Extract<MessagePart, { type: 'compaction' }>['reason']): string {
-  if (reason === 'threshold') return 'automatic threshold'
-  if (reason === 'overflow') return 'overflow recovery'
-  if (reason === 'requested') return 'requested'
-  if (reason === 'manual') return 'manual'
-  return 'context'
+type CompactionPartValue = Extract<MessagePart, { type: 'compaction' }>
+type CompactionTone = CompactionPartValue['status'] | 'skipped'
+
+// Keyed by the type, so adding a reason there fails to compile until it has a label here.
+const COMPACTION_REASON_LABELS: Record<PrimeCompactionReason, string> = {
+  manual: 'manual',
+  threshold: 'automatic threshold',
+  overflow: 'overflow recovery',
+  requested: 'requested',
+  idle: 'idle maintenance',
+  incomplete: 'incomplete response recovery',
 }
 
-function CompactionPart({ part }: { part: Extract<MessagePart, { type: 'compaction' }> }) {
+/** A compaction that ended without running because it was skipped is benign: it reads as a notice, never as a failure. */
+function compactionTone(part: CompactionPartValue): CompactionTone {
+  return part.status === 'failed' && part.outcome === 'skipped' ? 'skipped' : part.status
+}
+
+function compactionLabel(part: CompactionPartValue, tone: CompactionTone): string {
+  if (tone === 'running') return 'Compacting context'
+  if (tone === 'done') return 'Context compacted'
+  if (tone === 'cancelled') return 'Context compaction cancelled'
+  if (tone === 'failed') return 'Context compaction failed'
+  // A compaction someone asked for is skipped only when the history is too short for one.
+  return isRequestedCompactionReason(part.reason) ? 'Nothing to compact yet' : 'Context compaction skipped'
+}
+
+function CompactionPart({ part }: { part: CompactionPartValue }) {
   const [open, setOpen] = useState(false)
   const canExpand = Boolean(part.summary || part.error)
-  const label = part.status === 'running'
-    ? 'Compacting context'
-    : part.status === 'done'
-      ? 'Context compacted'
-      : part.status === 'cancelled' ? 'Context compaction cancelled' : part.outcome === 'skipped' ? 'Context compaction skipped' : 'Context compaction failed'
-  const state = part.status === 'running'
+  const tone = compactionTone(part)
+  const state = tone === 'running'
     ? <><LoaderCircle className="spin" size={12} /> running</>
-    : part.status === 'done'
+    : tone === 'done'
       ? <><Check size={12} /> {part.willRetry ? 'continuing' : 'done'}</>
-      : <><CircleAlert size={12} /> {part.status === 'cancelled' ? 'cancelled' : 'needs attention'}</>
+      : tone === 'skipped'
+        ? <><Info size={12} /> skipped</>
+        : <><CircleAlert size={12} /> {tone === 'cancelled' ? 'cancelled' : 'needs attention'}</>
   const details = part.error || part.summary
   const tokenLabel = part.tokensBefore === undefined ? '' : `${part.tokensBefore.toLocaleString()} tokens before`
-  return <div className={`activity-line activity-line--compaction is-${part.status}`}>
+  // No harness records the trigger with a completed compaction in its session file, so a reloaded row may name none.
+  const reasonLabel = part.reason ? COMPACTION_REASON_LABELS[part.reason] : undefined
+  return <div className={`activity-line activity-line--compaction is-${tone}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
-      <span className="activity-line__icon">{part.status === 'running' ? <LoaderCircle className="spin" size={13} /> : part.status === 'done' ? <Layers3 size={13} /> : <CircleAlert size={13} />}</span>
-      <span className="activity-line__kind">{label}</span>
-      <span className="activity-compaction__reason">{compactionReasonLabel(part.reason)}</span>
+      <span className="activity-line__icon">{tone === 'running' ? <LoaderCircle className="spin" size={13} /> : tone === 'done' ? <Layers3 size={13} /> : tone === 'skipped' ? <Info size={13} /> : <CircleAlert size={13} />}</span>
+      <span className="activity-line__kind">{compactionLabel(part, tone)}</span>
+      {reasonLabel ? <span className="activity-compaction__reason">{reasonLabel}</span> : null}
       {tokenLabel ? <span className="activity-compaction__tokens">{tokenLabel}</span> : null}
       <span className="activity-tool__state">{state}</span>
       {canExpand ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
     </button>
-    {open && details ? <div className={`activity-compaction__details ${part.status === 'done' ? '' : 'is-error'}`}><MarkdownText text={boundText(details, 40_000, '\n… [Compaction details truncated in the desktop view.]')} /></div> : null}
+    {open && details ? <div className={`activity-compaction__details ${tone === 'done' || tone === 'skipped' ? '' : 'is-error'}`}><MarkdownText text={boundText(details, 40_000, '\n… [Compaction details truncated in the desktop view.]')} /></div> : null}
   </div>
 }
 
@@ -240,7 +262,7 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
     }
     if (part.type === 'toolResult') return showTools ? <StandaloneToolResult key={key} part={part} /> : null
     if (part.type === 'agentMessage') return <AgentActivityPart key={key} part={part} />
-    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={part.text} /></div>
+    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(part.text, 40_000, '\n… [Note truncated in the desktop view.]')} /></div>
     return null
   })}</div>
 }

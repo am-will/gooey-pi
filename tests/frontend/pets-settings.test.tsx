@@ -35,6 +35,7 @@ describe('PetsSettings', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
+    expect(container.querySelector('header p')?.textContent).toBe('Choose a companion that reacts while the agent works.')
     expect(container.textContent).toContain('GooeyPi')
     expect(container.textContent).toContain('Rocky')
     expect(container.textContent).toContain('1 Codex pet found')

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ModelCatalogProvider } from '../../electron/main/model-catalog'
 import { PI_NOT_INSTALLED_WARNING, PiModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-pi'
 import type { PrimeModelCatalog } from '../../src/types/api'
@@ -165,6 +165,17 @@ describe('Pi model catalog service', () => {
     expect(await service.capabilities(undefined, 'gemini-2.5-pro')).toBeUndefined()
   })
 
+  it('passes the user environment to its probe without the Rust Prime opt-out', async () => {
+    vi.stubEnv('PRIME_AGENT_TELEMETRY', '1')
+    try {
+      const service = new PiModelCatalogService(fakePi(`
+const model = { ...${JSON.stringify(sampleCatalog.models[0])}, id: 'env-' + (process.env.PRIME_AGENT_TELEMETRY ?? 'unset') }
+process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_available_models', success: true, data: { models: [model] } }) + '\\n')
+`))
+      expect((await service.catalog(true)).models.map((model) => model.id)).toEqual(['env-1'])
+    } finally { vi.unstubAllEnvs() }
+  })
+
   it('returns an empty catalog with a clear status when pi is not installed', async () => {
     const service = new PiModelCatalogService(null)
     const catalog = await service.catalog(true)
@@ -306,6 +317,33 @@ process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_a
     // With no prior catalog the failure still surfaces.
     const failingOnly = new PiModelCatalogService(fakePi('process.exit(7)'))
     await expect(failingOnly.catalog(true)).rejects.toThrow(/exited with status 7 without answering/)
+  })
+
+  it('runs pi again after invalidate, and a refresh already in flight never fills the cache', async () => {
+    const counterFile = join(tempDir(), 'runs')
+    // The first run answers slowly with one model; later runs answer at once with four.
+    const executable = fakePi(`
+const fs = require('node:fs')
+fs.appendFileSync(${JSON.stringify(counterFile)}, 'x')
+const first = fs.readFileSync(${JSON.stringify(counterFile)}, 'utf8').length === 1
+const data = first ? { models: ${JSON.stringify(sampleCatalog.models.slice(0, 1))} } : ${JSON.stringify(sampleCatalog)}
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ type: 'response', id: '1', command: 'get_available_models', success: true, data }) + '\\n')
+}, first ? 400 : 0)
+`)
+    const service = new PiModelCatalogService(executable)
+    const runs = () => { try { return readFileSync(counterFile, 'utf8').length } catch { return 0 } }
+
+    const inFlight = service.catalog(true)
+    await waitUntil(() => runs() === 1)
+    service.invalidate()
+    const fresh = await service.catalog()
+    expect(fresh.models).toHaveLength(4)
+    // The older refresh still answers its own caller...
+    expect((await inFlight).models).toHaveLength(1)
+    // ...but the cache keeps the newer catalog, served within the TTL without another run.
+    expect((await service.catalog()).models).toHaveLength(4)
+    expect(runs()).toBe(2)
   })
 
   it('rejects hostile model entries and sanitizes suspicious fields', async () => {

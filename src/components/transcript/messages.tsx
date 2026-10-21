@@ -8,6 +8,7 @@ import { splitTerminalContextBlock } from '@/lib/terminal-context'
 import { writeClipboardText } from '@/lib/clipboard'
 import { boundText } from '@/lib/render-bounds'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { isSystemReport } from '@/lib/system-rows'
 import { MarkdownText } from '../MarkdownText'
 import { OmpMark, PiMark, PrimeMark } from '../ui'
 import { InlineText } from './syntax'
@@ -276,8 +277,9 @@ export const SteerReadMarker = memo(function SteerReadMarker({ message }: { mess
 
 export const ActivityMessage = memo(function ActivityMessage({ message, harness = 'prime' }: { message: TranscriptMessage; harness?: HarnessId }) {
   const activityLabel = `${HARNESS_SHORT_NAMES[harness]} message`
+  // A report other than a compaction row is an error. A notice keeps its text, which renders as a neutral note.
   const sourceParts: MessagePart[] =
-    message.role === 'system' && !message.parts.some((part) => part.type === 'compaction')
+    isSystemReport(message) && !message.parts.some((part) => part.type === 'compaction')
       ? [
           { type: 'toolCall', id: message.id, name: activityLabel },
           { type: 'toolResult', name: activityLabel, text: messageText(message), isError: true },
@@ -286,11 +288,11 @@ export const ActivityMessage = memo(function ActivityMessage({ message, harness 
   const parts = sourceParts.flatMap((part, index) =>
     part.type === 'toolResult' && sourceParts[index - 1]?.type !== 'toolCall' ? [{ type: 'toolCall' as const, id: `${message.id}-${index}`, name: part.name ?? 'Tool' }, part] : [part],
   )
-  return (
-    <article className="message message--activity">
-      <WorkTimeline parts={parts} showReasoning showTools />
-    </article>
-  )
+  const timeline = <WorkTimeline parts={parts} showReasoning showTools />
+  // An article cannot take the note role, so a notice renders as a div, like the steer-read marker.
+  return message.kind === 'notice'
+    ? <div className="message message--activity" role="note">{timeline}</div>
+    : <article className="message message--activity">{timeline}</article>
 })
 
 export const AgentMessage = memo(function AgentMessage({ message }: { message: TranscriptMessage }) {

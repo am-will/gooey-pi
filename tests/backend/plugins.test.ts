@@ -32,6 +32,30 @@ describe('PluginService discovery', () => {
     expect((await service.refresh()).skills[0].enabled).toBe(false)
   })
 
+  it('lets the harness label records it cannot load, built-ins included', async () => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    mkdirSync(join(agentDir, 'extensions'), { recursive: true })
+    writeFileSync(join(agentDir, 'extensions', 'legacy.ts'), 'export default function () {}\n')
+    const builtInSkills = () => [
+      { id: 'gooeypi-ask-user', name: 'Ask user', description: '', kind: 'extension' as const, location: 'system' as const, enabled: true },
+      { id: 'prime-work-schedules', name: 'Scheduled tasks', description: '', kind: 'skill' as const, location: 'system' as const, enabled: true },
+    ]
+    const unavailable = { available: false, detail: 'Not loadable by this build.' }
+    const labelled = new PluginService(null, async (path) => resolve(path), {
+      agentDir,
+      builtInSkills,
+      capabilityAvailability: (record) => record.kind === 'extension' ? unavailable : undefined,
+    })
+    const plain = new PluginService(null, async (path) => resolve(path), { agentDir, builtInSkills })
+
+    const labelledSkills = (await labelled.list()).skills
+    expect(labelledSkills.find((item) => item.name === 'legacy')).toMatchObject({ kind: 'extension', location: 'user', availability: unavailable })
+    expect(labelledSkills.find((item) => item.id === 'gooeypi-ask-user')?.availability).toEqual(unavailable)
+    expect(labelledSkills.find((item) => item.id === 'prime-work-schedules')).not.toHaveProperty('availability')
+    for (const item of (await plain.list()).skills) expect(item).not.toHaveProperty('availability')
+  })
+
   it('coalesces duplicate refreshes while discovery is in flight', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
