@@ -172,7 +172,7 @@ describe('AgentBrowserService', () => {
   it('opens a tab once the renderer attaches an approved guest and navigates it', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId, result } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
-    expect(guest.loadedUrls).toContain('https://example.com/')
+    expect(guest.loadedUrls).toEqual(['https://example.com/'])
     expect(guest.throttling).toBe(false)
     expect(result.url).toBe('https://example.com/')
     const snapshot = service.state()
