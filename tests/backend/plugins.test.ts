@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { PluginService, beginPluginDiscoveryShutdown } from '../../electron/main/plugins'
-import { removeMcpDefinition, updateMcpSettings, updateMcpState } from '../../electron/main/plugins/mcp'
+import { acquireSettingsLock, removeMcpDefinition, updateMcpSettings, updateMcpState } from '../../electron/main/plugins/mcp'
 import { executePiPluginInstall, executePiPluginRemove } from '../../electron/main/plugins/package-execution'
 import { readAtMost } from '../../electron/main/plugins/file-io'
 import { ProjectService } from '../../electron/main/projects'
@@ -1295,6 +1295,20 @@ describe('PluginService MCP connections', () => {
     expect(response.ok).toBe(true)
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).mcpServers['after-crash'].command).toBe('mcp-after-crash')
     expect(() => readFileSync(join(lockPath, 'owner.json'))).toThrow()
+  })
+
+  it('recovers only branded abandoned same-process locks and preserves an active owner', async () => {
+    const settings = join(temp(), 'settings.json')
+    const lock = `${settings}.lock`
+    mkdirSync(lock)
+    writeFileSync(join(lock, 'owner.json'), JSON.stringify({ application: 'gooeypi', version: 1, pid: process.pid, token: 'abandoned-token', createdAt: Date.now() - 1000 }))
+    const release = await acquireSettingsLock(settings)
+    const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'))
+    expect(owner.token).not.toBe('abandoned-token')
+    expect(owner.application).toBe('gooeypi')
+    try { await expect(acquireSettingsLock(settings)).rejects.toThrow('settings are busy') }
+    finally { await release() }
+    expect(existsSync(lock)).toBe(false)
   })
 
   it('detects and merges a non-cooperating writer update before rename', async () => {

@@ -13,8 +13,10 @@ const SETTINGS_LOCK_ATTEMPTS = 40
 const SETTINGS_LOCK_RETRY_MS = 50
 const SETTINGS_LOCK_OWNER = 'owner.json'
 const SETTINGS_UPDATE_ATTEMPTS = 4
+const activeSettingsLockTokens = new Set<string>()
 
 interface SettingsLockOwner {
+  application?: 'gooeypi'
   version: 1
   pid: number
   token: string
@@ -51,14 +53,14 @@ function parseSettingsLockOwner(value: unknown): SettingsLockOwner | null {
   if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0) return null
   if (typeof value.token !== 'string' || value.token.length < 1 || value.token.length > 200) return null
   if (typeof value.createdAt !== 'number' || !Number.isFinite(value.createdAt) || value.createdAt <= 0) return null
-  return { version: 1, pid: value.pid as number, token: value.token, createdAt: value.createdAt }
+  return { ...(value.application === 'gooeypi' ? { application: 'gooeypi' as const } : {}), version: 1, pid: value.pid as number, token: value.token, createdAt: value.createdAt }
 }
 
 function sameSettingsLockOwner(left: SettingsLockOwner | null, right: SettingsLockOwner): boolean {
   return left?.version === right.version && left.pid === right.pid && left.token === right.token && left.createdAt === right.createdAt
 }
 
-async function readSettingsForUpdate(path: string, agentName = 'Prime Agent'): Promise<{ settings: Record<string, unknown>; fingerprint: string; source: string | null }> {
+async function readSettingsForUpdate(path: string, agentName = 'Agent'): Promise<{ settings: Record<string, unknown>; fingerprint: string; source: string | null }> {
   let content: string
   try {
     const value = await readAtMost(path, MAX_SETTINGS_BYTES)
@@ -78,7 +80,7 @@ async function readSettingsForUpdate(path: string, agentName = 'Prime Agent'): P
 export async function settingsFingerprint(path: string): Promise<string> {
   try {
     const value = await readAtMost(path, MAX_SETTINGS_BYTES)
-    if (value.truncated) throw new TypeError('Prime Agent settings exceed the maximum supported size')
+    if (value.truncated) throw new TypeError('Agent settings exceed the maximum supported size')
     return createHash('sha256').update(value.content).digest('hex')
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return 'missing'
@@ -112,22 +114,32 @@ async function createSettingsLock(lockPath: string): Promise<(() => Promise<void
     throw error
   }
 
-  const owner: SettingsLockOwner = { version: 1, pid: process.pid, token: randomUUID(), createdAt: Date.now() }
+  const owner: SettingsLockOwner = { application: 'gooeypi', version: 1, pid: process.pid, token: randomUUID(), createdAt: Date.now() }
+  activeSettingsLockTokens.add(owner.token)
   try {
     await writeFile(join(lockPath, SETTINGS_LOCK_OWNER), `${JSON.stringify(owner)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
   } catch (error) {
-    await rm(lockPath, { recursive: true, force: true })
+    activeSettingsLockTokens.delete(owner.token)
+    const current = await readSettingsLockOwner(lockPath)
+    if (sameSettingsLockOwner(current, owner)) await rm(lockPath, { recursive: true, force: true })
     throw error
   }
   return async () => {
-    const current = await readSettingsLockOwner(lockPath)
-    if (sameSettingsLockOwner(current, owner)) await rm(lockPath, { recursive: true, force: true })
+    try {
+      const current = await readSettingsLockOwner(lockPath)
+      if (sameSettingsLockOwner(current, owner)) await rm(lockPath, { recursive: true, force: true })
+    } finally { activeSettingsLockTokens.delete(owner.token) }
   }
+}
+
+function isAbandonedSettingsLock(owner: SettingsLockOwner): boolean {
+  // Native proper-lockfile directories have no GooeyPi owner record. Never infer abandonment from age or unknown ownership.
+  return isProcessProvablyDead(owner.pid) || owner.application === 'gooeypi' && owner.pid === process.pid && !activeSettingsLockTokens.has(owner.token)
 }
 
 async function recoverStaleSettingsLock(lockPath: string): Promise<(() => Promise<void>) | null> {
   const observed = await readSettingsLockOwner(lockPath)
-  if (!observed || !isProcessProvablyDead(observed.pid)) return null
+  if (!observed || !isAbandonedSettingsLock(observed)) return null
 
   // The recovery directory serializes competing reapers. The owner is checked
   // again after claiming it, so a replacement lock is never removed by token.
@@ -140,7 +152,7 @@ async function recoverStaleSettingsLock(lockPath: string): Promise<(() => Promis
   }
   try {
     const current = await readSettingsLockOwner(lockPath)
-    if (!sameSettingsLockOwner(current, observed) || !isProcessProvablyDead(observed.pid)) return null
+    if (!sameSettingsLockOwner(current, observed) || !isAbandonedSettingsLock(observed)) return null
     await rm(lockPath, { recursive: true, force: true })
     return await createSettingsLock(lockPath)
   } finally {
@@ -164,7 +176,7 @@ export async function acquireSettingsLock(settingsPath: string, verify?: () => P
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, SETTINGS_LOCK_RETRY_MS))
   }
-  throw new Error('Prime Agent settings are busy; try again')
+  throw new Error('Agent settings are busy; try again')
 }
 
 interface FileIdentity {
@@ -178,7 +190,7 @@ function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
 
 async function regularFileIdentity(path: string): Promise<FileIdentity> {
   const stat = await lstat(path, { bigint: true })
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new TypeError('Prime Agent settings staging file changed during update')
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new TypeError('Agent settings staging file changed during update')
   return { dev: stat.dev.toString(), ino: stat.ino.toString() }
 }
 
@@ -242,10 +254,10 @@ async function writeSettingsAtomically(
     if (await fingerprint(path) !== expectedFingerprint) return false
     await verify?.()
     if (!sameFileIdentity(await regularFileIdentity(temporary), temporaryIdentity)) {
-      throw new TypeError('Prime Agent settings staging file changed during update')
+      throw new TypeError('Agent settings staging file changed during update')
     }
     if (backupIdentity && !sameFileIdentity(await regularFileIdentity(backup), backupIdentity)) {
-      throw new TypeError('Prime Agent settings backup changed during update')
+      throw new TypeError('Agent settings backup changed during update')
     }
     // There is no renameat-style API in Node on macOS. Await the pin re-check
     // immediately before the rename, then prove which inode won.
@@ -256,11 +268,11 @@ async function writeSettingsAtomically(
     renameSync(temporary, path)
     renamed = true
     if (!sameFileIdentity(await regularFileIdentity(path), temporaryIdentity)) {
-      throw new TypeError('Prime Agent settings target changed during update')
+      throw new TypeError('Agent settings target changed during update')
     }
     await verify?.()
     if (backupIdentity && !await removeOwnedFile(backup, backupIdentity)) {
-      throw new TypeError('Prime Agent settings backup changed during update')
+      throw new TypeError('Agent settings backup changed during update')
     }
     backupIdentity = null
     return true
@@ -270,7 +282,7 @@ async function writeSettingsAtomically(
         await rollbackSettingsRename(path, temporary, temporaryIdentity, backup, backupIdentity)
         renamed = false
       } catch (rollbackError) {
-        const message = error instanceof Error ? error.message : 'Prime Agent settings update failed'
+        const message = error instanceof Error ? error.message : 'Agent settings update failed'
         throw new AggregateError([error, rollbackError], `${message}; settings rollback could not be completed`)
       }
     }
@@ -440,7 +452,7 @@ export async function updateMcpSettings(
   if (isNetworkMcpDefinition(input)) throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
   if (options.harness !== 'omp' && options.harness !== 'pi') throw new TypeError(PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL)
   if (input.type !== 'stdio') throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
-  const agentName = options.agentName ?? 'Prime Agent'
+  const agentName = options.agentName ?? 'Agent'
   return mutateSettings(target, fingerprint, agentName, 'MCP', (settings) => {
     if (settings.mcpServers !== undefined && !isRecord(settings.mcpServers)) throw new TypeError(`${agentName} mcpServers setting must contain a JSON object`)
     const currentServers = isRecord(settings.mcpServers) ? settings.mcpServers : {}
@@ -459,7 +471,7 @@ export async function updateMcpState(
   options: { agentName?: string; harness?: HarnessId } = {},
 ): Promise<ProcessOutcome> {
   if (options.harness !== 'omp' && options.harness !== 'pi') return { ok: false, reason: 'blocked', output: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
-  const agentName = options.agentName ?? 'Prime Agent'
+  const agentName = options.agentName ?? 'Agent'
   return mutateSettings(target, fingerprint, agentName, 'MCP', (settings) => {
     const current = isRecord(settings.mcpServers) ? settings.mcpServers[input.name] : undefined
     if (!isRecord(current)) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` } }
@@ -478,7 +490,7 @@ export async function removeMcpDefinition(
 ): Promise<ProcessOutcome> {
   const definitionKey = input.definitionKey ?? input.name
   if (definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) throw new TypeError('MCP definition key exceeds the supported removal limit')
-  return mutateSettings(target, fingerprint, options.agentName ?? 'Prime Agent', 'MCP', (settings) => {
+  return mutateSettings(target, fingerprint, options.agentName ?? 'Agent', 'MCP', (settings) => {
     if (!isRecord(settings.mcpServers) || !Object.hasOwn(settings.mcpServers, definitionKey)) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` } }
     const nextServers = { ...settings.mcpServers }
     delete nextServers[definitionKey]
@@ -494,7 +506,7 @@ export async function updatePackageState(
   options: { agentName?: string } = {},
 ): Promise<ProcessOutcome> {
   const source = input.source
-  return mutateSettings(target, fingerprint, options.agentName ?? 'Prime Agent', 'package', (settings) => {
+  return mutateSettings(target, fingerprint, options.agentName ?? 'Agent', 'package', (settings) => {
     const packages = Array.isArray(settings.packages) ? settings.packages : []
     const index = packages.findIndex((item) => packageSource(item) === source)
     if (index < 0) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `Package “${source}” was not found in this scope.` } }
