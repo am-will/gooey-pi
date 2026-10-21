@@ -239,6 +239,7 @@ describe('PluginsPage bundled capability controls', () => {
   })
 
   it('disables Prime MCP creation and only submits local stdio servers for OMP', async () => {
+    const refresh = vi.fn(async () => undefined)
     const connect = vi.fn(async () => ({ ok: true, output: 'saved server' }))
     await act(async () => {
       root.render(<PluginsPage
@@ -246,7 +247,7 @@ describe('PluginsPage bundled capability controls', () => {
         askUserEnabled={true} onSetAskUserEnabled={async () => undefined}
         browserEnabled={true} onSetBrowserEnabled={async () => undefined}
         computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined}
-        onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })}
+        onRefresh={refresh} onInstall={async () => ({ ok: true, output: '' })}
         onInstallExtension={async () => ({ ok: true, output: '' })}
         onSetMcpSupport={async () => ({ ok: true, output: '' })}
         onConnectMcp={connect}
@@ -268,7 +269,7 @@ describe('PluginsPage bundled capability controls', () => {
         askUserEnabled={true} onSetAskUserEnabled={async () => undefined}
         browserEnabled={true} onSetBrowserEnabled={async () => undefined}
         computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined}
-        onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })}
+        onRefresh={refresh} onInstall={async () => ({ ok: true, output: '' })}
         onInstallExtension={async () => ({ ok: true, output: '' })} onSetMcpSupport={async () => ({ ok: true, output: '' })}
         onConnectMcp={connect} onSetMcpEnabled={async () => ({ ok: true, output: '' })}
       />)
@@ -288,6 +289,7 @@ describe('PluginsPage bundled capability controls', () => {
     const save = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Save local server')!
     await act(async () => { save.click(); await Promise.resolve(); await Promise.resolve() })
     expect(connect).toHaveBeenCalledWith({ name: 'files', scope: 'user', projectPath: undefined, type: 'stdio', command: 'npx', args: ['-y', 'server-files'] })
+    expect(refresh).not.toHaveBeenCalled()
   })
 
   it('toggles Pi MCP support through the supported adapter lifecycle', async () => {

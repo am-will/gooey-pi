@@ -170,7 +170,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
         setMcpName('')
         setMcpCommand('')
         setMcpArgs('')
-        if (addKind === 'mcp' || addKind === 'bundle') await onRefresh()
+        if (addKind === 'bundle') await onRefresh()
       }
     } finally {
       setAdding(false)
