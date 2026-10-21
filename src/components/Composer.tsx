@@ -1,9 +1,10 @@
+import { ComposerQueue } from './composer/ComposerQueue'
 import { ComposerAttachments } from './composer/ComposerAttachments'
 import { useComposerSuggestions } from '@/hooks/useComposerSuggestions'
 import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
-import { ArrowUp, Clock3, Edit3, Gauge, LoaderCircle, Mic, Paperclip, Plus, Square, Trash2, X, Zap } from 'lucide-react'
+import { ArrowUp, Gauge, LoaderCircle, Mic, Paperclip, Plus, Square, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
@@ -300,31 +301,7 @@ export const Composer = memo(function Composer({
 
   return (
     <div ref={wrapRef} className="composer-wrap" data-draft-scope={draftKey ?? 'default'}>
-      {queuedMessages.length || harnessQueuedMessageCount ? (
-        <section className="composer-queue" aria-label={t('composer.queue.label')} aria-live="polite">
-          <div className="composer-queue__header">
-            <span><Clock3 size={13} />{t('composer.queue.label')}</span>
-            <strong>{queuedMessages.length + harnessQueuedMessageCount}</strong>
-          </div>
-          <div className="composer-queue__list">
-            {queuedMessages.map((queued) => (
-              <div className="composer-queue__item" key={queued.id}>
-                <span className="composer-queue__text">{queued.text}</span>
-                <span className="composer-queue__actions">
-                  <button type="button" className="composer-queue__action" aria-label={t('composer.queue.sendNowDetail', { text: queued.text })} title={t('composer.queue.sendNow')} onClick={() => { void sendQueuedMessageImmediately(queued) }}><ArrowUp size={13} /></button>
-                  <button type="button" className="composer-queue__action" aria-label={t('composer.queue.editDetail', { text: queued.text })} title={t('composer.queue.edit')} onClick={() => { onEditQueuedMessage?.(queued); setValue((current) => current.trim() ? `${current.trimEnd()}\n\n${queued.text}` : queued.text); requestAnimationFrame(() => textareaRef.current?.focus()) }}><Edit3 size={13} /></button>
-                  <button type="button" className="composer-queue__action composer-queue__action--delete" aria-label={t('composer.queue.deleteDetail', { text: queued.text })} title={t('composer.queue.delete')} onClick={() => onDeleteQueuedMessage?.(queued)}><Trash2 size={13} /></button>
-                </span>
-              </div>
-            ))}
-            {harnessQueuedMessageCount ? (
-              <div className="composer-queue__item composer-queue__item--harness">
-                <span className="composer-queue__text">{t('composer.queue.harnessHolding', { agent: agentName, count: harnessQueuedMessageCount })}</span>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
+      <ComposerQueue queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} agentName={agentName} onSendNow={sendQueuedMessageImmediately} onEdit={(queued) => { onEditQueuedMessage?.(queued); setValue((current) => current.trim() ? `${current.trimEnd()}\n\n${queued.text}` : queued.text); requestAnimationFrame(() => textareaRef.current?.focus()) }} onDelete={onDeleteQueuedMessage} />
       <div
         className={`composer ${busy || submitting ? 'composer--busy' : ''} ${imageAttachments.dragging ? 'composer--image-dragging' : ''}`}
         {...imageAttachments.dragHandlers}
