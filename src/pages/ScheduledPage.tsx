@@ -1,3 +1,4 @@
+import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { useStableCallback } from '@/hooks/useStableCallback'
 import { DEVICE_TIME_ZONE, defaultForm, formFromSchedule, timingFromForm, targetFromForm, executionFromForm, validTimeZone, rruleParts, isAuthorized, type Frequency, type ScheduleForm } from '@/lib/schedule-form'
 import {
@@ -101,15 +102,6 @@ const WEEKDAYS = [
 ] as const satisfies ReadonlyArray<{ value: string; label: MessageKey; long: MessageKey }>
 
 const THINKING_LEVELS: readonly PrimeThinkingLevel[] = PRIME_THINKING_LEVELS
-const THINKING_LEVEL_KEYS = {
-  off: 'schedule.thinking.off',
-  minimal: 'schedule.thinking.minimal',
-  low: 'schedule.thinking.low',
-  medium: 'schedule.thinking.medium',
-  high: 'schedule.thinking.high',
-  xhigh: 'schedule.thinking.xhigh',
-  max: 'schedule.thinking.max',
-} as const satisfies Record<PrimeThinkingLevel, MessageKey>
 const FREQUENCIES: Array<{ value: Frequency; label: MessageKey }> = [
   { value: 'hourly', label: 'schedule.frequency.hourly' },
   { value: 'daily', label: 'schedule.frequency.daily' },
