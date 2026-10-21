@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from './agent-command'
 // Domain contracts are re-exported here so existing bridge imports keep one entry point.
 import type { HarnessId, HarnessStatus } from './api/harness'
 import type { PrimeModelDescriptor, PrimeThinkingLevel, PrimeModelCatalog, ProviderAuthEvent } from './api/models'
@@ -188,7 +189,7 @@ export interface PrimeWorkApi {
   }
   agent: {
     start(options: { cwd: string; sessionPath?: string; model?: string; thinking?: string; fast?: boolean; harness?: HarnessId }): Promise<RuntimeInfo>
-    command(runtimeId: string, command: Record<string, unknown>): Promise<Record<string, unknown>>
+    command(runtimeId: string, command: AgentRpcCommand): Promise<Record<string, unknown>>
     stop(runtimeId: string): Promise<boolean>
     list(): Promise<RuntimeInfo[]>
     onEvent(callback: (envelope: PrimeEventEnvelope) => void): () => void

@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from '@/types/agent-command'
 import { compactText } from '@/lib/text'
 import { useRef, useState } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
@@ -103,7 +104,7 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
       ? { ...session, title }
       : session))
   }
-  await bridge.agent.command(runtimeId, { type: 'set_session_name', name: title }).catch(() => undefined)
+  await bridge.agent.command(runtimeId, { type: 'set_session_name', name: title } satisfies AgentRpcCommand).catch(() => undefined)
   await indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle: title, isCurrent }).catch(() => undefined)
 }
 
@@ -334,7 +335,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           setSessions((items) => items.map((session) => session.filePath === currentWorkspace.sessionFile ? { ...session, lastUserMessageAt: sentAtIso } : session))
         }
         try {
-          const response = await bridge.agent.command(currentRuntime.runtimeId, { type: 'steer', message: prompt, ...(images.length ? { images } : {}) })
+          const response = await bridge.agent.command(currentRuntime.runtimeId, { type: 'steer', message: prompt, ...(images.length ? { images } : {}) } satisfies AgentRpcCommand)
           workspace.acceptSteer(pendingSteerId)
           const actions = parseSessionActionSnapshot(response.sessionActions)
           if (actions) workspace.acknowledgeSteer(pendingSteerId, actions)
@@ -436,8 +437,8 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           if (compactCommand && intent === 'steer') setToast(translate(formattingLocaleTag(), 'toast.compactionQueued'))
           return
         }
-        const promptRequest = { type: 'prompt', message: prompt, streamingBehavior: streamingBehaviorForIntent(intent), ...(images.length ? { images } : {}) }
-        const compactRequest = compactCommand && { type: 'compact', ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}) }
+        const promptRequest = { type: 'prompt', message: prompt, streamingBehavior: streamingBehaviorForIntent(intent), ...(images.length ? { images } : {}) } satisfies AgentRpcCommand
+        const compactRequest = compactCommand && { type: 'compact', ...(compactCommand.customInstructions ? { customInstructions: compactCommand.customInstructions } : {}) } satisfies AgentRpcCommand
         const showPrompt = (runtime: RuntimeInfo) => {
           if (!isCurrent()) return
           startedPrompt = true
@@ -497,7 +498,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           // Follow-ups are daemon-owned. Steers get a renderer-only pending
           // row so pickup can move them into history without redelivery.
           if (intent === 'steer') queuedPromptId = workspace.queuePrompt(prompt, intent, userMessage.parts, sentAt)
-          const response = await bridge.agent.command(activeRuntime.runtimeId, { type: intent === 'steer' ? 'steer' : 'follow_up', message: prompt, ...(images.length ? { images } : {}) })
+          const response = await bridge.agent.command(activeRuntime.runtimeId, { type: intent === 'steer' ? 'steer' : 'follow_up', message: prompt, ...(images.length ? { images } : {}) } satisfies AgentRpcCommand)
           const actions = parseSessionActionSnapshot(response.sessionActions)
           if (actions) {
             workspace.setRuntime((current) => current?.runtimeId === activeRuntime.runtimeId
@@ -557,7 +558,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const stoppedOwnerRuntimeId = stoppedOwner?.runtimeId
     const stoppedOwnerGeneration = stoppedOwner?.generation
     try {
-      await bridge.agent.command(stoppedRuntimeId, { type: 'abort' })
+      await bridge.agent.command(stoppedRuntimeId, { type: 'abort' } satisfies AgentRpcCommand)
       const currentOwner = workspace.runtimeOwnerRef.current
       if (
         workspace.workspaceRef.current.generation !== stoppedGeneration

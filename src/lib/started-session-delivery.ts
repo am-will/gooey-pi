@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from '@/types/agent-command'
 import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
 export interface StartedSessionDelivery {
@@ -9,7 +10,7 @@ export interface StartedSessionDelivery {
   sessionFile?: string
   agentName: string
   /** The prompt or compact command that carries the submission. */
-  request: Record<string, unknown>
+  request: Extract<AgentRpcCommand, { type: 'prompt' | 'compact' }>
   /** Runtime-to-session map that keeps sidebar lifecycle state current while detached. */
   runtimeSessions: Map<string, string>
   /** Makes the started session part of the visible session catalog. */
