@@ -258,7 +258,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         if (event.terminalId === terminalIdRef.current) announceExit(event.exitCode)
         else if (!terminalIdRef.current) bufferedExits.set(event.terminalId, event.exitCode)
       })
-      bridge.terminal.create({ cwd, shell, command, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
+      bridge.terminal.create({ cwd, shell, command, sessionPath: sessionPathRef.current, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
         if (cancelled) { void bridge.terminal.kill(terminalId); return }
         terminalIdRef.current = terminalId
         resolvedShellName = basename(actualShell)

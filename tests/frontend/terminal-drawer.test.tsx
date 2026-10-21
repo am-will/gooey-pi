@@ -64,13 +64,19 @@ describe('TerminalDrawer project command handle', () => {
     vi.restoreAllMocks()
   })
 
-  function renderDrawer(handle: RefObject<TerminalDrawerHandle | null>) {
-    act(() => root.render(<TerminalDrawer ref={handle} cwd="/repo" height={200} minHeight={100} maxHeight={500} defaultHeight={200} onHeightChange={vi.fn()} onClose={vi.fn()} onError={onError} />))
+  function renderDrawer(handle: RefObject<TerminalDrawerHandle | null>, sessionPath?: string) {
+    act(() => root.render(<TerminalDrawer ref={handle} sessionPath={sessionPath} cwd="/repo" height={200} minHeight={100} maxHeight={500} defaultHeight={200} onHeightChange={vi.fn()} onClose={vi.fn()} onError={onError} />))
   }
 
   function createHandle() {
     return { current: null } as RefObject<TerminalDrawerHandle | null>
   }
+
+  it('scopes initial terminal admission to the owning chat before create resolves', async () => {
+    renderDrawer(createHandle(), '/sessions/owner.jsonl')
+    await act(async () => { await Promise.resolve() })
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ sessionPath: '/sessions/owner.jsonl' }))
+  })
 
   it('runs a labelled command tab and passes the command to terminal.create', async () => {
     const handle = createHandle()
