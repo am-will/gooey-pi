@@ -1,3 +1,4 @@
+import { useGitStatus } from '@/hooks/useGitStatus'
 import { useSessionAttention } from '@/hooks/useSessionAttention'
 import { useNativeHeartbeats } from '@/hooks/useNativeHeartbeats'
 import { useBrowserPreviewState } from '@/hooks/useBrowserPreviewState'
@@ -16,7 +17,7 @@ import { errorMessage } from '@/lib/errors'
 import { LoadingPanel, TerminalLoadingPanel, VIEW_LOADING_KEYS } from '@/app/loading'
 import { I18nProvider, useLocaleTranslator } from '@/lib/i18n'
 import { openExternalUrl, revealPath } from '@/lib/desktop-actions'
-import { createSingleFlightAdmission, findProjectForSession, gitStatusForWorkspace, shouldRefreshGitOnSessionTransition, workspaceCwd } from '@/lib/workspace'
+import { createSingleFlightAdmission, findProjectForSession, workspaceCwd } from '@/lib/workspace'
 import { waitForVoiceSession } from '@/lib/voice'
 import { activeProjectScriptKind, ProjectScriptBusyError, setupNeedsRun } from '@/lib/project-scripts'
 import { SAMPLE_GIT, SAMPLE_PROJECTS, SAMPLE_SCHEDULES, SAMPLE_SESSIONS, SAMPLE_SKILLS, SAMPLE_TRANSCRIPT } from '@/lib/demo-workspace'
@@ -41,7 +42,7 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type GitStatus, type HarnessId, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type HarnessId, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
@@ -99,7 +100,6 @@ export default function App() {
   const [schedules, setSchedules] = useState<AutomationScheduleRecord[]>(() => bridge ? [] : SAMPLE_SCHEDULES)
   const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
   const [scheduleError, setScheduleError] = useState('')
-  const [gitSnapshot, setGitSnapshot] = useState(() => ({ cwd: bridge ? undefined : SAMPLE_PROJECTS[0]?.primaryFolder, status: bridge ? { isRepo: false, files: [] } as GitStatus : SAMPLE_GIT }))
   const [checkoutCatalog, setCheckoutCatalog] = useState<CheckoutCatalog>()
   const [checkoutsLoading, setCheckoutsLoading] = useState(false)
   const [view, setView] = useState<WorkspaceView>('session')
@@ -115,7 +115,6 @@ export default function App() {
   const [changesCardDismissed, setChangesCardDismissed] = useState(false)
   const submissionAdmissionRef = useRef(createSingleFlightAdmission())
   const queuedFlushRef = useRef(false)
-  const gitRequestRef = useRef(0)
   const checkoutRequestRef = useRef(0)
   const scheduleRequestRef = useRef(0)
   const demoTimerRef = useRef<number[]>([])
@@ -180,6 +179,7 @@ export default function App() {
     ?? projects.find((project) => project.id === workspace.activeProjectId)
     ?? projects[0], [projects, activeSession, workspace.activeProjectId])
   const activeCwd = workspaceCwd(activeProject, activeSession)
+  const { git, setGitSnapshot, gitRequestRef, refreshGit } = useGitStatus({ bridge, cwd: activeCwd, workspaceRef: workspace.workspaceRef, sessionStatus: activeSession?.status, locallyOwnedSession: Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath), initialSnapshot: bridge ? undefined : { cwd: SAMPLE_PROJECTS[0]?.primaryFolder, status: SAMPLE_GIT }, reportError })
   const mentionableSessions = useMemo(() => sessions.filter((session) => !session.archived
     && session.depth === 0
     && session.id !== activeSession?.id
@@ -192,7 +192,6 @@ export default function App() {
   const activeTerminalSession = useMemo(() => terminalSessions.find((terminal) => terminal.workspaceKey === workspaceViewKey
     || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath)), [activeTerminalSessionPath, terminalSessions, workspaceViewKey])
   const terminalOpen = Boolean(activeTerminalSession)
-  const git = gitStatusForWorkspace(gitSnapshot, activeCwd)
   useEffect(() => { setChangesCardDismissed(false) }, [activeCwd])
   useEffect(() => {
     if (!git.files.length || !settingsState.settings.showFileChangesPopup) setChangesCardDismissed(false)
@@ -240,16 +239,6 @@ export default function App() {
     }
   }, [view])
 
-  const refreshGit = useCallback(async () => {
-    const requestId = ++gitRequestRef.current
-    const cwd = activeCwd
-    if (!bridge || !cwd) { setGitSnapshot({ cwd, status: { isRepo: false, files: [] } }); return }
-    try {
-      const next = await bridge.git.status(cwd)
-      if (gitRequestRef.current === requestId && workspace.workspaceRef.current.cwd === cwd) setGitSnapshot({ cwd, status: next })
-    } catch (error) { if (gitRequestRef.current === requestId && workspace.workspaceRef.current.cwd === cwd) reportError(error) }
-  }, [activeCwd, bridge, reportError, workspace.workspaceRef])
-
   useAgentEvents({
     bridge, runtimeIdRef: workspace.runtimeIdRef, runtimeSessionsRef: workspace.runtimeSessionsRef,
     workspaceRef: workspace.workspaceRef,
@@ -262,7 +251,6 @@ export default function App() {
     activeSessionVisible: view === 'session',
   })
 
-  useEffect(() => { void refreshGit(); return () => { gitRequestRef.current += 1 } }, [refreshGit])
   const refreshCheckouts = useCallback(async () => {
     const requestId = ++checkoutRequestRef.current
     if (!bridge || !activeProject || activeProject.inferred) { setCheckoutCatalog(undefined); setCheckoutsLoading(false); return }
@@ -277,14 +265,6 @@ export default function App() {
     }
   }, [activeProject, bridge, reportError, settingsState.settings.checkoutStrategy])
   useEffect(() => { void refreshCheckouts(); return () => { checkoutRequestRef.current += 1 } }, [refreshCheckouts])
-  const previousSessionStatusRef = useRef<SessionRecord['status'] | undefined>(undefined)
-  const activeSessionStatus = activeSession?.status
-  const locallyOwnedActiveSession = Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath)
-  useEffect(() => {
-    const previousStatus = previousSessionStatusRef.current
-    previousSessionStatusRef.current = activeSessionStatus
-    if (shouldRefreshGitOnSessionTransition(previousStatus, activeSessionStatus, locallyOwnedActiveSession)) void refreshGit()
-  }, [activeSessionStatus, locallyOwnedActiveSession, refreshGit])
   const agentBrowser = useAgentBrowserTabs({ bridge, reportError })
   const terminalDrawerRefs = useRef(new Map<string, TerminalDrawerHandle>())
   const [terminalSelection, setTerminalSelection] = useState<TerminalSelectionContext>()

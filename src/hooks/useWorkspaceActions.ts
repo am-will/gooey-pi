@@ -11,8 +11,8 @@ import { isSystemReport } from '@/lib/system-rows'
 import { formattingLocaleTag, resolveLocale, translate } from '@/lib/i18n'
 import { isUntitledSessionTitle } from '@/lib/session-title'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
-import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import { type OwnedGitStatus, type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
+import type { CapabilityMutationInput, ExtensionInstallInput, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -36,7 +36,7 @@ export interface WorkspaceActionsDeps {
   demoTimerRef: MutableRefObject<number[]>
   setProjects: Dispatch<SetStateAction<ProjectRecord[]>>
   setSessions: Dispatch<SetStateAction<SessionRecord[]>>
-  setGitSnapshot: Dispatch<SetStateAction<{ cwd: string | undefined; status: GitStatus }>>
+  setGitSnapshot: Dispatch<SetStateAction<OwnedGitStatus>>
   setView: Dispatch<SetStateAction<WorkspaceView>>
   setPaletteOpen: Dispatch<SetStateAction<boolean>>
   setToast: Dispatch<SetStateAction<string | null>>
