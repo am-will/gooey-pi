@@ -122,6 +122,25 @@ describe('composer worktree picker', () => {
     expect(container.querySelector('[role="menu"]')).toBeNull()
   })
 
+  it('retains a failed branch name so creation can be retried', async () => {
+    const onExecuteCheckout = vi.fn().mockRejectedValueOnce(new Error('checkout failed')).mockResolvedValue(undefined)
+    act(() => root.render(<Composer {...props({ onExecuteCheckout })} />))
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Checkout: main"]')?.click())
+    const input = container.querySelector<HTMLInputElement>('[placeholder="New branch name"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'feature/retry')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const form = input.closest('form')!
+    await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(input.value).toBe('feature/retry')
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('checkout failed')
+    await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(onExecuteCheckout).toHaveBeenCalledTimes(2)
+    expect(onExecuteCheckout).toHaveBeenLastCalledWith({ strategy: 'worktree', operation: 'create', branch: 'feature/retry' })
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
   it('creates a worktree from an inline branch form', async () => {
     const onExecuteCheckout = vi.fn().mockResolvedValue(undefined)
     act(() => root.render(<Composer {...props({ onExecuteCheckout })} />))

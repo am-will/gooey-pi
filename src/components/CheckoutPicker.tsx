@@ -46,14 +46,16 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
     }
   }, [open])
 
-  const execute = async (action: CheckoutAction): Promise<void> => {
-    if (!onExecute) return
+  const execute = async (action: CheckoutAction): Promise<boolean> => {
+    if (!onExecute) return false
     setError('')
     try {
       await onExecute(action)
       setOpen(false)
+      return true
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('checkout.error'))
+      return false
     }
   }
 
@@ -62,8 +64,7 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
     if (!name || creating || !onExecute) return
     setCreating(true)
     try {
-      await execute({ strategy, operation: 'create', branch: name })
-      setBranch('')
+      if (await execute({ strategy, operation: 'create', branch: name })) setBranch('')
     } finally {
       setCreating(false)
     }
