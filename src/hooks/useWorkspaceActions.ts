@@ -351,7 +351,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             // silently vanishing steer reads as "sent but ignored".
             workspace.setMessages((items) => [
               ...items,
-              { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: translate(formattingLocaleTag(), 'error.steerNotDelivered', { message: requestFailureMessage(error) }) }] },
+              { id: `error-${Date.now()}`, role: 'system', kind: 'error', timestamp: Date.now(), parts: [{ type: 'text', text: translate(formattingLocaleTag(), 'error.steerNotDelivered', { message: requestFailureMessage(error) }) }] },
             ])
           }
           reportError(error)
@@ -540,7 +540,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           const finalized = startedPrompt
             ? items.flatMap((item) => item.streaming && item.role === 'assistant' && item.parts.length === 0 ? [] : [{ ...item, streaming: false }])
             : items
-          return isSystemReport(finalized.at(-1)) ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
+          return isSystemReport(finalized.at(-1)) ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', kind: 'error', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
         })
         throw error
       } finally { setSubmitting(false) }
