@@ -7,6 +7,7 @@ export type { ChildSession, ChildRoster, ChildHistoryOptions, ChildHistoryPage }
  * exactly, or webview attach is silently blocked.
  */
 export const BROWSER_PARTITION = 'persist:prime-work-browser'
+export const PREVIEW_TAB_ID = 'preview'
 
 export const THEME_MODES = ['system', 'light', 'dark'] as const
 export type ThemeMode = (typeof THEME_MODES)[number]
