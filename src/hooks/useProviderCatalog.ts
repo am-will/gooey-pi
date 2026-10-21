@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { isUsableModel, preferredModel } from '@/lib/models'
 import { formattingLocaleTag, translate } from '@/lib/i18n'
 import { PRIME_THINKING_LEVELS } from '@/types/api/models'
 import type { HarnessId, PrimeModelCatalog, PrimeModelDescriptor, PrimeThinkingLevel, PrimeWorkApi, ProviderAuthEvent, RuntimeInfo, SessionRecord } from '@/types/api'
@@ -15,15 +16,11 @@ type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
 /** Stable fallback identities so consumers can memoize on prop equality. */
 const DEFAULT_REASONING_LEVELS = PRIME_THINKING_LEVELS
 
-function isUsable(candidate: PrimeModelDescriptor): boolean {
-  return candidate.enabled !== false && candidate.available
-}
-
 /** Resolve a session's persisted model against the catalog, matching either the model id or the full key. */
 function findSessionModel(catalog: PrimeModelCatalog, session: Pick<SessionRecord, 'model' | 'provider'> | undefined): PrimeModelDescriptor | undefined {
   if (!session?.provider || !session.model) return undefined
-  return catalog.models.find((candidate) => candidate.provider === session.provider && (candidate.id === session.model || candidate.key === session.model) && isUsable(candidate))
-    ?? catalog.models.find((candidate) => candidate.id === session.model && isUsable(candidate))
+  return catalog.models.find((candidate) => candidate.provider === session.provider && (candidate.id === session.model || candidate.key === session.model) && isUsableModel(candidate))
+    ?? catalog.models.find((candidate) => candidate.id === session.model && isUsableModel(candidate))
 }
 
 interface PendingSelection { model: string; effort: PrimeThinkingLevel }
@@ -119,21 +116,16 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   const rememberSelectionRef = useRef(rememberSelection)
   useLayoutEffect(() => { rememberSelectionRef.current = rememberSelection })
 
-  const firstUsableModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => (
-    nextCatalog?.models.find((candidate) => candidate.enabled !== false && candidate.available)
-  ), [])
-
   const fallbackModel = useCallback((nextCatalog: PrimeModelCatalog | null | undefined) => {
     if (nextCatalog) {
       const sessionModel = findSessionModel(nextCatalog, activeSession)
       if (sessionModel) return sessionModel
     }
-    return nextCatalog?.models.find((candidate) => candidate.key === lastSelectedModel && candidate.enabled !== false && candidate.available)
-      ?? firstUsableModel(nextCatalog)
-  }, [activeSession, firstUsableModel, lastSelectedModel])
+    return preferredModel(nextCatalog?.models, lastSelectedModel)
+  }, [activeSession, lastSelectedModel])
 
   const selectedModel = useMemo<PrimeModelDescriptor | undefined>(() => {
-    return catalog?.models.find((candidate) => candidate.key === model && candidate.enabled !== false && candidate.available)
+    return catalog?.models.find((candidate) => candidate.key === model && isUsableModel(candidate))
   }, [catalog, model])
   const reasoningLevels = selectedModel?.availableThinkingLevels ?? runtime?.availableThinkingLevels ?? DEFAULT_REASONING_LEVELS
   // Group once per catalog identity so the composer's <option> tree can memoize.
@@ -164,7 +156,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
 
   useEffect(() => {
     if (!catalog) return
-    const current = catalog.models.find((candidate) => candidate.key === modelRef.current && candidate.enabled !== false && candidate.available)
+    const current = catalog.models.find((candidate) => candidate.key === modelRef.current && isUsableModel(candidate))
     if (current) return
     const fallback = fallbackModel(catalog)
     updateModel(fallback?.key ?? '')
@@ -208,7 +200,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     // changes so a catalog refresh cannot revert what the user picked.
     if (runtime?.model?.provider && runtime.model.id) {
       pendingSelectionsRef.current.delete(sessionKey)
-      const runtimeModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && isUsable(candidate))
+      const runtimeModel = catalog.models.find((candidate) => candidate.provider === runtime.model?.provider && candidate.id === runtime.model?.id && isUsableModel(candidate))
       if (runtimeModel) {
         if (modelRef.current !== runtimeModel.key) updateModel(runtimeModel.key)
         rememberSelectionRef.current(runtimeModel.key)
@@ -221,7 +213,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     if (!sessionChanged) return
 
     const pending = pendingSelectionsRef.current.get(sessionKey)
-    const pendingModel = pending && catalog.models.find((candidate) => candidate.key === pending.model && isUsable(candidate))
+    const pendingModel = pending && catalog.models.find((candidate) => candidate.key === pending.model && isUsableModel(candidate))
     if (pending && pendingModel) {
       if (modelRef.current !== pendingModel.key) updateModel(pendingModel.key)
       if (pendingModel.availableThinkingLevels.includes(pending.effort) && effortRef.current !== pending.effort) updateEffort(pending.effort)

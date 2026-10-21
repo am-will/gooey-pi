@@ -1,3 +1,4 @@
+import { preferredModel } from '@/lib/models'
 import type { AutomationScheduleRecord, PrimeModelDescriptor, PrimeThinkingLevel, ProjectRecord, ScheduleExecution, ScheduleTarget, ScheduleTiming, SessionRecord } from '@/types/api'
 
 export type Frequency = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'advanced'
@@ -47,12 +48,6 @@ function projectForSession(session: SessionRecord, projects: ProjectRecord[]) {
   return projects.find((project) => project.path === session.projectPath)
 }
 
-function defaultScheduleModel(models: PrimeModelDescriptor[], lastSelectedModel: string): string {
-  return models.find((model) => model.key === lastSelectedModel && model.enabled !== false && model.available)?.key
-    ?? models.find((model) => model.enabled !== false && model.available)?.key
-    ?? ''
-}
-
 export function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[], models: PrimeModelDescriptor[], lastSelectedModel: string, initialProjectId?: string, initialSessionId?: string): ScheduleForm {
   const authorizedProjects = projects.filter(isAuthorized)
   const initialSession = sessions.find((session) => session.id === initialSessionId && !session.archived)
@@ -75,7 +70,7 @@ export function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[]
     interval: '1',
     weekdays: [DAY_CODES[new Date().getDay()]],
     advancedRrule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: defaultScheduleModel(models, lastSelectedModel),
+    model: preferredModel(models, lastSelectedModel)?.key ?? '',
     thinking: 'auto',
     fast: false,
   }
@@ -123,7 +118,7 @@ export function formFromSchedule(item: AutomationScheduleRecord, models: PrimeMo
     interval: parts.get('INTERVAL') ?? '1',
     weekdays: parts.get('BYDAY')?.split(',').filter(Boolean) ?? [DAY_CODES[new Date().getDay()]],
     advancedRrule: item.timing.kind === 'rrule' ? item.timing.rrule : 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: item.execution.model === 'auto' ? defaultScheduleModel(models, lastSelectedModel) : item.execution.model,
+    model: item.execution.model === 'auto' ? preferredModel(models, lastSelectedModel)?.key ?? '' : item.execution.model,
     thinking: item.execution.thinking,
     fast: item.execution.speed === 'fast',
   }
