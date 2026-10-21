@@ -72,7 +72,7 @@ describe('HeartbeatService', () => {
  * A prime-agent CLI whose `schedule list` serves the heartbeat until
  * `schedule cancel` removes it. Every argv is recorded.
  */
-function fakePrimeCli(): { executable: string; argv: () => string[][] } {
+function fakePrimeCli(cancelError = ''): { executable: string; argv: () => string[][] } {
   const dir = mkdtempSync(join(tmpdir(), 'prime-work-heartbeat-cli-'))
   dirs.push(dir)
   const executable = join(dir, 'prime-agent.cjs')
@@ -86,6 +86,7 @@ if (args[0] === 'schedule' && args[1] === 'list') {
   const jobs = fs.existsSync(${JSON.stringify(cancelled)}) ? [] : [${JSON.stringify({ ...heartbeat, source: 'heartbeat' })}]
   process.stdout.write(JSON.stringify({ jobs }))
 } else if (args[0] === 'schedule' && args[1] === 'cancel') {
+  if (${JSON.stringify(cancelError)}) { process.stderr.write(${JSON.stringify(cancelError)}); process.exit(7) }
   fs.writeFileSync(${JSON.stringify(cancelled)}, args[2])
 } else {
   process.exit(2)
@@ -117,6 +118,16 @@ describe('HeartbeatService on Rust Prime', () => {
     await expect(service.manage('heartbeat-one', 'stop')).resolves.toBeNull()
     expect(agents.command).toHaveBeenCalledWith('rust-runtime', expect.objectContaining({ type: 'manage_heartbeat', action: 'stop' }))
     expect(cli.argv()).toContainEqual(['schedule', 'cancel', 'heartbeat-one'])
+  })
+
+  it('reports the CLI stop failure without exposing credentials or unbounded stderr', async () => {
+    const cli = fakePrimeCli(`ignored diagnostic\nPermission denied Bearer abcdefghijklmnop ${'detail '.repeat(80)}`)
+    const { service } = rustRuntime(cli.executable)
+    await expect(service.manage('heartbeat-one', 'stop')).rejects.toThrow('Could not stop this native heartbeat: Permission denied [redacted]')
+    try { await service.manage('heartbeat-one', 'stop') } catch (error) {
+      expect(String(error)).not.toContain('abcdefghijklmnop')
+      expect(String(error).length).toBeLessThan(260)
+    }
   })
 
   it.each(['pause', 'resume'] as const)('explains that %s needs the Rust Prime background service', async (action) => {
