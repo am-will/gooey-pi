@@ -840,7 +840,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(branchMenu.getByRole('menuitemradio').filter({ hasText: 'feature/e2e' })).toBeVisible()
   })
 
-  test('returns from settings with its back button, New session, Escape, and Ctrl+W', async () => {
+  test('returns from settings with its back button, New session, Escape, and primary W', async () => {
     const openSettings = async () => {
       await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
       await expect(page.getByRole('heading', { name: 'General' })).toBeVisible()
@@ -859,7 +859,11 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('combobox', { name: 'Message Prime' })).toBeVisible()
 
     await openSettings()
-    await page.keyboard.press('Control+w')
+    if (process.platform === 'darwin') {
+      await page.keyboard.press('Control+w')
+      await expect(page.locator('.settings-page')).toBeVisible()
+    }
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+w' : 'Control+w')
     await expect(page.getByRole('combobox', { name: 'Message Prime' })).toBeVisible()
   })
 
