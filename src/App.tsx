@@ -692,6 +692,7 @@ export default function App() {
     if (next.flushAttemptFailed) return
     queuedFlushRef.current = true
     void sendPrompt(next.text, [], 'queue', next.id)
+      .catch(() => undefined)
       .finally(() => { queuedFlushRef.current = false })
   }, [bridge, busy, externalSessionRunning, queuedMessages, sendPrompt, submitting])
 
