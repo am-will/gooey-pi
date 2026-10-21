@@ -1,3 +1,4 @@
+import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
 import { ArrowUp, AtSign, ChevronDown, Clock3, Command, Edit3, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
@@ -50,10 +51,6 @@ interface ComposerProps {
   fast: boolean
   fastSupported: boolean
   fastAvailable: boolean
-  /** Active harness agent name for tooltips ("Prime Agent" / "OMP"). */
-  agentName?: string
-  /** Active harness short name for inline copy ("Prime" / "OMP"). */
-  shortName?: string
   harness?: HarnessId
   imageInputSupported: boolean
   /** Primary action for Enter; Ctrl/Cmd+Enter selects the opposite action. */
@@ -128,8 +125,6 @@ export const Composer = memo(function Composer({
   fast,
   fastSupported,
   fastAvailable,
-  agentName = 'Prime Agent',
-  shortName = 'Prime',
   harness = 'prime',
   imageInputSupported,
   messageEnterAction = 'queue',
@@ -163,6 +158,8 @@ export const Composer = memo(function Composer({
   draftKey,
 }: ComposerProps) {
   const { t } = useI18n()
+  const agentName = HARNESS_AGENT_NAMES[harness]
+  const shortName = HARNESS_SHORT_NAMES[harness]
   const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
   const [caret, setCaret] = useState<{ value: string; position: number } | null>(null)
   const caretPos = caret?.value === value ? Math.min(caret.position, value.length) : value.length
