@@ -3,13 +3,15 @@ import type { AgentRpcManager } from '../agent-rpc'
 import type { AgentBrowserService } from './agent-service'
 import { isPathWithin } from '../validation'
 
-/** Release catalog and live-runtime guests before a project's grants are removed. */
-export async function closeProjectBrowserSessions(options: {
+/** Stop producers before releasing guests, so an exiting runtime cannot recreate a tab. */
+export async function stopProjectResources(options: {
+  stopProcesses(): Promise<unknown>
   roots: readonly string[]
   sessions(): Promise<readonly Pick<SessionRecord, 'filePath' | 'projectPath'>[]>
   runtimes: ReturnType<AgentRpcManager['list']>
   browser: Pick<AgentBrowserService, 'closeForSession'> | null
 }): Promise<void> {
+  await options.stopProcesses()
   if (!options.browser) return
   const sessions = await options.sessions()
   const owned = new Set(sessions.filter((session) => options.roots.some((root) => isPathWithin(root, session.projectPath))).map((session) => session.filePath))
