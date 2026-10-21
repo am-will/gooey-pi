@@ -12,7 +12,6 @@
 .title-toolbar__identity { min-width: 0; flex: 1; display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
 .title-toolbar__identity strong { max-width: 28vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; font-weight: 540; }
 .title-toolbar__actions { justify-content: flex-end; }
-.toolbar-divider { width: 1px; height: 16px; background: var(--border); margin: 0 5px; }
 .project-run-control { position: relative; margin-right: 3px; }
 .project-run-split { height: 28px; display: inline-flex; align-items: stretch; overflow: hidden; border: 1px solid transparent; border-radius: 7px; background: transparent; transition: border-color 130ms ease-out, background 130ms ease-out; }
 .project-run-split:hover { background: var(--surface-hover); }
