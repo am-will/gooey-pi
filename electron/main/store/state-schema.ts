@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { isAbsolute } from 'node:path'
 import { SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, HARNESS_IDS, PRIME_THINKING_LEVELS, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../../src/types/api'
 import { normalizeScheduleRunHistory } from '../schedules/retention'
 import { isBoundedString, isOneOf, isRecord } from '../validation'
