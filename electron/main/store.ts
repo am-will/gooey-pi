@@ -545,6 +545,11 @@ export class JsonStateStore {
     return structuredClone(this.state.projects)
   }
 
+  getDismissedProjectPaths(): string[] {
+    this.assertCompatible()
+    return [...this.state.dismissedProjectPaths]
+  }
+
   getArchivedSessions(): string[] {
     this.assertCompatible()
     return [...this.state.archivedSessions]
