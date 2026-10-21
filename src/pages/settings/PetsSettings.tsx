@@ -34,7 +34,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
 
   return (
     <>
-      <header><h1>Pets</h1><p>Choose a companion that reacts while the agent works.</p></header>
+      <header><h1>{t('settings.pets')}</h1><p>{t('settings.pets.description')}</p></header>
       <section className="pet-hero">
         <div className="pet-hero__stage"><PetAvatar pet={selected} pets={pets} activity="speaking" size={Math.round(96 * settings.petSize / 100)} reduceMotion={settings.reduceMotion} /></div>
         <div><span className="pet-kicker"><Sparkles size={12} /> {t('settings.pets.activeCompanion')}</span><h2>{petDisplayName(selected, t)}</h2><p>{selectedCopy ? t(selectedCopy.description) : selected.description}</p><small>{t('settings.pets.dragDescription')}</small></div>
@@ -49,7 +49,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
             <output htmlFor="pet-size">{settings.petSize}%</output>
           </div>
         </div>
-        <div className="pet-grid" role="radiogroup" aria-label="Desktop pet">
+        <div className="pet-grid" role="radiogroup" aria-label={t('settings.pets.aria')}>
           {available.map((pet) => (
             <button
               type="button"
@@ -62,7 +62,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
               <span className="pet-choice__art">
                 {pet.id === 'gooey-pi' ? <img src={GOOEYPI_MASCOT_SRC} alt="" /> : pet.kind === 'orb' ? <PetAvatar pet={pet} pets={pets} size={48} reduceMotion={settings.reduceMotion} /> : <PawPrint size={24} />}
               </span>
-              <span><strong>{pet.displayName}</strong><small>{pet.source === 'built-in' ? 'Built into GooeyPi' : 'Codex pet'}</small></span>
+              <span><strong>{petDisplayName(pet, t)}</strong><small>{pet.source === 'built-in' ? t('settings.pets.builtIn') : t('settings.pets.codexPet')}</small></span>
             </button>
           ))}
         </div>

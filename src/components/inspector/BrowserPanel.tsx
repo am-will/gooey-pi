@@ -48,7 +48,6 @@ function normalizeUrl(value: string) {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
 }
 
-const ANNOTATION_LIMIT_NOTICE = `You can attach at most ${MAX_BROWSER_ANNOTATIONS} annotations. Remove one from the composer attachment to add more.`
 
 interface BrowserPanelProps {
   navigationRequest?: { id: number; url: string }

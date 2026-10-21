@@ -5,6 +5,7 @@ import { newestWindow } from '@/lib/render-bounds'
 
 /** `shortName` names the active harness in screen-reader announcements ("OMP is working."). */
 export function useTranscriptScroll(messages: TranscriptMessage[], shortName: string) {
+  const { t } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
   const previousCountRef = useRef(0)
   const previousStreamingRef = useRef(false)
@@ -25,12 +26,12 @@ export function useTranscriptScroll(messages: TranscriptMessage[], shortName: st
     } else if (streaming && pinnedToBottomRef.current) {
       frame = requestAnimationFrame(() => scroller && typeof scroller.scrollTo === 'function' && scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' }))
     }
-    if (previousStreamingRef.current && !streaming) setAnnouncement(`${shortName} response complete.`)
-    else if (!previousStreamingRef.current && streaming) setAnnouncement(`${shortName} is working.`)
+    if (previousStreamingRef.current && !streaming) setAnnouncement(t('transcript.announcement.responseComplete', { name: shortName }))
+    else if (!previousStreamingRef.current && streaming) setAnnouncement(t('transcript.announcement.working', { name: shortName }))
     previousStreamingRef.current = streaming
     previousCountRef.current = messages.length
     return () => { if (frame !== undefined) cancelAnimationFrame(frame) }
-  }, [messages, streaming, shortName])
+  }, [messages, streaming, shortName, t])
 
   const updatePinnedState = () => {
     const scroller = scrollRef.current

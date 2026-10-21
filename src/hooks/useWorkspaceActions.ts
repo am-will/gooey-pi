@@ -8,7 +8,7 @@ import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/se
 import { parseCompactCommand, parseMcpCommand } from '@/lib/slash-commands'
 import { deliverToStartedSession } from '@/lib/started-session-delivery'
 import { isSystemReport } from '@/lib/system-rows'
-import { formattingLocaleTag, resolveLocale, translate, type MessageKey } from '@/lib/i18n'
+import { formattingLocaleTag, resolveLocale, translate } from '@/lib/i18n'
 import { isUntitledSessionTitle } from '@/lib/session-title'
 import type { DEFAULT_SETTINGS } from '@/lib/data'
 import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'

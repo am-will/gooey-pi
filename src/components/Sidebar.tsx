@@ -32,7 +32,7 @@ import { HARNESS_PRODUCT_NAMES, HARNESS_SELECTOR_ORDER, HARNESS_SHORT_NAMES } fr
 import { sortProjects } from '@/lib/project-order'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
-import { sessionTitleText, isUntitledSessionTitle, UNTITLED_SESSION_TITLE } from '@/lib/session-title'
+import { sessionTitleText } from '@/lib/session-title'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
 import { IconButton, Modal, OmpMark, PiMark, PrimeMark, useFocusTrap } from './ui'
 

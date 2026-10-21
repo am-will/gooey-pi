@@ -1,5 +1,4 @@
 import { errorMessage } from '@/lib/errors'
-import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type { ProjectRecord, SessionRecord } from '@/types/api'
 
 export interface WorkspaceSnapshot {
