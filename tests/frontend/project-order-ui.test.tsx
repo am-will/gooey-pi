@@ -209,3 +209,18 @@ describe('project ordering controls in App', () => {
     expect([...container.querySelectorAll('[aria-label^="Project options"] button')].some((button) => button.textContent?.includes('Pin project'))).toBe(false)
   })
 })
+
+it('rehydrates an accepted runtime dialog without replaying it after the local answer', async () => {
+  await import('../../src/components/ExtensionUiModal')
+  vi.mocked(bridge.sessions.list).mockResolvedValue([{ id: 'pending-session', harness: 'prime', filePath: '/zeta/chat.jsonl', projectPath: '/zeta', title: 'Pending chat', createdAt: '', updatedAt: '', status: 'waiting', depth: 0 }])
+  vi.mocked(bridge.agent.list).mockResolvedValue([{ runtimeId: 'pending-runtime', harness: 'prime', cwd: '/zeta', sessionFile: '/zeta/chat.jsonl', isStreaming: false,
+    pendingExtensionUi: [{ type: 'extension_ui_request', method: 'confirm', id: 'resume-question', title: 'Resume approval', message: 'Continue the existing task?' }], pendingExtensionUiGroups: [] }])
+  await act(async () => root.render(<App />))
+  const dialog = await waitFor(() => document.querySelector<HTMLElement>('[role="dialog"]'))
+  expect(dialog.textContent).toContain('Resume approval')
+  await act(async () => [...dialog!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Confirm')!.click())
+  expect(bridge.agent.command).toHaveBeenCalledWith('pending-runtime', { type: 'extension_ui_response', id: 'resume-question', confirmed: true })
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true })))
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+})

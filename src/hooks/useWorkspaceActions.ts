@@ -44,6 +44,7 @@ export interface WorkspaceActionsDeps {
   setSubmitting: Dispatch<SetStateAction<boolean>>
   refreshSchedules(): Promise<void>
   refreshHeartbeats(): Promise<void>
+  onNewWorkspace?(project: ProjectRecord, generation: number): void
   resetBrowserView(): void
   closeTerminalForSession(sessionPath: string): void
   sessionHasOpenExtensionUi?(filePath: string): boolean
@@ -187,13 +188,14 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     catch (error) { if (workspace.workspaceRef.current.generation === generation) reportError(error) }
   }
   const newSession = (requestedProject?: ProjectRecord) => {
-    const { bridge, initialized, layout, settingsState, activeProject, workspace, setView, setPaletteOpen } = getDeps()
+    const { bridge, initialized, layout, settingsState, activeProject, workspace, setView, setPaletteOpen, onNewWorkspace } = getDeps()
     if (!initialized) return
     const project = newSessionProject(requestedProject, workspace.workspaceRef.current.project, activeProject)
     if (!project) return
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
     clearComposerDraft(composerDraftScope(project.id))
-    workspace.activateWorkspace(project)
+    const generation = workspace.activateWorkspace(project)
+    onNewWorkspace?.(project, generation)
     if (!bridge) workspace.setMessages([])
     setView('session'); setPaletteOpen(false)
   }
