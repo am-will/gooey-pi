@@ -17,6 +17,27 @@ const waitFor = async (predicate: () => boolean, timeout = 4_000) => {
 }
 
 describe('TerminalService', () => {
+  it('drains a large burst completely while applying output backpressure', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'gooeypi-terminal-burst-')); dirs.push(cwd)
+    const output: string[] = []
+    let exitCode: number | undefined
+    const owner = {
+      id: 99, isDestroyed: () => false,
+      send: vi.fn((channel: string, event: { data?: string; exitCode?: number }) => {
+        if (channel === 'terminal:data') output.push(event.data ?? '')
+        if (channel === 'terminal:exit') exitCode = event.exitCode
+      }),
+    } as unknown as WebContents
+    const service = new TerminalService(async () => cwd, () => testShell)
+    try {
+      await service.create(owner, { cwd, command: "head -c 20000000 /dev/zero | tr '\\0' a; printf END" })
+      await waitFor(() => exitCode !== undefined, 10_000)
+      const combined = output.join('')
+      expect(exitCode).toBe(0)
+      expect(combined).toBe(`${'a'.repeat(20_000_000)}END`)
+    } finally { await service.killAll() }
+  }, 15_000)
+
   it('holds repository use until the terminal exits', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'gooeypi-terminal-use-')); dirs.push(cwd)
     const owner = { id: 39, isDestroyed: () => false, send: vi.fn() } as unknown as WebContents

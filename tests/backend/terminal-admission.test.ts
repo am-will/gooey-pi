@@ -38,6 +38,7 @@ function fakePty() {
 }
 beforeEach(() => { native.spawn.mockReset().mockImplementation(fakePty); vi.mocked(killProcessTree).mockClear() })
 afterEach(async () => {
+  vi.useRealTimers()
   await Promise.all(services.splice(0).map((service) => service.killAll()))
   for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true })
 })
@@ -163,7 +164,7 @@ describe('terminal raw input', () => {
     const renderer = owner()
     const { terminalId } = await service.create(renderer, { cwd })
     const terminal = native.spawn.mock.results[0].value as ReturnType<typeof fakePty>
-    const pasted = '\0' + '😀'.repeat(100_000)
+    const pasted = `\0${'😀'.repeat(100_000)}`
     service.input(renderer, terminalId, pasted)
     expect(terminal.write).toHaveBeenCalledWith(pasted)
     expect(() => service.input(renderer, terminalId, 'x'.repeat(1024 * 1024 + 1))).toThrow(/terminal data/)
@@ -193,5 +194,86 @@ describe('interactive terminal colors', () => {
       if (previous === undefined) delete process.env.NO_COLOR
       else process.env.NO_COLOR = previous
     }
+  })
+})
+
+
+describe('terminal output backpressure', () => {
+  it('forwards the crossing frame, pauses briefly, then resumes without killing the terminal', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    const renderer = owner()
+    await service.create(renderer, { cwd })
+    const terminal = native.spawn.mock.results[0].value as ReturnType<typeof fakePty>
+    vi.useFakeTimers()
+    const frame = 'x'.repeat(1024 * 1024)
+    terminal.emitData(frame)
+    terminal.emitData(frame)
+    expect(terminal.pause).toHaveBeenCalledOnce()
+    expect(terminal.kill).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(terminal.resume).toHaveBeenCalledOnce()
+    const sent = vi.mocked(renderer.send).mock.calls.filter(([channel]) => channel === 'terminal:data').map(([, event]) => event.data).join('')
+    expect(sent).toBe(frame + frame)
+  })
+
+  it('enforces the shared output window even below the per-terminal rate', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    for (let index = 0; index < 3; index++) await service.create(owner(), { cwd })
+    const terminals = native.spawn.mock.results.map(({ value }) => value as ReturnType<typeof fakePty>)
+    vi.useFakeTimers()
+    for (const terminal of terminals) terminal.emitData('x'.repeat(1024 * 1024))
+    terminals[2].emitData('x'.repeat(512 * 1024))
+    expect(terminals[2].pause).toHaveBeenCalledOnce()
+    expect(terminals[2].kill).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(terminals[2].resume).toHaveBeenCalledOnce()
+  })
+
+  it('retains the hard single-frame protocol bound', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    const renderer = owner()
+    await service.create(renderer, { cwd })
+    const terminal = native.spawn.mock.results[0].value as ReturnType<typeof fakePty>
+    terminal.emitData('x'.repeat(1024 * 1024 + 1))
+    await service.killAll()
+    expect(terminal.kill).toHaveBeenCalled()
+    const sent = vi.mocked(renderer.send).mock.calls.filter(([channel]) => channel === 'terminal:data').map(([, event]) => event.data).join('')
+    expect(sent).toContain('one output frame exceeded 1 MiB')
+    expect(sent).not.toContain('x'.repeat(100))
+  })
+
+  it('resumes a paused PTY before terminating so socket drainage can complete', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    const renderer = owner()
+    const { terminalId } = await service.create(renderer, { cwd })
+    const terminal = native.spawn.mock.results[0].value as ReturnType<typeof fakePty>
+    terminal.emitData('x'.repeat(1024 * 1024))
+    terminal.emitData('x'.repeat(1024 * 1024))
+    await service.kill(renderer, terminalId)
+    expect(terminal.resume).toHaveBeenCalledOnce()
+    expect(terminal.kill).toHaveBeenCalledOnce()
+    expect(terminal.resume.mock.invocationCallOrder[0]).toBeLessThan(terminal.kill.mock.invocationCallOrder[0])
+  })
+
+  it('cancels a pending resume when the PTY exits', async () => {
+    const cwd = directory()
+    const service = new TerminalService(async () => cwd, () => shell)
+    services.push(service)
+    await service.create(owner(), { cwd })
+    const terminal = native.spawn.mock.results[0].value as ReturnType<typeof fakePty>
+    vi.useFakeTimers()
+    terminal.emitData('x'.repeat(1024 * 1024))
+    terminal.emitData('x'.repeat(1024 * 1024))
+    terminal.emitExit()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(terminal.resume).not.toHaveBeenCalled()
   })
 })

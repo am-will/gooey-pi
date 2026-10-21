@@ -25,6 +25,7 @@ interface OwnedTerminal {
   pendingOutput: string
   pendingOutputBytes: number
   flushTimer?: NodeJS.Timeout
+  resumeTimer?: NodeJS.Timeout
   terminating: boolean
   exited: boolean
   workspaceUse: WorkspaceUseLease
@@ -58,8 +59,10 @@ function systemShells(): Set<string> {
   return shells
 }
 
-const MAX_TERMINAL_OUTPUT_BYTES_PER_SECOND = 16 * 1024 * 1024
-const MAX_TOTAL_TERMINAL_OUTPUT_BYTES_PER_SECOND = 32 * 1024 * 1024
+// Keep pauses below node-pty’s 200 ms socket shutdown drain deadline.
+const OUTPUT_WINDOW_MS = 100
+const MAX_TERMINAL_OUTPUT_WINDOW_BYTES = 16 * 1024 * 1024 / 10
+const MAX_TOTAL_TERMINAL_OUTPUT_WINDOW_BYTES = 32 * 1024 * 1024 / 10
 const MAX_TERMINAL_IPC_CHUNK_BYTES = 1024 * 1024
 const MAX_TERMINAL_INPUT_CHARS = 1024 * 1024
 
@@ -193,6 +196,7 @@ export class TerminalService {
         this.terminals.delete(terminalId)
         this.removeActive(terminalId, owned)
         if (owned.flushTimer) clearTimeout(owned.flushTimer)
+        if (owned.resumeTimer) { clearTimeout(owned.resumeTimer); owned.resumeTimer = undefined }
         this.flushOutput(terminalId, owned)
         if (!owner.isDestroyed()) { try { owner.send('terminal:exit', { terminalId, exitCode, signal } satisfies TerminalExitEvent) } catch { /* renderer exited */ } }
       })
@@ -294,13 +298,13 @@ export class TerminalService {
   private forwardOutput(id: string, owned: OwnedTerminal, data: string): void {
     if (owned.terminating || owned.owner.isDestroyed()) return
     const now = Date.now()
-    if (now - owned.outputWindowStartedAt >= 1_000) { owned.outputWindowStartedAt = now; owned.outputWindowBytes = 0 }
+    if (now - owned.outputWindowStartedAt >= OUTPUT_WINDOW_MS) { owned.outputWindowStartedAt = now; owned.outputWindowBytes = 0 }
     const bytes = Buffer.byteLength(data)
     owned.outputWindowBytes += bytes
-    if (now - this.totalOutputWindowStartedAt >= 1_000) { this.totalOutputWindowStartedAt = now; this.totalOutputWindowBytes = 0 }
+    if (now - this.totalOutputWindowStartedAt >= OUTPUT_WINDOW_MS) { this.totalOutputWindowStartedAt = now; this.totalOutputWindowBytes = 0 }
     this.totalOutputWindowBytes += bytes
-    if (bytes > MAX_TERMINAL_IPC_CHUNK_BYTES || owned.outputWindowBytes > MAX_TERMINAL_OUTPUT_BYTES_PER_SECOND || this.totalOutputWindowBytes > MAX_TOTAL_TERMINAL_OUTPUT_BYTES_PER_SECOND) {
-      owned.pendingOutput += '\r\n[GooeyPi stopped this terminal because output exceeded 16 MiB/s.]\r\n'
+    if (bytes > MAX_TERMINAL_IPC_CHUNK_BYTES) {
+      owned.pendingOutput += '\r\n[GooeyPi stopped this terminal because one output frame exceeded 1 MiB.]\r\n'
       owned.pendingOutputBytes = Buffer.byteLength(owned.pendingOutput)
       this.flushOutput(id, owned)
       void this.terminate(id, owned)
@@ -309,6 +313,20 @@ export class TerminalService {
     if (owned.pendingOutputBytes + bytes > MAX_TERMINAL_IPC_CHUNK_BYTES) this.flushOutput(id, owned)
     owned.pendingOutput += data; owned.pendingOutputBytes += bytes
     if (!owned.flushTimer) owned.flushTimer = setTimeout(() => { owned.flushTimer = undefined; this.flushOutput(id, owned) }, 16)
+    const terminalLimited = owned.outputWindowBytes >= MAX_TERMINAL_OUTPUT_WINDOW_BYTES
+    const totalLimited = this.totalOutputWindowBytes >= MAX_TOTAL_TERMINAL_OUTPUT_WINDOW_BYTES
+    if (!owned.resumeTimer && (terminalLimited || totalLimited)) {
+      try { owned.terminal.pause() } catch { return }
+      const resumeAt = Math.max(
+        terminalLimited ? owned.outputWindowStartedAt + OUTPUT_WINDOW_MS : now,
+        totalLimited ? this.totalOutputWindowStartedAt + OUTPUT_WINDOW_MS : now,
+      )
+      owned.resumeTimer = setTimeout(() => {
+        owned.resumeTimer = undefined
+        if (!owned.exited && !owned.terminating) { try { owned.terminal.resume() } catch { /* PTY exited */ } }
+      }, Math.max(1, Math.min(OUTPUT_WINDOW_MS, resumeAt - now)))
+      owned.resumeTimer.unref()
+    }
   }
 
   private flushOutput(id: string, owned: OwnedTerminal): void {
@@ -325,12 +343,17 @@ export class TerminalService {
     this.removeActive(id, owned)
     const operation = this.terminateProcess(id, owned)
     this.terminationPromises.set(owned, operation)
-    void operation.finally(() => { if (this.terminationPromises.get(owned) === operation) this.terminationPromises.delete(owned) })
+    const cleanup = () => { if (this.terminationPromises.get(owned) === operation) this.terminationPromises.delete(owned) }
+    void operation.then(cleanup, cleanup)
     return operation
   }
 
   private async terminateProcess(id: string, owned: OwnedTerminal): Promise<void> {
     if (owned.flushTimer) { clearTimeout(owned.flushTimer); owned.flushTimer = undefined }
+    if (owned.resumeTimer) {
+      clearTimeout(owned.resumeTimer); owned.resumeTimer = undefined
+      try { owned.terminal.resume() } catch { /* PTY exited */ }
+    }
     this.flushOutput(id, owned)
     if (owned.exited) return
     // Shell children can detach from the process group, so signal a snapshot of
