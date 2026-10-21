@@ -328,7 +328,7 @@ export class SessionService {
     if (safeTitle.startsWith('-') || /[\r\n]/.test(safeTitle)) throw new TypeError('title contains invalid characters')
     if (await this.renameRuntimeSession(safePath, safeTitle)) return true
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
-    // OMP/pi services are constructed with a null CLI path (electron/main/index.ts).
+    // Harnesses without the Prime CLI use their own file-level rename hook.
     if (!primeAgentPath) return this.renameFile?.(safePath, safeTitle) ?? false
     const selector = this.primeImplementation() === 'rust'
       ? await this.residentWorkerSelector(safePath)
