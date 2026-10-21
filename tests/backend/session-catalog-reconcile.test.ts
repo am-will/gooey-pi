@@ -504,6 +504,45 @@ describe('SessionMetadataCatalog known-file reconciliation', () => {
     expect(entries).toHaveBeenCalledOnce()
   })
 
+  it('chains known-file reconciliation behind an in-flight scan baseline', async () => {
+    const { catalog, files, entries, readMetadata } = fixture(1)
+    const started = deferred<void>()
+    const gate = deferred<void>()
+    readMetadata.mockImplementationOnce(async (path) => {
+      started.resolve()
+      await gate.promise
+      return metadataFor(path, 0)
+    })
+    const scan = catalog.all()
+    await started.promise
+    Object.assign(files.get(sessionName(0))!, { mtimeMs: 2, size: 101, version: 1 })
+    const reconcile = catalog.reconcileKnownChanges([sessionName(0)])
+    gate.resolve()
+    await scan
+    await expect(reconcile).resolves.toMatchObject({ kind: 'reconciled' })
+    Object.assign(files.get(sessionName(0))!, { mtimeMs: 3, size: 102, version: 2 })
+    await expect(catalog.reconcileKnownChanges([sessionName(0)])).resolves.toMatchObject({ kind: 'reconciled' })
+    expect(entries).toHaveBeenCalledOnce()
+    expect((await catalog.all())[0]?.id).toBe('session-00000-v2')
+  })
+
+  it('releases a reconcile waiting behind a failed scan', async () => {
+    const { catalog, entries } = fixture(1)
+    const started = deferred<void>()
+    const gate = deferred<void>()
+    entries.mockImplementationOnce(async () => {
+      started.resolve()
+      await gate.promise
+      throw new Error('directory unavailable')
+    })
+    const scan = catalog.all()
+    await started.promise
+    const reconcile = catalog.reconcileKnownChanges([sessionName(0)])
+    gate.resolve()
+    await expect(scan).resolves.toEqual([])
+    await expect(reconcile).resolves.toEqual({ kind: 'full-scan' })
+  })
+
   it('serializes overlapping reconciles and falls back before an older read can publish', async () => {
     const { catalog, files, entries } = fixture(1)
     const readerHarness = catalog as unknown as {
