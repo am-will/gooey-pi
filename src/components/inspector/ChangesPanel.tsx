@@ -1,5 +1,5 @@
 import { ArrowDownToLine, File, FileCode2, GitBranch, LoaderCircle, RefreshCw, Sparkles, Undo2 } from 'lucide-react'
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { GitStatus } from '@/types/api'
@@ -51,6 +51,7 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
   const [scope, setScope] = useState<'unstaged' | 'staged'>('unstaged')
   const [selectedPath, setSelectedPath] = useState<string | undefined>(git.files[0]?.path)
   const [diff, setDiff] = useState('')
+  const diffSelectionRef = useRef('')
   const [loading, setLoading] = useState(false)
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
@@ -77,10 +78,12 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
       return
     }
     let cancelled = false
-    setLoading(true)
+    const selection = JSON.stringify([cwd, activeSelectedPath, scope])
+    if (diffSelectionRef.current !== selection) setLoading(true)
+    diffSelectionRef.current = selection
     window.prime.git.diff(cwd, activeSelectedPath, scope === 'staged').then((value) => { if (!cancelled) setDiff(value.text) }).catch(() => { if (!cancelled) setDiff(t('inspector.changes.loadFailed')) }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [cwd, activeSelectedPath, scope])
+  }, [cwd, activeSelectedPath, scope, git])
 
   const mutate = async (kind: 'stage' | 'unstage' | 'restore', paths: string[]): Promise<boolean> => {
     if (readOnly || !cwd || !window.prime) return false
