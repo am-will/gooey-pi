@@ -138,7 +138,7 @@
 .schedule-detail__card dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); font-size: 10.5px; text-transform: none; }
 .schedule-detail__card code { color: var(--text-secondary); font: 9px/1.5 "SFMono-Regular", Menlo, monospace; }
 .schedule-history { margin-top: 28px; }
-.schedule-history > header { height: 40px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+.schedule-history > header { min-height: 40px; padding: 6px 0; gap: 8px; flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
 .schedule-history > header > div { display: flex; align-items: center; gap: 6px; }
 .schedule-history h2 { margin: 0; font-size: 12px; font-weight: 570; }
 .schedule-history > header > span { color: var(--text-tertiary); font-size: 9.5px; }
