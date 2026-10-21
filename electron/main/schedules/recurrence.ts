@@ -206,7 +206,6 @@ export function validateScheduleTiming(
   return normalizeTiming(input, true, parseInstant(now, 'now'))
 }
 
-export const canonicalizeScheduleTiming = validateScheduleTiming
 
 function formatterFor(timeZone: string): Intl.DateTimeFormat {
   const existing = formatters.get(timeZone)
@@ -352,7 +351,6 @@ export function nextScheduleOccurrence(timing: ScheduleTiming, after: Date | str
   return expandRruleInstants(normalized, afterDate, 1)[0]?.toISOString() ?? null
 }
 
-export const nextOccurrence = nextScheduleOccurrence
 
 /** Returns up to `count` occurrences strictly after `after`. */
 export function previewScheduleOccurrences(
@@ -370,7 +368,6 @@ export function previewScheduleOccurrences(
   return expandRruleInstants(normalized, cursor, count).map((instant) => instant.toISOString())
 }
 
-export const previewOccurrences = previewScheduleOccurrences
 
 /** Counts occurrences in the half-open interval [`fromInclusive`, `untilExclusive`). */
 export function countMissedOccurrences(
@@ -400,4 +397,3 @@ export function countMissedOccurrences(
   return occurrences.length
 }
 
-export const countMissedScheduleOccurrences = countMissedOccurrences
