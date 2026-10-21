@@ -15,6 +15,7 @@ import {
 } from './bucketed'
 import {
   createIncrementalMetadataReader,
+  ingestSplitModelChange,
   nodeMetadataReaderIo,
   type SessionMetadataReader,
   type SessionMetadataReaderIo,
@@ -51,8 +52,7 @@ const piMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change') {
     // Pi records split `provider` + `modelId` fields (Prime's shape), unlike
     // OMP's single `provider/id` string.
-    if (typeof value.modelId === 'string') state.model = value.modelId
-    if (typeof value.provider === 'string') state.provider = value.provider
+    ingestSplitModelChange(state, value)
   } else if (value.type === 'session_info' && typeof value.name === 'string') {
     // The latest session_info name wins; an empty name falls back to the prompt.
     state.displayName = compactText(value.name, 100)

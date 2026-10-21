@@ -62,27 +62,13 @@ export function applyLiveMetadata(metadata: SessionMetadata, live: JsonRecord): 
   }
 }
 
-interface MetadataAccumulator {
-  id: string
-  projectPath: string
-  createdAt: string
-  updatedAt: string
-  sawRecordTimestamp: boolean
-  lastUserMessageAt?: string
+interface MetadataAccumulator extends BaseMetadataAccumulator {
   depth: number
-  model?: string
-  provider?: string
-  thinkingLevel?: string
   sessionName?: string
-  firstUser: string
-  preview: string
   lifecycle?: string
   taskState?: string
   taskStateBasedOnMessageCount?: number
   messageCount: number
-  lastRole?: string
-  stopReason?: string
-  records: number
 }
 
 function createAccumulator(filePath: string, fileStat: Stats): MetadataAccumulator {
@@ -125,27 +111,54 @@ export function ingestMessageActivity(state: MessageActivityAccumulator, record:
   if ((message.role === 'assistant' || message.role === 'user') && text) state.preview = text
 }
 
-function ingestMetadataLine(state: MetadataAccumulator, line: string): void {
+export interface BaseMetadataAccumulator extends MessageActivityAccumulator {
+  id: string
+  projectPath: string
+  updatedAt: string
+  sawRecordTimestamp: boolean
+  model?: string
+  provider?: string
+  thinkingLevel?: string
+  records: number
+}
+
+export function parseMetadataRecord(state: BaseMetadataAccumulator, line: string): JsonRecord | undefined {
   if (!line) return
   if (++state.records > SESSION_FILE_MAX_RECORDS) throw new SessionFileLimitError('Session file has too many records')
   let value: unknown
   try { value = JSON.parse(line) } catch { return }
   if (!isRecord(value)) return
-  const recordTimestamp = validTimestamp(value.timestamp, '')
-  if (recordTimestamp) {
-    state.updatedAt = recordTimestamp
-    state.sawRecordTimestamp = true
-  }
+  const timestamp = validTimestamp(value.timestamp, '')
+  if (timestamp) { state.updatedAt = timestamp; state.sawRecordTimestamp = true }
+  return value
+}
+
+export function ingestCommonRecord(state: BaseMetadataAccumulator, record: JsonRecord): void {
+  if (record.type === 'session') {
+    if (typeof record.id === 'string') state.id = record.id
+    if (typeof record.cwd === 'string') state.projectPath = record.cwd
+    state.createdAt = validTimestamp(record.timestamp, state.createdAt)
+  } else if (record.type === 'thinking_level_change' && typeof record.thinkingLevel === 'string') state.thinkingLevel = record.thinkingLevel
+  else if (record.type === 'message') ingestMessageActivity(state, record)
+}
+
+export function ingestSplitModelChange(state: BaseMetadataAccumulator, record: JsonRecord): void {
+  if (typeof record.modelId === 'string') state.model = record.modelId
+  if (typeof record.provider === 'string') state.provider = record.provider
+}
+
+export function sessionTitle(name: string | undefined, firstUser: string): string {
+  return compactText(name ?? '', 100) || compactText(firstUser, 100) || 'Untitled session'
+}
+
+function ingestMetadataLine(state: MetadataAccumulator, line: string): void {
+  const value = parseMetadataRecord(state, line)
+  if (!value) return
+  ingestCommonRecord(state, value)
   if (value.type === 'session') {
-    if (typeof value.id === 'string') state.id = value.id
-    if (typeof value.cwd === 'string') state.projectPath = value.cwd
-    state.createdAt = validTimestamp(value.timestamp, state.createdAt)
     if (typeof value.rlmDepth === 'number' && Number.isInteger(value.rlmDepth) && value.rlmDepth >= 0) state.depth = value.rlmDepth
     else if (typeof value.parentSession === 'string') state.depth = 1
-  } else if (value.type === 'model_change') {
-    if (typeof value.modelId === 'string') state.model = value.modelId
-    if (typeof value.provider === 'string') state.provider = value.provider
-  } else if (value.type === 'thinking_level_change' && typeof value.thinkingLevel === 'string') state.thinkingLevel = value.thinkingLevel
+  } else if (value.type === 'model_change') ingestSplitModelChange(state, value)
   else if (value.type === 'session_info' && typeof value.name === 'string') state.sessionName = compactText(value.name, 100)
   else if (value.type === 'session_state' && isRecord(value.state) && typeof value.state.status === 'string') state.lifecycle = value.state.status
   else if (value.type === 'agent_status' && isRecord(value.status)) {
@@ -153,14 +166,11 @@ function ingestMetadataLine(state: MetadataAccumulator, line: string): void {
     state.taskStateBasedOnMessageCount = typeof value.status.basedOnMessageCount === 'number'
       ? value.status.basedOnMessageCount
       : undefined
-  } else if (value.type === 'message') {
-    state.messageCount += 1
-    ingestMessageActivity(state, value)
-  }
+  } else if (value.type === 'message') state.messageCount += 1
 }
 
 function metadataFromAccumulator(state: MetadataAccumulator, filePath: string, fallbackUpdated: string): SessionMetadata {
-  const title = compactText(state.sessionName || state.firstUser, 100) || 'Untitled session'
+  const title = sessionTitle(state.sessionName, state.firstUser)
   // Prime verdicts describe exactly the message count they were generated from.
   const taskState = typeof state.taskStateBasedOnMessageCount !== 'number'
     || state.taskStateBasedOnMessageCount === state.messageCount
