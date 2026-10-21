@@ -231,29 +231,53 @@ describe('agent RPC command frame bounds', () => {
     manager.setRuntimeEnvironmentProvider(({ cwd }) => ({ CLAIM: cwd }))
     manager.setRuntimeEndListener(ended)
     manager.setWorkspaceUseProvider(async (cwd) => {
-      if (cwd === project.cwd) {
-        entered()
-        if (stage === 'workspace lease') await gate
-      }
+      if (cwd === project.cwd) entered()
+      if (stage === 'workspace lease') await gate
       return { release: releaseLease }
     })
     if (stage === 'runtime admission') (manager as unknown as { runtimeAdmission: Promise<void> }).runtimeAdmission = gate
     const starting = manager.start({ cwd: project.cwd }).then((info) => ({ info }), (error: unknown) => ({ error }))
+    const outsideStarting = manager.start({ cwd: sibling.cwd })
     await admissionEntered
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     await manager.stopForProjectRoots([project.cwd])
     releaseGate()
     const outcome = await starting
     expect(outcome).toMatchObject({ error: expect.objectContaining({ message: expect.stringContaining('Project') }) })
-    expect(manager.list()).toEqual([])
+    expect(manager.list().some((info) => info.cwd === project.cwd)).toBe(false)
     expect(releaseLease).toHaveBeenCalledOnce()
     expect(ended).toHaveBeenCalledExactlyOnceWith({ CLAIM: project.cwd }, undefined)
-    const outside = await manager.start({ cwd: sibling.cwd })
+    const outside = await outsideStarting
     expect(outside.cwd).toBe(sibling.cwd)
     expect(manager.list().map((info) => info.runtimeId)).toEqual([outside.runtimeId])
+    expect((manager as unknown as { pendingProjectStarts: Set<unknown> }).pendingProjectStarts.size).toBe(0)
     // Removal cancels the overlapping admission, rather than permanently denying a re-granted root.
     const fresh = await manager.start({ cwd: project.cwd })
     expect(fresh.cwd).toBe(project.cwd)
+  })
+
+  it('rechecks project authority when removal finishes during pre-admission session validation', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    let authorized = true
+    let releaseValidation!: () => void
+    let entered!: () => void
+    const validating = new Promise<void>((resolve) => { entered = resolve })
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => {
+      if (!authorized) throw new Error('Project authority was removed')
+      return cwd
+    }, async (file) => { entered(); await new Promise<void>((resolve) => { releaseValidation = resolve }); return file })
+    managers.push(manager)
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => ({ CLAIM: 'pre-admission' }))
+    manager.setRuntimeEndListener(ended)
+    const starting = manager.start({ cwd: fake.cwd, sessionPath: '/sessions/pending.jsonl' }).then((info) => ({ info }), (error: unknown) => ({ error }))
+    await validating
+    authorized = false
+    await manager.stopForProjectRoots([fake.cwd])
+    releaseValidation()
+    expect(await starting).toMatchObject({ error: expect.objectContaining({ message: 'Project authority was removed' }) })
+    expect(ended).toHaveBeenCalledExactlyOnceWith({ CLAIM: 'pre-admission' }, undefined)
+    expect(manager.list()).toEqual([])
   })
 
   it('holds repository use for the lifetime of a runtime', async () => {
