@@ -190,13 +190,13 @@ type CompactionPartValue = Extract<MessagePart, { type: 'compaction' }>
 type CompactionTone = CompactionPartValue['status'] | 'skipped'
 
 // Keyed by the type, so adding a reason there fails to compile until it has a label here.
-const COMPACTION_REASON_LABELS: Record<PrimeCompactionReason, string> = {
-  manual: 'manual',
-  threshold: 'automatic threshold',
-  overflow: 'overflow recovery',
-  requested: 'requested',
-  idle: 'idle maintenance',
-  incomplete: 'incomplete response recovery',
+const COMPACTION_REASON_KEYS: Record<PrimeCompactionReason, MessageKey> = {
+  manual: 'transcript.compaction.reason.manual',
+  threshold: 'transcript.compaction.reason.threshold',
+  overflow: 'transcript.compaction.reason.overflow',
+  requested: 'transcript.compaction.reason.requested',
+  idle: 'transcript.compaction.reason.idle',
+  incomplete: 'transcript.compaction.reason.incomplete',
 }
 
 /** A compaction that ended without running because it was skipped is benign: it reads as a notice, never as a failure. */
@@ -204,34 +204,35 @@ function compactionTone(part: CompactionPartValue): CompactionTone {
   return part.status === 'failed' && part.outcome === 'skipped' ? 'skipped' : part.status
 }
 
-function compactionLabel(part: CompactionPartValue, tone: CompactionTone): string {
-  if (tone === 'running') return 'Compacting context'
-  if (tone === 'done') return 'Context compacted'
-  if (tone === 'cancelled') return 'Context compaction cancelled'
-  if (tone === 'failed') return 'Context compaction failed'
+function compactionLabel(part: CompactionPartValue, tone: CompactionTone, t: ReturnType<typeof useI18n>['t']): string {
+  if (tone === 'running') return t('transcript.compaction.running')
+  if (tone === 'done') return t('transcript.compaction.done')
+  if (tone === 'cancelled') return t('transcript.compaction.cancelled')
+  if (tone === 'failed') return t('transcript.compaction.failed')
   // A compaction someone asked for is skipped only when the history is too short for one.
-  return isRequestedCompactionReason(part.reason) ? 'Nothing to compact yet' : 'Context compaction skipped'
+  return t(isRequestedCompactionReason(part.reason) ? 'transcript.compaction.nothingYet' : 'transcript.compaction.skipped')
 }
 
 function CompactionPart({ part }: { part: CompactionPartValue }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const canExpand = Boolean(part.summary || part.error)
   const tone = compactionTone(part)
   const state = tone === 'running'
-    ? <><LoaderCircle className="spin" size={12} /> running</>
+    ? <><LoaderCircle className="spin" size={12} /> {t('transcript.state.running')}</>
     : tone === 'done'
-      ? <><Check size={12} /> {part.willRetry ? 'continuing' : 'done'}</>
+      ? <><Check size={12} /> {t(part.willRetry ? 'transcript.state.continuing' : 'transcript.state.done')}</>
       : tone === 'skipped'
-        ? <><Info size={12} /> skipped</>
-        : <><CircleAlert size={12} /> {tone === 'cancelled' ? 'cancelled' : 'needs attention'}</>
+        ? <><Info size={12} /> {t('transcript.state.skipped')}</>
+        : <><CircleAlert size={12} /> {t(tone === 'cancelled' ? 'transcript.state.cancelled' : 'transcript.state.needsAttention')}</>
   const details = part.error || part.summary
-  const tokenLabel = part.tokensBefore === undefined ? '' : `${part.tokensBefore.toLocaleString()} tokens before`
+  const tokenLabel = part.tokensBefore === undefined ? '' : t('transcript.compaction.tokensBefore', { count: part.tokensBefore.toLocaleString() })
   // No harness records the trigger with a completed compaction in its session file, so a reloaded row may name none.
-  const reasonLabel = part.reason ? COMPACTION_REASON_LABELS[part.reason] : undefined
+  const reasonLabel = part.reason ? t(COMPACTION_REASON_KEYS[part.reason]) : undefined
   return <div className={`activity-line activity-line--compaction is-${tone}`}>
     <button type="button" className="activity-tool__summary" disabled={!canExpand} onClick={() => setOpen((value) => !value)} aria-expanded={canExpand ? open : undefined}>
       <span className="activity-line__icon">{tone === 'running' ? <LoaderCircle className="spin" size={13} /> : tone === 'done' ? <Layers3 size={13} /> : tone === 'skipped' ? <Info size={13} /> : <CircleAlert size={13} />}</span>
-      <span className="activity-line__kind">{compactionLabel(part, tone)}</span>
+      <span className="activity-line__kind">{compactionLabel(part, tone, t)}</span>
       {reasonLabel ? <span className="activity-compaction__reason">{reasonLabel}</span> : null}
       {tokenLabel ? <span className="activity-compaction__tokens">{tokenLabel}</span> : null}
       <span className="activity-tool__state">{state}</span>

@@ -1367,4 +1367,9 @@ export const englishCatalog = {
   'archive.running.confirm': 'Archive',
   'archive.doneToast': 'Archived. Find it in Settings › Archived chats.',
   'archive.restoredToast': 'Session restored.',
+  'transcript.compaction.reason.idle': 'idle maintenance',
+  'transcript.compaction.reason.incomplete': 'incomplete response recovery',
+  'transcript.compaction.nothingYet': 'Nothing to compact yet',
+  'transcript.state.skipped': 'skipped',
+
 } as const satisfies Record<string, Message>

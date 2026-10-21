@@ -1340,4 +1340,9 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'archive.doneToast': 'アーカイブしました。「設定 › アーカイブ済みチャット」から復元できます。',
   'archive.restoredToast': 'チャットを復元しました。',
 
+  'transcript.compaction.reason.idle': 'アイドル時の保守',
+  'transcript.compaction.reason.incomplete': '未完了の応答を復旧',
+  'transcript.compaction.nothingYet': 'まだ圧縮できる内容がありません',
+  'transcript.state.skipped': 'スキップ',
+
 }
