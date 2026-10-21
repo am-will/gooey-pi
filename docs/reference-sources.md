@@ -1,6 +1,6 @@
 # Reference and clean-room record
 
-Prime Work is an independently authored desktop client for Prime Agent. It follows common macOS split-view, chat, terminal, browser, and code-review interaction patterns. No proprietary application source code or bundled assets were copied.
+This historical record describes the original Prime Work client, now GooeyPi. It follows common macOS split-view, chat, terminal, browser, and code-review interaction patterns. No proprietary application source code or bundled assets were copied.
 
 Public product references consulted for feature behavior and high-level visual study:
 

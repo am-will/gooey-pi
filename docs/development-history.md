@@ -2,15 +2,15 @@
 
 Prime Work was created during a set of Prime Agent and Codex sessions on August 5, 2026. This document maps those sessions to the repository history and records the work that led to the current GUI.
 
-## Source sessions
+## Original implementation
 
-| Session | Agent | Product work |
-|---|---|---|
-| `019fd463-f980-706b-9e16-dc4ad3948bee` | Prime Agent | Researched the Codex desktop interaction model and Prime Agent runtime, selected Electron, created the application architecture and design system, implemented the backend services and sandboxed preload bridge, built the React workspace, added real sessions/projects/browser/terminal/plugins/settings/schedules, added tests and packaging, and fixed the Electron window-close crash. |
-| `019fd4ae-2a62-72da-a181-9a088ba01659` | Prime Agent | Replaced generic identity treatments with Prime branding, generated the macOS icon assets, added keyboard- and pointer-accessible inspector/terminal resizing, refined typography and responsive behavior, and extended end-to-end coverage. |
-| `019fd4de-e0f8-7f92-8243-992e27ebad64` | Codex | Iterated on title-bar spacing and browser/terminal iconography from live screenshots, restored the Prime mark, introduced the lined-globe treatment, and verified the final dark-mode render. |
+The initial Prime-only client was called Prime Work. Prime Agent sessions produced
+the Electron architecture, sandboxed bridge, React workspace, project and session
+services, coding tools, packaging, and tests. Later Prime Agent and Codex sessions
+refined the identity, typography, responsive panels, icons, and title bar.
 
-The remaining Prime sessions in the same working directory (`019fd45f…`, `019fd466…`, `019fd485…`, `019fd487…`, `019fd48a…`, `019fd48b…`, `019fd49e…`, and `019fd4b5…`) dealt with Prime Agent skill warnings, version checks, or computer-use MCP configuration. They did not contribute files to Prime Work and are intentionally not represented as code commits.
+This is a historical account of that initial implementation. Use the
+[documentation index](README.md) for the current multi-harness architecture.
 
 ## Build sequence
 
