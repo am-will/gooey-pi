@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { isThinkingLevel, validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { isThinkingLevel, validateRpcCommand, type ValidatedRpcCommand } from '../../electron/main/agent-rpc/command-schema'
 
 const passthrough = async (path: string) => path
 
@@ -182,5 +182,14 @@ describe('validateRpcCommand extension UI responses', () => {
     await expect(validate({ type: 'extension_ui_response', id: 'ui-1', confirmed: true, cancelled: false })).rejects.toThrow('command.cancelled is not supported')
     await expect(validate({ type: 'extension_ui_response', id: 'ui-1', cancelled: false })).rejects.toThrow('command.cancelled is not supported')
     await expect(validate({ type: 'extension_ui_response', value: 'answer' })).rejects.toThrow('id must be a string')
+  })
+})
+
+
+describe('validated RPC command types', () => {
+  it('preserves validated discriminants and enum fields for internal consumers', () => {
+    expectTypeOf<Extract<ValidatedRpcCommand, { type: 'set_service_tier' }>['serviceTier']>().toEqualTypeOf<'default' | 'priority'>()
+    expectTypeOf<Extract<ValidatedRpcCommand, { type: 'prompt' }>['streamingBehavior']>().toEqualTypeOf<'steer' | 'followUp' | undefined>()
+    expectTypeOf<Extract<ValidatedRpcCommand, { type: 'set_heartbeat' }>['deliveryMode']>().toEqualTypeOf<'steer' | 'follow_up' | undefined>()
   })
 })

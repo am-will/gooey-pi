@@ -269,15 +269,15 @@ export class AgentRpcManager {
     // interception below routes it via runtime.setServiceTier instead.
     const translated = runtime.adapter.translateCommand(command)
     if (command.type === 'set_model' && this.providers) {
-      await this.providers.requireAvailableModel(`${String(command.provider)}/${String(command.modelId)}`, this.disabledProviders(), this.disabledModels())
+      await this.providers.requireAvailableModel(`${command.provider}/${command.modelId}`, this.disabledProviders(), this.disabledModels())
     }
     if (command.type === 'set_service_tier') {
-      const serviceTier = command.serviceTier === 'priority' ? 'priority' : 'default'
+      const serviceTier = command.serviceTier
       const supported = await runtime.setServiceTier(serviceTier)
       if (!supported) throw new Error('Fast mode is not supported by the selected model')
       return { type: 'response', command: 'set_service_tier', success: true }
     }
-    if (Array.isArray(command.images) && command.images.length > 0 && runtime.snapshot().imageInputSupported === false) {
+    if ((command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up') && command.images && command.images.length > 0 && runtime.snapshot().imageInputSupported === false) {
       throw new Error('The active model does not accept images. Choose a vision model and try again.')
     }
     const response = await runtime.command(translated)

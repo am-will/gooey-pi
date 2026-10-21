@@ -6,6 +6,7 @@ import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
 import { providerErrorDetail } from './limits'
 import type { RpcObject } from './types'
+import type { ValidatedRpcCommand } from './command-schema'
 
 /** Normalized start inputs the manager resolves before the harness turns them into argv. */
 export interface HarnessStartArgsInput {
@@ -59,7 +60,7 @@ export interface HarnessRpcAdapter {
   readonly compactRefusal: RegExp
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
-  translateCommand(command: RpcObject): RpcObject
+  translateCommand(command: ValidatedRpcCommand): RpcObject
   /**
    * Harness event → Prime event vocabulary, given the runtime state before the
    * event. One harness event may expand into several, which the runtime
@@ -124,9 +125,9 @@ export class UnsupportedRpcCommandError extends Error {
 }
 
 /** A command translator that refuses the `unsupported` commands and passes every other command through. */
-function rejectCommands(unsupported: ReadonlySet<string>, harnessLabel: string): (command: RpcObject) => RpcObject {
+function rejectCommands(unsupported: ReadonlySet<string>, harnessLabel: string): (command: ValidatedRpcCommand) => ValidatedRpcCommand {
   return (command) => {
-    const type = String(command.type)
+    const type = command.type
     if (unsupported.has(type)) throw new UnsupportedRpcCommandError(type, harnessLabel)
     return command
   }

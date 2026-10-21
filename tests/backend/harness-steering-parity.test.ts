@@ -1,3 +1,5 @@
+import type { ValidatedRpcCommand } from '../../electron/main/agent-rpc/command-schema'
+import type { PromptImage } from '../../src/types/api'
 import { describe, expect, it } from 'vitest'
 import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { parseSessionActionSnapshot } from '../../src/lib/session-actions'
@@ -11,14 +13,14 @@ const adapters = [
 
 describe.each(adapters)('%s steering protocol parity', (_name, adapter) => {
   it('passes steer commands through the shared RPC vocabulary', () => {
-    const command = { type: 'steer', message: 'change direction' }
+    const command = { type: 'steer', message: 'change direction' } satisfies ValidatedRpcCommand
     expect(adapter.translateCommand(command)).toBe(command)
   })
 
   it('preserves the existing image payload for prompts and steers', () => {
-    const images = [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]
-    const prompt = { type: 'prompt', message: 'inspect', images }
-    const steer = { type: 'steer', message: 'inspect this instead', images }
+    const images: PromptImage[] = [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]
+    const prompt = { type: 'prompt', message: 'inspect', images } satisfies ValidatedRpcCommand
+    const steer = { type: 'steer', message: 'inspect this instead', images } satisfies ValidatedRpcCommand
 
     expect(adapter.translateCommand(prompt)).toBe(prompt)
     expect(adapter.translateCommand(steer)).toBe(steer)
