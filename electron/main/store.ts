@@ -1,14 +1,14 @@
-import { DEFAULT_SETTINGS } from '../../src/lib/default-settings'
+import { defaultSettings, parseSettings } from './store/settings-schema'
+export { defaultSettings } from './store/settings-schema'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, HARNESS_IDS, OMP_APPROVAL_MODES, SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { HARNESS_IDS, SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, PRIME_THINKING_LEVELS, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { renameWithWindowsRetry } from './lib/durable-write'
-import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
-import { errorMessage, errorCode, isProviderId, isModelKey, isOneOf, isRecord } from './validation'
+import { isBoundedString, errorMessage, errorCode, isOneOf, isRecord } from './validation'
 
 export interface FolderIdentity {
   dev: string
@@ -98,12 +98,6 @@ function parseWindowsLegacyTombstone(value: unknown): WindowsLegacyTombstone | n
   }
 }
 
-export function defaultSettings(): AppSettings {
-  const defaultShell = process.platform === 'win32'
-    ? (process.env.ComSpec && isAbsolute(process.env.ComSpec) ? process.env.ComSpec : 'C:\\Windows\\System32\\cmd.exe')
-    : (process.env.SHELL?.startsWith('/') ? process.env.SHELL : '/bin/zsh')
-  return { ...structuredClone(DEFAULT_SETTINGS), terminalShell: defaultShell }
-}
 
 function defaultState(): DesktopState {
   return { version: CURRENT_DESKTOP_STATE_VERSION, projects: [], settings: defaultSettings(), archivedSessions: [], dismissedProjectPaths: [], schedules: [] }
@@ -120,12 +114,12 @@ function validDate(value: unknown): value is string {
 }
 function parseProjectScripts(value: unknown): ProjectScripts | undefined {
   if (!isRecord(value)) return undefined
-  const setup = boundedString(value.setup, 64 * 1024, true) && !value.setup.includes('\0') ? value.setup : ''
-  const run = boundedString(value.run, 64 * 1024, true) && !value.run.includes('\0') ? value.run : ''
+  const setup = isBoundedString(value.setup, 64 * 1024, true) && !value.setup.includes('\0') ? value.setup : ''
+  const run = isBoundedString(value.run, 64 * 1024, true) && !value.run.includes('\0') ? value.run : ''
   const setupLastExitCode = Number.isSafeInteger(value.setupLastExitCode)
     ? Number(value.setupLastExitCode)
     : undefined
-  const setupLastRun = setupLastExitCode !== undefined && boundedString(value.setupLastRun, 64 * 1024, true) && !value.setupLastRun.includes('\0')
+  const setupLastRun = setupLastExitCode !== undefined && isBoundedString(value.setupLastRun, 64 * 1024, true) && !value.setupLastRun.includes('\0')
     ? value.setupLastRun
     : undefined
   return { setup, run, setupLastRun, setupLastExitCode }
@@ -167,131 +161,33 @@ function parseProject(value: unknown, preHarnessState: boolean): PersistedProjec
   }
 }
 
-function parseSettings(value: unknown, legacyState = false): AppSettings {
-  const defaults = defaultSettings()
-  if (!isRecord(value)) return defaults
-  const parseRuntimePath = (path: unknown, fallback: string): string => (
-    typeof path === 'string' && path.length <= 4_096 && (!path || isAbsolute(path)) ? path : fallback
-  )
-  const runtimePaths = isRecord(value.runtimePaths)
-    ? {
-        prime: parseRuntimePath(value.runtimePaths.prime, defaults.runtimePaths.prime),
-        omp: parseRuntimePath(value.runtimePaths.omp, defaults.runtimePaths.omp),
-        pi: parseRuntimePath(value.runtimePaths.pi, defaults.runtimePaths.pi),
-      }
-    : defaults.runtimePaths
-  const activeHarness = isOneOf(HARNESS_IDS, value.activeHarness)
-    ? value.activeHarness
-    : legacyState ? 'prime' : defaults.activeHarness
-  const parseLastSelectedModel = (model: unknown, fallback: string): string => (
-    typeof model === 'string' && model.length <= 385 && (!model || isModelKey(model))
-      ? model
-      : fallback
-  )
-  const lastSelectedModels = isRecord(value.lastSelectedModels)
-    ? {
-        prime: parseLastSelectedModel(value.lastSelectedModels.prime, defaults.lastSelectedModels.prime),
-        omp: parseLastSelectedModel(value.lastSelectedModels.omp, defaults.lastSelectedModels.omp),
-        pi: parseLastSelectedModel(value.lastSelectedModels.pi, defaults.lastSelectedModels.pi),
-      }
-    : defaults.lastSelectedModels
-  return {
-    theme: isOneOf(THEME_MODES, value.theme) ? value.theme : defaults.theme,
-    // Derived from the shared tuple so a locale the renderer can select is never
-    // rewritten to the default when the state file is read back.
-    locale: isOneOf(LOCALE_PREFERENCES, value.locale) ? value.locale : defaults.locale,
-    interfaceFontScale: isOneOf(INTERFACE_FONT_SCALES, value.interfaceFontScale) ? value.interfaceFontScale : defaults.interfaceFontScale,
-    projectSortMode: isOneOf(PROJECT_SORT_MODES, value.projectSortMode) ? value.projectSortMode : defaults.projectSortMode,
-    sidebarOpen: typeof value.sidebarOpen === 'boolean' ? value.sidebarOpen : defaults.sidebarOpen,
-    inspectorOpen: typeof value.inspectorOpen === 'boolean' ? value.inspectorOpen : defaults.inspectorOpen,
-    showFileChangesPopup: typeof value.showFileChangesPopup === 'boolean' ? value.showFileChangesPopup : defaults.showFileChangesPopup,
-    checkoutStrategy: isOneOf(CHECKOUT_STRATEGIES, value.checkoutStrategy) ? value.checkoutStrategy : defaults.checkoutStrategy,
-    keepRunningInBackground: typeof value.keepRunningInBackground === 'boolean' ? value.keepRunningInBackground : defaults.keepRunningInBackground,
-    launchAtLogin: typeof value.launchAtLogin === 'boolean' ? value.launchAtLogin : defaults.launchAtLogin,
-    terminalOpen: typeof value.terminalOpen === 'boolean' ? value.terminalOpen : defaults.terminalOpen,
-    defaultInspectorTab: isOneOf(INSPECTOR_TABS, value.defaultInspectorTab) ? value.defaultInspectorTab : defaults.defaultInspectorTab,
-    browserHome: typeof value.browserHome === 'string' ? value.browserHome : defaults.browserHome,
-    browserAskForDownloads: typeof value.browserAskForDownloads === 'boolean' ? value.browserAskForDownloads : defaults.browserAskForDownloads,
-    terminalShell: typeof value.terminalShell === 'string' ? value.terminalShell : defaults.terminalShell,
-    reduceMotion: typeof value.reduceMotion === 'boolean' ? value.reduceMotion : defaults.reduceMotion,
-    showReasoningSummaries: typeof value.showReasoningSummaries === 'boolean' ? value.showReasoningSummaries : defaults.showReasoningSummaries,
-    showToolCalls: typeof value.showToolCalls === 'boolean' ? value.showToolCalls : defaults.showToolCalls,
-    messageEnterAction: isOneOf(MESSAGE_ENTER_ACTIONS, value.messageEnterAction) ? value.messageEnterAction : defaults.messageEnterAction,
-    runtimePaths,
-    askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
-    askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
-    browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,
-    computerUseEnabled: typeof value.computerUseEnabled === 'boolean' ? value.computerUseEnabled : defaults.computerUseEnabled,
-    disabledProviders: parseDisabledProviders(value.disabledProviders, defaults.disabledProviders),
-    disabledModels: parseDisabledModels(value.disabledModels, defaults.disabledModels),
-    ompDisabledProviders: parseDisabledProviders(value.ompDisabledProviders, defaults.ompDisabledProviders),
-    ompDisabledModels: parseDisabledModels(value.ompDisabledModels, defaults.ompDisabledModels),
-    piDisabledProviders: parseDisabledProviders(value.piDisabledProviders, defaults.piDisabledProviders),
-    piDisabledModels: parseDisabledModels(value.piDisabledModels, defaults.piDisabledModels),
-    lastSelectedModels,
-    activeHarness,
-    ompApprovalMode: isOneOf(OMP_APPROVAL_MODES, value.ompApprovalMode) ? value.ompApprovalMode : defaults.ompApprovalMode,
-    petEnabled: typeof value.petEnabled === 'boolean' ? value.petEnabled : defaults.petEnabled,
-    petId: boundedString(value.petId, 128) && /^[a-z0-9][a-z0-9._/-]{0,127}$/i.test(value.petId) ? value.petId : defaults.petId,
-    petSize: Number.isInteger(value.petSize) && (value.petSize as number) >= 50 && (value.petSize as number) <= 125 ? value.petSize as number : defaults.petSize,
-    voiceTranscriptionProvider: value.voiceTranscriptionProvider === 'openai-live' || value.voiceTranscriptionProvider === 'openai' || value.voiceTranscriptionProvider === 'groq' || value.voiceTranscriptionProvider === 'deepgram' || value.voiceTranscriptionProvider === 'self-hosted' || value.voiceTranscriptionProvider === 'local-whisper' ? value.voiceTranscriptionProvider : defaults.voiceTranscriptionProvider,
-    voiceOpenAiLiveTranscriptionModel: boundedString(value.voiceOpenAiLiveTranscriptionModel, 128) ? value.voiceOpenAiLiveTranscriptionModel : defaults.voiceOpenAiLiveTranscriptionModel,
-    voiceOpenAiTranscriptionModel: boundedString(value.voiceOpenAiTranscriptionModel, 128) ? value.voiceOpenAiTranscriptionModel : defaults.voiceOpenAiTranscriptionModel,
-    voiceGroqTranscriptionModel: boundedString(value.voiceGroqTranscriptionModel, 128) ? value.voiceGroqTranscriptionModel : defaults.voiceGroqTranscriptionModel,
-    voiceDeepgramTranscriptionModel: boundedString(value.voiceDeepgramTranscriptionModel, 128) ? value.voiceDeepgramTranscriptionModel : defaults.voiceDeepgramTranscriptionModel,
-    voiceSelfHostedUrl: boundedString(value.voiceSelfHostedUrl, 2_048, true) ? value.voiceSelfHostedUrl : defaults.voiceSelfHostedUrl,
-    voiceSelfHostedModel: boundedString(value.voiceSelfHostedModel, 128, true) ? value.voiceSelfHostedModel : defaults.voiceSelfHostedModel,
-    voiceLocalWhisperExecutable: boundedString(value.voiceLocalWhisperExecutable, 4096, true) ? value.voiceLocalWhisperExecutable : defaults.voiceLocalWhisperExecutable,
-    voiceLocalWhisperModel: boundedString(value.voiceLocalWhisperModel, 4096, true) ? value.voiceLocalWhisperModel : defaults.voiceLocalWhisperModel,
-    voiceRealtimeModel: boundedString(value.voiceRealtimeModel, 128) ? value.voiceRealtimeModel : defaults.voiceRealtimeModel,
-    voiceRealtimeVoice: boundedString(value.voiceRealtimeVoice, 64) ? value.voiceRealtimeVoice : defaults.voiceRealtimeVoice,
-  }
-}
-
-function parseDisabledProviders(value: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback
-  return [...new Set(value.filter((item): item is string => (
-    typeof item === 'string' && isProviderId(item)
-  )))].slice(0, MAX_CATALOG_PROVIDERS)
-}
-
-function parseDisabledModels(value: unknown, fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback
-  return [...new Set(value.filter((item): item is string => (
-    typeof item === 'string' && isModelKey(item)
-  )))].slice(0, 5_000)
-}
-
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
 
-function boundedString(value: unknown, max: number, allowEmpty = false): value is string {
-  return typeof value === 'string' && value.length <= max && (allowEmpty || value.trim().length > 0)
-}
 
 function parseScheduleTarget(value: unknown): ScheduleTarget | null {
-  if (!isRecord(value) || !boundedString(value.projectId, 256)) return null
+  if (!isRecord(value) || !isBoundedString(value.projectId, 256)) return null
   if (value.kind === 'project') return { kind: 'project', projectId: value.projectId }
-  if (value.kind === 'session' && boundedString(value.sessionId, 256)) return { kind: 'session', projectId: value.projectId, sessionId: value.sessionId }
+  if (value.kind === 'session' && isBoundedString(value.sessionId, 256)) return { kind: 'session', projectId: value.projectId, sessionId: value.sessionId }
   return null
 }
 
 function parseScheduleTiming(value: unknown): ScheduleTiming | null {
   if (!isRecord(value)) return null
   if (value.kind === 'once' && validDate(value.at)) return { kind: 'once', at: value.at }
-  if (value.kind === 'rrule' && boundedString(value.dtstartLocal, 64) && boundedString(value.timeZone, 128) && boundedString(value.rrule, 2_048)) {
+  if (value.kind === 'rrule' && isBoundedString(value.dtstartLocal, 64) && isBoundedString(value.timeZone, 128) && isBoundedString(value.rrule, 2_048)) {
     return { kind: 'rrule', dtstartLocal: value.dtstartLocal, timeZone: value.timeZone, rrule: value.rrule }
   }
   return null
 }
 
 function parseScheduleExecution(value: unknown): ScheduleExecution | null {
-  if (!isRecord(value) || !boundedString(value.model, 512) || !THINKING_LEVELS.has(String(value.thinking))) return null
+  if (!isRecord(value) || !isBoundedString(value.model, 512) || !THINKING_LEVELS.has(String(value.thinking))) return null
   if (value.speed !== 'normal' && value.speed !== 'fast') return null
   return { model: value.model, thinking: value.thinking as ScheduleExecution['thinking'], speed: value.speed }
 }
 
 function parseScheduleRun(value: unknown): ScheduleRunRecord | null {
-  if (!isRecord(value) || !boundedString(value.id, 256) || !boundedString(value.taskId, 256)) return null
+  if (!isRecord(value) || !isBoundedString(value.id, 256) || !isBoundedString(value.taskId, 256)) return null
   if (!Number.isSafeInteger(value.taskRevision) || Number(value.taskRevision) < 1 || !isOneOf(SCHEDULE_RUN_STATUSES, value.status)) return null
   if ((value.trigger !== 'scheduled' && value.trigger !== 'manual') || !validDate(value.scheduledFor) || !validDate(value.queuedAt)) return null
   const execution = parseScheduleExecution(value.execution)
@@ -307,16 +203,16 @@ function parseScheduleRun(value: unknown): ScheduleRunRecord | null {
     finishedAt: validDate(value.finishedAt) ? value.finishedAt : undefined,
     status: value.status,
     execution,
-    sessionId: boundedString(value.sessionId, 256) ? value.sessionId : undefined,
-    sessionFile: boundedString(value.sessionFile, 4_096) ? value.sessionFile : undefined,
-    error: boundedString(value.error, 4_000, true) ? value.error : undefined,
+    sessionId: isBoundedString(value.sessionId, 256) ? value.sessionId : undefined,
+    sessionFile: isBoundedString(value.sessionFile, 4_096) ? value.sessionFile : undefined,
+    error: isBoundedString(value.error, 4_000, true) ? value.error : undefined,
     skippedCount: Number.isSafeInteger(value.skippedCount) && Number(value.skippedCount) > 0 ? Number(value.skippedCount) : undefined,
   }
 }
 
 function parseSchedule(value: unknown, preHarnessState: boolean): AutomationScheduleRecord | null {
-  if (!isRecord(value) || value.schemaVersion !== 1 || !boundedString(value.id, 256)) return null
-  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1 || !boundedString(value.title, 200) || !boundedString(value.prompt, 1024 * 1024)) return null
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isBoundedString(value.id, 256)) return null
+  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1 || !isBoundedString(value.title, 200) || !isBoundedString(value.prompt, 1024 * 1024)) return null
   const target = parseScheduleTarget(value.target)
   const timing = parseScheduleTiming(value.timing)
   const execution = parseScheduleExecution(value.execution)
@@ -339,7 +235,7 @@ function parseSchedule(value: unknown, preHarnessState: boolean): AutomationSche
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     nextRunAt: validDate(value.nextRunAt) ? value.nextRunAt : undefined,
-    blockedReason: boundedString(value.blockedReason, 4_000, true) ? value.blockedReason : undefined,
+    blockedReason: isBoundedString(value.blockedReason, 4_000, true) ? value.blockedReason : undefined,
     runs,
   }
 }
