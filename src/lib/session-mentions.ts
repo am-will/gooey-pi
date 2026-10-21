@@ -1,3 +1,4 @@
+import { scanAtMentions } from './at-mentions'
 import type { HarnessId, SessionRecord } from '@/types/api'
 
 export interface SessionMention {
@@ -30,9 +31,6 @@ export interface RoutedSessionReference {
   harness: HarnessId
 }
 
-const boundaryBefore = (value: string | undefined): boolean => value === undefined || /[\s([{"'`]/.test(value)
-const boundaryAfter = (value: string | undefined): boolean => value === undefined || /[\s.,!?;:()[\]{}"'`]/.test(value)
-
 /** Resolves exact visible @title references to stable session UUIDs. */
 export function findSessionMentions(value: string, sessions: readonly SessionRecord[], preferredIds: ReadonlyMap<string, string> = new Map()): SessionMention[] {
   const candidates = [...sessions].filter((session) => session.title.trim()).sort((left, right) => {
@@ -42,20 +40,7 @@ export function findSessionMentions(value: string, sessions: readonly SessionRec
     const preferred = preferredIds.get(key)
     return preferred === left.id ? -1 : preferred === right.id ? 1 : 0
   })
-  const lowerValue = value.toLocaleLowerCase()
-  const mentions: SessionMention[] = []
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== '@' || !boundaryBefore(value[index - 1])) continue
-    const session = candidates.find((candidate) => {
-      const token = `@${candidate.title.trim()}`.toLocaleLowerCase()
-      return lowerValue.startsWith(token, index) && boundaryAfter(value[index + token.length])
-    })
-    if (!session) continue
-    const end = index + session.title.trim().length + 1
-    mentions.push({ start: index, end, text: value.slice(index, end), session })
-    index = end - 1
-  }
-  return mentions
+  return scanAtMentions(value, candidates, (candidate) => candidate.title).map(({ candidate, ...mention }) => ({ ...mention, session: candidate }))
 }
 
 /** Adds immutable ids for the model while preserving the user's visible @title text. */

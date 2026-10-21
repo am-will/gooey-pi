@@ -1,3 +1,4 @@
+import { scanAtMentions } from './at-mentions'
 import type { SkillRecord } from '@/types/api'
 
 export interface CapabilityMention {
@@ -9,9 +10,6 @@ export interface CapabilityMention {
 
 export const CAPABILITY_ROUTING_BEGIN = '===== BEGIN GOOEYPI CAPABILITY ROUTING ====='
 export const CAPABILITY_ROUTING_END = '===== END GOOEYPI CAPABILITY ROUTING ====='
-
-const boundaryBefore = (value: string | undefined): boolean => value === undefined || /[\s([{"'`]/.test(value)
-const boundaryAfter = (value: string | undefined): boolean => value === undefined || /[\s.,!?;:()[\]{}"'`]/.test(value)
 
 function mentionCandidates(skills: readonly SkillRecord[]): SkillRecord[] {
   const seen = new Set<string>()
@@ -29,20 +27,7 @@ function mentionCandidates(skills: readonly SkillRecord[]): SkillRecord[] {
 /** Resolves visible @ mentions against the enabled catalog without treating email addresses as capabilities. */
 export function findCapabilityMentions(value: string, skills: readonly SkillRecord[]): CapabilityMention[] {
   const candidates = mentionCandidates(skills)
-  const lowerValue = value.toLocaleLowerCase()
-  const mentions: CapabilityMention[] = []
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== '@' || !boundaryBefore(value[index - 1])) continue
-    const skill = candidates.find((candidate) => {
-      const token = `@${candidate.name.trim()}`.toLocaleLowerCase()
-      return lowerValue.startsWith(token, index) && boundaryAfter(value[index + token.length])
-    })
-    if (!skill) continue
-    const end = index + skill.name.trim().length + 1
-    mentions.push({ start: index, end, text: value.slice(index, end), skill })
-    index = end - 1
-  }
-  return mentions
+  return scanAtMentions(value, candidates, (candidate) => candidate.name).map(({ candidate, ...mention }) => ({ ...mention, skill: candidate }))
 }
 
 function routingInstruction(mention: CapabilityMention): string {

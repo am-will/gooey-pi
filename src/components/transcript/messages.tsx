@@ -1,3 +1,4 @@
+import { scanAtMentions } from '@/lib/at-mentions'
 import { Fragment, memo, useMemo, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, Target } from 'lucide-react'
 import type { HarnessId, MessagePart, TranscriptMessage } from '@/types/api'
@@ -206,31 +207,13 @@ function SessionReferenceText({ text, references, onOpen }: { text: string; refe
   return <>{lines.map((line, lineIndex) => {
     const parts: ReactNode[] = []
     let cursor = 0
-    while (cursor < line.length) {
-      let foundIndex = -1
-      let found: RoutedSessionReference | undefined
-      for (let index = cursor; index < line.length; index += 1) {
-        const before = line[index - 1]
-        found = ordered.find((reference) => {
-          const after = line[index + reference.label.length]
-          return (before === undefined || /[\s([{"'`]/.test(before))
-            && line.startsWith(reference.label, index)
-            && (after === undefined || /[\s.,!?;:()[\]{}"'`]/.test(after))
-        })
-        if (found) { foundIndex = index; break }
-      }
-      if (!found || foundIndex < 0) { parts.push(line.slice(cursor)); break }
-      if (foundIndex > cursor) parts.push(line.slice(cursor, foundIndex))
-      const reference = found
-      parts.push(<button
-        type="button"
-        key={`${reference.harness}:${reference.sessionId}:${foundIndex}`}
-        className="session-reference"
-        aria-label={t('transcript.openSession', { label: reference.label.slice(1) })}
-        onClick={() => onOpen?.(reference.sessionId, reference.harness)}
-      >{reference.label}</button>)
-      cursor = foundIndex + reference.label.length
+    for (const mention of scanAtMentions(line, ordered, (reference) => reference.label.slice(1), { caseSensitive: true })) {
+      if (mention.start > cursor) parts.push(line.slice(cursor, mention.start))
+      const reference = mention.candidate
+      parts.push(<button type="button" key={`${reference.harness}:${reference.sessionId}:${mention.start}`} className="session-reference" aria-label={t('transcript.openSession', { label: reference.label.slice(1) })} onClick={() => onOpen?.(reference.sessionId, reference.harness)}>{mention.text}</button>)
+      cursor = mention.end
     }
+    if (cursor < line.length) parts.push(line.slice(cursor))
     return <Fragment key={`${lineIndex}-${line.slice(0, 12)}`}>{parts}{lineIndex < lines.length - 1 ? <br /> : null}</Fragment>
   })}</>
 }
