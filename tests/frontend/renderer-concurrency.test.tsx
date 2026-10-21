@@ -1218,3 +1218,21 @@ describe('plugin request ownership', () => {
     expect(reportError).not.toHaveBeenCalled()
   })
 })
+
+
+it('cancels recognized malformed dialogs instead of leaving the harness waiting', async () => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  let state!: ReturnType<typeof useExtensionUi>
+  function ExtensionProbe() {
+    state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef: { current: new Map() }, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+    return null
+  }
+  await act(async () => root.render(<ExtensionProbe />))
+  await act(async () => {
+    for (const method of ['select', 'confirm', 'input', 'editor']) state.showExtensionUi('runtime', { type: 'extension_ui_request', method, id: method, title: '' })
+    state.showExtensionUi('runtime', { type: 'extension_ui_request', method: 'notify', id: 'notice', title: '' })
+  })
+  expect(command.mock.calls).toEqual(['select', 'confirm', 'input', 'editor'].map((id) => ['runtime', { type: 'extension_ui_response', id, cancelled: true }]))
+  expect(state.extensionUi).toBeNull()
+})

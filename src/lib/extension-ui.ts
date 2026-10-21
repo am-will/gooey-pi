@@ -54,6 +54,14 @@ function questionnaireMeta(value: string): ExtensionUiQuestionnaireMeta | undefi
   return { groupId, index, total }
 }
 
+const DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor'])
+
+/** A malformed recognized dialog can still be released when its response id is valid. */
+export function extensionUiDialogId(raw: Record<string, unknown>): string | undefined {
+  return raw.type === 'extension_ui_request' && typeof raw.method === 'string' && DIALOG_METHODS.has(raw.method)
+    ? stringValue(raw.id, 200) : undefined
+}
+
 export function parseExtensionUiRequest(raw: Record<string, unknown>): ExtensionUiRequest | undefined {
   if (raw.type !== 'extension_ui_request') return undefined
   const id = stringValue(raw.id, 200)
@@ -63,9 +71,12 @@ export function parseExtensionUiRequest(raw: Record<string, unknown>): Extension
 
   if (method === 'select') {
     if (!Array.isArray(raw.options) || raw.options.length < 1 || raw.options.length > MAX_OPTIONS) return undefined
-    const options = raw.options.map((option) => stringValue(option, MAX_OPTION_LENGTH))
-    if (options.some((option): option is undefined => option === undefined)) return undefined
-    const parsedOptions = options as string[]
+    const parsedOptions: string[] = []
+    for (const value of raw.options) {
+      const option = stringValue(value, MAX_OPTION_LENGTH)
+      if (option === undefined) return undefined
+      parsedOptions.push(option)
+    }
     const questionnaire = questionnaireMeta(parsedOptions[0])
     const visibleOptions = questionnaire ? parsedOptions.slice(1) : parsedOptions
     if (visibleOptions.length < 1) return undefined

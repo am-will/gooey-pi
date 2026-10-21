@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ExtensionUiResponse } from '@/components/ExtensionUiModal'
-import { ASK_USER_TIMEOUT_MS, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest } from '@/lib/extension-ui'
+import { ASK_USER_TIMEOUT_MS, extensionUiDialogId, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest } from '@/lib/extension-ui'
 import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
@@ -220,7 +220,12 @@ export function useExtensionUi({
       return
     }
     const request = parseExtensionUiRequest(rawEvent)
-    if (!request || !bridge) return
+    if (!bridge) return
+    if (!request) {
+      const id = extensionUiDialogId(rawEvent)
+      if (id) void bridge.agent.command(runtimeId, { type: 'extension_ui_response', id, cancelled: true }).catch(() => undefined)
+      return
+    }
 
     if (request.method === 'select' && request.questionnaire) {
       const questionnaireKey = `${runtimeId}:${request.questionnaire.groupId}`
