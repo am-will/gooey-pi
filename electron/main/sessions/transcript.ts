@@ -239,6 +239,10 @@ export function createTranscriptReader(dialect: TranscriptDialect = primeTranscr
 
 async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: string, isStreaming: boolean): Promise<TranscriptMessage[]> {
   if ((await stat(filePath)).size > 256 * 1024 * 1024) throw new Error('Session transcript is too large to display')
+  return renderTranscriptLines(strictJsonLines(createReadStream(filePath), SESSION_FILE_RECORD_LIMIT_BYTES), isStreaming, dialect)
+}
+
+export async function renderTranscriptLines(lines: AsyncIterable<string>, isStreaming = false, dialect: TranscriptDialect = primeTranscriptDialect): Promise<TranscriptMessage[]> {
   const entries = new Map<string, { id: string; parentId: string | null; entry: JsonRecord; bytes: number }>()
   // A light id→parentId edge map covers every record, so the parent-chain walk
   // still traverses nodes that never render (and never charge the budgets).
@@ -248,7 +252,7 @@ async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: s
   let recordCount = 0
   // The metadata reader of the same file MUST share this per-record tolerance:
   // a record the catalog accepts must never make the transcript unopenable.
-  for await (const line of strictJsonLines(createReadStream(filePath), SESSION_FILE_RECORD_LIMIT_BYTES)) {
+  for await (const line of lines) {
     if (!line) continue
     if (++recordCount > 200_000) throw new Error('Session transcript has too many records')
     let entry: unknown
