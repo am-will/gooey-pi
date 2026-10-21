@@ -176,6 +176,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # GitHub runner HTTP/3 drops Apple ticket-service connections; use HTTPS/TCP.
+      # https://github.com/actions/runner-images/issues/14924
+      - name: Route Apple ticket retrieval over TCP
+        run: node scripts/release/apple-ticket-transport.mjs setup "$RUNNER_TEMP/gooeypi-ticket-pf.json"
       # CI runs the full typecheck/lint/test suite for this commit; the release
       # job only builds the bundle, packages, and runs post-package verification.
       - name: Build, sign, notarize, and verify release packages
@@ -187,6 +191,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Release the job-scoped Apple ticket transport
+        if: always()
+        run: node scripts/release/apple-ticket-transport.mjs cleanup "$RUNNER_TEMP/gooeypi-ticket-pf.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gooeypi-public-macos-${{ matrix.arch }}
