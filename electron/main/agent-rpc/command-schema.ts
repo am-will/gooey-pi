@@ -1,6 +1,7 @@
 import { PRIME_THINKING_LEVELS, type PrimeThinkingLevel } from '../../../src/types/api'
 import { isRecord, rejectUnknownKeys, requireBoolean, requireId, requireRecord, requireString } from '../validation'
-import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from './limits'
+import { rpcRequestFrameBytes } from './limits'
+import { RPC_WRITE_FRAME_LIMIT_BYTES } from '../jsonl-limits'
 import type { RpcObject } from './types'
 
 /** Main services retain the broader protocol vocabulary below. */
@@ -49,7 +50,7 @@ function validateImages(value: unknown): Array<{ type: 'image'; data: string; mi
     if (image.type !== 'image') throw new TypeError(`images[${index}].type must be image`)
     const mimeType = requireString(image.mimeType, `images[${index}].mimeType`, { min: 1, max: 100 })
     if (!/^image\/(png|jpeg|gif|webp)$/i.test(mimeType)) throw new TypeError('Unsupported image type')
-    const data = requireString(image.data, `images[${index}].data`, { min: 1, max: MAX_RPC_WRITE_FRAME_BYTES })
+    const data = requireString(image.data, `images[${index}].data`, { min: 1, max: RPC_WRITE_FRAME_LIMIT_BYTES })
     validateImageData(data, mimeType)
     return { type: 'image' as const, data, mimeType }
   })
@@ -57,7 +58,7 @@ function validateImages(value: unknown): Array<{ type: 'image'; data: string; mi
 
 export async function validateRpcCommand(raw: unknown, validateSessionPath: (path: string) => Promise<string>): Promise<RpcObject> {
   const command = requireRecord(raw, 'command')
-  if (rpcRequestFrameBytes(command) > MAX_RPC_WRITE_FRAME_BYTES) throw new TypeError('command is too large for the RPC transport')
+  if (rpcRequestFrameBytes(command) > RPC_WRITE_FRAME_LIMIT_BYTES) throw new TypeError('command is too large for the RPC transport')
   const type = requireString(command.type, 'command.type', { min: 1, max: 64 })
   if (SIMPLE_COMMANDS.has(type)) {
     rejectUnknownKeys(command, type === 'new_session' ? ['type', 'parentSession'] : ['type'], 'command')

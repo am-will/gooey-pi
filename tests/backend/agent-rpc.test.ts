@@ -7,7 +7,8 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery, UnsupportedRpcCommandError, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
 import { validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
-import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
+import { rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
+import { RPC_WRITE_FRAME_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
 import { FramedRpcTransport } from '../../electron/main/agent-rpc/transport'
 import type { RpcObject } from '../../electron/main/agent-rpc/types'
@@ -308,12 +309,12 @@ describe('agent RPC command frame bounds', () => {
     })
     const sample = command(signature.length)
     const overhead = rpcRequestFrameBytes(sample) - sample.images[0].data.length
-    let decodedBytes = Math.floor((MAX_RPC_WRITE_FRAME_BYTES - overhead) / 4) * 3
-    while (rpcRequestFrameBytes(command(decodedBytes + 1)) <= MAX_RPC_WRITE_FRAME_BYTES) decodedBytes += 1
-    while (rpcRequestFrameBytes(command(decodedBytes)) > MAX_RPC_WRITE_FRAME_BYTES) decodedBytes -= 1
+    let decodedBytes = Math.floor((RPC_WRITE_FRAME_LIMIT_BYTES - overhead) / 4) * 3
+    while (rpcRequestFrameBytes(command(decodedBytes + 1)) <= RPC_WRITE_FRAME_LIMIT_BYTES) decodedBytes += 1
+    while (rpcRequestFrameBytes(command(decodedBytes)) > RPC_WRITE_FRAME_LIMIT_BYTES) decodedBytes -= 1
 
     const accepted = await validateRpcCommand(command(decodedBytes), async (path) => path)
-    expect(rpcRequestFrameBytes(accepted)).toBeLessThanOrEqual(MAX_RPC_WRITE_FRAME_BYTES)
+    expect(rpcRequestFrameBytes(accepted)).toBeLessThanOrEqual(RPC_WRITE_FRAME_LIMIT_BYTES)
     await expect(validateRpcCommand(command(decodedBytes + 1), async (path) => path)).rejects.toThrow('too large for the RPC transport')
   })
 
