@@ -23,7 +23,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type {
   AutomationScheduleRecord,
   HarnessId,
@@ -193,7 +193,7 @@ function runIcon(status: ScheduleRunRecord['status']) {
 }
 
 
-export function ScheduledPage({
+export const ScheduledPage = memo(function ScheduledPage({
   harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId, onFocusHandled,
   onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat, onArchiveSessions,
 }: ScheduledPageProps) {
@@ -519,4 +519,4 @@ export function ScheduledPage({
       {confirmationModal}
     </div></div>
   )
-}
+})

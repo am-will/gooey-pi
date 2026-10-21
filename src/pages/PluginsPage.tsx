@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, BookOpen, Check, ChevronRight, FileCode2, FileText, GitFork, Globe2, Package, Palette, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Trash2, WandSparkles, X } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import type { CapabilityMutationInput, ExtensionInstallInput, HarnessId, McpConnectionInput, McpStateInput, PluginWarning, PrimeImplementation, SkillRecord } from '@/types/api'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { LOCAL_MCP_STATE_UNAVAILABLE_DETAIL, NETWORK_MCP_AUTH_UNAVAILABLE, NETWORK_MCP_UNAVAILABLE_DETAIL, PI_MCP_ADAPTER_REQUIRED_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '@/lib/mcp-policy'
@@ -101,7 +101,7 @@ interface PluginsPageProps {
   onMutateCapability?(input: CapabilityMutationInput): Promise<{ ok: boolean; output: string }>
 }
 
-export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserTimeoutMs = 120_000, onSetAskUserTimeoutMs, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability }: PluginsPageProps) {
+export const PluginsPage = memo(function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserTimeoutMs = 120_000, onSetAskUserTimeoutMs, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability }: PluginsPageProps) {
   const { t } = useI18n()
   // Main-process output is either one of the fixed availability details or raw
   // command output; only the former is translated.
@@ -426,4 +426,4 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
       </div>
     </div>
   )
-}
+})

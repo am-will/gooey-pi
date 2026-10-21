@@ -1,5 +1,5 @@
 import { Bell, CheckCircle2, CircleAlert, Clock3, LoaderCircle, Search, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { ProjectRecord, SessionRecord } from '@/types/api'
 import { activityNotificationSignature, signatureCleared } from '@/app/session-attention'
 import { basename, formatRelative } from '@/lib/data'
@@ -48,7 +48,7 @@ interface ActivityPageProps {
   onClear(sessions: SessionRecord[]): void
 }
 
-export function ActivityPage({ sessions, projects, clearedActivity, onOpen, onClear }: ActivityPageProps) {
+export const ActivityPage = memo(function ActivityPage({ sessions, projects, clearedActivity, onOpen, onClear }: ActivityPageProps) {
   const { t } = useI18n()
   const [viewState, setViewState] = useState<ActivityViewState>({ filter: 'all', query: '', visibleLimit: ACTIVITY_BATCH })
   const { filter, query, visibleLimit } = viewState
@@ -79,4 +79,4 @@ export function ActivityPage({ sessions, projects, clearedActivity, onOpen, onCl
     })}</div> : <EmptyState icon={<Bell size={24}/>} title={t('activity.empty.title')}>{t('activity.empty.description')}</EmptyState>}
     {visible.length > displayed.length ? <button type="button" className="page-show-more" onClick={() => setViewState((current) => growActivityBatch(current, visible.length))}>{t('activity.showMore', { count: Math.min(ACTIVITY_BATCH, visible.length - displayed.length) })}</button> : null}
   </div></div>
-}
+})
