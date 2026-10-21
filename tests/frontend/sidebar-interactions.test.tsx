@@ -40,5 +40,20 @@ it('compares every present prop, including newly introduced optional props', () 
   const future = { ...previous, futureRosterGeneration: 1 }
   expect(areSidebarPropsEqual(previous, future)).toBe(false)
   expect(areSidebarPropsEqual(future, previous)).toBe(false)
-  expect(areSidebarPropsEqual(previous, { ...previous, childRoster: {} as SidebarProps['childRoster'] })).toBe(false)
+  expect(areSidebarPropsEqual(previous, { ...previous, childRoster: { kind: 'loading', parentFile: session.filePath } })).toBe(false)
+})
+
+it('keeps menu interaction inside the layer and dismisses outside or on Escape', async () => {
+  await act(async () => { root.render(<Sidebar {...props()} />) })
+  await click('.session-row__more')
+  const menu = host.querySelector('.session-row__menu')!
+  await act(async () => { menu.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
+  expect(host.querySelector('.session-row__menu')).not.toBeNull()
+  const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+  await act(async () => { menu.dispatchEvent(escape) })
+  expect(escape.defaultPrevented).toBe(true)
+  expect(host.querySelector('.session-row__menu')).toBeNull()
+  await click('.session-row__more')
+  await act(async () => { document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
+  expect(host.querySelector('.session-row__menu')).toBeNull()
 })

@@ -26,7 +26,7 @@ import {
   SquarePen,
   Trash2,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
+import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PROJECT_SORT_MODES, type AppMeta, type AppUpdateState, type HarnessId, type ProjectRecord, type ProjectSortMode, type SessionRecord, type WorkspaceView } from '@/types/api'
 import { writeClipboardText } from '@/lib/clipboard'
 import { formatRelative } from '@/lib/data'
@@ -37,7 +37,9 @@ import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { sessionTitleText } from '@/lib/session-title'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
 import { ChildSessionRows, type ChildRosterView } from './ChildSessionRows'
-import { IconButton, Modal, OmpMark, PiMark, PrimeMark, useFocusTrap } from './ui'
+import { IconButton, Modal, useFocusTrap } from './ui'
+import { HarnessMark } from './HarnessMark'
+import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 
 const PROJECT_SORT_LABEL_KEYS = { recent: 'projects.sort.recent', alphabetical: 'projects.sort.alphabetical' } as const satisfies Record<ProjectSortMode, MessageKey>
 
@@ -129,13 +131,6 @@ function SessionStatusMark({ status, attention }: { status: SessionRecord['statu
   return <span className={`session-status-mark session-status-mark--${status}`} title={title}><span /></span>
 }
 
-const HARNESS_MARKS: Record<HarnessId, (props: { size?: number }) => ReactElement> = { omp: OmpMark, prime: PrimeMark, pi: PiMark }
-
-function HarnessMark({ harness, size }: { harness: HarnessId; size: number }) {
-  const Mark = HARNESS_MARKS[harness]
-  return <Mark size={size} />
-}
-
 function updateControlCopy(state: AppUpdateState, t: Translate): { label: string; title: string } {
   // `version` keeps its own leading space so both the "Download 1.2.3" and the
   // bare "Download" forms stay byte-identical to the pre-i18n copy.
@@ -218,35 +213,15 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
   const updateBusy = updateState.phase === 'checking' || updateState.phase === 'downloading'
   const updateIndeterminate = updateState.phase === 'downloading' && updateState.percent === undefined
   const updateVisible = updateState.phase === 'available' || updateState.phase === 'downloading' || updateState.phase === 'downloaded' || updateState.phase === 'error'
-  useEffect(() => {
-    if (!harnessMenuOpen) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.brand-switcher')) setHarnessMenuOpen(false) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setHarnessMenuOpen(false) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [harnessMenuOpen])
-  useEffect(() => {
-    if (!projectMenu) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.project-group')) setProjectMenu(null) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectMenu(null) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [projectMenu])
-  useEffect(() => {
-    if (!projectSortMenuOpen) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.sidebar__sort-menu, .sidebar__sort-toggle')) setProjectSortMenuOpen(false) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectSortMenuOpen(false) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [projectSortMenuOpen])
+  useDismissableLayer(harnessMenuOpen, (target) => target instanceof Element && Boolean(target.closest('.brand-switcher')), () => setHarnessMenuOpen(false))
+  useDismissableLayer(Boolean(projectMenu), (target) => target instanceof Element && Boolean(target.closest('.project-group')), () => setProjectMenu(null))
+  useDismissableLayer(projectSortMenuOpen, (target) => target instanceof Element && Boolean(target.closest('.sidebar__sort-menu, .sidebar__sort-toggle')), () => setProjectSortMenuOpen(false))
+  useDismissableLayer(Boolean(sessionMenu), (target) => target instanceof Element && Boolean(target.closest('.session-row-wrap, .session-row__menu')), () => setSessionMenu(null))
   useEffect(() => {
     if (!sessionMenu) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.session-row-wrap')) setSessionMenu(null) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null) } }
     const dismissOnMove = () => setSessionMenu(null)
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
     document.addEventListener('scroll', dismissOnMove, true); window.addEventListener('resize', dismissOnMove)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true); document.removeEventListener('scroll', dismissOnMove, true); window.removeEventListener('resize', dismissOnMove) }
+    return () => { document.removeEventListener('scroll', dismissOnMove, true); window.removeEventListener('resize', dismissOnMove) }
   }, [sessionMenu])
   // Archiving stops a live agent, so running work confirms first. Idle chats
   // archive on a single click because Settings can restore them again.
