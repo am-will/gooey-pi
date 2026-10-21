@@ -40,6 +40,21 @@ describe('workspace runtime ownership', () => {
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ message: 'History read failed' }))
   })
 
+  it.each(['agent_start', 'turn_start'])('keeps initial history while buffering a live %s', async (type) => {
+    let finish!: (messages: TranscriptMessage[]) => void
+    const read = vi.fn(() => new Promise<TranscriptMessage[]>((resolve) => { finish = resolve }))
+    const bridge = { sessions: { read } } as unknown as PrimeWorkApi
+    act(() => root.render(createElement(Probe, { bridge, initialSession: session, sessions: [session] })))
+    act(() => {
+      latest.reconcileTranscriptForEvent(runtime.runtimeId, { type })
+      latest.queueAgentEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'live answer' } })
+    })
+    await act(async () => finish([{ id: 'history', role: 'user', timestamp: 1, parts: [{ type: 'text', text: 'earlier prompt' }] }]))
+    expect(read).toHaveBeenCalledOnce()
+    expect(latest.loadingSession).toBe(false)
+    expect(latest.messages.map((message) => message.parts)).toMatchObject([[{ type: 'text', text: 'earlier prompt' }], [{ type: 'text', text: 'live answer' }]])
+  })
+
   it('records the started runtime session before its catalog record arrives', () => {
     act(() => root.render(createElement(Probe)))
     act(() => latest.attachRuntime(runtime, 0))

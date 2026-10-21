@@ -43,6 +43,7 @@ function queuedPromptOwner(
 }
 
 interface TranscriptLoad {
+  initial: boolean
   generation: number
   sessionFile: string
   eventBuffer: PrimeEventBuffer
@@ -213,7 +214,7 @@ export function useWorkspaceRuntime({
       sessionFile: session?.filePath,
     }
     transcriptLoadRef.current = bridge && session?.filePath
-      ? { generation, sessionFile: session.filePath, eventBuffer: createPrimeEventBuffer(), reconciliation: false, admissionRevision: 0 }
+      ? { initial: true, generation, sessionFile: session.filePath, eventBuffer: createPrimeEventBuffer(), reconciliation: false, admissionRevision: 0 }
       : null
     const queueOwner = queuedPromptOwner(project, session, nextRuntime, generation)
     const queuedPrompts = queueOwner ? queuedPromptsByOwnerRef.current.get(queueOwner) ?? [] : []
@@ -250,10 +251,12 @@ export function useWorkspaceRuntime({
     reconciliation: boolean,
     runtimeId?: string,
     admittedLoad?: TranscriptLoad,
+    initial = false,
   ) => {
     if (!bridge || !selected.sessionFile) return
     const previousLoad = transcriptLoadRef.current
     const pendingLoad = admittedLoad ?? {
+      initial,
       generation: selected.generation,
       sessionFile: selected.sessionFile,
       eventBuffer: previousLoad?.generation === selected.generation
@@ -365,7 +368,7 @@ export function useWorkspaceRuntime({
     // read would replace the still-streaming transcript with finalized rows.
     if (type === 'agent_start' || type === 'turn_start' || type === 'compaction_start' || type === 'auto_retry_start') {
       const load = transcriptLoadRef.current
-      if (load?.generation === selected.generation) {
+      if (load?.generation === selected.generation && !(load.initial && (type === 'agent_start' || type === 'turn_start'))) {
         transcriptLoadRef.current = null
         deferredReconciliationRef.current = null
         setMessages((current) => load.eventBuffer.replay(current))
@@ -609,7 +612,7 @@ export function useWorkspaceRuntime({
     if (admittedLoad?.generation === workspaceGeneration && admittedLoad.sessionFile === activeSession.filePath) {
       if (!admittedLoad.reconciliation) startTranscriptRead(selected, false, undefined, admittedLoad)
     } else {
-      startTranscriptRead(selected, false)
+      startTranscriptRead(selected, false, undefined, undefined, workspaceChanged)
     }
   }, [activeSession?.filePath, bridge, externalSessionSyncRevision, externalSessionUpdatedAt, locallyOwnedActiveSession, startTranscriptRead, workspaceGeneration])
 
