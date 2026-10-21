@@ -269,7 +269,7 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
     }
     if (part.type === 'toolResult') return showTools ? <StandaloneToolResult key={key} part={part} /> : null
     if (part.type === 'agentMessage') return <AgentActivityPart key={key} part={part} />
-    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(transcriptText(part, t), 40_000, '\n… [Note truncated in the desktop view.]')} /></div>
+    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(transcriptText(part, t), 40_000, '\n… [Note truncated in the desktop view.]')} streaming={streaming} /></div>
     return null
   })}</div>
 }
