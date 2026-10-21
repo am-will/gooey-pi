@@ -22,6 +22,17 @@ describe('agent transport events', () => {
     expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'The agent encountered an error.' }])
   })
 
+  it('does not suppress an error after a non-error system compaction row', () => {
+    const compaction: TranscriptMessage = { id: 'compaction', role: 'system', parts: [{ type: 'compaction', status: 'done' }] }
+    const error = applyPrimeEvent([compaction], { type: 'error', error: 'real failure' })
+    expect(error).toHaveLength(2)
+    expect(error.at(-1)).toMatchObject({ kind: 'error', parts: [{ type: 'text', text: 'real failure' }] })
+    expect(applyPrimeEvent(error, { type: 'runtime_exit', expected: false, code: 1 })).toHaveLength(2)
+    const exit = applyPrimeEvent([compaction], { type: 'runtime_exit', expected: false, code: 1 })
+    expect(exit).toHaveLength(2)
+    expect(exit.at(-1)?.kind).toBe('error')
+  })
+
   it('keeps the stream open when the desktop rate limiter drops events', () => {
     const messages = applyPrimeEvent([streamingMessage()], { type: 'transport_limit', kind: 'count', error: 'Prime Agent event rate exceeded the desktop limit' })
 
