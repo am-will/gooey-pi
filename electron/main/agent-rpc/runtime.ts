@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { PrimeContextUsage, PrimeEventEnvelope, PrimeModelDescriptor, PrimeServiceTier, RuntimeInfo, SessionActionSnapshot } from '../../../src/types/api'
@@ -66,7 +67,7 @@ export class RpcRuntime {
   private contextUsageRefreshRequest: ContextUsageRefreshRequest | null = null
   private readonly contextUsage = new ContextUsageProjection()
   private contextUsageEmitTimer: NodeJS.Timeout | null = null
-  private lastContextUsageEmitAt = 0
+  private lastContextUsageEmitAt = Number.NEGATIVE_INFINITY
   private continuationPending = false
   // Provider auto-retry backoff: agent_end has fired but the agent will
   // continue the same turn, so the runtime must keep reporting busy. Kept
@@ -617,7 +618,7 @@ export class RpcRuntime {
     this.info.contextUsage = usage
     if (!changed) return
 
-    const elapsed = Date.now() - this.lastContextUsageEmitAt
+    const elapsed = performance.now() - this.lastContextUsageEmitAt
     if (immediate || elapsed >= 100) {
       this.emitContextUsageNow()
       return
@@ -637,7 +638,7 @@ export class RpcRuntime {
     }
     const usage = this.info.contextUsage
     if (!usage || this.stopped) return
-    this.lastContextUsageEmitAt = Date.now()
+    this.lastContextUsageEmitAt = performance.now()
     this.emit({ type: 'context_usage', contextUsage: usage })
   }
 

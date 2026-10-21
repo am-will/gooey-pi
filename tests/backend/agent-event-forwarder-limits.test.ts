@@ -8,9 +8,9 @@ import { AgentEventForwarder } from '../../electron/main/agent-rpc'
 
 interface Forwarded { runtimeId: string; event: Record<string, unknown> }
 
-function forwarder(limits: Partial<{ maxEvents: number; maxEnvelopeBytes: number; maxWindowBytes: number; windowMs: number }>): { events: Forwarded['event'][]; emit: (event: Record<string, unknown>) => void } {
+function forwarder(limits: Partial<{ maxEvents: number; maxEnvelopeBytes: number; maxWindowBytes: number; windowMs: number }>, now?: () => number): { events: Forwarded['event'][]; emit: (event: Record<string, unknown>) => void } {
   const events: Forwarded['event'][] = []
-  const instance = new AgentEventForwarder('runtime-test', (envelope: Forwarded) => events.push(envelope.event), limits)
+  const instance = new AgentEventForwarder('runtime-test', (envelope: Forwarded) => events.push(envelope.event), limits, now)
   return { events, emit: (event) => instance.emit(event) }
 }
 
@@ -70,15 +70,17 @@ describe('AgentEventForwarder runtime_exit exemption', () => {
     expect(started).toBeLessThanOrEqual(32)
   })
 
-  it('resets saturation and reporting when the window rolls over', () => {
+  it('resets saturation after monotonic time elapses despite a backward wall-clock step', () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000_000)
-    const { events, emit } = forwarder({ maxEvents: 1, windowMs: 1_000 })
+    let elapsed = 0
+    const { events, emit } = forwarder({ maxEvents: 1, windowMs: 1_000 }, () => elapsed)
     emit({ type: 'message_update', index: 0 })
     emit({ type: 'message_update', index: 1 })
     expect(events.map((event) => event.type)).toEqual(['message_update', 'transport_limit'])
 
-    vi.setSystemTime(1_001_500)
+    vi.setSystemTime(900_000)
+    elapsed = 1_500
     emit({ type: 'message_update', index: 2 })
     emit({ type: 'message_update', index: 3 })
     expect(events.filter((event) => event.type === 'message_update')).toHaveLength(2)

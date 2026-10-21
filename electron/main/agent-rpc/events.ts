@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks'
 import type { PrimeEventEnvelope } from '../../../src/types/api'
 import type { RpcObject } from './types'
 
@@ -26,7 +27,7 @@ const DEFAULT_AGENT_EVENT_LIMITS: AgentEventLimits = {
 /** Applies the same byte accounting to real and synthetic events before they reach Electron IPC. */
 export class AgentEventForwarder {
   private readonly limits: AgentEventLimits
-  private windowStarted = Date.now()
+  private windowStarted: number
   private eventCount = 0
   private criticalEventCount = 0
   private windowBytes = 0
@@ -37,8 +38,10 @@ export class AgentEventForwarder {
     private readonly runtimeId: string,
     private readonly onEvent: (envelope: PrimeEventEnvelope) => void,
     limits: Partial<AgentEventLimits> = {},
+    private readonly now: () => number = () => performance.now(),
   ) {
     this.limits = { ...DEFAULT_AGENT_EVENT_LIMITS, ...limits }
+    this.windowStarted = this.now()
   }
 
   emit(event: RpcObject): void {
@@ -81,7 +84,7 @@ export class AgentEventForwarder {
   }
 
   private resetWindowIfNeeded(): void {
-    const now = Date.now()
+    const now = this.now()
     if (now - this.windowStarted < this.limits.windowMs) return
     this.windowStarted = now
     this.eventCount = 0
