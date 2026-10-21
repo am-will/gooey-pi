@@ -57,8 +57,9 @@ describe('transcript rendering', () => {
     const html = renderToStaticMarkup(createElement(WorkTimeline, {
       parts: [{ type: 'toolCall', name: 'ask_user', args: { questions } }], showReasoning: true, showTools: true,
     }))
-    expect(html).toContain('Question 1?')
-    expect(html).toContain('Question 5?')
+    const preview = /<code class="activity-tool__preview">([\s\S]*?)<\/code>/.exec(html)?.[1].replace(/<[^>]+>/g, '')
+    expect(preview).toContain('Question 1?')
+    expect(preview).toContain('Question 5?')
   })
 
   it('normalizes only bounded question prefixes while the tool details are collapsed', () => {
