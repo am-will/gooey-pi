@@ -388,8 +388,9 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       fromSessionId: source.session.id,
       text: message,
     })
-    const busy = !isRuntimeIdle(runtime)
-    await target.manager.command(runtime.runtimeId, { type: busy ? 'follow_up' : 'prompt', message: attribution })
+    const current = target.manager.list().find((candidate) => candidate.runtimeId === runtime.runtimeId) ?? runtime
+    const busy = !isRuntimeIdle(current)
+    await target.manager.command(current.runtimeId, { type: busy ? 'follow_up' : 'prompt', message: attribution })
     return { delivered: true, target_session_id: target.session.id, awakened: !existing, queued: Boolean(busy), cursor_before: before.cursor }
   }
 

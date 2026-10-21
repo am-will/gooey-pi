@@ -274,6 +274,17 @@ describe('AgentCollaborationBridge', () => {
     expect(messages[0]?.text).toContain('_END')
   })
 
+  it('queues against the runtime state after an asynchronous transcript read', async () => {
+    const { call, primeManager, primeSessions } = await fixture()
+    primeSessions.read.mockImplementationOnce(async () => {
+      primeManager.list.mockReturnValue([{ runtimeId: 'runtime-target', harness: 'prime', cwd: '/project', isStreaming: true }])
+      return defaultTargetTranscript
+    })
+    const response = await call('send', { target_session_id: target.id, message: 'Next task' })
+    expect(response.body.result).toMatchObject({ delivered: true, queued: true })
+    expect(primeManager.command).toHaveBeenCalledWith('runtime-target', expect.objectContaining({ type: 'follow_up' }))
+  })
+
   it('delivers attributed messages to a live target and returns a wait cursor', async () => {
     const { call, primeManager } = await fixture()
     const sent = await call('send', { target_session_id: target.id, message: 'Please claim src/api.ts.' })
