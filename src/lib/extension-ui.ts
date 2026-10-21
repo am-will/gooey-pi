@@ -1,3 +1,5 @@
+import type { ExtensionUiQuestionnaireProgress } from '../types/api'
+
 export interface ExtensionUiQuestionnaireMeta {
   groupId: string
   index: number
@@ -27,6 +29,19 @@ export type ExtensionUiRequest =
   | { method: 'input'; id: string; title: string; placeholder?: string; timeout?: number }
   | { method: 'editor'; id: string; title: string; prefill?: string }
   | ExtensionUiQuestionnaireRequest
+
+export type QuestionnaireSelectRequest = Extract<ExtensionUiRequest, { method: 'select' }> & { questionnaire: ExtensionUiQuestionnaireMeta }
+
+/** UI positions include only unanswered questions; protocol indexes stay on the requests. */
+export function questionnaireContents(requests: readonly QuestionnaireSelectRequest[], progress?: ExtensionUiQuestionnaireProgress): Pick<ExtensionUiQuestionnaireRequest, 'questions' | 'total' | 'complete'> {
+  const expected = progress?.total ?? requests[0]?.questionnaire.total ?? 0
+  const settled = new Set(progress?.settled ?? [])
+  const arrived = new Set([...(progress?.arrived ?? []), ...requests.map((request) => request.questionnaire.index)])
+  const questions = requests.filter((request) => !settled.has(request.questionnaire.index))
+    .sort((left, right) => left.questionnaire.index - right.questionnaire.index)
+    .map((request, index) => ({ id: request.id, title: request.title, options: request.options, index }))
+  return { questions, total: expected - settled.size, complete: expected > 0 && Array.from({ length: expected }, (_, index) => arrived.has(index) || settled.has(index)).every(Boolean) }
+}
 
 const MAX_TITLE_LENGTH = 4_000
 const MAX_OPTION_LENGTH = 500

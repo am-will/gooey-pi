@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ExtensionUiResponse } from '@/components/ExtensionUiModal'
-import { ASK_USER_TIMEOUT_MS, extensionUiDialogId, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest } from '@/lib/extension-ui'
+import { ASK_USER_TIMEOUT_MS, extensionUiDialogId, questionnaireContents, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest, type QuestionnaireSelectRequest } from '@/lib/extension-ui'
 import { formattingLocaleTag, translate } from '@/lib/i18n'
-import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
+import type { ExtensionUiQuestionnaireProgress, PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
 interface UseExtensionUiOptions {
   bridge: PrimeWorkApi | null
@@ -13,8 +13,6 @@ interface UseExtensionUiOptions {
   setRuntime: React.Dispatch<React.SetStateAction<RuntimeInfo | null>>
   reportError(error: unknown): void
 }
-
-type QuestionnaireSelectRequest = Extract<ExtensionUiRequest, { method: 'select' }>
 
 export interface PendingExtensionUi {
   runtimeId: string
@@ -54,6 +52,7 @@ export function useExtensionUi({
   const [extensionUi, setExtensionUi] = useState<PendingExtensionUi | null>(null)
   const extensionUiRef = useRef<PendingExtensionUi | null>(null)
   const pendingByRuntimeRef = useRef<Map<string, PendingExtensionUi>>(new Map())
+  const progressByRuntimeRef = useRef(new Map<string, Map<string, ExtensionUiQuestionnaireProgress>>())
   const timerByRuntimeRef = useRef<Map<string, number>>(new Map())
   const timedOutQuestionnairesRef = useRef<Set<string>>(new Set())
   const askUserTimeoutRef = useRef(askUserTimeoutMs)
@@ -67,6 +66,7 @@ export function useExtensionUi({
     const timer = timerByRuntimeRef.current.get(targetRuntimeId)
     if (timer !== undefined) window.clearTimeout(timer)
     timerByRuntimeRef.current.delete(targetRuntimeId)
+    progressByRuntimeRef.current.delete(targetRuntimeId)
     pendingByRuntimeRef.current.delete(targetRuntimeId)
     if (extensionUiRef.current?.runtimeId === targetRuntimeId) {
       extensionUiRef.current = null
@@ -219,6 +219,9 @@ export function useExtensionUi({
     }
 
     if (request.method === 'select' && request.questionnaire) {
+      const groupedRequest = { ...request, questionnaire: request.questionnaire }
+      const progress = progressByRuntimeRef.current.get(runtimeId)?.get(request.questionnaire.groupId)
+      if (progress?.settled.includes(request.questionnaire.index)) return
       const questionnaireKey = `${runtimeId}:${request.questionnaire.groupId}`
       if (timedOutQuestionnairesRef.current.has(questionnaireKey)) {
         void bridge.agent.command(runtimeId, {
@@ -233,21 +236,14 @@ export function useExtensionUi({
       if (previous && !sameQuestionnaire) {
         cancelPending(previous)
         clearExtensionUi(runtimeId)
+        if (progress) progressByRuntimeRef.current.set(runtimeId, new Map([[progress.groupId, progress]]))
       }
 
-      const existing = sameQuestionnaire ? previous?.requests ?? [] : []
+      const existing = (sameQuestionnaire ? previous?.requests ?? [] : []).filter((item) => !progress?.settled.includes(item.questionnaire.index))
       const requests = existing.some((item) => item.id === request.id)
         ? existing
-        : [...existing, request]
-      const questions = requests
-        .map((item) => ({
-          id: item.id,
-          title: item.title,
-          options: item.options,
-          index: item.questionnaire?.index ?? 0,
-        }))
-        .sort((a, b) => a.index - b.index)
-      const total = request.questionnaire.total
+        : [...existing, groupedRequest]
+      const { questions, total, complete } = questionnaireContents(requests, progress)
       presentPending({
         // Later questions of a group keep the timer the first one started.
         ...(sameQuestionnaire
@@ -261,7 +257,7 @@ export function useExtensionUi({
           title: translate(formattingLocaleTag(), 'extensionUi.answerTitle', { count: total }),
           questions,
           total,
-          complete: questions.length >= total,
+          complete,
           // Only a harness-timed questionnaire's timer reads this. GooeyPi's
           // own timeout runs from ownedTimeout.
           timeout: request.timeout ?? ASK_USER_TIMEOUT_MS,
@@ -278,6 +274,24 @@ export function useExtensionUi({
     }
     presentPending({ runtimeId, request })
   }, [bridge, cancelPending, clearExtensionUi, expirePending, presentPending])
+
+  const rehydrateExtensionUi = useCallback((runtime: Pick<RuntimeInfo, 'runtimeId' | 'pendingExtensionUi' | 'pendingExtensionUiGroups'>) => {
+    if (runtime.pendingExtensionUi === undefined && runtime.pendingExtensionUiGroups === undefined) return
+    const frames = runtime.pendingExtensionUi ?? []
+    const ids = new Set(frames.map(extensionUiDialogId).filter((id) => id !== undefined))
+    const previous = pendingByRuntimeRef.current.get(runtime.runtimeId)
+    if (previous && !requestIds(previous).some((id) => ids.has(id))) clearExtensionUi(runtime.runtimeId)
+    const groups = new Map((runtime.pendingExtensionUiGroups ?? []).map((group) => [group.groupId, group]))
+    if (groups.size) progressByRuntimeRef.current.set(runtime.runtimeId, groups)
+    else progressByRuntimeRef.current.delete(runtime.runtimeId)
+    for (const frame of frames) {
+      const parsed = parseExtensionUiRequest(frame)
+      const current = pendingByRuntimeRef.current.get(runtime.runtimeId)
+      // Recompute grouped membership even for a known id when other indexes settled.
+      if (parsed && !(parsed.method === 'select' && parsed.questionnaire) && current && requestIds(current).includes(parsed.id)) continue
+      showExtensionUi(runtime.runtimeId, frame)
+    }
+  }, [clearExtensionUi, showExtensionUi])
 
   const hasOpenRequestForSession = useCallback((filePath: string): boolean => {
     for (const runtimeId of pendingByRuntimeRef.current.keys()) {
@@ -298,8 +312,9 @@ export function useExtensionUi({
     for (const pending of pendingByRuntimeRef.current.values()) cancelPending(pending)
     timerByRuntimeRef.current.clear()
     pendingByRuntimeRef.current.clear()
+    progressByRuntimeRef.current.clear()
     timedOutQuestionnairesRef.current.clear()
   }, [cancelPending])
 
-  return { extensionUi, clearExtensionUi, respondToExtensionUi, showExtensionUi, hasOpenRequestForSession }
+  return { extensionUi, clearExtensionUi, respondToExtensionUi, showExtensionUi, rehydrateExtensionUi, hasOpenRequestForSession }
 }

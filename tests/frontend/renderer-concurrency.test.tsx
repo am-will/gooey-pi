@@ -1281,3 +1281,63 @@ it('returns false for rolled-back persistence and true only for a saved settings
   await act(async () => { expect(await state.updateSettings({ browserHome: 'https://saved.example/' })).toBe(true) })
   expect(state.settings.browserHome).toBe('https://saved.example/')
 })
+
+it.each([false, true])('restores only unanswered questionnaire members with authoritative settled indexes (late=%s)', async (late) => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  const setSessions = vi.fn(), setRuntime = vi.fn(), reportError = vi.fn()
+  let state!: ReturnType<typeof useExtensionUi>
+  function Probe() { state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions, setRuntime, reportError }); return null }
+  await act(async () => root.render(<Probe />))
+  const question = { type: 'extension_ui_request', method: 'select', id: 'q2', title: 'Remaining question', options: ['__prime_ask_user__group:1:2', 'A'] }
+  const snapshot = { runtimeId: 'runtime', pendingExtensionUi: late ? undefined : [question], pendingExtensionUiGroups: [{ groupId: 'group', total: 2, arrived: late ? [0] : [0, 1], settled: [0] }] }
+  act(() => state.rehydrateExtensionUi(snapshot))
+  if (late) {
+    expect(state.extensionUi).toBeNull()
+    act(() => state.showExtensionUi('runtime', { ...question, id: 'q1', options: ['__prime_ask_user__group:0:2', 'A'] }))
+    expect(state.extensionUi).toBeNull()
+    act(() => state.showExtensionUi('runtime', question))
+  } else {
+    const deadline = state.extensionUi?.deadline
+    act(() => state.rehydrateExtensionUi(snapshot))
+    expect(state.extensionUi?.deadline).toBe(deadline)
+  }
+  expect(state.extensionUi?.request).toMatchObject({ method: 'questionnaire', total: 1, complete: true, questions: [{ id: 'q2', index: 0 }] })
+  expect(command).not.toHaveBeenCalled()
+  await act(async () => state.respondToExtensionUi({ values: { q2: 'A' } }))
+  expect(command).toHaveBeenCalledExactlyOnceWith('runtime', { type: 'extension_ui_response', id: 'q2', value: 'A' })
+})
+
+it('does not infer completion from a partial snapshot and completes only after the later live member arrives', async () => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  const setSessions = vi.fn(), setRuntime = vi.fn(), reportError = vi.fn()
+  let state!: ReturnType<typeof useExtensionUi>
+  function Probe() { state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions, setRuntime, reportError }); return null }
+  await act(async () => root.render(<Probe />))
+  act(() => state.rehydrateExtensionUi({ runtimeId: 'runtime', pendingExtensionUi: [{ type: 'extension_ui_request', method: 'select', id: 'q1', title: 'First', options: ['__prime_ask_user__group:0:2', 'A'] }], pendingExtensionUiGroups: [{ groupId: 'group', total: 2, arrived: [0], settled: [] }] }))
+  expect(state.extensionUi?.request).toMatchObject({ complete: false, total: 2 })
+  act(() => state.showExtensionUi('runtime', { type: 'extension_ui_request', method: 'select', id: 'q2', title: 'Second', options: ['__prime_ask_user__group:1:2', 'B'] }))
+  expect(state.extensionUi?.request).toMatchObject({ complete: true, total: 2 })
+  expect(command).not.toHaveBeenCalled()
+})
+
+it('rehydrates ordinary dialogs idempotently and retires an authoritative empty snapshot without another response', async () => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  const setSessions = vi.fn(), setRuntime = vi.fn(), reportError = vi.fn()
+  let state!: ReturnType<typeof useExtensionUi>
+  function Probe() { state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions, setRuntime, reportError }); return null }
+  await act(async () => root.render(<Probe />))
+  const snapshot = { runtimeId: 'runtime', pendingExtensionUi: [{ type: 'extension_ui_request', method: 'input', id: 'name', title: 'Name' }] }
+  act(() => { state.rehydrateExtensionUi(snapshot); state.rehydrateExtensionUi(snapshot) })
+  expect(state.extensionUi?.request).toMatchObject({ method: 'input', id: 'name' })
+  act(() => state.rehydrateExtensionUi({ runtimeId: 'runtime' }))
+  expect(state.extensionUi?.request.id).toBe('name')
+  act(() => state.rehydrateExtensionUi({ runtimeId: 'runtime', pendingExtensionUi: [], pendingExtensionUiGroups: [] }))
+  expect(state.extensionUi).toBeNull()
+  expect(command).not.toHaveBeenCalled()
+})
