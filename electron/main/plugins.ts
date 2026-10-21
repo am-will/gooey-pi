@@ -141,9 +141,11 @@ export class PluginService {
 
   private async discover(safeProjectPath: string | undefined, ownerKey: string, revision: number): Promise<PluginCatalog> {
     if (safeProjectPath) this.lastProjectPath = safeProjectPath
-    const result = await this.discoverCatalog(this.agentDir, safeProjectPath, resolveExecutable(this.agentPath), this.harness)
-    const builtInSkills = await this.builtInSkills()
-    const piMcpState = this.harness === 'pi' ? await this.piMcpAdapterState() : undefined
+    const [result, builtInSkills, piMcpState] = await Promise.all([
+      this.discoverCatalog(this.agentDir, safeProjectPath, resolveExecutable(this.agentPath), this.harness),
+      this.builtInSkills(),
+      this.harness === 'pi' ? this.piMcpAdapterState() : undefined,
+    ])
     const harnessCapabilities: SkillRecord[] = this.harness === 'pi' ? [{
       id: 'gooeypi-pi-mcp',
       name: 'Pi MCP Adapter',
