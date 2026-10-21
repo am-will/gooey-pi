@@ -38,9 +38,9 @@ export class DurableStateFile {
   }
 
   async writeDurableFile(path: string, data: string | Uint8Array, flags: string): Promise<void> {
+    const file = await this.fileSystem.open(path, flags, 0o600)
     let completed = false
     try {
-      const file = await this.fileSystem.open(path, flags, 0o600)
       try {
         await file.writeFile(data, { encoding: 'utf8' })
         await file.sync()
@@ -68,14 +68,16 @@ export class DurableStateFile {
       throw new Error(`Desktop state would be ${bytes} bytes, exceeding the ${MAX_STATE_FILE_BYTES}-byte safe size limit; the change was not saved`)
     }
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
+    let created = false
     try {
       await this.writeDurableFile(temp, serialized, 'w')
+      created = true
 
       await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.filePath, this.platform)
 
       await this.syncParentDirectory(this.filePath, requireDirectorySync)
     } finally {
-      await this.unlinkIfExists(temp)
+      if (created) await this.unlinkIfExists(temp)
     }
   }
 

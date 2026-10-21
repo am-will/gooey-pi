@@ -247,11 +247,13 @@ export class LegacyStateMigrator {
       schedules: [],
       [WINDOWS_LEGACY_TOMBSTONE_KEY]: marker,
     }, null, 2)}\n`
+    let created = false
     try {
       await this.durable.writeDurableFile(temp, serialized, 'wx')
+      created = true
       await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
     } finally {
-      await this.durable.unlinkIfExists(temp)
+      if (created) await this.durable.unlinkIfExists(temp)
     }
   }
 
