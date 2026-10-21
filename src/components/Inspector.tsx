@@ -3,7 +3,7 @@ import { PanelRightClose } from 'lucide-react'
 import type { BrowserAnnotationsApi } from '@/hooks/useBrowserAnnotations'
 import type { StampedPointerEvent } from '@/hooks/useAgentBrowserTabs'
 import { useI18n, type MessageKey } from '@/lib/i18n'
-import type { AgentBrowserTabRecord, AutomationScheduleRecord, GitStatus, InspectorTab, NativeHeartbeatRecord, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
+import type { PrimeWorkApi, AgentBrowserTabRecord, AutomationScheduleRecord, GitStatus, InspectorTab, NativeHeartbeatRecord, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
 import type { AgentSlotRect } from './AgentBrowserLayer'
 import { BrowserPanel } from './inspector/BrowserPanel'
 import { ChangesPanel } from './inspector/ChangesPanel'
@@ -42,7 +42,7 @@ export interface InspectorProps {
   agentSessionKey?: string
   onPreviewContext(webContentsId: number | null, sessionFile: string | null): void
   previewPointerEvent: StampedPointerEvent | null
-  onNavigateAgentTab(tabId: string, action: 'back' | 'forward' | 'reload'): void
+  onNavigateAgentTab: (...args: Parameters<PrimeWorkApi['browser']['navigateTab']>) => void
   onRefreshGit(): Promise<void> | void
   onOpenExternal(url: string): void
   onRevealPath(path: string): void
