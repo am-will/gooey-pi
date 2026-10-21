@@ -9,13 +9,12 @@ import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
 import type { PrimeImplementation, PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor, ProviderAuthEvent, ProviderAuthMethod, ProviderAuthSource, SkillRecord } from '../../src/types/api'
 import { NETWORK_MCP_AUTH_UNAVAILABLE, NETWORK_MCP_UNAVAILABLE_DETAIL } from '../../src/lib/mcp-policy'
 import type { CliModelCatalogOptions } from './model-catalog-cli'
-import { catalogLimitWarnings, limitCatalogRelations } from './model-catalog'
+import { boundedInteger, CATALOG_TTL_MS, catalogLimitWarnings, limitCatalogRelations, modelKey, requireCatalogModel } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
 import type { ExecutableSource } from './process-utils'
 import { RustPrimeModelCatalogService } from './providers-prime-rust'
-import { requireString, requireWebUrl } from './validation'
+import { isModelId, isProviderId, requireString, requireWebUrl } from './validation'
 
-const CATALOG_TTL_MS = 30_000
 export { MAX_CATALOG_PROVIDERS } from './model-catalog'
 const EXTERNAL_AUTH_PROVIDERS = new Set(['amazon-bedrock', 'google-vertex'])
 const OAUTH_TIMEOUT_MS = 10 * 60_000
@@ -38,16 +37,6 @@ interface OAuthFlow {
 type WithoutFlow<T> = T extends ProviderAuthEvent ? Omit<T, 'flowId' | 'providerId'> : never
 type ProviderAuthEventPayload = WithoutFlow<ProviderAuthEvent>
 
-function modelKey(provider: string, id: string): string { return `${provider}/${id}` }
-
-function safeModelId(value: string): boolean {
-  return value.length > 0 && value.length <= 256 && /^[a-zA-Z0-9._:/+-]+$/.test(value)
-}
-
-function safeProviderId(value: string): boolean {
-  return value.length > 0 && value.length <= 128 && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(value)
-}
-
 function isMcpAuthProvider(providerId: string): boolean {
   return providerId.toLowerCase().startsWith('mcp:')
 }
@@ -58,7 +47,7 @@ function isMcpAuthProvider(providerId: string): boolean {
  * discovery cannot inspect or mutate a shared `mcp:*` credential.
  */
 function modelRegistryAuthStorage(authStorage: AuthStorage): AuthStorage {
-  return {
+  const facade: Pick<AuthStorage, 'reload' | 'getOAuthProviders' | 'get' | 'hasAuth' | 'getAuthStatus' | 'getApiKey' | 'getApiKeyWithSourceToken' | 'getProviderHeaders' | 'markAuthStale' | 'getCurrentAuthSourceToken' | 'markAuthSourceStale'> = {
     reload: () => authStorage.reload(),
     getOAuthProviders: () => authStorage.getOAuthProviders().filter((provider) => !isMcpAuthProvider(provider.id)),
     get: (provider: string) => isMcpAuthProvider(provider) ? undefined : authStorage.get(provider),
@@ -70,12 +59,13 @@ function modelRegistryAuthStorage(authStorage: AuthStorage): AuthStorage {
     markAuthStale: (provider: string) => !isMcpAuthProvider(provider) && authStorage.markAuthStale(provider),
     getCurrentAuthSourceToken: (provider: string) => isMcpAuthProvider(provider) ? undefined : authStorage.getCurrentAuthSourceToken(provider),
     markAuthSourceStale: (token: Parameters<AuthStorage['markAuthSourceStale']>[0]) => !isMcpAuthProvider(token.provider) && authStorage.markAuthSourceStale(token),
-  } as unknown as AuthStorage
+  }
+  return facade as AuthStorage
 }
 
 /** The distinct provider ids a catalog may list: well formed, and never an MCP credential. */
 function listableProviderIds(providerIds: Iterable<string>): string[] {
-  return [...new Set(providerIds)].filter((id) => safeProviderId(id) && !isMcpAuthProvider(id))
+  return [...new Set(providerIds)].filter((id) => isProviderId(id) && !isMcpAuthProvider(id))
 }
 
 type ProviderAuthStatus = ReturnType<ModelRegistry['getProviderAuthStatus']>
@@ -86,9 +76,7 @@ interface ProviderContext {
   registry: ModelRegistry
 }
 
-function boundedInteger(value: number): number {
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0
-}
+
 
 export function resolveAvailableModelKeys(
   models: ReadonlyArray<{ provider: string; id: string }>,
@@ -228,7 +216,7 @@ export class PrimeProviderService {
     try { executableModels = await registry.getExecutableModels() }
     catch { executableDiscoveryWarning = 'Executable model discovery failed; availability may be incomplete.' }
     const oauthProviders = new Map(registry.authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]))
-    const eligibleModels = snapshot.models.filter((model) => safeProviderId(model.provider) && safeModelId(model.id))
+    const eligibleModels = snapshot.models.filter((model) => isProviderId(model.provider) && isModelId(model.id))
     const validProviderIds = listableProviderIds([...eligibleModels.map((model) => model.provider), ...oauthProviders.keys()])
     const authStatuses = new Map(validProviderIds.map((id) => [id, registry.getProviderAuthStatus(id)]))
     const configuredProviders = new Set([...authStatuses].filter(([, status]) => status.configured).map(([id]) => id))
@@ -330,13 +318,7 @@ export class PrimeProviderService {
   async requireAvailableModel(rawKey: unknown, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelDescriptor> {
     const key = requireString(rawKey, 'model', { min: 3, max: 512, trim: true })
     const catalog = await this.catalog(false, disabledProviders, disabledModels)
-    const model = catalog.models.find((candidate) => candidate.key === key)
-    if (!model) throw new Error('Model was not found in the Prime Agent catalog')
-    const provider = catalog.providers.find((candidate) => candidate.id === model.provider)
-    if (!provider?.enabled) throw new Error(`Provider ${model.provider} is disabled in GooeyPi`)
-    if (model.enabled === false) throw new Error(`${model.name} is disabled in GooeyPi`)
-    if (!model.available) throw new Error(`Provider ${model.provider} is not configured for ${model.name}`)
-    return model
+    return requireCatalogModel(catalog, key, 'Prime Agent')
   }
 
   async capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined> {

@@ -1,6 +1,5 @@
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '../../src/types/api'
 import type { ProviderCatalog } from './agent-rpc'
-import type { PrimeProviderService } from './providers'
 
 /**
  * The model-catalog surface shared by every agent harness provider service.
@@ -104,9 +103,21 @@ export function catalogLimitWarnings(
   return warnings
 }
 
-/**
- * Compile-time proof that PrimeProviderService structurally satisfies the
- * shared surface without editing providers.ts. Harness wiring can use this to
- * hand either service to catalog consumers.
- */
-export const asModelCatalogProvider = (service: PrimeProviderService): ModelCatalogProvider => service
+export const CATALOG_TTL_MS = 30_000
+
+export function modelKey(provider: string, id: string): string { return `${provider}/${id}` }
+
+export function boundedInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+/** Resolve GUI selection policy against an already loaded catalog. */
+export function requireCatalogModel(catalog: PrimeModelCatalog, key: string, harnessLabel: string): PrimeModelDescriptor {
+  const model = catalog.models.find((candidate) => candidate.key === key)
+  if (!model) throw new Error(`Model was not found in the ${harnessLabel} catalog`)
+  const provider = catalog.providers.find((candidate) => candidate.id === model.provider)
+  if (!provider?.enabled) throw new Error(`Provider ${model.provider} is disabled in GooeyPi`)
+  if (model.enabled === false) throw new Error(`${model.name} is disabled in GooeyPi`)
+  if (!model.available) throw new Error(`Provider ${model.provider} is not configured for ${model.name}`)
+  return model
+}

@@ -1,10 +1,10 @@
 import { supportsFastMode } from 'prime-agent-ai'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '../../src/types/api'
 import { harnessVersion } from './lib/harness-version'
-import { catalogLimitWarnings, limitCatalogRelations, type ModelCatalogProvider } from './model-catalog'
+import { boundedInteger, CATALOG_TTL_MS, catalogLimitWarnings, limitCatalogRelations, modelKey, requireCatalogModel, type ModelCatalogProvider } from './model-catalog'
 import { withModelVisibility } from './model-visibility'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
-import { requireString } from './validation'
+import { isModelId, isProviderId, requireString } from './validation'
 
 /**
  * Shared model-catalog machinery for the harnesses whose catalog comes from an
@@ -16,25 +16,10 @@ import { requireString } from './validation'
  * and how one entry maps to a descriptor, and may replace the default
  * provider rows.
  */
-const CATALOG_TTL_MS = 30_000
 export { MAX_CATALOG_PROVIDERS } from './model-catalog'
 export const DEFAULT_CATALOG_TIMEOUT_MS = 15_000
 export const DEFAULT_CATALOG_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const VERSION_MAX_OUTPUT_BYTES = 4_096
-
-export function modelKey(provider: string, id: string): string { return `${provider}/${id}` }
-
-export function safeModelId(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 256 && /^[a-zA-Z0-9._:/+-]+$/.test(value)
-}
-
-export function safeProviderId(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 128 && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(value)
-}
-
-export function boundedInteger(value: unknown): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
-}
 
 /**
  * Neither CLI carries per-model fast-mode metadata, so both delegate to the
@@ -61,7 +46,7 @@ export interface ValidatedModelEntry {
 export function validateModelEntry(value: unknown): ValidatedModelEntry | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
-  if (!safeProviderId(record.provider) || !safeModelId(record.id)) return null
+  if (!isProviderId(record.provider) || !isModelId(record.id)) return null
   if (typeof record.name !== 'string' || record.name.length === 0) return null
   if (record.reasoning !== undefined && typeof record.reasoning !== 'boolean') return null
   const reasoning = record.reasoning === true
@@ -161,13 +146,7 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
   async requireAvailableModel(rawKey: unknown, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelDescriptor> {
     const key = requireString(rawKey, 'model', { min: 3, max: 512, trim: true })
     const catalog = await this.catalog(false, disabledProviders, disabledModels)
-    const model = catalog.models.find((candidate) => candidate.key === key)
-    if (!model) throw new Error(`Model was not found in the ${this.harnessLabel} catalog`)
-    const provider = catalog.providers.find((candidate) => candidate.id === model.provider)
-    if (!provider?.enabled) throw new Error(`Provider ${model.provider} is disabled`)
-    if (model.enabled === false) throw new Error(`${model.name} is disabled`)
-    if (!model.available) throw new Error(`Provider ${model.provider} is not configured for ${model.name}`)
-    return model
+    return requireCatalogModel(catalog, key, this.harnessLabel)
   }
 
   async capabilities(provider: string | undefined, modelId: string | undefined): Promise<PrimeModelDescriptor | undefined> {
