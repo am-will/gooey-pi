@@ -1,4 +1,4 @@
-import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
+import { accessSync, constants as fsConstants, readdirSync, realpathSync, statSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import { delimiter, posix, win32 } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -249,6 +249,37 @@ interface PrepareExecutableSpawnOptions {
 
 function canAccessPath(candidate: string, mode: number): boolean {
   try { accessSync(candidate, mode); return true } catch { return false }
+}
+
+/** Windows implicitly searches cwd for bare executable names, before PATH. */
+export function resolveGitExecutable(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { platform?: NodeJS.Platform; canonicalExecutable?: (path: string) => string | undefined } = {},
+): string {
+  if ((options.platform ?? process.platform) !== 'win32') return 'git'
+  const canonicalExecutable = options.canonicalExecutable ?? ((path: string) => {
+    try { return statSync(path).isFile() ? realpathSync(path) : undefined } catch { return undefined }
+  })
+  const insideProject = (path: string): boolean => {
+    const rel = win32.relative(win32.toNamespacedPath(cwd), win32.toNamespacedPath(path))
+    return rel === '' || rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel)
+  }
+  const seen = new Set<string>()
+  for (const value of [env.Path, env.PATH]) {
+    for (const entry of (value ?? '').split(';')) {
+      const directory = entry.trim().replace(/^"(.*)"$/, '$1')
+      if (!win32.isAbsolute(directory) || win32.parse(directory).root === '\\') continue
+      const normalized = win32.normalize(directory)
+      const key = normalized.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (insideProject(normalized)) continue
+      const executable = canonicalExecutable(win32.join(normalized, 'git.exe'))
+      if (executable && win32.isAbsolute(executable) && !insideProject(executable)) return executable
+    }
+  }
+  throw new Error('Git was not found in an absolute PATH directory outside this project. Install Git and add its executable directory to PATH.')
 }
 
 /**
