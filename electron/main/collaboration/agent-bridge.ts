@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { HarnessId, PrimeModelDescriptor, RuntimeInfo, SessionRecord, TranscriptMessage } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import { isRuntimeIdle, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
+import { isRuntimeIdle } from '../../../src/lib/session-actions'
+import { startPromptedRuntime } from '../delegated-task'
 import type { AgentRpcManager } from '../agent-rpc'
+import { createKeyedMutex, createSingleFlight } from '../lib/async'
 import { CapabilityBridge, type CapabilityClaim } from '../lib/capability-bridge'
 import type { ModelCatalogProvider } from '../model-catalog'
-import { availableModels, rankedModelMatches, resolveModel, resolveReasoning } from '../model-selection'
+import { availableModels, modelListing, resolveModel } from '../model-selection'
 import { requireBoolean, requireId, requireInteger, requireString } from '../validation'
 import { encodeGooeyPiAgentMessage } from './message-envelope'
 
@@ -156,8 +158,8 @@ function cursorFor(session: SessionRecord, messages: CollaborationMessage[], liv
 export class AgentCollaborationBridge extends CapabilityBridge {
   protected readonly rateLimit = 120
   protected readonly rateLimitError = 'Session collaboration rate limit exceeded; slow down and retry shortly'
-  private readonly waking = new Map<string, Promise<RuntimeInfo>>()
-  private readonly deliveries = new Map<string, Promise<void>>()
+  private readonly waking = createSingleFlight<string, RuntimeInfo>()
+  private readonly deliveries = createKeyedMutex<string>()
   private readonly sourcesByToken = new Map<string, CollaborationTarget>()
   private readonly activeWaitsByToken = new Map<string, number>()
   private readonly activeWaitTargets = new Set<string>()
@@ -275,14 +277,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
   private async listModels(source: CollaborationTarget, rawQuery: unknown): Promise<Record<string, unknown>> {
     const query = rawQuery === undefined ? '' : requireString(rawQuery, 'query', { max: 256, trim: true })
     const available = await this.modelsFor(source)
-    const matches = query ? rankedModelMatches(query, available) : available
-    const models = matches.slice(0, 100).map((model) => ({
-      key: model.key,
-      name: model.name,
-      provider: model.provider,
-      reasoning_levels: model.availableThinkingLevels,
-    }))
-    return { models, matched: matches.length, returned: models.length, truncated: matches.length > models.length }
+    return modelListing(query, available)
   }
 
   private async create(source: CollaborationTarget, params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -293,47 +288,20 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     const reasoningQuery = params.reasoning === undefined ? undefined : requireString(params.reasoning, 'reasoning', { min: 1, max: 64, trim: true })
     const fast = params.fast === undefined ? undefined : requireBoolean(params.fast, 'fast')
     const selectedModel = modelQuery ? resolveModel(modelQuery, await this.modelsFor(source)) : undefined
-    const selectedReasoning = selectedModel && reasoningQuery
-      ? resolveReasoning(reasoningQuery, selectedModel.availableThinkingLevels)
-      : undefined
     const manager = source.manager
-    const runtime = await manager.start({
+    const { runtime: current, reasoning: appliedReasoning } = await startPromptedRuntime(manager, {
       cwd: source.session.projectPath,
-      ...(selectedModel ? { model: selectedModel.key } : {}),
-      ...(selectedReasoning ? { thinking: selectedReasoning } : {}),
-      ...(fast !== undefined ? { fast } : {}),
+      model: selectedModel, reasoningQuery, prompt, title, fast,
+      missingSessionMessage: 'The harness accepted the prompt but did not create a visible session. The session was not reported as created.',
+      onAbandon: (runtimeId) => { this.pendingRuntimeTokens.delete(runtimeId) },
     })
-    let appliedReasoning = selectedReasoning
-    try {
-      if (!selectedModel && reasoningQuery) {
-        appliedReasoning = resolveReasoning(reasoningQuery, runtime.availableThinkingLevels ?? [])
-        await manager.command(runtime.runtimeId, { type: 'set_thinking_level', level: appliedReasoning })
-      }
-      await manager.command(runtime.runtimeId, {
-        type: 'prompt',
-        message: prompt,
-        streamingBehavior: streamingBehaviorForIntent('queue'),
-      })
-      if (title) await manager.command(runtime.runtimeId, { type: 'set_session_name', name: title }).catch(() => undefined)
-      await manager.command(runtime.runtimeId, { type: 'get_state' })
-    } catch (error) {
-      this.pendingRuntimeTokens.delete(runtime.runtimeId)
-      await manager.stop(runtime.runtimeId).catch(() => false)
-      throw error
-    }
-    const current = manager.list().find((candidate) => candidate.runtimeId === runtime.runtimeId) ?? runtime
-    if (!current.sessionFile) {
-      this.pendingRuntimeTokens.delete(runtime.runtimeId)
-      await manager.stop(runtime.runtimeId).catch(() => false)
-      throw new Error('The harness accepted the prompt but did not create a visible session. The session was not reported as created.')
-    }
     this.bindRuntimeSession(current.runtimeId, current.sessionFile)
     const sessionPath = resolve(current.sessionFile)
     const created = (await source.service.list(source.session.projectPath, false, true))
       .find((candidate) => candidate.depth === 0 && resolve(candidate.filePath) === sessionPath)
     if (!created) {
-      this.pendingRuntimeTokens.delete(runtime.runtimeId)
-      await manager.stop(runtime.runtimeId).catch(() => false)
+      this.pendingRuntimeTokens.delete(current.runtimeId)
+      await manager.stop(current.runtimeId).catch(() => false)
       throw new Error('The harness created a runtime but its session is not yet readable from GooeyPi')
     }
     return {
@@ -404,26 +372,11 @@ export class AgentCollaborationBridge extends CapabilityBridge {
 
   private async wake(target: CollaborationTarget): Promise<RuntimeInfo> {
     const key = `${target.session.harness}:${resolve(target.session.filePath)}`
-    const existing = this.waking.get(key)
-    if (existing) return existing
-    const pending = target.manager.start({ cwd: target.session.projectPath, sessionPath: target.session.filePath })
-    this.waking.set(key, pending)
-    try { return await pending }
-    finally { if (this.waking.get(key) === pending) this.waking.delete(key) }
+    return this.waking.run(key, () => target.manager.start({ cwd: target.session.projectPath, sessionPath: target.session.filePath }))
   }
 
-  private async withDeliveryLock<T>(target: CollaborationTarget, action: () => Promise<T>): Promise<T> {
-    const key = `${target.session.harness}:${resolve(target.session.filePath)}`
-    const previous = this.deliveries.get(key) ?? Promise.resolve()
-    let release!: () => void
-    const current = new Promise<void>((resolveCurrent) => { release = resolveCurrent })
-    this.deliveries.set(key, current)
-    await previous.catch(() => undefined)
-    try { return await action() }
-    finally {
-      release()
-      if (this.deliveries.get(key) === current) this.deliveries.delete(key)
-    }
+  private withDeliveryLock<T>(target: CollaborationTarget, action: () => Promise<T>): Promise<T> {
+    return this.deliveries.run(`${target.session.harness}:${resolve(target.session.filePath)}`, action)
   }
 
   private async withWaitAdmission<T>(claim: CapabilityClaim, targetId: string, action: () => Promise<T>): Promise<T> {
