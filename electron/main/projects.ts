@@ -547,9 +547,7 @@ export class ProjectService {
     const linked = (await listGitWorktrees(parentCwd)).find((worktree) => resolve(worktree.path) === requested)
     if (!linked) throw new TypeError('worktree path is not linked to the authorized Git repository')
     const { path, identity } = await this.captureFolderIdentity(linked.path)
-    const next = await this.persistWorktree(parentCwd, path, identity)
-    if (next.id !== id) throw new TypeError('worktree belongs to a different project grant')
-    return next
+    return this.persistWorktree(parentCwd, path, identity, id)
   }
 
   async chooseCheckoutWorktreePath(cwdValue: unknown, branchValue: unknown, worktrees: readonly GitWorktree[]): Promise<string | undefined> {
@@ -606,7 +604,7 @@ export class ProjectService {
     return { ...project, sessionCount: sessions.filter((session) => resolve(session.projectPath) === path).length, gitBranch: await this.branchProvider(path) }
   }
 
-  private async persistWorktree(parentCwd: string, path: string, identity: FolderIdentity): Promise<ProjectRecord> {
+  private async persistWorktree(parentCwd: string, path: string, identity: FolderIdentity, expectedParentId: string): Promise<ProjectRecord> {
     if (await this.isBroadRoot(path)) throw new TypeError('Broad filesystem roots cannot be added as projects')
     this.removalRoots.delete(path)
     const now = new Date().toISOString()
@@ -623,6 +621,7 @@ export class ProjectService {
       if (parentId) break
     }
     if (!parentId) throw new TypeError('worktree parent project is not an authorized grant')
+    if (parentId !== expectedParentId) throw new TypeError('worktree belongs to a different project grant')
     const project = await this.store.update((state): PersistedProject => {
       state.dismissedProjectPaths = state.dismissedProjectPaths.filter((item) => resolve(item) !== path)
       const own = this.ownProjects(state.projects)
@@ -916,6 +915,7 @@ export class ProjectService {
       }
       throw new TypeError(`path is not inside an added ${productName} project or its folder identity changed`)
     }
+    if (authorizationRevision !== this.authorizationRevision) throw new TypeError('project authorization changed while the request was being checked')
     return authorizedRoot
   }
 
