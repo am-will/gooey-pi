@@ -409,6 +409,20 @@ describe('harness-aware IPC routing', () => {
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:logout-mcp', expect.any(Function))
   })
 
+  it('serializes visibility read-modify-write operations across concurrent toggles', async () => {
+    const update = harness.services.settings.update.getMockImplementation()
+    if (!update) throw new Error('Missing fixture settings update')
+    harness.services.settings.update.mockImplementation(async (patch) => {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      return update(patch)
+    })
+    await Promise.all([
+      harness.invoke('providers:set-enabled', 'anthropic', true, 'omp'),
+      harness.invoke('providers:set-enabled', 'openai', false, 'omp'),
+    ])
+    expect(harness.services.settings.get().ompDisabledProviders).toEqual(['openai'])
+  })
+
   it('stores OMP provider visibility in desktop settings without mutating OMP', async () => {
     await expect(harness.invoke('providers:set-enabled', 'openai', false, 'omp')).resolves.toMatchObject({
       from: 'omp',
