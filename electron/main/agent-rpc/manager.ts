@@ -458,7 +458,9 @@ export class AgentRpcManager {
   private async decorate(runtime: RpcRuntime): Promise<void> {
     if (!this.providers) return
     const snapshot = runtime.snapshot()
-    runtime.applyCapabilities(await this.providers.capabilities(snapshot.model?.provider, snapshot.model?.id))
+    try {
+      runtime.applyCapabilities(await this.providers.capabilities(snapshot.model?.provider, snapshot.model?.id))
+    } catch { /* Catalog outages must not fail a healthy runtime or erase known capabilities. */ }
   }
 
   private requireRuntime(value: unknown): RpcRuntime {

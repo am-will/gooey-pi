@@ -140,7 +140,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   })
 })
 
-function fakeAgent(promptResponse: string, stateResponse?: string, exitDelayMs = 0): { cwd: string; executable: string } {
+function fakeAgent(promptResponse: string, stateResponse?: string, exitDelayMs = 0, controlCommands = false): { cwd: string; executable: string } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-'))
   dirs.push(cwd)
   const executable = join(cwd, 'fake-agent.cjs')
@@ -159,6 +159,8 @@ input.on('line', (line) => {
     send(${promptResponse})
   } else if (command.type === 'abort') {
     send({ id: command.id, type: 'response', command: 'abort', success: true })
+  } else if (${controlCommands} && ['set_model', 'set_thinking_level'].includes(command.type)) {
+    send({ id: command.id, type: 'response', command: command.type, success: true })
   } else if (command.type === 'set_service_tier') {
     send({ id: command.id, type: 'response', command: 'set_service_tier', success: true })
   }
@@ -1049,6 +1051,30 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect(runtime.availableThinkingLevels).toContain('xhigh')
     expect(runtime.availableThinkingLevels).not.toContain('max')
   })
+  it('starts a healthy runtime when its optional capability catalog is unavailable', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const providers = new PrimeProviderService({ authPath: join(fake.cwd, 'auth.json'), modelsPath: join(fake.cwd, 'models.json') })
+    vi.spyOn(providers, 'capabilities').mockRejectedValue(new Error('Catalog unavailable'))
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, providers)
+    managers.push(manager)
+    const runtime = await manager.start({ cwd: fake.cwd })
+    expect(manager.list()).toMatchObject([{ runtimeId: runtime.runtimeId }])
+  })
+
+  it('keeps existing capabilities when catalog refresh fails after successful controls', async () => {
+    const state = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-1', isStreaming: false, model: { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT-5.4' } } }"
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", state, 0, true)
+    const providers = new PrimeProviderService({ authPath: join(fake.cwd, 'auth.json'), modelsPath: join(fake.cwd, 'models.json') })
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, providers)
+    managers.push(manager)
+    const runtime = await manager.start({ cwd: fake.cwd })
+    vi.spyOn(providers, 'capabilities').mockRejectedValue(new Error('Catalog unavailable'))
+    await expect(manager.command(runtime.runtimeId, { type: 'set_thinking_level', level: 'high' })).resolves.toMatchObject({ success: true })
+    await expect(manager.command(runtime.runtimeId, { type: 'set_model', provider: 'openai-codex', modelId: 'gpt-5.4' })).resolves.toMatchObject({ success: true })
+    expect(manager.list()[0]?.availableThinkingLevels).toEqual(runtime.availableThinkingLevels)
+    expect(manager.list()[0]?.imageInputSupported).toBe(runtime.imageInputSupported)
+  })
+
   it('rejects images authoritatively when the active runtime model is text-only', async () => {
     const state = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-1', isStreaming: false, model: { provider: 'fixture', id: 'text-model', name: 'Text model' } } }"
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", state)
