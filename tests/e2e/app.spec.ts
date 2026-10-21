@@ -1233,8 +1233,9 @@ test.describe('Prime Work desktop smoke', () => {
   async function archiveThread(title: string) {
     const row = page.locator('.session-row-wrap').filter({ hasText: title })
     await row.getByTitle(`Archive ${title}`).click()
-    const dialog = page.getByRole('dialog')
-    if (await dialog.waitFor({ state: 'visible', timeout: 500 }).then(() => true).catch(() => false)) {
+    const dialog = page.getByRole('dialog', { name: 'Archive running chat', exact: true })
+    await expect.poll(async () => await row.count() === 0 || await dialog.isVisible()).toBe(true)
+    if (await row.count() !== 0) {
       await dialog.getByRole('button', { name: 'Archive', exact: true }).click()
     }
     await expect(row).toHaveCount(0)
