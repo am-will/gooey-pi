@@ -14,12 +14,19 @@ import type { TerminalPromptContext, TerminalSelectionContext } from '@/types/ap
 import { IconButton } from './ui'
 import { ResizeHandle } from './ResizeHandle'
 
+export interface TerminalInitialCommand {
+  id: string
+  command: string
+  label: string
+  onExit(exitCode?: number): void
+}
+
 interface TerminalDrawerProps {
   visible?: boolean
   cwd?: string
   sessionPath?: string
   shell?: string
-  initialCommand?: { id: string; command: string; label: string; onExit(exitCode?: number): void }
+  initialCommand?: TerminalInitialCommand
   height: number
   minHeight: number
   maxHeight: number
