@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
 import { dump, load } from 'js-yaml'
 import { validateReleaseTag } from './validate-release-tag.mjs'
 
@@ -37,14 +37,26 @@ export function parseReleasePlatforms(value = RELEASE_PLATFORMS.join(',')) {
  *
  * tests/release-scripts.test.ts derives the produced names from the
  * electron-builder configuration and fails when this map drifts from them.
+ *
+ * `windowsUnsigned` drops the MSIX for unsigned beta Windows releases: without
+ * an Authenticode certificate electron-builder can only emit a Store-only
+ * package (publisher CN=ms) that Windows refuses to install.
+ *
+ * electron-updater downloads differentially by fetching `<feed url>.blockmap`
+ * for the macOS ZIPs and the NSIS installer, so those assets publish their
+ * blockmaps beside them and must never be renamed. The AppImage and Windows ZIP
+ * embed their blockmaps and need no separate asset.
  */
-export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS) {
+export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS, { windowsUnsigned = false } = {}) {
+  if (windowsUnsigned && !platforms.includes('win')) throw new Error('Unsigned Windows release assets require the win release platform')
   const assets = {
     mac: [
       [`GooeyPi-${version}-m-chip.dmg`, `GooeyPi-${version}-arm64.dmg`],
       [`GooeyPi-${version}-intel-chip.dmg`, `GooeyPi-${version}-x64.dmg`],
       [`GooeyPi-${version}-arm64.zip`],
+      [`GooeyPi-${version}-arm64.zip.blockmap`],
       [`GooeyPi-${version}-x64.zip`],
+      [`GooeyPi-${version}-x64.zip.blockmap`],
     ],
     linux: [
       [`GooeyPi-${version}-linux-arm64.AppImage`],
@@ -57,7 +69,12 @@ export function releaseAssetNames(version, platforms = RELEASE_PLATFORMS) {
       [`GooeyPi-${version}-linux-x86_64.rpm`],
     ],
     // electron-builder emits the MSIX-compatible package as .appx; publish the same bytes with the modern .msix extension.
-    win: [[`GooeyPi-${version}-win-x64.exe`], [`GooeyPi-${version}-win-x64.zip`], [`GooeyPi-${version}-win-x64.msix`, `GooeyPi-${version}-win-x64.appx`]],
+    win: [
+      [`GooeyPi-${version}-win-x64.exe`],
+      [`GooeyPi-${version}-win-x64.exe.blockmap`],
+      [`GooeyPi-${version}-win-x64.zip`],
+      ...(windowsUnsigned ? [] : [[`GooeyPi-${version}-win-x64.msix`, `GooeyPi-${version}-win-x64.appx`]]),
+    ],
   }
   const entries = platforms
     .flatMap((platform) => [...assets[platform], ...UPDATE_METADATA_BY_PLATFORM[platform].map((name) => [name])])
@@ -73,8 +90,8 @@ function compareNames(left, right) {
   return left < right ? -1 : left > right ? 1 : 0
 }
 
-export function expectedGitHubReleaseAssets(version, platforms = RELEASE_PLATFORMS) {
-  return [...releaseAssetNames(version, platforms).keys()]
+export function expectedGitHubReleaseAssets(version, platforms = RELEASE_PLATFORMS, options = {}) {
+  return [...releaseAssetNames(version, platforms, options).keys()]
 }
 
 function parseUpdateMetadata(path, expectedVersion) {
@@ -131,8 +148,8 @@ export function mergeUpdateMetadata(paths, expectedVersion) {
   }
 }
 
-export function expectedDownloadedReleaseAssets(version, platforms = RELEASE_PLATFORMS) {
-  return [...releaseAssetNames(version, platforms).values()]
+export function expectedDownloadedReleaseAssets(version, platforms = RELEASE_PLATFORMS, options = {}) {
+  return [...releaseAssetNames(version, platforms, options).values()]
 }
 
 function listFiles(directory, found = []) {
@@ -151,13 +168,13 @@ async function sha256(path) {
   return hash.digest('hex')
 }
 
-export async function prepareGitHubRelease({ inputDirectory, outputDirectory, tag, platforms = RELEASE_PLATFORMS, projectDirectory = process.cwd() }) {
+export async function prepareGitHubRelease({ inputDirectory, outputDirectory, tag, platforms = RELEASE_PLATFORMS, windowsUnsigned = false, projectDirectory = process.cwd() }) {
   const release = validateReleaseTag(tag, projectDirectory)
   if (!existsSync(inputDirectory) || !lstatSync(inputDirectory).isDirectory()) throw new Error(`Downloaded release artifact directory does not exist: ${inputDirectory}`)
   if (existsSync(outputDirectory) && readdirSync(outputDirectory).length) throw new Error(`GitHub Release output directory must be empty: ${outputDirectory}`)
   mkdirSync(outputDirectory, { recursive: true })
 
-  const names = releaseAssetNames(release.version, platforms)
+  const names = releaseAssetNames(release.version, platforms, { windowsUnsigned })
   const downloadedNames = new Set(names.values())
   const publishedNameByDownloadedName = new Map([...names].map(([published, downloaded]) => [downloaded, published]))
   const updateMetadataNames = new Set(Object.values(UPDATE_METADATA_BY_PLATFORM).flat())
@@ -210,24 +227,18 @@ export async function prepareGitHubRelease({ inputDirectory, outputDirectory, ta
   return { ...release, assets: [...names.keys()], checksumFile: 'SHA256SUMS.txt' }
 }
 
-export function invokedAsScript() {
-  if (!process.argv[1]) return true
-  return import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-}
-
-function option(name) {
-  const index = process.argv.indexOf(name)
-  return index === -1 ? undefined : process.argv[index + 1]
-}
-
-if (invokedAsScript()) {
+if (import.meta.main) {
   try {
-    const inputDirectory = option('--input')
-    const outputDirectory = option('--output')
-    const tag = option('--tag')
-    const platforms = parseReleasePlatforms(option('--platforms'))
+    const { values } = parseArgs({
+      strict: true,
+      allowPositionals: false,
+      options: { input: { type: 'string' }, output: { type: 'string' }, tag: { type: 'string' }, platforms: { type: 'string' }, 'windows-unsigned': { type: 'boolean' } },
+    })
+    const { input: inputDirectory, output: outputDirectory, tag } = values
+    const platforms = parseReleasePlatforms(values.platforms)
+    const windowsUnsigned = values['windows-unsigned'] === true
     if (!inputDirectory || !outputDirectory) throw new Error('Provide --input and --output directories')
-    const release = await prepareGitHubRelease({ inputDirectory: resolve(inputDirectory), outputDirectory: resolve(outputDirectory), tag, platforms })
+    const release = await prepareGitHubRelease({ inputDirectory: resolve(inputDirectory), outputDirectory: resolve(outputDirectory), tag, platforms, windowsUnsigned })
     console.log(`Prepared ${release.assets.length} assets and ${release.checksumFile} for ${release.tag}.`)
   } catch (error) {
     console.error(`GitHub Release preparation failed: ${error instanceof Error ? error.message : String(error)}`)

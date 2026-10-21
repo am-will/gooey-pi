@@ -1,7 +1,8 @@
+import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   MAX_PACKAGED_SMOKE_MARKER_BYTES,
   PACKAGED_RENDERER_URL,
@@ -77,6 +78,32 @@ describe('packaged smoke launcher invocation', () => {
   it('kills the whole Windows process tree and uses process groups elsewhere', () => {
     expect(launcher.killTreeCommand(4321, 'win32')).toEqual({ command: 'taskkill', args: ['/T', '/F', '/PID', '4321'] })
     expect(launcher.killTreeCommand(4321, 'linux')).toBeNull()
+  })
+
+  it('kills a leftover POSIX process group even after its leader exited', () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const exited = { pid: 4321, exitCode: 0, signalCode: null, kill: vi.fn() }
+      launcher.killProcessTree(exited, 'linux')
+      expect(kill).toHaveBeenCalledWith(-4321, 'SIGKILL')
+
+      kill.mockClear()
+      launcher.killProcessTree({ pid: undefined, exitCode: null, signalCode: null, kill: vi.fn() }, 'linux')
+      // An exited Windows child has no tree taskkill could still reach.
+      launcher.killProcessTree({ pid: 4321, exitCode: 0, signalCode: null, kill: vi.fn() }, 'win32')
+      expect(kill).not.toHaveBeenCalled()
+
+      kill.mockImplementation(() => {
+        throw Object.assign(new Error('no such process group'), { code: 'ESRCH' })
+      })
+      launcher.killProcessTree(exited, 'linux')
+      expect(exited.kill).not.toHaveBeenCalled()
+      const running = { pid: 4321, exitCode: null, signalCode: null, kill: vi.fn() }
+      launcher.killProcessTree(running, 'linux')
+      expect(running.kill).toHaveBeenCalledWith('SIGKILL')
+    } finally {
+      kill.mockRestore()
+    }
   })
 
   it('bounds captured diagnostics to their tail', () => {
@@ -178,6 +205,33 @@ describe('packaged smoke launch', () => {
     expect(readdirSync(sandbox)).not.toContain('survived-the-deadline')
     expect(temporaryWorkspaces()).toEqual(before)
   })
+
+  it('does not wait for a helper that keeps the output pipes open after the application exits', async () => {
+    const helperPid = join(sandbox, 'helper.pid')
+    writeFakeApplication(
+      `${launchArguments}\n${mirrorScheduleSkill}\n${reportReadiness}\nsleep 30 >&2 &\necho $! > ${helperPid}\nexit 0`,
+    )
+    const started = Date.now()
+
+    await expect(launcher.smokePackagedApp('linux', 'x64', { timeoutMs: 10_000, exitGraceMs: 200 })).resolves.toMatchObject({ version: '9.9.9' })
+
+    expect(Date.now() - started).toBeLessThan(5_000)
+    // The helper shared the application's process group, so it was killed rather than left running.
+    const pid = Number(readFileSync(helperPid, 'utf8'))
+    const running = () => {
+      try {
+        process.kill(pid, 0)
+      } catch {
+        return false
+      }
+      // A killed orphan stays a zombie until its new parent reaps it, which a
+      // container init that never calls wait() may not do.
+      const ps = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' })
+      if (ps.error) throw ps.error
+      return !ps.stdout.trim().startsWith('Z')
+    }
+    await vi.waitFor(() => expect(running()).toBe(false))
+  }, 15_000)
 
   it('reports a missing packaged executable rather than launching something else', async () => {
     rmSync(join(unpacked, 'gooeypi'), { force: true })
