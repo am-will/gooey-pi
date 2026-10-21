@@ -38,9 +38,9 @@ export class CheckoutService {
     const strategy = this.strategy()
     if (strategy === 'branch') {
       try {
-      const cwd = await authorizedRepositoryRoot(project.primaryFolder, (path) => this.projects.authorizeCwd(path))
-      const checkouts = await listLocalGitBranches(cwd)
-      return { strategy, activeName: checkouts.find((branch) => branch.current)?.name ?? '', checkouts }
+        const cwd = await authorizedRepositoryRoot(project.primaryFolder, (path) => this.projects.authorizeCwd(path))
+        const checkouts = await listLocalGitBranches(cwd)
+        return { strategy, activeName: checkouts.find((branch) => branch.current)?.name ?? '', checkouts }
       } catch (error) {
         if (isNotARepositoryFailure(error)) return { strategy, activeName: '', checkouts: [] }
         throw error

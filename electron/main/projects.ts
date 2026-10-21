@@ -607,19 +607,18 @@ export class ProjectService {
     const ownPersistedFolders = new Set(this.ownProjects(this.store.getProjects()).flatMap((p) => p.folders.map((f) => resolve(f))))
 
     const checkRoots = async (map: Map<string, FolderIdentity>, isReadOnlyMap: boolean): Promise<string | undefined> => {
-      const roots: string[] = []
-      for (const [configured, expected] of map) {
-        if (this.removalRoots.has(configured) || this.pendingRemovalIds.has(inferredId(configured))) continue
-        if (!isReadOnlyMap && !ownPersistedFolders.has(configured)) { map.delete(configured); continue }
+      const roots = await mapLimit([...map], 4, async ([configured, expected]): Promise<string | undefined> => {
+        if (this.removalRoots.has(configured) || this.pendingRemovalIds.has(inferredId(configured))) return undefined
+        if (!isReadOnlyMap && !ownPersistedFolders.has(configured)) { map.delete(configured); return undefined }
         if (isReadOnlyMap && dismissed.has(configured) && !ownPersistedFolders.has(configured)) {
           map.delete(configured)
-          continue
+          return undefined
         }
         const verified = await this.folderIdentity.verify(configured, expected)
-        if (!verified) continue
+        if (!verified) return undefined
         if (isReadOnlyMap && dismissed.has(verified.path) && !ownPersistedFolders.has(configured)) {
           map.delete(configured)
-          continue
+          return undefined
         }
         if (!folderIdentitiesEqual(expected, verified.identity)) {
           if (!isReadOnlyMap) {
@@ -629,15 +628,15 @@ export class ProjectService {
               expected,
               current: verified.identity,
             }], authorizationRevision)
-            if (!refreshed.has(configured)) { map.delete(configured); continue }
+            if (!refreshed.has(configured)) { map.delete(configured); return undefined }
           }
           // Read-only roots are re-captured by the next discovery pass; refreshing in place would only hide drift.
           if (!isReadOnlyMap) map.set(configured, verified.identity)
         }
-        if (this.removalRoots.has(verified.path) || this.pendingRemovalIds.has(inferredId(verified.path))) continue
-        roots.push(verified.path)
-      }
-      return roots.filter((root) => isPathWithin(root, path)).sort((a, b) => b.length - a.length)[0]
+        if (this.removalRoots.has(verified.path) || this.pendingRemovalIds.has(inferredId(verified.path))) return undefined
+        return verified.path
+      })
+      return roots.filter((root): root is string => root !== undefined && isPathWithin(root, path)).sort((a, b) => b.length - a.length)[0]
     }
 
     let authorizedRoot = await checkRoots(this.authorizedRoots, false)
