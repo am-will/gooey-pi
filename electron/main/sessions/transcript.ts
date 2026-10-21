@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import type { TranscriptMessage } from '../../../src/types/api'
-import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
+import { SESSION_FILE_MAX_BYTES, SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { strictJsonLines } from '../jsonl'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
@@ -74,7 +74,7 @@ export function createTranscriptReader(dialect: TranscriptDialect = primeTranscr
 async function readTranscriptWithDialect(dialect: TranscriptDialect, filePath: string, isStreaming: boolean): Promise<TranscriptMessage[]> {
   const info = await stat(filePath)
   if (!info.isFile()) throw new Error('Session transcript is not a regular file')
-  if (info.size > 256 * 1024 * 1024) throw new Error('Session transcript is too large to display')
+  if (info.size > SESSION_FILE_MAX_BYTES) throw new Error('Session transcript is too large to display')
   return renderTranscriptLines(strictJsonLines(createReadStream(filePath), SESSION_FILE_RECORD_LIMIT_BYTES), isStreaming, dialect)
 }
 

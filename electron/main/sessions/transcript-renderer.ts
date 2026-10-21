@@ -1,5 +1,6 @@
 import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
 import { isCompactionReason } from '../../../src/lib/compaction-reason'
+import { SESSION_FILE_MAX_RECORDS } from '../jsonl-limits'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
 import { parseGooeyPiAgentMessage } from '../collaboration/message-envelope'
@@ -182,7 +183,7 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
   // a record the catalog accepts must never make the transcript unopenable.
   for await (const line of lines) {
     if (!line) continue
-    if (++recordCount > 200_000) throw new Error('Session transcript has too many records')
+    if (++recordCount > SESSION_FILE_MAX_RECORDS) throw new Error('Session transcript has too many records')
     let entry: unknown
     try { entry = JSON.parse(line) } catch { continue }
     if (!isRecord(entry) || entry.type === 'session' || typeof entry.id !== 'string' || entry.id.length > 1_024) continue

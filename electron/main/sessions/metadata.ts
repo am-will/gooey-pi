@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { Readable } from 'node:stream'
 import type { SessionRecord, SessionStatus } from '../../../src/types/api'
-import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
+import { SESSION_FILE_MAX_BYTES, SESSION_FILE_MAX_RECORDS, SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { isRecord } from '../validation'
 import { compactText, textFromContent, validTimestamp } from './transcript'
 
@@ -12,8 +12,7 @@ export type JsonRecord = Record<string, unknown>
 /** Per-file metadata snapshot; the owning SessionService stamps the harness when it builds SessionRecords. */
 export interface SessionMetadata extends Omit<SessionRecord, 'harness'> { sessionName?: string; hasRunningRlmChildren?: boolean }
 
-const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024
-export const MAX_METADATA_RECORDS = 200_000
+export class SessionFileLimitError extends Error {}
 // The transcript reader of the same file MUST share this per-record tolerance.
 const MAX_METADATA_RECORD_BYTES = SESSION_FILE_RECORD_LIMIT_BYTES
 const MAX_TRACKED_METADATA_STATES = 5_000
@@ -127,7 +126,7 @@ export function ingestMessageActivity(state: MessageActivityAccumulator, record:
 
 function ingestMetadataLine(state: MetadataAccumulator, line: string): void {
   if (!line) return
-  if (++state.records > MAX_METADATA_RECORDS) throw new Error('Session file has too many records')
+  if (++state.records > SESSION_FILE_MAX_RECORDS) throw new SessionFileLimitError('Session file has too many records')
   let value: unknown
   try { value = JSON.parse(line) } catch { return }
   if (!isRecord(value)) return
@@ -235,13 +234,13 @@ function ingestBytes<Accumulator extends object>(parser: MetadataLineParser<Accu
   while (true) {
     const newline = data.indexOf(LINE_FEED, start)
     if (newline < 0) break
-    if (newline - start > MAX_METADATA_RECORD_BYTES) throw new Error('JSONL record exceeded the maximum frame size')
+    if (newline - start > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
     const end = newline > start && data[newline - 1] === CARRIAGE_RETURN ? newline - 1 : newline
     parser.ingestLine(state.accumulator, data.toString('utf8', start, end))
     start = newline + 1
   }
   const rest = data.subarray(start)
-  if (rest.length > MAX_METADATA_RECORD_BYTES) throw new Error('JSONL record exceeded the maximum frame size')
+  if (rest.length > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
   state.pending = Buffer.from(rest)
 }
 
@@ -320,9 +319,9 @@ export function createIncrementalMetadataReader<Accumulator extends object>(
       states.delete(filePath)
       throw error
     }
-    if (fileStat.size > MAX_SESSION_FILE_BYTES) {
+    if (fileStat.size > SESSION_FILE_MAX_BYTES) {
       states.delete(filePath)
-      throw new Error('Session file is too large')
+      throw new SessionFileLimitError('Session file is too large')
     }
     const state = states.get(filePath)
     if (state && fileStat.size === state.size && fileStat.mtimeMs === state.mtimeMs) {
@@ -366,7 +365,7 @@ export function createIncrementalMetadataReader<Accumulator extends object>(
           return snapshotState(parser, resumed, filePath, fileStat.mtime.toISOString())
         }
       } catch (error) {
-        if (error instanceof Error && (error.message === 'Session file has too many records' || error.message === 'JSONL record exceeded the maximum frame size')) {
+        if (error instanceof SessionFileLimitError) {
           states.delete(filePath)
           throw error
         }

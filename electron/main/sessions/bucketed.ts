@@ -1,3 +1,4 @@
+import { SESSION_FILE_MAX_RECORDS } from '../jsonl-limits'
 import type { Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
@@ -8,7 +9,7 @@ import type { TranscriptMessage } from '../../../src/types/api'
 import type { SessionCatalogEntry, SessionCatalogIo } from './catalog'
 import {
   ingestMessageActivity,
-  MAX_METADATA_RECORDS,
+  SessionFileLimitError,
   statusFrom,
   type JsonRecord,
   type MetadataLineParser,
@@ -161,7 +162,7 @@ export function createBucketedMetadataParser(ingestRecord: BucketedRecordIngest)
     createAccumulator: createBucketedAccumulator,
     ingestLine: (state, line) => {
       if (!line) return
-      if (++state.records > MAX_METADATA_RECORDS) throw new Error('Session file has too many records')
+      if (++state.records > SESSION_FILE_MAX_RECORDS) throw new SessionFileLimitError('Session file has too many records')
       let value: unknown
       try { value = JSON.parse(line) } catch { return }
       if (!isRecord(value)) return
