@@ -87,7 +87,11 @@ const openChangesTab = async () => {
   expect(container.querySelector('#inspector-panel-changes')).not.toBeNull()
 }
 
-describe('inspector re-render containment', () => {
+describe.each(['MacIntel', 'Linux x86_64', 'Win32'])('inspector re-render containment on %s', (platform) => {
+  beforeEach(() => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform)
+    vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(platform)
+  })
   it('keeps the memoized inspector subtree mounted across App re-renders on the changes tab', async () => {
     await renderApp()
     await openChangesTab()
