@@ -303,7 +303,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
 
       <nav className="sidebar__primary" aria-label={t('nav.primary')}>
         <button type="button" title={t('nav.newSessionShortcut', { shortcut: newSessionShortcut })} onClick={() => onNewSession()}><NotebookPen size={15} /><span>{t('nav.newSession')}</span><kbd>{newSessionShortcut}</kbd></button>
-        <button type="button" title={t('common.search')} onClick={() => { setSearchOpen((open) => !open); window.setTimeout(() => document.getElementById('session-search')?.focus(), 0) }} className={searchOpen ? 'is-active' : ''}><Search size={15} /><span>{t('common.search')}</span></button>
+        <button type="button" title={t('common.search')} onClick={() => { if (searchOpen) setQuery(''); setSearchOpen((open) => !open); window.setTimeout(() => document.getElementById('session-search')?.focus(), 0) }} className={searchOpen ? 'is-active' : ''}><Search size={15} /><span>{t('common.search')}</span></button>
         {searchOpen ? (
           <div className="sidebar-search">
             <Search size={13} />
@@ -400,33 +400,8 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
 }
 
 export function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps): boolean {
-  return previous.projects === next.projects
-    && previous.sessions === next.sessions
-    && previous.childRoster === next.childRoster
-    && previous.activeProjectId === next.activeProjectId
-    && previous.activeSessionId === next.activeSessionId
-    && previous.activeView === next.activeView
-    && previous.activeHarness === next.activeHarness
-    && previous.harnesses === next.harnesses
-    && previous.clearedAttention === next.clearedAttention
-    && previous.updateState === next.updateState
-    && previous.onUpdateAction === next.onUpdateAction
-    && previous.onSelectHarness === next.onSelectHarness
-    && previous.onSelectProject === next.onSelectProject
-    && previous.onSelectSession === next.onSelectSession
-    && previous.onNavigate === next.onNavigate
-    && previous.onNewSession === next.onNewSession
-    && previous.onAddProject === next.onAddProject
-    && previous.onRemoveProject === next.onRemoveProject
-    && previous.projectSortMode === next.projectSortMode
-    && previous.onSetProjectSortMode === next.onSetProjectSortMode
-    && previous.onTogglePinProject === next.onTogglePinProject
-    && previous.onClose === next.onClose
-    && previous.onOpenPalette === next.onOpenPalette
-    && previous.onRenameSession === next.onRenameSession
-    && previous.onArchiveSession === next.onArchiveSession
-    && previous.overlay === next.overlay
-    && previous.platform === next.platform
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  return [...keys].every((key) => Object.is(Reflect.get(previous, key), Reflect.get(next, key)))
 }
 
 export const Sidebar = memo(SidebarView, areSidebarPropsEqual)
