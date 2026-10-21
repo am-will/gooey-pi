@@ -847,6 +847,21 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect(ended).toHaveBeenCalledWith(environment, undefined)
   })
 
+  it('releases minted capabilities when workspace admission rejects before spawning', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const environment = { PRIME_WORK_BROWSER_TOKEN: 'workspace-denied-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
+    manager.setWorkspaceUseProvider(async () => { throw new Error('Checkout is in progress') })
+
+    await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Checkout is in progress')
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended).toHaveBeenCalledWith(environment, undefined)
+    expect(manager.list()).toEqual([])
+  })
+
   it('notifies runtime termination once after explicit stop while active claims remain owned', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
     const manager = managerFor(fake.executable)
