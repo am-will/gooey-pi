@@ -1,3 +1,4 @@
+import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
 import { ArrowUp, AtSign, ChevronDown, Clock3, Command, Edit3, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -110,16 +111,6 @@ const primeCommands: ReadonlyArray<{ command: string; detail: MessageKey }> = [
   ...commands,
   { command: '/mcp', detail: 'composer.command.mcp' },
 ]
-
-const reasoningLabels: Record<PrimeThinkingLevel, MessageKey> = {
-  off: 'composer.effort.off',
-  minimal: 'composer.effort.minimal',
-  low: 'composer.effort.low',
-  medium: 'composer.effort.medium',
-  high: 'composer.effort.high',
-  xhigh: 'composer.effort.xhigh',
-  max: 'composer.effort.max',
-}
 
 const EMPTY_ANNOTATIONS: BrowserAnnotation[] = []
 const noop = () => undefined
@@ -724,7 +715,7 @@ export const Composer = memo(function Composer({
             <SelectControl label={t('composer.effort.label')} compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>
-                  {t(reasoningLabels[level])}
+                  {t(THINKING_LEVEL_KEYS[level])}
                 </option>
               ))}
             </SelectControl>
