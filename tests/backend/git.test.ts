@@ -30,6 +30,82 @@ const untrackedNestedRepository = (cwd: string, name: string) => {
 }
 
 describe('GitService', () => {
+  it('keeps large changed-path sets readable beyond the attribute config-size budget', async () => {
+    const cwd = repository('gooeypi-git-large-attributes-')
+    const directory = join(cwd, 'a'.repeat(120), 'b'.repeat(120)); mkdirSync(directory, { recursive: true })
+    for (let index = 0; index < 1_500; index++) writeFileSync(join(directory, `${'c'.repeat(115)}-${index}.txt`), 'new')
+    const status = await new GitService(async (path) => realpathSync(path)).status(cwd)
+    expect(status.error).toBeUndefined()
+    expect(status.files).toHaveLength(GIT_STATUS_ENTRY_LIMIT)
+    expect(status.truncated).toBe(true)
+    expect(status.root).toBe(realpathSync(cwd))
+  })
+
+  it('unstages both sides of an index rename while preserving the renamed worktree file', async () => {
+    const cwd = repository('gooeypi-git-unstage-rename-')
+    git(cwd, 'mv', 'file.txt', 'renamed.txt')
+    const service = new GitService(async () => cwd)
+    await expect(service.unstage(cwd, ['renamed.txt'])).resolves.toBe(true)
+    const staged = spawnSync('git', ['diff', '--cached', '--name-only'], { cwd, encoding: 'utf8' })
+    expect(staged.stdout).toBe('')
+    expect(existsSync(join(cwd, 'file.txt'))).toBe(false)
+    expect(readFileSync(join(cwd, 'renamed.txt'), 'utf8')).toBe('base\n')
+  })
+
+  it('lists linked checkouts when the main repository is bare', async () => {
+    const source = repository('gooeypi-git-bare-source-')
+    const bare = mkdtempSync(join(tmpdir(), 'gooeypi-git-bare-')); dirs.push(bare)
+    git(source, 'clone', '--bare', '-q', source, bare)
+    const linked = `${bare}-linked`; dirs.push(linked)
+    git(bare, 'worktree', 'add', '-qb', 'linked', linked)
+    const worktrees = await listGitWorktrees(linked)
+    expect(worktrees).toHaveLength(1)
+    expect(worktrees[0]).toMatchObject({ path: realpathSync(linked), branch: 'linked', current: true })
+  })
+
+  it('uses protected global excludes when checking branch switch cleanliness', async () => {
+    const cwd = repository('gooeypi-git-switch-global-ignore-')
+    const home = mkdtempSync(join(tmpdir(), 'gooeypi-git-ignore-home-')); dirs.push(home)
+    writeFileSync(join(home, '.gitignore_global'), '.DS_Store\n')
+    writeFileSync(join(home, '.gitconfig'), '[core]\n excludesFile = ~/.gitignore_global\n')
+    git(cwd, 'branch', 'next')
+    writeFileSync(join(cwd, '.DS_Store'), 'Finder metadata')
+    const oldHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      expect(await inspectGitWorktreeClean(cwd)).toEqual({ kind: 'clean' })
+      expect(await switchGitBranch(cwd, 'next')).toEqual({ kind: 'applied' })
+      expect(readFileSync(join(cwd, '.DS_Store'), 'utf8')).toBe('Finder metadata')
+    } finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome }
+  })
+
+  it('preserves protected line-ending settings while repository values take precedence', async () => {
+    const cwd = repository('gooeypi-git-line-endings-')
+    const home = mkdtempSync(join(tmpdir(), 'gooeypi-git-line-home-')); dirs.push(home)
+    writeFileSync(join(home, '.gitconfig'), '[core]\n autocrlf = input\n')
+    const previous = process.env.HOME
+    process.env.HOME = home
+    try {
+      const service = new GitService(async () => cwd)
+      writeFileSync(join(cwd, 'file.txt'), 'converted\r\n')
+      await service.stage(cwd, ['file.txt'])
+      expect(spawnSync('git', ['cat-file', '-p', ':file.txt'], { cwd, encoding: 'utf8' }).stdout).toBe('converted\n')
+      git(cwd, 'config', 'core.autocrlf', 'false')
+      writeFileSync(join(cwd, 'file.txt'), 'preserved\r\n')
+      await service.stage(cwd, ['file.txt'])
+      expect(spawnSync('git', ['cat-file', '-p', ':file.txt'], { cwd, encoding: 'utf8' }).stdout).toBe('preserved\r\n')
+    } finally { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous }
+  })
+
+  it('restores both names of a staged rename back to HEAD', async () => {
+    const cwd = repository('gooeypi-git-restore-rename-')
+    git(cwd, 'mv', 'file.txt', 'renamed.txt')
+    await expect(new GitService(async () => cwd).restore(cwd, ['renamed.txt'])).resolves.toBe(true)
+    expect(readFileSync(join(cwd, 'file.txt'), 'utf8')).toBe('base\n')
+    expect(existsSync(join(cwd, 'renamed.txt'))).toBe(false)
+    expect(spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }).stdout).toBe('')
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')

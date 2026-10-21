@@ -16,6 +16,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('../../electron/main/git', () => ({
+  authorizedRepositoryRoot: async (cwd: string, authorize: (path: string) => Promise<string>) => authorize(cwd),
   createGitWorktree: mocks.createGitWorktree,
   isNotARepositoryFailure: () => false,
   listGitWorktrees: mocks.listGitWorktrees,

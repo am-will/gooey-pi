@@ -1,4 +1,5 @@
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
+import { isPathWithin } from './validation'
 import type { HarnessId } from '../../src/types/api'
 
 export type WorkspaceUseOwner =
@@ -43,10 +44,6 @@ interface WorkspaceUse {
   retireIfIdle?: () => Promise<boolean>
 }
 
-function contains(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${sep}`)
-}
-
 export class RepositoryUseGate {
   private readonly workspaceUses = new Set<WorkspaceUse>()
   private readonly activeCheckouts = new Set<string>()
@@ -64,7 +61,7 @@ export class RepositoryUseGate {
     retireIfIdle?: () => Promise<boolean>,
   ): Promise<WorkspaceUseLease> {
     const path = resolve(pathValue)
-    while ([...this.activeCheckouts].some((root) => contains(root, path))) await this.changed
+    while ([...this.activeCheckouts].some((root) => isPathWithin(root, path))) await this.changed
     const use = { path, owner, retireIfIdle }
     this.workspaceUses.add(use)
     let released = false
@@ -89,7 +86,7 @@ export class RepositoryUseGate {
       this.activeCheckouts.add(root)
       try {
         const owners: WorkspaceUseOwner[] = []
-        for (const use of [...this.workspaceUses].filter((candidate) => contains(root, candidate.path))) {
+        for (const use of [...this.workspaceUses].filter((candidate) => isPathWithin(root, candidate.path))) {
           if (!use.retireIfIdle || !await use.retireIfIdle()) owners.push(use.owner)
         }
         if (owners.length) throw new RepositoryUseError(owners)

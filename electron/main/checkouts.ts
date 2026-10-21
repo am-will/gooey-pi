@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import type { AppSettings, CheckoutAction, CheckoutCatalog, CheckoutChangeResult, CheckoutStrategy, ProjectRecord } from '../../src/types/api'
-import { createAndSwitchGitBranch, createGitWorktree, isNotARepositoryFailure, listGitWorktrees, listLocalGitBranches, resolveGitRepositoryRoot, switchGitBranch, validateGitBranch } from './git'
+import { authorizedRepositoryRoot, createAndSwitchGitBranch, createGitWorktree, isNotARepositoryFailure, listGitWorktrees, listLocalGitBranches, switchGitBranch, validateGitBranch } from './git'
 import type { ProjectService } from './projects'
 import { RepositoryUseError, type RepositoryUseGate } from './repository-use-gate'
 import { rejectUnknownKeys, requireId, requireRecord, requireString } from './validation'
@@ -37,11 +37,18 @@ export class CheckoutService {
     const project = await this.projects.resolveCheckoutProject(requireId(projectIdValue, 'project id'))
     const strategy = this.strategy()
     if (strategy === 'branch') {
-      const checkouts = await listLocalGitBranches(project.primaryFolder)
-      return { strategy, activeName: checkouts.find((branch) => branch.current)?.name ?? '', checkouts }
+      try {
+        const cwd = await authorizedRepositoryRoot(project.primaryFolder, (path) => this.projects.authorizeCwd(path))
+        const checkouts = await listLocalGitBranches(cwd)
+        return { strategy, activeName: checkouts.find((branch) => branch.current)?.name ?? '', checkouts }
+      } catch (error) {
+        if (isNotARepositoryFailure(error)) return { strategy, activeName: '', checkouts: [] }
+        throw error
+      }
     }
     try {
-      return { strategy, activePath: project.primaryFolder, checkouts: await listGitWorktrees(project.primaryFolder) }
+      const cwd = await authorizedRepositoryRoot(project.primaryFolder, (path) => this.projects.authorizeCwd(path))
+      return { strategy, activePath: project.primaryFolder, checkouts: await listGitWorktrees(cwd) }
     } catch (error) {
       if (isNotARepositoryFailure(error)) return { strategy, activePath: project.primaryFolder, checkouts: [] }
       throw error
@@ -56,7 +63,7 @@ export class CheckoutService {
     const project = await this.projects.resolveCheckoutProject(projectId)
     if (action.strategy === 'worktree') return this.executeWorktree(project, action)
     try {
-      const repositoryRoot = await resolveGitRepositoryRoot(project.primaryFolder)
+      const repositoryRoot = await authorizedRepositoryRoot(project.primaryFolder, (path) => this.projects.authorizeCwd(path))
       return await this.useGate.runBranchCheckout(repositoryRoot, async () => this.executeBranch(project, action))
     } catch (error) {
       if (error instanceof RepositoryUseError) return { kind: 'refused', code: 'active-work', message: error.message }
@@ -68,7 +75,8 @@ export class CheckoutService {
     project: ProjectRecord,
     action: Extract<CheckoutAction, { strategy: 'worktree' }>,
   ): Promise<CheckoutChangeResult> {
-    const worktrees = await listGitWorktrees(project.primaryFolder)
+    const cwd = await authorizedRepositoryRoot(project.primaryFolder, (path) => this.projects.authorizeCwd(path))
+    const worktrees = await listGitWorktrees(cwd)
     if (action.operation === 'open') {
       const path = resolve(action.path)
       const linked = worktrees.find((worktree) => resolve(worktree.path) === path)
@@ -91,7 +99,7 @@ export class CheckoutService {
     project: ProjectRecord,
     action: Extract<CheckoutAction, { strategy: 'branch' }>,
   ): Promise<CheckoutChangeResult> {
-    const branch = await validateGitBranch(project.primaryFolder, action.branch)
+    const branch = action.branch
     const outcome = action.operation === 'create'
       ? await createAndSwitchGitBranch(project.primaryFolder, branch)
       : await switchGitBranch(project.primaryFolder, branch)
@@ -106,6 +114,6 @@ export class CheckoutService {
       return { kind: 'refused', code: 'dirty-worktree', message: `Branch checkout requires a clean project. GooeyPi did not modify your files.${detail}` }
     }
     if (outcome.kind === 'unchanged') return { kind: 'unchanged', project, checkout: { strategy: 'branch', branch } }
-    return { kind: 'applied', project: await this.projects.refreshCheckoutProject(project.id), checkout: { strategy: 'branch', branch } }
+    return { kind: 'applied', project: await this.projects.resolveCheckoutProject(project.id), checkout: { strategy: 'branch', branch } }
   }
 }
