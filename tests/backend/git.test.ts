@@ -52,6 +52,17 @@ describe('GitService', () => {
     expect(readFileSync(join(cwd, 'renamed.txt'), 'utf8')).toBe('base\n')
   })
 
+  it('lists linked checkouts when the main repository is bare', async () => {
+    const source = repository('gooeypi-git-bare-source-')
+    const bare = mkdtempSync(join(tmpdir(), 'gooeypi-git-bare-')); dirs.push(bare)
+    git(source, 'clone', '--bare', '-q', source, bare)
+    const linked = `${bare}-linked`; dirs.push(linked)
+    git(bare, 'worktree', 'add', '-qb', 'linked', linked)
+    const worktrees = await listGitWorktrees(linked)
+    expect(worktrees).toHaveLength(1)
+    expect(worktrees[0]).toMatchObject({ path: realpathSync(linked), branch: 'linked', current: true })
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')

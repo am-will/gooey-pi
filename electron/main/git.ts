@@ -270,13 +270,14 @@ interface RepositoryContext {
 function parseWorktreeList(output: string, repositoryRoot: string): GitWorktree[] {
   const records = output.split('\0\0').filter(Boolean)
   if (records.length > GIT_WORKTREE_LIMIT) throw new Error('Git worktree list exceeded the safety limit')
-  return records.map((record, index) => {
+  return records.flatMap((record, index) => {
     const fields = record.split('\0').filter(Boolean)
     const pathField = fields.find((field) => field.startsWith('worktree '))
     const headField = fields.find((field) => field.startsWith('HEAD '))
     const branchField = fields.find((field) => field.startsWith('branch '))
     const pathValue = pathField?.slice('worktree '.length)
     const head = headField?.slice('HEAD '.length)
+    if (pathValue && pathValue.length <= 4096 && fields.includes('bare') && head === undefined) return []
     if (!pathValue || pathValue.length > 4096 || !head || !/^[0-9a-fA-F]{4,64}$/.test(head)) {
       throw new Error(`Git worktree list returned an invalid record at index ${index}`)
     }
@@ -286,14 +287,14 @@ function parseWorktreeList(output: string, repositoryRoot: string): GitWorktree[
       throw new Error(`Git worktree list returned an invalid branch at index ${index}`)
     }
     const branch = branchRef?.slice('refs/heads/'.length)
-    return {
+    return [{
       path,
       name: basename(path) || path,
       branch,
       head: head.toLowerCase(),
       current: path === resolve(repositoryRoot),
       detached: fields.includes('detached') || branch === undefined,
-    }
+    }]
   })
 }
 
