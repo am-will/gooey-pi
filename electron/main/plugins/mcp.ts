@@ -28,6 +28,24 @@ export interface ProjectSettingsPath {
   verify(): Promise<void>
 }
 
+async function resolveSettingsTarget(target: string | ProjectSettingsPath): Promise<ProjectSettingsPath> {
+  if (typeof target !== 'string') return target
+  let observed: Stats
+  try { observed = await lstat(target) }
+  catch (error) {
+    if (errorCode(error) === 'ENOENT') return { path: target, verify: async () => undefined }
+    throw error
+  }
+  if (!observed.isSymbolicLink()) return { path: target, verify: async () => undefined }
+  const path = await realpath(target)
+  return { path, verify: async () => {
+    const current = await lstat(target)
+    if (!current.isSymbolicLink() || current.dev !== observed.dev || current.ino !== observed.ino || await realpath(target) !== path) {
+      throw new TypeError('Settings symlink changed during update')
+    }
+  } }
+}
+
 function parseSettingsLockOwner(value: unknown): SettingsLockOwner | null {
   if (!isRecord(value) || value.version !== 1) return null
   if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0) return null
@@ -49,7 +67,7 @@ async function readSettingsForUpdate(path: string, agentName = 'Prime Agent'): P
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return { settings: {}, fingerprint: 'missing', source: null }
     if (error instanceof TypeError && error.message.includes('maximum supported size')) throw error
-    throw new TypeError(`${agentName} settings are not valid JSON; fix them before connecting an MCP server`)
+    throw new Error(`${agentName} settings could not be read: ${error instanceof Error ? error.message : String(error)}`)
   }
   let value: unknown
   try { value = JSON.parse(content) } catch { throw new TypeError(`${agentName} settings are not valid JSON; fix them before connecting an MCP server`) }
@@ -390,8 +408,7 @@ export async function updateMcpSettings(
   if (options.harness !== 'omp' && options.harness !== 'pi') throw new TypeError(PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL)
   if (input.type !== 'stdio') throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
   const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
-  const verify = typeof target === 'string' ? undefined : target.verify
+  const { path: settingsPath, verify } = await resolveSettingsTarget(target)
   const release = await acquireSettingsLock(settingsPath, verify)
   try {
     for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
@@ -430,8 +447,7 @@ export async function updateMcpState(
     return { ok: false, reason: 'blocked', output: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
   }
   const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
-  const verify = typeof target === 'string' ? undefined : target.verify
+  const { path: settingsPath, verify } = await resolveSettingsTarget(target)
   const release = await acquireSettingsLock(settingsPath, verify)
   try {
     for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
@@ -501,12 +517,13 @@ export async function updatePackageState(
 ): Promise<ProcessOutcome> {
   const source = input.source
   const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
-  const verify = typeof target === 'string' ? undefined : target.verify
+  const { path: settingsPath, verify } = await resolveSettingsTarget(target)
   const release = await acquireSettingsLock(settingsPath, verify)
   try {
     for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
+      await verify()
       const snapshot = await readSettingsForUpdate(settingsPath, agentName)
+      await verify()
       const packages = Array.isArray(snapshot.settings.packages) ? snapshot.settings.packages : []
       const index = packages.findIndex((item) => packageSource(item) === source)
       if (index < 0) return { ok: false, reason: 'blocked', output: `Package “${source}” was not found in this scope.` }

@@ -1066,6 +1066,27 @@ describe('PluginService MCP connections', () => {
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).packages).toEqual(['npm:disabled', partial])
   })
 
+  it.skipIf(process.platform === 'win32')('updates user settings through a symlink without replacing the link', async () => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    mkdirSync(agentDir)
+    const actual = join(root, 'real-settings.json')
+    const settings = join(agentDir, 'settings.json')
+    writeFileSync(actual, JSON.stringify({ packages: ['npm:tools'], keep: true }))
+    symlinkSync(actual, settings)
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir })
+    expect((await service.mutateCapability({ kind: 'package', action: 'disable', name: 'tools', source: 'npm:tools', scope: 'user' })).ok).toBe(true)
+    expect(lstatSync(settings).isSymbolicLink()).toBe(true)
+    expect(JSON.parse(readFileSync(actual, 'utf8'))).toMatchObject({ keep: true, packages: [{ source: 'npm:tools', skills: [] }] })
+  })
+
+  it('reports an unreadable settings source separately from invalid JSON', async () => {
+    const root = temp()
+    const settings = join(root, 'settings.json')
+    mkdirSync(settings)
+    await expect(removeMcpDefinition(settings, { name: 'tools' })).rejects.toThrow('could not be read')
+  })
+
   it('disables and restores a package while preserving its original filters', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
