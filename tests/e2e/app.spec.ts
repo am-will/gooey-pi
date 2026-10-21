@@ -758,10 +758,12 @@ test.describe('Prime Work desktop smoke', () => {
     const bridge = await page.evaluate(() => {
       const prime = (window as typeof window & { prime?: Record<string, unknown> }).prime
       const voice = prime?.voice
-      return { type: typeof prime, groups: prime ? Object.keys(prime).sort() : [], voiceMethods: voice && typeof voice === 'object' ? Object.keys(voice).sort() : [] }
+      const subagents = prime?.subagents
+      return { type: typeof prime, groups: prime ? Object.keys(prime).sort() : [], voiceMethods: voice && typeof voice === 'object' ? Object.keys(voice).sort() : [], subagentMethods: subagents && typeof subagents === 'object' ? Object.keys(subagents).sort() : [] }
     })
     expect(bridge.type).toBe('object')
-    expect(bridge.groups).toEqual(['agent', 'app', 'browser', 'git', 'heartbeats', 'pets', 'plugins', 'projects', 'providers', 'schedules', 'sessions', 'settings', 'terminal', 'updates', 'voice'])
+    expect(bridge.groups).toEqual(['agent', 'app', 'browser', 'git', 'heartbeats', 'pets', 'plugins', 'projects', 'providers', 'schedules', 'sessions', 'settings', 'subagents', 'terminal', 'updates', 'voice'])
+    expect(bridge.subagentMethods).toEqual(['history', 'list'])
     expect(bridge.voiceMethods).toContain('testSelfHosted')
     const updateMenu = await app!.evaluate(({ Menu }) => {
       const parents = Menu.getApplicationMenu()?.items ?? []
