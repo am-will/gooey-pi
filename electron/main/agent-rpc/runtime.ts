@@ -7,7 +7,7 @@ import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
 import { redactedStderrTail } from '../lib/process-detail'
 import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAssemblyTiming } from './chunk-assembly'
-import { AgentEventForwarder } from './events'
+import { AgentEventForwarder, isDesktopReservedEvent } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
 import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, reportsCompactionOutcome, settledCompactionEnd, type CompactAnswer, type ManualCompaction } from './manual-compaction'
@@ -448,7 +448,7 @@ export class RpcRuntime {
   }
 
   private handleFrame(raw: unknown): void {
-    if (!isRecord(raw) || typeof raw.type !== 'string') return
+    if (!isRecord(raw) || typeof raw.type !== 'string' || isDesktopReservedEvent(raw)) return
     this.receivedFrame = true
     if (raw.type !== 'response') this.lastActivityAt = Date.now()
     if (raw.type === 'response' && typeof raw.id === 'string') {

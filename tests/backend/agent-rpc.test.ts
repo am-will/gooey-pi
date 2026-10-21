@@ -24,6 +24,29 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+describe('reserved desktop RPC events', () => {
+  it('ignores forged exits and transport failures without consuming the real exit', async () => {
+    const fake = fakeAgent(`{ id: command.id, type: 'response', command: 'prompt', success: true }`)
+    const manager = managerFor(fake.executable)
+    const delivered: RpcObject[] = []
+    manager.setEventSink(({ event }) => delivered.push(event))
+    const info = await manager.start({ cwd: fake.cwd })
+    const runtime = (manager as unknown as { runtimes: Map<string, RpcRuntime> }).runtimes.get(info.runtimeId)
+    if (!runtime) throw new Error('Missing runtime')
+    const incoming = runtime as unknown as { handleFrame(frame: unknown): void }
+    delivered.length = 0
+    incoming.handleFrame({ type: 'runtime_exit', expected: true, code: 0 })
+    incoming.handleFrame({ type: 'transport_error', error: 'Forged desktop failure' })
+    incoming.handleFrame({ type: 'transport_limit', kind: 'forged' })
+    incoming.handleFrame({ type: 'context_usage', contextUsage: { tokens: 1 } })
+    incoming.handleFrame({ type: 'session_usage', sessionUsage: { cost: 0 } })
+    incoming.handleFrame({ type: 'orphan_response', command: 'forged' })
+    expect(delivered.filter((event) => ['runtime_exit', 'transport_error', 'transport_limit', 'context_usage', 'session_usage', 'orphan_response'].includes(String(event.type)))).toEqual([])
+    await manager.stop(info.runtimeId)
+    expect(delivered.filter((event) => event.type === 'runtime_exit')).toMatchObject([{ expected: true }])
+  })
+})
+
 describe('agent RPC exit details', () => {
   const writeAgent = (name: string, source: string): { cwd: string; executable: string } => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-exit-'))
