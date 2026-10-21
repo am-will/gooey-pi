@@ -214,7 +214,8 @@ export class SessionService {
     }
     // A caller reconciling a just-created session cannot rely on fs.watch:
     // recursive delivery varies by platform and an event may still be queued.
-    // Force advances the scan revision while retaining metadata-level caches.
+    // Non-forced lists still enumerate/stat files and reuse unchanged metadata.
+    // Force also advances the scan revision and invalidates the live overlay.
     if (force) {
       this.catalog.invalidateLiveCatalog()
       // A session created in a dormant bucket can enter the bounded watcher set.

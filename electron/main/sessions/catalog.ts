@@ -177,6 +177,7 @@ export class SessionMetadataCatalog {
     return this.liveCatalog()
   }
 
+  /** A reconciled snapshot serves one read; other calls rescan so missed watch events cannot leave stale records. */
   async all(): Promise<SessionMetadata[]> {
     await this.waitForReconciliations()
     const revision = this.catalogRevision
