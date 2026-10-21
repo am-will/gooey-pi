@@ -148,6 +148,7 @@ export class TerminalService {
     const options = requireRecord(raw, 'terminal options')
     rejectUnknownKeys(options, ['cwd', 'sessionPath', 'shell', 'command', 'cols', 'rows'], 'terminal options')
     if (this.closed) throw new Error('Terminal service is shutting down')
+    if (this.terminals.size + this.pendingCreates.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
     const requestedCwd = requireString(options.cwd, 'cwd', { min: 1, max: 4096 })
     const requestedSessionPath = options.sessionPath === undefined ? undefined : requireString(options.sessionPath, 'sessionPath', { min: 1, max: 4096 })
     const pending: PendingTerminal = { ownerId: owner.id, cwd: canonicalSessionPath(requestedCwd), sessionPath: requestedSessionPath === undefined ? undefined : canonicalSessionPath(requestedSessionPath), cancelled: false }
@@ -174,6 +175,7 @@ export class TerminalService {
       let terminal: pty.IPty
       try {
         this.assertPendingCreate(owner, pending)
+        if (this.terminals.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
         terminal = pty.spawn(shell, shellArguments(shell, command), { cwd, cols, rows, name: 'xterm-256color', env })
       } catch (error) {
         workspaceUse.release()
@@ -253,13 +255,13 @@ export class TerminalService {
   }
 
   async killOwner(ownerId: number): Promise<void> {
-    for (const pending of this.pendingCreates) if (pending.ownerId === ownerId) pending.cancelled = true
+    this.cancelPendingCreates((pending) => pending.ownerId === ownerId)
     await Promise.all([...this.terminals].filter(([, terminal]) => terminal.ownerId === ownerId).map(([id, terminal]) => this.terminate(id, terminal)))
   }
 
   async killAll(): Promise<void> {
     this.closed = true
-    for (const pending of this.pendingCreates) pending.cancelled = true
+    this.cancelPendingCreates(() => true)
     const starting = [...this.terminals].map(([id, terminal]) => this.terminate(id, terminal))
     await Promise.all([...new Set([...this.terminationPromises.values(), ...starting])])
   }
@@ -267,15 +269,23 @@ export class TerminalService {
   /** Terminates every PTY and descendant process tree bound to one session. */
   async killForSession(sessionPathValue: unknown): Promise<void> {
     const sessionPath = canonicalSessionPath(requireString(sessionPathValue, 'sessionPath', { min: 1, max: 4096 }))
-    for (const pending of this.pendingCreates) if (pending.sessionPath === sessionPath) pending.cancelled = true
+    this.cancelPendingCreates((pending) => pending.sessionPath === sessionPath)
     const matches = [...this.terminals].filter(([, terminal]) => terminal.sessionPath === sessionPath)
     await Promise.all(matches.map(([id, terminal]) => this.terminate(id, terminal)))
   }
 
   async killForProjectRoots(roots: string[]): Promise<void> {
-    for (const pending of this.pendingCreates) if (roots.some((root) => isPathWithin(root, pending.cwd))) pending.cancelled = true
+    this.cancelPendingCreates((pending) => roots.some((root) => isPathWithin(root, pending.cwd)))
     const matches = [...this.terminals].filter(([, terminal]) => roots.some((root) => isPathWithin(root, terminal.cwd)))
     await Promise.all(matches.map(([id, terminal]) => this.terminate(id, terminal)))
+  }
+
+  private cancelPendingCreates(matches: (pending: PendingTerminal) => boolean): void {
+    for (const pending of this.pendingCreates) {
+      if (!matches(pending)) continue
+      pending.cancelled = true
+      this.pendingCreates.delete(pending)
+    }
   }
 
   private forwardOutput(id: string, owned: OwnedTerminal, data: string): void {

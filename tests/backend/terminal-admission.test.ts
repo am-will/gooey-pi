@@ -117,3 +117,39 @@ describe('pending terminal ownership', () => {
     expect(native.spawn).not.toHaveBeenCalled()
   })
 })
+
+
+describe('terminal capacity admission', () => {
+  it('reserves no more than eight slots while workspace admission is pending', async () => {
+    const cwd = directory()
+    const lease = deferred<{ release(): void }>()
+    const entered = deferred<void>()
+    const release = vi.fn()
+    const begin = vi.fn(() => { if (begin.mock.calls.length === 8) entered.finish(); return lease.promise })
+    const service = new TerminalService(async () => cwd, () => shell, async (path) => path, begin)
+    services.push(service)
+    const creates = Promise.allSettled(Array.from({ length: 9 }, () => service.create(owner(), { cwd })))
+    await entered.promise
+    expect(begin).toHaveBeenCalledTimes(8)
+    lease.finish({ release })
+    const results = await creates
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(8)
+    expect(results.filter((result) => result.status === 'rejected')).toMatchObject([{ reason: expect.objectContaining({ message: expect.stringContaining('eight') }) }])
+    expect(native.spawn).toHaveBeenCalledTimes(8)
+  })
+
+  it('releases pending slots immediately when an owner is revoked', async () => {
+    const cwd = directory()
+    const authorization = deferred<string>()
+    let calls = 0
+    const service = new TerminalService(() => ++calls <= 8 ? authorization.promise : Promise.resolve(cwd), () => shell)
+    services.push(service)
+    const oldOwner = owner(200)
+    const old = Promise.allSettled(Array.from({ length: 8 }, () => service.create(oldOwner, { cwd })))
+    await service.killOwner(oldOwner.id)
+    await expect(service.create(owner(201), { cwd })).resolves.toHaveProperty('terminalId')
+    authorization.finish(cwd)
+    expect((await old).every((result) => result.status === 'rejected')).toBe(true)
+    expect(native.spawn).toHaveBeenCalledOnce()
+  })
+})
