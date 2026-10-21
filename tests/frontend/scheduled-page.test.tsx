@@ -48,3 +48,16 @@ it.each(['updated', 'deleted'])('keeps the edit revision and never creates when 
   expect(onCreate).not.toHaveBeenCalled()
   expect(onUpdate).toHaveBeenCalledWith('task', expect.objectContaining({ revision: 3 }))
 })
+
+
+it('consumes a focus request once so catalog refresh cannot reopen it after Back', () => {
+  const onFocusHandled = vi.fn()
+  const props = renderPage({ schedules: [task], selectedScheduleId: 'task', onFocusHandled })
+  expect(host.querySelector('.schedule-page--detail')).not.toBeNull()
+  expect(onFocusHandled).toHaveBeenCalledExactlyOnceWith('task')
+  act(() => host.querySelector<HTMLButtonElement>('.schedule-back')!.click())
+  renderPage({ ...props, schedules: [{ ...task }] })
+  expect(host.querySelector('.schedule-page--detail')).toBeNull()
+  expect(onFocusHandled).toHaveBeenCalledTimes(1)
+})
+

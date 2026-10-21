@@ -1,3 +1,4 @@
+import { useStableCallback } from '@/hooks/useStableCallback'
 import { DEVICE_TIME_ZONE, defaultForm, formFromSchedule, timingFromForm, targetFromForm, executionFromForm, validTimeZone, rruleParts, isAuthorized, type Frequency, type ScheduleForm } from '@/lib/schedule-form'
 import {
   AlertTriangle,
@@ -65,6 +66,7 @@ interface ScheduledPageProps {
   initialProjectId?: string
   initialSessionId?: string
   selectedScheduleId?: string | null
+  onFocusHandled?(id: string): void
   onCreate(input: ScheduleInput): Promise<void>
   onUpdate(id: string, patch: SchedulePatch): Promise<void>
   onPause(id: string): Promise<void>
@@ -194,10 +196,12 @@ function runIcon(status: ScheduleRunRecord['status']) {
 
 
 export function ScheduledPage({
-  harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId,
+  harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId, onFocusHandled,
   onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat, onArchiveSessions,
 }: ScheduledPageProps) {
   const { t } = useI18n()
+  const focusHandled = useStableCallback((id: string) => onFocusHandled?.(id))
+  const appliedFocusRef = useRef<string | null>(null)
   const [filter, setFilter] = useState<ScheduleFilter>('active')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editor, setEditor] = useState<ScheduleEditor | null>(null)
@@ -219,8 +223,12 @@ export function ScheduledPage({
   const sessionMap = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [sessions])
   const selected = schedules.find((item) => item.id === selectedId) ?? null
   useEffect(() => {
-    if (selectedScheduleId && schedules.some((item) => item.id === selectedScheduleId)) setSelectedId(selectedScheduleId)
-  }, [schedules, selectedScheduleId])
+    if (!selectedScheduleId) { appliedFocusRef.current = null; return }
+    if (appliedFocusRef.current === selectedScheduleId || !schedules.some((item) => item.id === selectedScheduleId)) return
+    appliedFocusRef.current = selectedScheduleId
+    setSelectedId(selectedScheduleId)
+    focusHandled(selectedScheduleId)
+  }, [focusHandled, schedules, selectedScheduleId])
   const selectedProject = projectMap.get(form.projectId)
   const eligibleSessions = useMemo(() => {
     const project = projects.find((item) => item.id === form.projectId)
