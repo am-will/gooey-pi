@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { formattingLocaleTag, translate } from '@/lib/i18n'
+import { PRIME_THINKING_LEVELS } from '@/types/api/models'
 import type { HarnessId, PrimeModelCatalog, PrimeModelDescriptor, PrimeThinkingLevel, PrimeWorkApi, ProviderAuthEvent, RuntimeInfo, SessionRecord } from '@/types/api'
 
 type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
@@ -12,7 +13,7 @@ type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
  */
 
 /** Stable fallback identities so consumers can memoize on prop equality. */
-const DEFAULT_REASONING_LEVELS: PrimeThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const DEFAULT_REASONING_LEVELS = PRIME_THINKING_LEVELS
 
 function isUsable(candidate: PrimeModelDescriptor): boolean {
   return candidate.enabled !== false && candidate.available
