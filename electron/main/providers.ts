@@ -152,6 +152,7 @@ export class PrimeProviderService {
   private cachedAt = 0
   private catalogGeneration = 0
   private catalogRefresh: Promise<PrimeModelCatalog> | null = null
+  private catalogRefreshForced = false
   private readonly flows = new Map<string, OAuthFlow>()
   private eventSink: (event: ProviderAuthEvent) => void = () => undefined
   private readonly openExternal: (url: string) => Promise<void>
@@ -202,7 +203,7 @@ export class PrimeProviderService {
   async catalog(force = false, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelCatalog> {
     this.currentContext()
     if (this.implementation() === 'rust') return this.rustCatalog(force, disabledProviders, disabledModels)
-    if (force) this.invalidate()
+    if (force && !this.catalogRefreshForced) this.invalidate()
     if (!force && this.cachedCatalog && Date.now() - this.cachedAt < CATALOG_TTL_MS) {
       return withModelVisibility(this.cachedCatalog, disabledProviders, disabledModels)
     }
@@ -210,8 +211,9 @@ export class PrimeProviderService {
     // duplicate registry work; the in-flight promise is cleared in finally.
     if (!this.catalogRefresh) {
       const refresh = this.refreshCatalog(this.catalogGeneration).finally(() => {
-        if (this.catalogRefresh === refresh) this.catalogRefresh = null
+        if (this.catalogRefresh === refresh) { this.catalogRefresh = null; this.catalogRefreshForced = false }
       })
+      this.catalogRefreshForced = force
       this.catalogRefresh = refresh
     }
     return withModelVisibility(await this.catalogRefresh, disabledProviders, disabledModels)
@@ -411,6 +413,7 @@ export class PrimeProviderService {
     this.cachedCatalog = null
     this.cachedAt = 0
     this.catalogRefresh = null
+    this.catalogRefreshForced = false
     this.rustModels.invalidate()
   }
 
