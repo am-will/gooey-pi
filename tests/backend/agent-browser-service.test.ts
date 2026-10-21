@@ -142,6 +142,23 @@ function fixture(options?: { actionTimeoutMs?: number }) {
 }
 
 describe('AgentBrowserService', () => {
+  it('rejects inherited key and modifier names before dispatching input', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    for (const key of ['constructor', 'toString', '__proto__']) {
+      await expect(service.pressKey('/sessions/a.jsonl', { tabId, key })).rejects.toThrow(/key must/)
+    }
+    await expect(service.pressKey('/sessions/a.jsonl', { tabId, key: 'Enter', modifiers: ['constructor'] })).rejects.toThrow(/modifiers may/)
+    expect(guest.inputEvents).toEqual([])
+  })
+
+  it('bounds oversized script responses before parsing them', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.scriptResult = () => JSON.stringify({ value: 'x'.repeat(300_000) })
+    await expect(service.evaluate('/sessions/a.jsonl', { tabId, code: 'return 1' })).rejects.toThrow(/byte limit/)
+  })
+
   it('runs agent scripts outside the page main world', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
