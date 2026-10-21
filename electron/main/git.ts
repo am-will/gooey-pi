@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import type { GitDiff, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
 import { resolveGitExecutable, restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
-import { protectedScopeOverrides, readGlobalConfigValue } from './git-protected-config'
+import { protectedScopeOverrides, readGlobalConfigValue, readProtectedScopeSettings } from './git-protected-config'
 import { changedPathStatesFromStatus, nextNulField, parseNumstat, parseStatus } from './git-porcelain'
 export { GIT_STATUS_ENTRY_LIMIT } from './git-porcelain'
 import { errorMessage, requireGitPath, requireString, stripAnsi } from './validation'
@@ -35,8 +35,9 @@ function hardenedGitArgs(args: readonly string[], extraConfig: readonly string[]
   return [...result, ...args]
 }
 
-function runGit(cwd: string, args: readonly string[], options: { timeoutMs: number; maxBytes: number; input?: string }, extraConfig: readonly string[] = []): Promise<ProcessResult> {
-  return runProcess(resolveGitExecutable(cwd), hardenedGitArgs(args, extraConfig), { cwd, ...options, env: restrictedGitEnvironment() })
+async function runGit(cwd: string, args: readonly string[], options: { timeoutMs: number; maxBytes: number; input?: string }, extraConfig: readonly string[] = []): Promise<ProcessResult> {
+  const { safeDirectories } = await readProtectedScopeSettings(cwd)
+  return runProcess(resolveGitExecutable(cwd), hardenedGitArgs(args, [...safeDirectories.map((path) => `safe.directory=${path}`), ...extraConfig]), { cwd, ...options, env: restrictedGitEnvironment() })
 }
 
 function resultDetail(result: ProcessResult): string {
@@ -269,10 +270,11 @@ export async function validateGitBranch(cwd: string, branchValue: unknown): Prom
 export async function createGitWorktree(cwd: string, targetPath: string, branchValue: unknown): Promise<void> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
   const branch = await validateGitBranch(repositoryRoot, branchValue)
-  if (filterOverridesFromConfig(await repositoryConfig(repositoryRoot)).length) {
+  const config = await repositoryConfig(repositoryRoot)
+  if (filterOverridesFromConfig(config).length) {
     throw new Error('Git worktree creation is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
   }
-  const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT })
+  const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT }, await protectedScopeOverrides(repositoryRoot, config))
   requireProcessSuccess('Git worktree creation', result)
 }
 

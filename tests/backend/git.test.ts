@@ -79,6 +79,24 @@ describe('GitService', () => {
     } finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome }
   })
 
+  it('preserves protected line-ending settings while repository values take precedence', async () => {
+    const cwd = repository('gooeypi-git-line-endings-')
+    const home = mkdtempSync(join(tmpdir(), 'gooeypi-git-line-home-')); dirs.push(home)
+    writeFileSync(join(home, '.gitconfig'), '[core]\n autocrlf = input\n')
+    const previous = process.env.HOME
+    process.env.HOME = home
+    try {
+      const service = new GitService(async () => cwd)
+      writeFileSync(join(cwd, 'file.txt'), 'converted\r\n')
+      await service.stage(cwd, ['file.txt'])
+      expect(spawnSync('git', ['cat-file', '-p', ':file.txt'], { cwd, encoding: 'utf8' }).stdout).toBe('converted\n')
+      git(cwd, 'config', 'core.autocrlf', 'false')
+      writeFileSync(join(cwd, 'file.txt'), 'preserved\r\n')
+      await service.stage(cwd, ['file.txt'])
+      expect(spawnSync('git', ['cat-file', '-p', ':file.txt'], { cwd, encoding: 'utf8' }).stdout).toBe('preserved\r\n')
+    } finally { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous }
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')
