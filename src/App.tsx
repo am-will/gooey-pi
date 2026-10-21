@@ -1,3 +1,4 @@
+import { useAutomations } from '@/hooks/useAutomations'
 import { TerminalDrawerStack } from '@/components/TerminalDrawerStack'
 import type { TerminalSessionMount } from '@/app/terminal-sessions'
 import { composerDraftScope } from '@/lib/composer-draft'
@@ -45,7 +46,7 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type RuntimeInfo, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type RuntimeInfo, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
@@ -87,9 +88,6 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectRecord[]>(() => bridge ? [] : SAMPLE_PROJECTS)
   const [sessions, setSessions] = useState<SessionRecord[]>(() => bridge ? [] : SAMPLE_SESSIONS)
   const { clearedAttention, clearedActivity, clearSessionAttention, clearActivity } = useSessionAttention({ setSessions })
-  const [schedules, setSchedules] = useState<AutomationScheduleRecord[]>(() => bridge ? [] : SAMPLE_SCHEDULES)
-  const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
-  const [scheduleError, setScheduleError] = useState('')
   const [view, setView] = useState<WorkspaceView>('session')
   const [settingsSectionRequest, setSettingsSectionRequest] = useState<{ section: 'general' | 'agent'; id: number }>({ section: 'general', id: 0 })
   const [noHarnessPromptDismissed, setNoHarnessPromptDismissed] = useState(false)
@@ -103,7 +101,6 @@ export default function App() {
   const [changesCardDismissed, setChangesCardDismissed] = useState(false)
   const submissionAdmissionRef = useRef(createSingleFlightAdmission())
   const queuedFlushRef = useRef(false)
-  const scheduleRequestRef = useRef(0)
   const demoTimerRef = useRef<number[]>([])
   const [activeProjectScriptRun, setActiveProjectScriptRun] = useState<ActiveProjectScriptRun>()
   const activeProjectScriptRunRef = useRef<ActiveProjectScriptRun | undefined>(undefined)
@@ -128,6 +125,7 @@ export default function App() {
   const { t } = useLocaleTranslator(settingsState.settings.locale)
   const appUpdates = useAppUpdates(bridge, reportError, settingsState.settings.locale)
   const activeHarness = settingsState.settings.activeHarness
+  const { schedules, setSchedules, scheduleError, setScheduleError, scheduleFocusId, setScheduleFocusId, refreshSchedules } = useAutomations({ bridge, harness: activeHarness, initialSchedules: bridge ? [] : SAMPLE_SCHEDULES, reportError })
   const selectHarness = useCallback((harness: HarnessId) => {
     setVoiceOrbOpen(false)
     setFocusPetVoiceControl(false)
@@ -279,21 +277,6 @@ export default function App() {
   })
   useEffect(() => () => { demoTimerRef.current.forEach(window.clearTimeout) }, [])
 
-  const refreshSchedules = useCallback(async () => {
-    if (!bridge) return
-    const requestId = ++scheduleRequestRef.current
-    try {
-      const next = await bridge.schedules.list(activeHarness)
-      if (scheduleRequestRef.current === requestId) { setSchedules(next); setScheduleError('') }
-    } catch (error) {
-      if (scheduleRequestRef.current === requestId) setScheduleError(errorMessage(error))
-      reportError(error)
-    }
-  }, [activeHarness, bridge, reportError])
-  useEffect(() => {
-    if (!bridge) return
-    return bridge.schedules.onChanged(() => { void refreshSchedules() })
-  }, [bridge, refreshSchedules])
   const patchProjectScripts = useCallback((projectId: string, scripts: NonNullable<ProjectRecord['scripts']>) => {
     setProjects((current) => current.map((project) => project.id === projectId ? { ...project, scripts } : project))
   }, [])
