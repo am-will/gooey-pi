@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { contextUsageFromEvent, sessionUsageFromEvent } from '@/app/agent-events'
 import { applySessionLifecycleEvent, sessionLifecycleChange } from '@/app/session-attention'
 import { fallbackModelFromRecord } from '@/lib/events/model-fallback'
@@ -6,17 +6,19 @@ import { parseSessionActionSnapshot } from '@/lib/session-actions'
 import type { WorkspaceSnapshot } from '@/app/workspace'
 import type { PrimeWorkApi, RuntimeInfo, SessionActionSnapshot, SessionRecord } from '@/types/api'
 
+const NOOP = () => undefined
+
 interface UseAgentEventsOptions {
   bridge: PrimeWorkApi | null
   runtimeIdRef: React.RefObject<string | null>
   runtimeSessionsRef: React.RefObject<Map<string, string>>
-  runtimeOwnerRef: React.RefObject<{ runtimeId: string; generation: number } | null>
   workspaceRef: React.RefObject<WorkspaceSnapshot>
   setSessions: React.Dispatch<React.SetStateAction<SessionRecord[]>>
   setRuntime: React.Dispatch<React.SetStateAction<RuntimeInfo | null>>
   reconcileQueuedPrompts?(snapshot: SessionActionSnapshot): void
   clearQueuedPromptFlushFailures?(): void
-  clearQueuedPrompts?(): void
+  dropPendingSteers(runtimeId?: string): void
+  detachRuntime(runtimeId: string): void
   queueAgentEvent(event: Record<string, unknown>): void
   reconcileTranscriptForEvent(runtimeId: string, event: Record<string, unknown>): void
   showExtensionUi(runtimeId: string, event: Record<string, unknown>): void
@@ -30,13 +32,13 @@ export function useAgentEvents({
   bridge,
   runtimeIdRef,
   runtimeSessionsRef,
-  runtimeOwnerRef,
   workspaceRef,
   setSessions,
   setRuntime,
-  reconcileQueuedPrompts = () => undefined,
-  clearQueuedPromptFlushFailures = () => undefined,
-  clearQueuedPrompts = () => undefined,
+  reconcileQueuedPrompts = NOOP,
+  clearQueuedPromptFlushFailures = NOOP,
+  dropPendingSteers,
+  detachRuntime,
   queueAgentEvent,
   reconcileTranscriptForEvent,
   showExtensionUi,
@@ -45,6 +47,8 @@ export function useAgentEvents({
   refreshGitOnTerminalEvent,
   activeSessionVisible,
 }: UseAgentEventsOptions) {
+  const activeSessionVisibleRef = useRef(activeSessionVisible)
+  useLayoutEffect(() => { activeSessionVisibleRef.current = activeSessionVisible }, [activeSessionVisible])
   useEffect(() => {
     if (!bridge) return
     let gitRefreshTimer: number | null = null
@@ -64,7 +68,7 @@ export function useAgentEvents({
         if (sessionLifecycleChange(event)) {
           // A new chat shows its own runtime's session before it adopts it.
           const shownFile = workspaceRef.current.sessionFile ?? (runtimeIdRef.current === runtimeId ? sessionFile : undefined)
-          const visible = activeSessionVisible && shownFile === sessionFile
+          const visible = activeSessionVisibleRef.current && shownFile === sessionFile
           setSessions((items) => items.map((session) => session.filePath === sessionFile
             ? applySessionLifecycleEvent(session, event, visible)
             : session))
@@ -73,7 +77,7 @@ export function useAgentEvents({
       showExtensionUi(runtimeId, event)
       if (type === 'runtime_exit') clearExtensionUi(runtimeId)
       if (runtimeIdRef.current !== runtimeId) {
-        if (type === 'runtime_exit') runtimeSessionsRef.current.delete(runtimeId)
+        if (type === 'runtime_exit') { dropPendingSteers(runtimeId); detachRuntime(runtimeId) }
         return
       }
       if (type === 'context_usage') {
@@ -128,10 +132,8 @@ export function useAgentEvents({
       }
       if (type === 'runtime_exit') {
         clearExtensionUi(runtimeId)
-        runtimeSessionsRef.current.delete(runtimeId)
-        runtimeIdRef.current = null
-        runtimeOwnerRef.current = null
-        setRuntime((current) => current?.runtimeId === runtimeId ? null : current)
+        dropPendingSteers(runtimeId)
+        detachRuntime(runtimeId)
       } else if (type === 'agent_end' || type === 'extension_error' || type === 'error' || type === 'transport_error') {
         clearQueuedPromptFlushFailures()
         setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, isStreaming: false, isCompacting: false } : current)
@@ -143,11 +145,11 @@ export function useAgentEvents({
       if (gitRefreshTimer !== null) window.clearTimeout(gitRefreshTimer)
     }
   }, [
-    activeSessionVisible,
     bridge,
     clearExtensionUi,
     clearQueuedPromptFlushFailures,
-    clearQueuedPrompts,
+    dropPendingSteers,
+    detachRuntime,
     reconcileQueuedPrompts,
     workspaceRef,
     queueAgentEvent,
@@ -155,8 +157,7 @@ export function useAgentEvents({
     refreshGit,
     refreshGitOnTerminalEvent,
     runtimeIdRef,
-    runtimeOwnerRef,
-    runtimeSessionsRef,
+      runtimeSessionsRef,
     setRuntime,
     setSessions,
     showExtensionUi,

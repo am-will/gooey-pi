@@ -37,6 +37,21 @@ const repository = () => {
 }
 
 describe('withRepositoryGuards spawn dedupe', () => {
+  it('supplies protected safe.directory on the first repository probe and every following Git operation', async () => {
+    const cwd = repository()
+    const home = mkdtempSync(join(tmpdir(), 'gooeypi-git-safe-home-')); dirs.push(home)
+    writeFileSync(join(home, '.gitconfig'), `[safe]\n directory = ${cwd}\n`)
+    const previous = process.env.HOME
+    process.env.HOME = home
+    try {
+      expect((await new GitService(async () => cwd).status(cwd)).error).toBeUndefined()
+      const operations = (runProcess as unknown as Mock).mock.calls.filter(([, args]) => !(args as string[]).includes('--get-regexp'))
+      expect(operations.length).toBeGreaterThan(1)
+      for (const [, args] of operations) expect(args).toContain(`safe.directory=${cwd}`)
+      expect(operations[0][1]).toContain('--show-toplevel')
+    } finally { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous }
+  })
+
   it('resolves the toplevel and configuration exactly once per status call graph', async () => {
     const cwd = repository()
     const service = new GitService(async () => cwd)
@@ -51,7 +66,7 @@ describe('withRepositoryGuards spawn dedupe', () => {
     // cache may add one bounded `config --global --get core.excludesFile`.
     const globalExcludesReads = calls.filter((args) => args[0] === 'config' && !args.includes('--list'))
     for (const call of globalExcludesReads) {
-      expect(call).toEqual(expect.arrayContaining(['--global', '--get', 'core.excludesFile']))
+      expect(call).toEqual(expect.arrayContaining(['--show-scope', '--null', '--no-includes', '--get-regexp']))
     }
     expect(globalExcludesReads.length).toBeLessThanOrEqual(1)
   })
@@ -68,7 +83,7 @@ describe('withRepositoryGuards spawn dedupe', () => {
     // rev-parse --show-toplevel, config --list, commit — and nothing else.
     // (A cold global-excludes cache may interleave one `config --global --get
     // core.excludesFile`; it is unrelated to identity, so it is filtered out.)
-    const calls = spawnedGitArgs().filter((args) => !(args[0] === 'config' && args.includes('core.excludesFile')))
+    const calls = spawnedGitArgs().filter((args) => !(args[0] === 'config' && args.includes('--get-regexp')))
     expect(calls.map((args) => args[0])).toEqual(['rev-parse', 'config', 'commit'])
     expect(calls.some((args) => args.includes('--global') || args.includes('--get'))).toBe(false)
 
@@ -92,7 +107,7 @@ describe('withRepositoryGuards spawn dedupe', () => {
 
       const committed = await service.commit(cwd, 'partial identity')
       expect(committed.ok).toBe(true)
-      const globalReads = spawnedGitArgs().filter((args) => args[0] === 'config' && args.includes('--global') && !args.includes('core.excludesFile'))
+      const globalReads = spawnedGitArgs().filter((args) => args[0] === 'config' && args.includes('--global') && !args.includes('--get-regexp'))
       expect(globalReads).toHaveLength(1)
       expect(globalReads[0]).toContain('user.email')
 

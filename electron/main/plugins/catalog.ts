@@ -1,3 +1,4 @@
+import { JSON_SCHEMA, load } from 'js-yaml'
 import { createHash } from 'node:crypto'
 import type { Dir } from 'node:fs'
 import { lstat, opendir, realpath } from 'node:fs/promises'
@@ -14,19 +15,13 @@ import {
 } from '../../../src/lib/mcp-policy'
 import { HARNESSES } from '../harness'
 import { mapLimit } from '../lib/async'
-import { isPathWithin, isRecord } from '../validation'
-import { errorCode, readAtMost } from './file-io'
+import { errorCode, isPathWithin, isRecord } from '../validation'
+import { isPackageDisabled, packageSource } from './package-entries'
+import { readAtMost } from './file-io'
 
 type Kind = SkillRecord['kind']
 type Location = SkillRecord['location']
 interface Candidate { path: string; kind: Exclude<Kind, 'package' | 'mcp'>; location: Location }
-
-/** Project-relative directory that holds a harness's project agent state. */
-const PROJECT_AGENT_SEGMENTS: Record<HarnessId, readonly string[]> = {
-  prime: ['.prime', 'agent'],
-  omp: ['.omp'],
-  pi: ['.pi'],
-}
 
 const MAX_DISCOVERY_CANDIDATES = 2_000
 const MAX_DISCOVERY_DIRECTORIES = 1_000
@@ -52,27 +47,23 @@ async function readSmall(path: string, max = MAX_METADATA_BYTES): Promise<string
   try { return (await readAtMost(path, max)).content } catch { return '' }
 }
 
-function scalar(frontmatter: string, key: string): string | undefined {
-  const match = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))
-  if (!match) return undefined
-  const value = match[1].trim().replace(/^(?:"(.*)"|'(.*)')$/, '$1$2')
-  if (value === '|' || value === '>') return undefined
-  return value.slice(0, 500)
-}
-
 async function markdownMetadata(path: string): Promise<{ name?: string; description: string }> {
   const content = await readSmall(path)
-  const frontmatterEnd = content.indexOf('\n---', 3)
-  const frontmatter = content.startsWith('---') ? content.slice(3, frontmatterEnd >= 0 ? frontmatterEnd : 0) : ''
-  const name = scalar(frontmatter, 'name')
-  const description = scalar(frontmatter, 'description')
-    ?? content.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith('---') && !line.startsWith('#'))
-    ?? ''
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)
+  let metadata: unknown
+  if (frontmatter) {
+    try { metadata = load(frontmatter[1], { schema: JSON_SCHEMA }) } catch { /* malformed metadata falls back to the document body */ }
+  }
+  const fields = isRecord(metadata) ? metadata : {}
+  const name = typeof fields.name === 'string' ? fields.name.trim().slice(0, 500) : undefined
+  const body = frontmatter ? content.slice(frontmatter[0].length) : content
+  const description = typeof fields.description === 'string' ? fields.description.trim()
+    : body.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith('---') && !line.startsWith('#')) ?? ''
   return { name, description: description.slice(0, 500) }
 }
 
 function normalizedPackageSlug(source: string): string {
-  let value = source.trim().replace(/^(?:npm:|git:)/i, '').replace(/[?#].*$/, '').replace(/\.git$/i, '')
+  let value = source.trim().replace(/^(?:npm:|git:)/i, '').replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '')
   value = value.replace(/\/+$/, '').slice(value.lastIndexOf('/') + 1).replace(/@[^@/]+$/, '')
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'package'
 }
@@ -287,11 +278,11 @@ async function addPackageSettingsMetadata(
   if (Array.isArray(settings.packages)) {
     for (const raw of settings.packages) {
       if (output.length >= MAX_DISCOVERY_RECORDS) break
-      const sourceValue = typeof raw === 'string' ? raw : isRecord(raw) && typeof raw.source === 'string' ? raw.source : undefined
+      const sourceValue = packageSource(raw)
       if (!sourceValue) continue
       const source = sourceValue.slice(0, 2_048)
       const metadata = await packageMetadata(sourceValue, settingsPath)
-      const enabled = !(isRecord(raw) && ['extensions', 'skills', 'prompts', 'themes'].every((key) => Array.isArray(raw[key]) && raw[key].length === 0))
+      const enabled = !isPackageDisabled(raw)
       output.push({ id: idFor('package', location, sourceValue), ...metadata, kind: 'package', location, enabled, source })
     }
   }
@@ -338,7 +329,7 @@ function addMcpSettingsMetadata(
         kind: 'mcp', location, enabled, source: origin, ...definitionIdentity,
         availability: { available: false, detail: NETWORK_MCP_UNAVAILABLE_DETAIL },
       })
-    } else if (definition && (definition.type === 'stdio' || harness === 'pi' || harness === 'prime') && typeof definition.command === 'string') {
+    } else if (definition && (definition.type === 'stdio' || definition.type === undefined || harness === 'pi' || harness === 'prime') && typeof definition.command === 'string') {
       const command = basename(definition.command).slice(0, 120)
       const availability = harness === 'prime'
         ? { available: false as const, detail: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
@@ -475,7 +466,7 @@ export async function discoverPlugins(agentDir: string, safeProjectPath: string 
 
   let projectSettings: Record<string, unknown> = {}
   if (safeProjectPath && isAbsolute(safeProjectPath) && await pathExists(safeProjectPath)) {
-    const projectAgentDir = join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness])
+    const projectAgentDir = join(safeProjectPath, ...HARNESSES[harness].projectAgentSegments)
     const projectSettingsPath = join(projectAgentDir, 'settings.json')
     const projectSkillsDir = join(safeProjectPath, '.agents', 'skills')
     const [sameAgentDir, sameSettingsFile, sameProjectSkillsDir] = await Promise.all([
@@ -512,7 +503,7 @@ export async function discoverPlugins(agentDir: string, safeProjectPath: string 
   const mcpRecords: SkillRecord[] = []
   result.push(...ompPackageRecords)
   const globalSettingsPath = join(agentDir, 'settings.json')
-  const projectSettingsPath = safeProjectPath ? join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'settings.json') : ''
+  const projectSettingsPath = safeProjectPath ? join(safeProjectPath, ...HARNESSES[harness].projectAgentSegments, 'settings.json') : ''
   await addPackageSettingsMetadata(globalSettings, globalSettingsPath, 'user', result)
   await addPackageSettingsMetadata(projectSettings, projectSettingsPath, 'project', result)
   addMcpSettingsMetadata(globalSettings, globalSettingsPath, 'user', mcpRecords, warnings, harness)
@@ -525,7 +516,7 @@ export async function discoverPlugins(agentDir: string, safeProjectPath: string 
     if (globalMcp.warning) warnings.push(globalMcp.warning)
     addMcpSettingsMetadata(globalMcp.settings, globalMcpPath, 'user', mcpRecords, warnings, harness, true)
     if (safeProjectPath) {
-      const projectMcpPath = join(safeProjectPath, ...PROJECT_AGENT_SEGMENTS[harness], 'mcp.json')
+      const projectMcpPath = join(safeProjectPath, ...HARNESSES[harness].projectAgentSegments, 'mcp.json')
       const projectMcp = await readSettings(projectMcpPath, 'project')
       if (projectMcp.warning) warnings.push(projectMcp.warning)
       addMcpSettingsMetadata(projectMcp.settings, projectMcpPath, 'project', mcpRecords, warnings, harness, true)

@@ -2,9 +2,11 @@
  * JavaScript source strings injected into agent-controlled browser guests.
  * Everything these scripts return is untrusted page data: callers must bound
  * and sanitize it before it reaches the agent or the renderer. Dynamic values
- * are embedded via JSON.stringify (strings) or validated integers only, so
- * hostile inputs cannot break out of the script text.
+ * use JSON.stringify for strings or validated integers. evaluateScript alone
+ * intentionally accepts agent-authored JavaScript as a function body.
  */
+
+export const AGENT_WORLD_ID = 1001
 
 const INTERACTIVE_SELECTOR = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="switch"], [contenteditable="true"], [onclick]'
 
@@ -62,7 +64,7 @@ export function readPageScript(mode: 'interactive' | 'text', maxTextChars: numbe
       if (role) entry.role = bound(role, 32)
       if (entry.tag === 'a') entry.href = bound(el.getAttribute('href') || '', 200)
       if (entry.tag === 'input') {
-        entry.inputType = bound(el.getAttribute('type') || 'text', 32)
+        entry.inputType = bound(el.getAttribute('type') || 'text', 32).toLowerCase()
         if (entry.inputType !== 'password' && typeof el.value === 'string') entry.value = bound(el.value, 120)
         if (el.checked === true) entry.checked = true
       }
@@ -156,13 +158,8 @@ export function elementAtPointScript(x: number, y: number): string {
 
 export function pageInfoScript(): string {
   return `(() => JSON.stringify({
-    url: String(location.href).slice(0, 2000),
-    title: (document.title || '').replace(/\\s+/g, ' ').trim().slice(0, 300),
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
-    scrollY: Math.round(window.scrollY),
-    scrollHeight: (document.scrollingElement || document.documentElement || {}).scrollHeight || 0,
-    readyState: document.readyState,
   }))()`
 }
 
@@ -171,7 +168,9 @@ export function evaluateScript(code: string, maxResultChars: number): string {
   const limit = boundedInt(maxResultChars, 1, 100_000, 'maxResultChars')
   return `(async () => {
     try {
-      const value = await (async () => { ${code} })()
+      const value = await (async () => {
+${code}
+      })()
       let rendered
       try { rendered = JSON.stringify(value) } catch { rendered = undefined }
       if (rendered === undefined) rendered = String(value)

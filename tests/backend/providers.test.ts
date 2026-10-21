@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { OAuthLoginCallbacks, OAuthProviderInterface } from 'prime-agent-ai/oauth'
 import { AuthStorage } from 'prime-agent'
 import { MAX_CATALOG_PROVIDERS, PrimeProviderService, resolveAvailableModelKeys } from '../../electron/main/providers'
 import type { PrimeImplementation, PrimeModelCatalog } from '../../src/types/api'
@@ -68,6 +69,13 @@ function serviceWithRegistryModels(models: unknown[], options: { executableModel
   internals.registry.getProviderDisplayName = (id) => id
   internals.registry.getError = () => undefined
   return providerService
+}
+
+function oauthProviderFor(providerService: PrimeProviderService, id: string): OAuthProviderInterface {
+  const storage = (providerService as unknown as { authStorage: Pick<AuthStorage, 'getOAuthProviders'> }).authStorage
+  const provider = storage.getOAuthProviders().find((candidate) => candidate.id === id)
+  if (!provider) throw new Error('Missing OAuth provider')
+  return provider
 }
 
 function expectRelationalIntegrity(catalog: PrimeModelCatalog): void {
@@ -332,15 +340,12 @@ describe('Prime provider adapter', () => {
   it('always allows retrying a provider login after cancel, even when login hangs', async () => {
     const providerService = service()
     const internals = providerService as unknown as {
-      authStorage: { login(providerId: string, options: unknown): Promise<void> }
       flows: Map<string, { timer: NodeJS.Timeout }>
     }
-    // A login that ignores the abort signal and never settles.
-    internals.authStorage.login = () => new Promise<void>(() => undefined)
-
     const catalog = await providerService.catalog(true)
     const oauthProvider = catalog.providers.find((provider) => provider.authMethod === 'oauth')
     expect(oauthProvider).toBeDefined()
+    vi.spyOn(oauthProviderFor(providerService, oauthProvider!.id), 'login').mockImplementation(() => new Promise(() => undefined))
 
     const first = await providerService.startOAuth(oauthProvider!.id)
     await expect(providerService.startOAuth(oauthProvider!.id)).rejects.toThrow(/already active/)
@@ -353,6 +358,75 @@ describe('Prime provider adapter', () => {
     expect(providerService.cancelOAuth(second.flowId)).toBe(true)
     // A second cancel of the same flow is a no-op.
     expect(providerService.cancelOAuth(second.flowId)).toBe(false)
+  })
+
+  it.each(['invalidate', 'force'] as const)('does not publish an older catalog refresh after %s', async (action) => {
+    const oldModel = primeModel('test-provider', 'old-model')
+    const newModel = primeModel('test-provider', 'new-model')
+    const providerService = serviceWithRegistryModels([oldModel, newModel])
+    let entered!: () => void
+    let release!: () => void
+    const admission = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const refresh = vi.fn().mockImplementationOnce(async () => { entered(); await gate; return { models: [oldModel] } }).mockResolvedValue({ models: [newModel] })
+    const internals = providerService as unknown as { registry: { refreshModelCatalog: typeof refresh } }
+    internals.registry.refreshModelCatalog = refresh
+    const older = providerService.catalog()
+    await admission
+    if (action === 'invalidate') providerService.invalidate()
+    try {
+      expect((await providerService.catalog(action === 'force')).models.map((model) => model.id)).toEqual(['new-model'])
+      release()
+      expect((await older).models.map((model) => model.id)).toEqual(['old-model'])
+      expect((await providerService.catalog()).models.map((model) => model.id)).toEqual(['new-model'])
+      expect(refresh).toHaveBeenCalledTimes(2)
+    } finally { release() }
+  })
+
+  it('ignores late authorization URLs, progress and completion after OAuth cancellation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-oauth-cancel-'))
+    dirs.push(dir)
+    const openExternal = vi.fn(async () => undefined)
+    const providerService = new PrimeProviderService({ authPath: join(dir, 'auth.json'), modelsPath: join(dir, 'models.json'), openExternal })
+    const events = vi.fn()
+    providerService.setEventSink(events)
+    let callbacks!: OAuthLoginCallbacks
+    let finish!: () => void
+    const provider = (await providerService.catalog()).providers.find((candidate) => candidate.authMethod === 'oauth')!
+    vi.spyOn(oauthProviderFor(providerService, provider.id), 'login').mockImplementation(async (value) => {
+      callbacks = value
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { access: 'late-access', refresh: 'late-refresh', expires: Date.now() + 60_000 }
+    })
+    const { flowId } = await providerService.startOAuth(provider.id)
+    providerService.cancelOAuth(flowId)
+    events.mockClear()
+    callbacks.onAuth({ url: 'https://example.test/login' })
+    callbacks.onProgress?.('Late progress')
+    finish()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(openExternal).not.toHaveBeenCalled()
+    expect(events).not.toHaveBeenCalled()
+  })
+
+  it('does not let a cancelled provider overwrite credentials saved by its newer flow', async () => {
+    const { providerService, authPath } = serviceWithAuthPath()
+    const providerId = (await providerService.catalog()).providers.find((candidate) => candidate.authMethod === 'oauth')!.id
+    const descriptor = oauthProviderFor(providerService, providerId)
+    let finishOlder!: (credentials: Awaited<ReturnType<OAuthProviderInterface['login']>>) => void
+    vi.spyOn(descriptor, 'login').mockImplementationOnce(() => new Promise((resolve) => { finishOlder = resolve }))
+      .mockResolvedValue({ access: 'new-access', refresh: 'new-refresh', expires: Date.now() + 60_000 })
+    const events = vi.fn()
+    providerService.setEventSink(events)
+    const older = await providerService.startOAuth(providerId)
+    providerService.cancelOAuth(older.flowId)
+    const newer = await providerService.startOAuth(providerId)
+    await vi.waitFor(() => expect(events).toHaveBeenCalledWith(expect.objectContaining({ flowId: newer.flowId, type: 'complete' })))
+    finishOlder({ access: 'stale-access', refresh: 'stale-refresh', expires: Date.now() + 60_000 })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(JSON.parse(readFileSync(authPath, 'utf8'))[providerId].access).toBe('new-access')
+    providerService.cancelAll()
   })
 
   it('rejects OAuth for providers that do not own an OAuth flow', async () => {

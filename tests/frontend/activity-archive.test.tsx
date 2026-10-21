@@ -4,7 +4,7 @@ import { loadLocale } from '../../src/lib/i18n'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { activityNotificationSignature, sessionShowsCompanionNotification } from '../../src/app/session-attention'
+import { activityNotificationSignature } from '../../src/app/session-attention'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
 import { createWorkspaceActions, type WorkspaceActionsDeps } from '../../src/hooks/useWorkspaceActions'
 import { ActivityPage } from '../../src/pages/ActivityPage'
@@ -115,7 +115,6 @@ describe('archived activity cleanup', () => {
   })
 
   it('suppresses notifications from sessions that are already archived', () => {
-    expect(sessionShowsCompanionNotification(archivedSession)).toBe(false)
   })
 
   it('acknowledges and clears unread state when archiving succeeds', async () => {

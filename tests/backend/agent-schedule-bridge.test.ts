@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentScheduleBridge } from '../../electron/main/schedules/agent-bridge'
+import { AgentScheduleBridge, createScheduleScopeResolver } from '../../electron/main/schedules/agent-bridge'
 import { AutomationService } from '../../electron/main/schedules/service'
 import { JsonStateStore } from '../../electron/main/store'
 
@@ -50,6 +50,18 @@ describe('AgentScheduleBridge', () => {
 
     expect(await call('list', {})).toMatchObject({ status: 401 })
     expect(await call('list', {}, other.PRIME_WORK_SCHEDULE_TOKEN)).toMatchObject({ status: 200 })
+  })
+
+  it('binds a newly created session capability once without replacing its scope', async () => {
+    const { service, call } = await fixture()
+    const unbound = bridges[0].environmentFor({ cwd: '/project' })
+    const token = unbound.PRIME_WORK_SCHEDULE_TOKEN
+    const input = { prompt: 'Check this thread', timing: { kind: 'once', at: '2030-01-02T00:00:00Z' }, execution: { model: 'auto', thinking: 'auto', speed: 'normal' } }
+    expect(await call('create', { target: 'current_session', input }, token)).toMatchObject({ status: 400 })
+    bridges[0].bindSession(token, '/sessions/one.jsonl')
+    bridges[0].bindSession(token, undefined)
+    expect(await call('create', { target: 'current_session', input }, token)).toMatchObject({ status: 200 })
+    expect(service.list()[0].target).toEqual({ kind: 'session', projectId: 'project-one', sessionId: 'session-one' })
   })
 
   it('creates agent-attributed tasks only in the capability current target', async () => {
@@ -120,5 +132,28 @@ describe('AgentScheduleBridge', () => {
       body: JSON.stringify({ method: 'create', params: { target: 'current_session', input: {} } }),
     })
     expect(response.status).toBe(400)
+  })
+})
+
+
+describe('agent schedule grant resolution', () => {
+  it('prefers the deepest explicit folder and refuses inferred, foreign-session and prefix-only grants', async () => {
+    const resolveScope = createScheduleScopeResolver({
+      harness: 'omp',
+      projects: { list: async () => [
+        { id: 'parent', folders: ['/project'], inferred: false },
+        { id: 'nested', folders: ['/other', '/project/nested'], inferred: false },
+        { id: 'inferred', folders: ['/inferred'], inferred: true },
+      ] },
+      sessions: { list: async () => [
+        { id: 'nested-session', filePath: '/sessions/nested', projectPath: '/project/nested/..cache' },
+        { id: 'foreign-session', filePath: '/sessions/foreign', projectPath: '/project/other' },
+      ] },
+    })
+    expect(await resolveScope({ cwd: '/project/nested/..cache', sessionPath: '/sessions/nested' })).toEqual({ projectId: 'nested', sessionId: 'nested-session' })
+    expect(await resolveScope({ cwd: '/project/nested', sessionPath: '/sessions/foreign' })).toEqual({ projectId: 'nested', sessionId: undefined })
+    expect(await resolveScope({ cwd: '/other' })).toEqual({ projectId: 'nested' })
+    await expect(resolveScope({ cwd: '/project-elsewhere' })).rejects.toThrow('explicitly granted')
+    await expect(resolveScope({ cwd: '/inferred' })).rejects.toThrow('explicitly granted')
   })
 })

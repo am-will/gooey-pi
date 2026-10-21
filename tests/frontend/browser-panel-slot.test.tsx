@@ -3,6 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Inspector } from '../../src/components/Inspector'
 import { BrowserPanel } from '../../src/components/inspector/BrowserPanel'
 import type { BrowserAnnotationsApi } from '../../src/hooks/useBrowserAnnotations'
 import type { AgentBrowserTabRecord } from '../../src/types/api'
@@ -225,4 +226,35 @@ describe('BrowserPanel agent slot measurement', () => {
     ])
     expect(latestObserver().disconnect).toHaveBeenCalledOnce()
   })
+})
+
+
+it('revokes Preview adoption when the selected thread has no session file', async () => {
+  const onPreviewContext = vi.fn()
+  const renderOwner = async (agentSessionKey?: string) => {
+    await act(async () => root.render(<BrowserPanel home="https://example.com/" onOpenExternal={() => undefined} annotations={annotations} agentSessionKey={agentSessionKey} onPreviewContext={onPreviewContext} />))
+  }
+  await renderOwner('/sessions/a.jsonl')
+  const view = container.querySelector('webview')!
+  Object.assign(view, { getWebContentsId: () => 42 })
+  await act(async () => view.dispatchEvent(new Event('dom-ready')))
+  expect(onPreviewContext).toHaveBeenLastCalledWith(42, '/sessions/a.jsonl')
+  await renderOwner()
+  expect(onPreviewContext).toHaveBeenLastCalledWith(null, null)
+})
+
+it('forwards the agent address URL through Inspector without dropping it', async () => {
+  const navigate = vi.fn()
+  const noop = () => undefined
+  await act(async () => root.render(<Inspector activeTab="browser" onTabChange={noop} onClose={noop} messages={[]} git={{ isRepo: false, files: [] }} automations={[]} heartbeats={[]} onOpenAutomation={noop}
+    browserHome="https://example.com/" browserAnnotations={annotations} agentBrowserTabs={[agentTab]} activeAgentTabId={agentTab.tabId} agentPreviewSelected={false}
+    onSelectAgentTab={noop} onCloseAgentTab={noop} onShowBrowserPreview={noop} onAgentSlotRect={onAgentSlotRect} onPreviewContext={noop} previewPointerEvent={null}
+    onNavigateAgentTab={navigate} onRefreshGit={noop} onOpenExternal={noop} onRevealPath={noop} onGrantProject={noop} />))
+  const input = container.querySelector<HTMLInputElement>('.browser-agent-urlbar input')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'example.org/docs')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(navigate).toHaveBeenCalledWith('agent-tab', 'url', 'https://example.org/docs')
 })

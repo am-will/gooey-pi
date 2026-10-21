@@ -53,6 +53,40 @@ async function setup() {
 }
 
 describe('CheckoutService', () => {
+  it('returns an empty branch catalog for a granted non-Git directory', async () => {
+    const { root, service } = await setup()
+    rmSync(join(root, '.git'), { recursive: true, force: true })
+    await expect(service.list('project')).resolves.toEqual({ strategy: 'branch', activeName: '', checkouts: [] })
+  })
+
+  it.each(['branch', 'worktree'] as const)('does not use a subfolder grant to access its ungranted repository ancestor (%s)', async (strategy) => {
+    const { root, store, service, setStrategy } = await setup()
+    const nested = join(root, 'nested'); mkdirSync(nested)
+    const info = lstatSync(nested, { bigint: true })
+    await store.update((state) => { Object.assign(state.projects[0], {
+      path: nested, folders: [nested], primaryFolder: nested,
+      folderIdentities: { [nested]: { dev: info.dev.toString(), ino: info.ino.toString(), birthtimeNs: info.birthtimeNs.toString() } },
+    }) })
+    setStrategy(strategy)
+    const branch = runGit(root, 'branch', '--show-current')
+    await expect(service.list('project')).rejects.toThrow(/not inside/)
+    await expect(service.execute('project', strategy === 'branch'
+      ? { strategy, operation: 'switch', branch: 'feature/local' }
+      : { strategy, operation: 'open', path: root })).rejects.toThrow(/not inside/)
+    expect(runGit(root, 'branch', '--show-current')).toBe(branch)
+  })
+
+  it('resolves one project without enriching unrelated project branches', async () => {
+    const { projects, store, root } = await setup()
+    const other = join(root, '..', 'other'); mkdirSync(other)
+    const info = lstatSync(other, { bigint: true })
+    await store.update((state) => { state.projects.push({ ...state.projects[0], id: 'other', path: other, folders: [other], primaryFolder: other, folderIdentities: { [other]: { dev: info.dev.toString(), ino: info.ino.toString(), birthtimeNs: info.birthtimeNs.toString() } } }) })
+    const branch = vi.fn(async () => 'main')
+    projects.bindProviders({ sessions: async () => [], branch })
+    await expect(projects.resolveCheckoutProject('project')).resolves.toMatchObject({ id: 'project', gitBranch: 'main' })
+    expect(branch).toHaveBeenCalledExactlyOnceWith(root)
+  })
+
   it('switches a clean local branch without changing project identity or folders', async () => {
     const { root, service } = await setup()
     const before = await service.list('project')

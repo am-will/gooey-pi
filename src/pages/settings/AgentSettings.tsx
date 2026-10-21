@@ -98,8 +98,9 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
           validate={(value) => runtimePathValidation(value.trim(), harness)}
           normalize={(value) => value.trim()}
           onCommit={async (value) => {
-            await onUpdate({ runtimePaths: { ...settings.runtimePaths, [harness]: value } })
-            await refreshHarnesses()
+            const saved = await onUpdate({ runtimePaths: { ...settings.runtimePaths, [harness]: value } })
+            if (saved !== false) await refreshHarnesses()
+            return saved
           }}
         />)}
       </section>

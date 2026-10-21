@@ -9,12 +9,13 @@ import { join } from 'node:path'
 
 interface RegisteredTool {
   name: string
-  execute(toolCallId: string, params: Record<string, unknown>): Promise<{ content: Array<{ text: string }> }>
+  execute(toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<{ content: Array<{ text: string }> }>
 }
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
   await Promise.all(cleanups.splice(0).map(async (cleanup) => cleanup()))
 })
 
@@ -63,6 +64,20 @@ describe('omp-work-schedules extension', () => {
     const { tools, pi } = fakePi()
     factory(pi)
     expect(tools).toEqual([])
+  })
+
+  it('forwards tool cancellation to the broker fetch', async () => {
+    const factory = await loadExtension('http://127.0.0.1:1/v1/call', 'token')
+    const { tools, pi } = fakePi()
+    factory(pi)
+    const controller = new AbortController()
+    controller.abort(new Error('Cancelled by caller'))
+    const fetchCall = vi.fn(async (_url: unknown, options: RequestInit) => {
+      expect(options.signal).toBe(controller.signal)
+      throw controller.signal.reason
+    })
+    vi.stubGlobal('fetch', fetchCall)
+    await expect(tools[0].execute('cancel', {}, controller.signal)).rejects.toThrow('Cancelled by caller')
   })
 
   it('creates, lists, updates, and manages OMP schedules through the broker', async () => {

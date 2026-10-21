@@ -1,7 +1,7 @@
 import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
 import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
-import { interceptedCommandName } from '@/lib/slash-commands'
+import { interceptedCommandName } from '@/lib/prompt-commands'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
 import type { BrowserAnnotation, HarnessId, SessionRecord, SkillRecord, TerminalPromptContext } from '@/types/api'
 
@@ -40,4 +40,13 @@ function appendContext(prompt: string, { sessions, sessionReferenceIds, skills, 
   const promptWithCapabilities = appendCapabilityRouting(promptWithSessions, skills.filter((skill) => !sessionTitles.has(skill.name.trim().toLocaleLowerCase())))
   const promptWithAnnotations = appendAnnotationsToPrompt(promptWithCapabilities, annotations)
   return appendTerminalContextToPrompt(promptWithAnnotations, terminalContext)
+}
+
+
+/** English attachment labels are sent to the harness as message content. */
+export function attachmentPlaceholderPrompt({ draft, images, files, annotations }: { draft: string; images: number; files: number; annotations: number }): string {
+  return draft.trim() || (images > 0
+    ? (images === 1 ? '[Attached image]' : '[Attached images]')
+    : files > 0 ? (files === 1 ? '[Attached file]' : '[Attached files]')
+      : annotations > 0 ? '[Page annotations]' : '[Terminal selection]')
 }

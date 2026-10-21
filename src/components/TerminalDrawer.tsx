@@ -1,3 +1,5 @@
+import { errorMessage } from '@/lib/errors'
+import { basename } from '@/lib/data'
 import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, Trash2, X } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Terminal, type ITheme } from '@xterm/xterm'
@@ -5,19 +7,26 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useI18n } from '@/lib/i18n'
-import { boundTerminalText, TERMINAL_CONTEXT_MAX_CHARS, TERMINAL_SELECTION_MAX_CHARS } from '@/lib/terminal-context'
+import { boundTerminalText, readTerminalBufferTail, TERMINAL_SELECTION_MAX_CHARS } from '@/lib/terminal-context'
 import { openExternalUrl } from '@/lib/desktop-actions'
 import { terminalLinkOpensExternally } from '@/lib/terminal-links'
 import type { TerminalPromptContext, TerminalSelectionContext } from '@/types/api'
 import { IconButton } from './ui'
 import { ResizeHandle } from './ResizeHandle'
 
+export interface TerminalInitialCommand {
+  id: string
+  command: string
+  label: string
+  onExit(exitCode?: number): void
+}
+
 interface TerminalDrawerProps {
   visible?: boolean
   cwd?: string
   sessionPath?: string
   shell?: string
-  initialCommand?: { id: string; command: string; label: string; onExit(exitCode?: number): void }
+  initialCommand?: TerminalInitialCommand
   height: number
   minHeight: number
   maxHeight: number
@@ -68,6 +77,10 @@ export interface TerminalDrawerHandle {
   stopCommand(tabId: string): void
 }
 
+function tabLabel(tab: Pick<TerminalTab, 'label' | 'shellName' | 'number'>): string {
+  return tab.label ?? `${tab.shellName} ${tab.number}`
+}
+
 const MAX_TERMINAL_TABS = 8
 
 const terminalTheme = (): ITheme => {
@@ -96,26 +109,6 @@ const terminalTheme = (): ITheme => {
     brightWhite: read('--terminal-bright-white', '#20201e'),
   }
 }
-
-function readTerminalContent(terminal: Terminal): { content: string; contentTruncated: boolean } {
-  const buffer = terminal.buffer.active
-  const lines: string[] = []
-  let current = ''
-  for (let index = 0; index < buffer.length; index += 1) {
-    const line = buffer.getLine(index)
-    if (!line) continue
-    const text = line.translateToString(true)
-    if (line.isWrapped) current += text
-    else {
-      if (current) lines.push(current)
-      current = text
-    }
-  }
-  if (current) lines.push(current)
-  const bounded = boundTerminalText(lines.join('\n'), TERMINAL_CONTEXT_MAX_CHARS)
-  return { content: bounded.text, contentTruncated: bounded.truncated }
-}
-
 
 const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function TerminalView({ cwd, sessionPath, shell, command, label, visible, onStateChange, onSelectionChange, onError, onOpenLink, onExit }, ref) {
   const { t } = useI18n()
@@ -154,8 +147,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     const terminal = terminalRef.current
     const terminalId = terminalIdRef.current
     if (!visibleRef.current || !terminal || !terminalId || !window.prime) return
-    const content = readTerminalContent(terminal)
-    window.prime.terminal.setActiveContext(terminalId, { label: labelRef.current, content: content.content, truncated: content.contentTruncated })
+    const content = readTerminalBufferTail(terminal.buffer.active)
+    window.prime.terminal.setActiveContext(terminalId, { label: labelRef.current, content: content.text, truncated: content.truncated })
   }
 
   const scheduleActiveContext = () => {
@@ -186,6 +179,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
   }, [sessionPath])
 
   useEffect(() => {
+    const bridge = window.prime
     const container = containerRef.current
     if (!container) return
     const terminal = new Terminal({
@@ -205,8 +199,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         onOpenLinkRef.current(uri, terminalLinkOpensExternally(event))
         return
       }
-      if (!window.prime) return
-      void openExternalUrl(window.prime.app, uri).then((failure) => {
+      if (!bridge) return
+      void openExternalUrl(bridge.app, uri).then((failure) => {
         if (failure) onErrorRef.current?.(failure)
       })
     })
@@ -230,46 +224,48 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     const bufferedData = new Map<string, string>()
     const bufferedExits = new Map<string, number>()
     let exitAnnounced = false
+    let resolvedShellName = shell ? basename(shell) : 'terminal'
     const announceExit = (exitCode: number) => {
       if (exitAnnounced) return
       exitAnnounced = true
       terminal.writeln(`\r\n\x1b[90m${t('terminal.exitNotice', { code: exitCode })}\x1b[0m`)
-      onStateChangeRef.current({ shellName: shell?.split('/').at(-1) ?? 'terminal', connected: false })
+      onStateChangeRef.current({ shellName: resolvedShellName, connected: false })
       onExitRef.current?.(exitCode)
     }
     const inputDisposable = terminal.onData((data) => {
       const id = terminalIdRef.current
-      if (id && window.prime) window.prime.terminal.input(id, data)
+      if (id && bridge) bridge.terminal.input(id, data)
     })
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       const id = terminalIdRef.current
-      if (id && window.prime) window.prime.terminal.resize(id, cols, rows)
+      if (id && bridge) bridge.terminal.resize(id, cols, rows)
     })
     const selectionDisposable = terminal.onSelectionChange(() => {
       const selection = boundTerminalText(terminal.getSelection(), TERMINAL_SELECTION_MAX_CHARS)
       onSelectionChangeRef.current(selection.text, selection.truncated)
     })
 
-    if (window.prime && cwd) {
+    if (bridge && cwd) {
       // Subscribe before create resolves: a fast shell can emit its prompt or exit before the IPC reply.
-      offData = window.prime.terminal.onData((event) => {
+      offData = bridge.terminal.onData((event) => {
         if (event.terminalId === terminalIdRef.current) terminal.write(event.data, scheduleActiveContext)
         else if (!terminalIdRef.current) {
           const next = `${bufferedData.get(event.terminalId) ?? ''}${event.data}`
           bufferedData.set(event.terminalId, next.slice(-256 * 1024))
         }
       })
-      offExit = window.prime.terminal.onExit((event) => {
+      offExit = bridge.terminal.onExit((event) => {
         if (event.terminalId === terminalIdRef.current) announceExit(event.exitCode)
         else if (!terminalIdRef.current) bufferedExits.set(event.terminalId, event.exitCode)
       })
-      window.prime.terminal.create({ cwd, shell, command, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
-        if (cancelled) { void window.prime.terminal.kill(terminalId); return }
+      bridge.terminal.create({ cwd, shell, command, sessionPath: sessionPathRef.current, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
+        if (cancelled) { void bridge.terminal.kill(terminalId); return }
         terminalIdRef.current = terminalId
-        onStateChangeRef.current({ shellName: actualShell.split('/').at(-1) ?? actualShell, connected: true })
+        resolvedShellName = basename(actualShell)
+        onStateChangeRef.current({ shellName: resolvedShellName, connected: true })
         const initialOutput = bufferedData.get(terminalId)
         const bindCurrentSession = async () => {
-          if (sessionPathRef.current) await window.prime.terminal.bindSession(terminalId, sessionPathRef.current)
+          if (sessionPathRef.current) await bridge.terminal.bindSession(terminalId, sessionPathRef.current)
           scheduleActiveContext()
         }
         if (initialOutput) terminal.write(initialOutput, () => { void bindCurrentSession().catch(() => undefined) })
@@ -280,7 +276,13 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         if (earlyExit !== undefined) announceExit(earlyExit)
       }).catch((error: unknown) => {
         if (cancelled) return
-        const message = error instanceof Error ? error.message : t('terminal.error.start')
+        offData?.()
+        offExit?.()
+        offData = undefined
+        offExit = undefined
+        bufferedData.clear()
+        bufferedExits.clear()
+        const message = errorMessage(error, t('terminal.error.start'))
         terminal.writeln(`\x1b[31m${message}\x1b[0m`)
         onErrorRef.current?.(message)
         onExitRef.current?.()
@@ -308,7 +310,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       if (activeContextTimerRef.current !== undefined) window.clearTimeout(activeContextTimerRef.current)
       const id = terminalIdRef.current
       terminalIdRef.current = null
-      if (id && window.prime) void window.prime.terminal.kill(id)
+      if (id && bridge) void bridge.terminal.kill(id)
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null
@@ -322,7 +324,7 @@ function createTab(number: number, shell?: string, command?: string, label?: str
   return {
     id,
     number,
-    shellName: shell?.split('/').at(-1) ?? 'zsh',
+    shellName: shell ? basename(shell) : 'zsh',
     connected: false,
     command,
     label,
@@ -353,7 +355,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId)
     const value = viewRefs.current.get(tabId)?.readSelection()
     if (!tab || !value) return undefined
-    return { tabId, label: `${tab.shellName} ${tab.number}`, text: value.text, truncated: value.truncated }
+    return { tabId, label: tabLabel(tab), text: value.text, truncated: value.truncated }
   }
 
   useImperativeHandle(ref, () => ({
@@ -363,7 +365,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
       const tab = tabsRef.current.find((candidate) => candidate.id === tabId)
       const value = viewRefs.current.get(tabId)?.readSelection()
       if (!tab || !value?.text) return undefined
-      return { tabId, label: tab.label ?? `${tab.shellName} ${tab.number}`, cwd, ...value }
+      return { tabId, label: tabLabel(tab), cwd, ...value }
     },
     runCommand: (command, label, onExit) => {
       if (tabsRef.current.length >= MAX_TERMINAL_TABS) throw new Error(t('terminal.tabLimit', { count: MAX_TERMINAL_TABS }))
@@ -427,7 +429,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
               <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => setActiveTabId(tab.id)}>
                 <TerminalIcon size={14}/>
 
-                <span>{tab.label ?? `${tab.shellName} ${tab.number}`}</span>
+                <span>{tabLabel(tab)}</span>
                 <span className={`terminal-live-dot ${tab.connected ? 'is-connected' : ''}`}/>
               </button>
               <button type="button" className="terminal-tab__close" aria-label={t('terminal.tab.close', { number: tab.number })} onClick={() => closeTerminal(tab.id)}><X size={11}/></button>
@@ -436,7 +438,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
           <IconButton label={t('terminal.new')} size="small" disabled={tabs.length >= MAX_TERMINAL_TABS} onClick={addTerminal}><Plus size={14}/></IconButton>
         </div>
         <div className="terminal-actions">
-          <span className="terminal-cwd" title={cwd}>{cwd?.split('/').at(-1) ?? t('terminal.noProject')}</span>
+          <span className="terminal-cwd" title={cwd}>{cwd ? basename(cwd) : t('terminal.noProject')}</span>
           <IconButton label={t('terminal.clear')} onClick={() => viewRefs.current.get(activeTabId)?.clear()}><Trash2 size={13}/></IconButton>
           <IconButton label={maximized ? t('terminal.restore') : t('terminal.maximize')} onClick={() => setMaximized((value) => !value)}>{maximized ? <Minimize2 size={13}/> : <Maximize2 size={13}/>}</IconButton>
           <IconButton label={t('terminal.close')} onClick={onClose}><X size={14}/></IconButton>
@@ -451,12 +453,12 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
             sessionPath={sessionPath}
             shell={shell}
             command={tab.command}
-            label={tab.label ?? `${tab.shellName} ${tab.number}`}
+            label={tabLabel(tab)}
             visible={visible && tab.id === activeTabId}
             onStateChange={(state) => updateTab(tab.id, state)}
             onSelectionChange={(text, truncated) => {
               if (activeTabIdRef.current !== tab.id) return
-              onSelectionChangeRef.current?.({ tabId: tab.id, label: `${tab.shellName} ${tab.number}`, text, truncated })
+              onSelectionChangeRef.current?.({ tabId: tab.id, label: tabLabel(tab), text, truncated })
             }}
             onError={onError}
             onOpenLink={onOpenLink}

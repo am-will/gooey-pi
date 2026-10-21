@@ -16,6 +16,17 @@ export interface CrashGuard {
   dispose(): void
 }
 
+/** Log startup and fatal failures through the same best-effort disk boundary. */
+export function writeCrashLog(logPath: () => string | null, kind: 'startup' | 'uncaughtException' | 'unhandledRejection', reason: unknown): void {
+  const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
+  try {
+    const path = logPath()
+    if (!path) return
+    mkdirSync(dirname(path), { recursive: true })
+    appendFileSync(path, `[${new Date().toISOString()}] ${kind}: ${detail}\n`)
+  } catch { /* A diagnostic write must not replace the original failure. */ }
+}
+
 /**
  * Last-resort handlers for errors nothing else caught. This is a backstop, not a
  * swallow: the process always exits non-zero after logging and attempting to stop
@@ -30,13 +41,7 @@ export function installCrashGuards(options: CrashGuardOptions): CrashGuard {
     if (crashing) return
     crashing = true
     const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
-    try {
-      const path = options.logPath()
-      if (path) {
-        mkdirSync(dirname(path), { recursive: true })
-        appendFileSync(path, `[${new Date().toISOString()}] ${kind}: ${detail}\n`)
-      }
-    } catch { /* the crash log must never block the exit */ }
+    writeCrashLog(options.logPath, kind, reason)
     console.error(`GooeyPi fatal ${kind}: ${detail}`)
     const deadline = setTimeout(() => exit(1), cleanupTimeoutMs)
     deadline.unref?.()

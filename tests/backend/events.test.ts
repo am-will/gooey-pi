@@ -1,5 +1,6 @@
+import { resetTranscriptIdsForTests } from '../../src/lib/events/ids'
 import { describe, expect, it, vi } from 'vitest'
-import { applyPrimeEvent, createPrimeEventBuffer, replayPrimeEvents, resetTranscriptIdsForTests } from '../../src/lib/events'
+import { applyPrimeEvent, createPrimeEventBuffer, replayPrimeEvents } from '../../src/lib/events'
 import { keepLiveCompactionReasons } from '../../src/lib/events/compaction'
 import type { TranscriptMessage } from '../../src/types/api'
 
@@ -20,6 +21,33 @@ describe('agent transport events', () => {
     const messages = applyPrimeEvent([streamingMessage()], { type })
 
     expect(messages.at(-1)?.parts).toMatchObject([{ type: 'text', text: 'The agent encountered an error.' }])
+  })
+
+  it('does not suppress an error after a non-error system compaction row', () => {
+    const compaction: TranscriptMessage = { id: 'compaction', role: 'system', parts: [{ type: 'compaction', status: 'done' }] }
+    const error = applyPrimeEvent([compaction], { type: 'error', error: 'real failure' })
+    expect(error).toHaveLength(2)
+    expect(error.at(-1)).toMatchObject({ kind: 'error', parts: [{ type: 'text', text: 'real failure' }] })
+    expect(applyPrimeEvent(error, { type: 'runtime_exit', expected: false, code: 1 })).toHaveLength(2)
+    const exit = applyPrimeEvent([compaction], { type: 'runtime_exit', expected: false, code: 1 })
+    expect(exit).toHaveLength(2)
+    expect(exit.at(-1)?.kind).toBe('error')
+  })
+
+  it('closes an interrupted compaction before a restarted runtime compacts again', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const events = [{ type: 'compaction_start', reason: 'manual' }, { type: 'runtime_exit', expected: false, code: 1 },
+      { type: 'agent_start' }, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'new turn' } }, { type: 'agent_end' },
+      { type: 'compaction_start', reason: 'manual' }, { type: 'compaction_end', result: { summary: 'new summary' } }]
+    resetTranscriptIdsForTests()
+    const batched = replayPrimeEvents([], events)
+    resetTranscriptIdsForTests()
+    const sequential = events.reduce<TranscriptMessage[]>((current, event) => applyPrimeEvent(current, event), [])
+    expect(batched).toEqual(sequential)
+    expect(batched.flatMap(({ parts }) => parts.filter((part) => part.type === 'compaction'))).toMatchObject([
+      { status: 'cancelled', outcome: 'cancelled' }, { status: 'done', summary: 'new summary' },
+    ])
+    vi.restoreAllMocks()
   })
 
   it('keeps the stream open when the desktop rate limiter drops events', () => {

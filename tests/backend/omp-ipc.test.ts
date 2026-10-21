@@ -1,3 +1,4 @@
+import { serviceStub } from '../helpers/ipc-harness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,6 +17,7 @@ const electronMocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => electronMocks)
 
+import type { AppSettings } from '../../src/types/api'
 import { registerIpc, type IpcRegistration } from '../../electron/main/ipc'
 import { OmpModelCatalogService, MAX_CATALOG_PROVIDERS } from '../../electron/main/providers-omp'
 
@@ -48,9 +50,7 @@ process.exit(2)
   return new OmpModelCatalogService(executable)
 }
 
-function serviceStub(): Record<string, unknown> {
-  return new Proxy({}, { get: () => vi.fn(async () => undefined) })
-}
+
 
 interface Harness {
   invoke(channel: string, ...args: unknown[]): unknown
@@ -59,7 +59,7 @@ interface Harness {
 }
 
 function buildServices() {
-  const settingsState = { disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
+  const settingsState: Pick<AppSettings, 'ompApprovalMode' | 'disabledProviders' | 'disabledModels' | 'ompDisabledProviders' | 'ompDisabledModels' | 'piDisabledProviders' | 'piDisabledModels'> = { ompApprovalMode: 'inherit', disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
   const catalog = (from: string, disabled: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()) => {
     const models = [
       { key: 'anthropic/claude', provider: 'anthropic', id: 'claude' },
@@ -110,15 +110,16 @@ function buildServices() {
       start: vi.fn(async (options: unknown) => ({ started: 'prime', options })),
       command: vi.fn(async () => ({ ok: 'prime' })),
       stop: vi.fn(async () => true),
+      requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
       list: vi.fn(() => [{ runtimeId: 'prime-runtime', harness: 'prime' }]),
     },
-    terminals: { ...serviceStub(), killForSession: vi.fn(async () => undefined) },
+    terminals: { ...serviceStub(), killOwner: vi.fn(async () => undefined), killForSession: vi.fn(async () => undefined) },
     git: serviceStub(),
     plugins: { ...serviceStub(), list: vi.fn(async () => 'prime-plugins'), install: vi.fn(async () => undefined), installExtension: vi.fn(async () => undefined), setMcpSupport: vi.fn(async () => undefined), connectMcp: vi.fn(async () => undefined), setMcpEnabled: vi.fn(async () => undefined), refresh: vi.fn(async () => 'prime-plugins') },
     providers: { ...serviceStub(), catalog: vi.fn(async (_force, disabled, disabledModels) => catalog('prime', disabled, disabledModels)), saveApiKey: vi.fn(async () => undefined) },
     settings: {
       ...serviceStub(),
-      get: vi.fn(() => settingsState),
+      get: vi.fn(() => ({ ...settingsState })),
       update: vi.fn(async (patch: Partial<typeof settingsState>) => { Object.assign(settingsState, patch); return settingsState }),
     },
     heartbeats: serviceStub(),
@@ -143,6 +144,7 @@ function buildServices() {
         start: vi.fn(async (options: unknown) => ({ started: 'omp', options })),
         command: vi.fn(async () => ({ ok: 'omp' })),
         stop: vi.fn(async () => true),
+        requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
         list: vi.fn(() => [{ runtimeId: 'omp-runtime', harness: 'omp' }]),
       },
       catalog: {
@@ -168,6 +170,7 @@ function buildServices() {
         start: vi.fn(async (options: unknown) => ({ started: 'pi', options })),
         command: vi.fn(async () => ({ ok: 'pi' })),
         stop: vi.fn(async () => true),
+        requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
         list: vi.fn(() => [{ runtimeId: 'pi-runtime', harness: 'pi' }]),
       },
       catalog: {
@@ -205,6 +208,30 @@ describe('harness-aware IPC routing', () => {
     for (const directory of fixtureDirs.splice(0)) rmSync(directory, { recursive: true, force: true })
   })
 
+  it('observes terminal cleanup rejection after revoking a renderer', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      harness.services.terminals.killOwner.mockRejectedValueOnce(new Error('PTY teardown failed'))
+      harness.registration.revoke(1)
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('PTY teardown failed')))
+    } finally { log.mockRestore() }
+  })
+
+  it('retires OMP runtime environments after approval mode changes', async () => {
+    await harness.invoke('settings:update', { ompApprovalMode: 'always-ask' })
+    expect(harness.services.omp.agents.requestRuntimeEnvironmentRefresh).toHaveBeenCalledOnce()
+    expect(harness.services.agents.requestRuntimeEnvironmentRefresh).not.toHaveBeenCalled()
+    expect(harness.services.pi.agents.requestRuntimeEnvironmentRefresh).not.toHaveBeenCalled()
+  })
+
+  it('requires an explicit boolean before archiving a session', async () => {
+    for (const value of [undefined, null, 'true', 1]) {
+      await expect(harness.invoke('sessions:archive', OMP_SESSION, value)).rejects.toThrow(/boolean/)
+    }
+    expect(harness.services.omp.sessions.archive).not.toHaveBeenCalled()
+    expect(harness.services.browser.closeForSession).not.toHaveBeenCalled()
+  })
+
   it('exposes harness refresh through the fixed authorized app channel', async () => {
     await expect(harness.invoke('app:refresh-harnesses')).resolves.toMatchObject({ meta: { version: '0.0.0-refreshed' } })
     expect(harness.services.refreshHarnesses).toHaveBeenCalledTimes(1)
@@ -221,6 +248,18 @@ describe('harness-aware IPC routing', () => {
     await expect(async () => harness.invoke('sessions:list', undefined, false, 'PI')).rejects.toThrow('Invalid harness')
     expect(harness.services.agents.start).not.toHaveBeenCalled()
     expect(harness.services.omp.agents.start).not.toHaveBeenCalled()
+  })
+
+  it('gates child history to OMP and authorizes the parent before lazy discovery', async () => {
+    for (const harnessId of ['prime', 'pi']) {
+      await expect(harness.invoke('subagents:list', PRIME_SESSION, harnessId)).resolves.toMatchObject({ supported: false })
+      await expect(harness.invoke('subagents:history', PRIME_SESSION, 'opaque', {}, harnessId)).rejects.toThrow('OMP only')
+    }
+    await expect(harness.invoke('subagents:list', OMP_SESSION, 'OMP')).rejects.toThrow('Invalid harness')
+    await expect(harness.invoke('subagents:history', OMP_SESSION, 'opaque', {}, 'OMP')).rejects.toThrow('Invalid harness')
+    await expect(harness.invoke('subagents:list', PRIME_SESSION, 'omp')).rejects.toThrow('outside')
+    expect(harness.services.omp.sessions.requireSessionPath).toHaveBeenCalledWith(PRIME_SESSION)
+    expect(harness.services.sessions.requireSessionPath).not.toHaveBeenCalled()
   })
 
   it('routes agent:start by harness and strips the routing field before the manager sees it', async () => {
@@ -252,6 +291,16 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.agents.stop).toHaveBeenCalledWith('omp-runtime')
     await expect(harness.invoke('agent:stop', 'pi-runtime')).resolves.toBe(true)
     expect(harness.services.pi.agents.stop).toHaveBeenCalledWith('pi-runtime')
+  })
+
+  it('allows only renderer-owned command types while preserving internal protocol commands', async () => {
+    for (const type of ['send_message', 'manage_heartbeat', 'update_heartbeat', 'switch_session', 'observe', 'get_subagents']) {
+      expect(() => harness.invoke('agent:command', 'prime-runtime', { type })).toThrow('not exposed to the renderer')
+    }
+    expect(harness.services.agents.command).not.toHaveBeenCalled()
+    for (const type of ['abort', 'prompt', 'steer', 'follow_up', 'compact', 'set_model', 'set_thinking_level', 'set_service_tier', 'set_session_name', 'extension_ui_response']) {
+      await expect(harness.invoke('agent:command', 'prime-runtime', { type })).resolves.toEqual({ ok: 'prime' })
+    }
   })
 
   it('concatenates all managers for agent:list', () => {
@@ -296,16 +345,12 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.plugins.connectMcp).toHaveBeenCalledWith({ name: 'docs' })
     await harness.invoke('plugins:set-mcp-enabled', { name: 'docs', scope: 'user', enabled: false }, 'omp')
     expect(harness.services.omp.plugins.setMcpEnabled).toHaveBeenCalledWith({ name: 'docs', scope: 'user', enabled: false })
-    await harness.invoke('plugins:refresh', 'omp')
-    expect(harness.services.omp.plugins.refresh).toHaveBeenCalledOnce()
     await harness.invoke('plugins:list', '/repo', 'pi')
     expect(harness.services.pi.plugins.list).toHaveBeenCalledWith('/repo')
     await harness.invoke('plugins:install', 'npm:example', 'pi')
     expect(harness.services.pi.plugins.install).toHaveBeenCalledWith('npm:example')
     await harness.invoke('plugins:connect-mcp', { name: 'docs' }, 'pi')
     expect(harness.services.pi.plugins.connectMcp).toHaveBeenCalledWith({ name: 'docs' })
-    await harness.invoke('plugins:refresh', 'pi')
-    expect(harness.services.pi.plugins.refresh).toHaveBeenCalledOnce()
 
     await expect(async () => harness.invoke('plugins:list', undefined, 'OMP')).rejects.toThrow('Invalid harness')
   })
@@ -356,17 +401,50 @@ describe('harness-aware IPC routing', () => {
 
   it('routes providers:catalog with independent desktop visibility per harness', async () => {
     await expect(harness.invoke('providers:catalog', true)).resolves.toMatchObject({ from: 'prime' })
-    expect(harness.services.providers.catalog).toHaveBeenCalledWith(true, new Set(['blocked']), new Set())
+    expect(harness.services.providers.catalog).toHaveBeenCalledWith(true)
 
     await expect(harness.invoke('providers:catalog', true, 'omp')).resolves.toMatchObject({ from: 'omp' })
-    expect(harness.services.omp.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
+    expect(harness.services.omp.catalog.catalog).toHaveBeenCalledWith(true)
     await expect(harness.invoke('providers:catalog', true, 'pi')).resolves.toMatchObject({ from: 'pi' })
-    expect(harness.services.pi.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
+    expect(harness.services.pi.catalog.catalog).toHaveBeenCalledWith(true)
+  })
+
+  it('does not register removed preload channels', () => {
+    for (const channel of ['plugins:refresh', 'schedules:get']) expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith(channel, expect.any(Function))
   })
 
   it('does not register MCP-specific authentication or credential cleanup channels', () => {
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:start-mcp-oauth', expect.any(Function))
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:logout-mcp', expect.any(Function))
+  })
+
+  it('applies visibility after a delayed catalog refresh settles', async () => {
+    const original = harness.services.omp.catalog.catalog.getMockImplementation()
+    if (!original) throw new Error('Missing fixture catalog')
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    harness.services.omp.catalog.catalog.mockImplementationOnce(async (force, disabled, models) => {
+      await gate
+      return original(force, disabled, models)
+    })
+    const pending = harness.invoke('providers:catalog', true, 'omp')
+    await harness.services.settings.update({ ompDisabledModels: ['openai/gpt'] })
+    release()
+    await expect(pending).resolves.toMatchObject({ models: expect.arrayContaining([{ key: 'openai/gpt', provider: 'openai', id: 'gpt', enabled: false }]) })
+  })
+
+  it('serializes visibility read-modify-write operations across concurrent toggles', async () => {
+    const update = harness.services.settings.update.getMockImplementation()
+    if (!update) throw new Error('Missing fixture settings update')
+    harness.services.settings.update.mockImplementation(async (patch) => {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      return update(patch)
+    })
+    await Promise.all([
+      harness.invoke('providers:set-enabled', 'anthropic', true, 'omp'),
+      harness.invoke('providers:set-enabled', 'openai', false, 'omp'),
+    ])
+    expect(harness.services.settings.get().ompDisabledProviders).toEqual(['openai'])
   })
 
   it('stores OMP provider visibility in desktop settings without mutating OMP', async () => {

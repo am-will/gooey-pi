@@ -1,8 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { RPC_READ_FRAME_LIMIT_BYTES } from '../jsonl-limits'
+import { RPC_READ_FRAME_LIMIT_BYTES, RPC_WRITE_FRAME_LIMIT_BYTES } from '../jsonl-limits'
 import { StrictJsonlDecoder } from '../jsonl'
 import { errorMessage } from '../validation'
-import { MAX_RPC_WRITE_FRAME_BYTES } from './limits'
 
 export interface QueuedRpcWrite {
   /** Settles when the line has been flushed to the child (or failed). */
@@ -79,7 +78,7 @@ export class FramedRpcTransport {
     const rejected = (error: Error): QueuedRpcWrite => ({ done: Promise.reject(error), cancel: () => 'cancelled' })
     if (!this.writable()) return rejected(new Error('Runtime is not available'))
     const bytes = Buffer.byteLength(line)
-    if (bytes > MAX_RPC_WRITE_FRAME_BYTES) return rejected(new Error('RPC write exceeded the per-message byte limit'))
+    if (bytes > RPC_WRITE_FRAME_LIMIT_BYTES) return rejected(new Error('RPC write exceeded the per-message byte limit'))
     if (this.queuedWriteBytes + bytes > 32 * 1024 * 1024) return rejected(new Error('RPC write queue byte budget exceeded'))
     this.queuedWriteBytes += bytes
     let state: 'queued' | 'writing' | 'settled' | 'cancelled' = 'queued'
@@ -106,7 +105,7 @@ export class FramedRpcTransport {
       // A child that stops reading stdin must fail the transport rather than
       // pin the write queue (and its byte budget) forever.
       const deadline = setTimeout(() => {
-        const stall = new Error('Prime Agent stopped reading RPC input')
+        const stall = new Error('Agent stopped reading RPC input')
         finish(stall)
         this.onFatalTransportError(stall)
       }, this.writeDeadlineMs)

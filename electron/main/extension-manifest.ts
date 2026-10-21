@@ -11,7 +11,7 @@ export interface ExtensionInjection {
 
 const injectionsByHarness = {
   prime: [
-    { capability: 'browser', filename: 'prime-work-browser.ts', environmentVariable: 'PRIME_WORK_BROWSER_EXTENSION_PATH' },
+    { capability: 'browser', filename: 'omp-work-browser.ts', environmentVariable: 'PRIME_WORK_BROWSER_EXTENSION_PATH' },
     { capability: 'askUser', filename: 'omp-work-ask-user.ts', environmentVariable: 'PRIME_WORK_ASK_USER_EXTENSION_PATH' },
     { capability: 'collaboration', filename: 'omp-work-collaboration.ts', environmentVariable: 'GOOEYPI_COLLABORATION_EXTENSION_PATH' },
   ],
@@ -52,7 +52,10 @@ export interface ExtensionPathContext {
   readonly resourcesPath: string
 }
 
+export function bundledResourcePath(context: ExtensionPathContext, ...segments: string[]): string {
+  return join(context.isPackaged ? context.resourcesPath : join(context.appPath, 'assets'), ...segments)
+}
+
 export function resolveExtensionPath(filename: string, context: ExtensionPathContext): string {
-  const root = context.isPackaged ? context.resourcesPath : join(context.appPath, 'assets')
-  return join(root, 'extensions', filename)
+  return bundledResourcePath(context, 'extensions', filename)
 }

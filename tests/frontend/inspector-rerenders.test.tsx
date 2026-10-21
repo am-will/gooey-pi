@@ -4,12 +4,13 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App'
+import { detectRendererPlatform } from '../../src/lib/platform-shortcuts'
 import { useBrowserAnnotations, type BrowserAnnotationsApi } from '../../src/hooks/useBrowserAnnotations'
 import type { InspectorProps } from '../../src/components/Inspector'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const observed = vi.hoisted(() => ({ inspectorProps: [] as unknown[], changesPanelRenders: 0 }))
+const observed = vi.hoisted(() => ({ inspectorProps: [] as unknown[], changesPanelRenders: 0, activityRenders: 0 }))
 
 // Wraps the memoized Inspector, so every App render is observed even when the
 // memo (correctly) skips the inspector subtree.
@@ -22,6 +23,11 @@ vi.mock('../../src/components/Inspector', async (importOriginal) => {
       return <actual.Inspector {...props} />
     },
   }
+})
+
+vi.mock('../../src/pages/ActivityPage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/pages/ActivityPage')>()
+  return { ...actual, ActivityPage(props: Parameters<typeof actual.ActivityPage>[0]) { observed.activityRenders++; return <actual.ActivityPage {...props} /> } }
 })
 
 // Rendered inside the memo, so its render count is exactly the number of times
@@ -43,6 +49,7 @@ let root: Root
 beforeEach(() => {
   observed.inspectorProps = []
   observed.changesPanelRenders = 0
+  observed.activityRenders = 0
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
@@ -62,13 +69,17 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-const toggleSidebar = async () => act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true })) })
+const primaryModifier = () => detectRendererPlatform() === 'darwin' ? { metaKey: true } : { ctrlKey: true }
+const toggleSidebar = async () => act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ...primaryModifier() })) })
 
 const renderApp = async () => {
   // Resolve the lazy inspector chunk up front so its Suspense boundary settles on mount.
   await import('../../src/components/Inspector')
   await act(async () => { root.render(<App />) })
-  await act(async () => {})
+  for (let attempt = 0; attempt < 100 && !container.querySelector('.app-shell[data-ready="true"]'); attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+  }
+  expect(container.querySelector('.app-shell[data-ready="true"]')).not.toBeNull()
 }
 
 const openChangesTab = async () => {
@@ -78,7 +89,11 @@ const openChangesTab = async () => {
   expect(container.querySelector('#inspector-panel-changes')).not.toBeNull()
 }
 
-describe('inspector re-render containment', () => {
+describe.each(['MacIntel', 'Linux x86_64', 'Win32'])('inspector re-render containment on %s', (platform) => {
+  beforeEach(() => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform)
+    vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(platform)
+  })
   it('keeps the memoized inspector subtree mounted across App re-renders on the changes tab', async () => {
     await renderApp()
     await openChangesTab()
@@ -152,4 +167,18 @@ describe('useBrowserAnnotations identity', () => {
     expect(updated).not.toBe(stable)
     expect(updated.annotations).toHaveLength(1)
   })
+})
+
+it('keeps the full-page view element stable during unrelated shell updates', async () => {
+  await import('../../src/pages/ActivityPage')
+  await import('../../src/components/CommandPalette')
+  await renderApp()
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.sidebar__primary button')].find((button) => button.textContent?.includes('Activity'))!.click())
+  expect(observed.activityRenders).toBeGreaterThan(0)
+  const before = observed.activityRenders
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ...primaryModifier() })))
+  expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
+  await act(async () => document.body.querySelector<HTMLInputElement>('.command-palette input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+  expect(observed.activityRenders).toBe(before)
 })

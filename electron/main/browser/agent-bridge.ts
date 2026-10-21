@@ -27,17 +27,6 @@ export class AgentBrowserBridge extends CapabilityBridge {
     }
   }
 
-  /**
-   * Runtimes started without --resume only learn their session file at
-   * handshake; the manager reports it here so the claim gains its session
-   * scope. An existing scope is never overwritten.
-   */
-  bindSession(token: string | undefined, sessionFile: string | undefined): void {
-    if (!token || !sessionFile) return
-    const claim = this.claimForToken(token)
-    if (claim && !claim.sessionPath) claim.sessionPath = sessionFile
-  }
-
   protected async dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim): Promise<unknown> {
     if (!claim.sessionPath) throw new Error('Browser control is not available yet for this thread; try again in a moment')
     return this.call(method, params, canonicalSessionPath(claim.sessionPath))

@@ -24,7 +24,8 @@ You only need one harness to get started:
 - Choose a model, reasoning level, and Fast mode when the selected model supports it.
 - Queue a follow-up or steer an agent while it is working.
 - Paste or drop PNG, JPEG, GIF, and WebP images into a prompt when the model supports vision.
-- Resume, rename, search, and archive persistent sessions.
+- Resume, rename, search, archive, and restore persistent sessions.
+- Read OMP child-agent history in the inspector while keeping the parent conversation open.
 - See running, finished, failed, and waiting-for-input work in one Activity view, then clear items you have handled.
 
 ### Keep projects organized
@@ -32,6 +33,7 @@ You only need one harness to get started:
 - Add local folders and reopen sessions grouped by project.
 - Search projects, chats, and branches from the sidebar.
 - Switch between linked Git worktrees from the composer.
+- Save project setup and run scripts and launch them in the integrated terminal.
 - Create a branch worktree and open it as a new GooeyPi workspace.
 - Mention another top-level session with `@session`, copy its UUID, or let agents create and message model-selected sessions for parallel work.
 
@@ -58,7 +60,7 @@ You only need one harness to get started:
 
 ### Add capabilities
 
-The Capabilities page brings together packages, plugins, extensions, skills, prompts, and MCP servers. GooeyPi can manage local stdio MCP definitions for OMP and adapter-enabled Pi. Network MCP and authentication stay under the selected harness's direct control; those entries are visible but read-only in GooeyPi, with bounded definition-only removal available for cleanup. MCP discovery has an independent 2,500-definition-per-settings-file limit and reports an explicit warning when that limit is exceeded, so unrelated capabilities cannot hide supported MCP rows.
+The Capabilities page brings together packages, plugins, extensions, skills, prompts, and MCP servers. GooeyPi can manage local stdio MCP definitions for OMP and adapter-enabled Pi. Network MCP and authentication stay under the selected harness's direct control; those entries are visible but read-only in GooeyPi, with bounded definition-only removal available for cleanup. MCP discovery reports a warning when a settings file exceeds its supported size, keeping unrelated capabilities from hiding supported MCP rows.
 
 GooeyPi also ships optional capabilities for:
 
@@ -77,6 +79,7 @@ Ask User and computer control are off by default. You can enable, disable, or re
 ### Make it comfortable
 
 - Choose a light, dark, or system theme and adjust the interface text size.
+- Use English, Japanese, or Simplified Chinese interface text with operating-system regional dates and times.
 - Reduce motion, resize the workspace panels, or let them become overlays in a narrow window.
 - Use keyboard navigation and the command palette for common actions.
 
@@ -89,7 +92,7 @@ Ask User and computer control are off by default. You can enable, disable, or re
 
 GooeyPi checks common install locations automatically. If a harness is missing, open **Settings → Harness** to refresh detection or choose its executable.
 
-GitHub Releases provides a DMG and ZIP for macOS, common Linux package formats plus AppImage, and a Windows installer and ZIP.
+GitHub Releases provides a DMG and ZIP for macOS, common Linux package formats plus AppImage, and a Windows NSIS installer and ZIP.
 
 macOS 14 Sonoma or later is required. Release verification checks the application's declared minimum and the deployment targets of its native modules.
 
@@ -99,9 +102,9 @@ Harness provider credentials stay with the harness. Optional voice keys are encr
 
 <a href="https://www.star-history.com/?repos=am-will%2Fgooey-pi&type=date&legend=top-left">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=am-will/gooey-pi&type=date&theme=dark&legend=top-left&sealed_token=Gyqf4f7-dQQMVcOLDzasYvuEMUjpCSlTbbitvVvzi1dyMJRIttzqLWN-D1cijN9r-TqFj2A-ibdETPCeMHGsKGYRJrAzd9VflC7tpdapc0tRiSBi6qrSJQ" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=am-will/gooey-pi&type=date&legend=top-left&sealed_token=Gyqf4f7-dQQMVcOLDzasYvuEMUjpCSlTbbitvVvzi1dyMJRIttzqLWN-D1cijN9r-TqFj2A-ibdETPCeMHGsKGYRJrAzd9VflC7tpdapc0tRiSBi6qrSJQ" />
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=am-will/gooey-pi&type=date&legend=top-left&sealed_token=Gyqf4f7-dQQMVcOLDzasYvuEMUjpCSlTbbitvVvzi1dyMJRIttzqLWN-D1cijN9r-TqFj2A-ibdETPCeMHGsKGYRJrAzd9VflC7tpdapc0tRiSBi6qrSJQ" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=am-will/gooey-pi&type=date&theme=dark&legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=am-will/gooey-pi&type=date&legend=top-left" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=am-will/gooey-pi&type=date&legend=top-left" />
   </picture>
 </a>
 
@@ -114,10 +117,10 @@ nvm install && nvm use
 npm run toolchain:bootstrap
 ```
 
-The bootstrap command verifies the exact size and SHA-512 of the checked-in npm archive, then installs it offline with install-time lifecycle scripts disabled into the invoked npm's configured global prefix, verifies the installed CLI and both tool versions against `package.json` and `.nvmrc`, and makes its shim available to subsequent GitHub Actions steps before dependencies are installed.
+The bootstrap command installs the repository-pinned npm from its verified local archive into the invoked npm's configured global prefix, with install-time lifecycle scripts disabled. It then checks the selected toolchain. See the [validation guide](docs/validation.md#reproducible-setup) for details.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -134,7 +137,7 @@ npm run dev
 
 ```bash
 export npm_config_python=/path/to/python3
-npm install --ignore-scripts
+npm ci --ignore-scripts
 node node_modules/electron/install.js
 npx electron-builder install-app-deps
 ```
@@ -160,7 +163,7 @@ The Queue and Steer shortcuts can be swapped in **Settings → Harness → Messa
 
 ## Local data and safety
 
-GooeyPi is built around local projects and local harness sessions. It does not rewrite session history or take ownership of Pi, OMP, or Prime Agent credentials.
+GooeyPi is built around local projects and local harness sessions. It preserves harness-owned sessions and credentials. Offline OMP and Pi session renames can update their JSONL metadata; see the [security model](docs/security.md) for the filesystem boundaries.
 
 Remote pages open in a separate browser profile with Node access disabled. Project paths and desktop actions are checked in the main process, and third-party capabilities still run with your operating-system permissions. Review packages, commands, MCP servers, and projects before allowing them to act.
 
@@ -175,12 +178,12 @@ Run these before submitting a code change:
 ```bash
 npm run typecheck
 npm run check
-npm test
+npm run vendor:verify-patches
+npm run test:coverage
 npm run test:e2e
-npm run build
 ```
 
-See the [validation guide](docs/validation.md) for the source-of-truth checks and reproducible commands.
+See the [validation guide](docs/validation.md) for the source-of-truth checks and reproducible commands, and the [documentation index](docs/README.md) for integration and security references.
 
 To make an installable local QA build, run the command for your operating system:
 
@@ -191,6 +194,10 @@ npm run package:win:local-qa
 ```
 
 Build packages on their target operating system so native dependencies match the release.
+
+## Contributors
+
+Thanks to our [contributors, reporters, and design collaborators](CONTRIBUTORS.md).
 
 ## License
 

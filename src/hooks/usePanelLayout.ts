@@ -96,6 +96,7 @@ export function usePanelLayout({
     const workspace = sessionWorkspaceRef.current
     if (!row || !workspace) return
     const syncBounds = () => {
+      if (row.hidden) return
       if (!window.matchMedia('(max-width: 980px)').matches) {
         setInspectorMax(Math.max(INSPECTOR_MIN, row.clientWidth - CHAT_MIN))
       }

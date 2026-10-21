@@ -3,6 +3,8 @@
 #
 # Idempotent bootstrap that prepares a checked-out working tree so a Cloud
 # Agent can lint, type-check, test, build, and run the Electron desktop app.
+# Canonical setup and check commands: docs/validation.md. This phase does not
+# start the app; use an isolated home for state-changing GUI verification.
 # Runs on Cursor's default Ubuntu base image (which already provides nvm, sudo,
 # build-essential, python3, xvfb and ffmpeg).
 set -euo pipefail

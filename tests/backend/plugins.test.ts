@@ -1,11 +1,12 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { PluginService, beginPluginDiscoveryShutdown } from '../../electron/main/plugins'
-import { removeMcpDefinition, updateMcpSettings, updateMcpState } from '../../electron/main/plugins/mcp'
+import { acquireSettingsLock, removeMcpDefinition, updateMcpSettings, updateMcpState } from '../../electron/main/plugins/mcp'
 import { executePiPluginInstall, executePiPluginRemove } from '../../electron/main/plugins/package-execution'
+import { readAtMost } from '../../electron/main/plugins/file-io'
 import { ProjectService } from '../../electron/main/projects'
 import { JsonStateStore } from '../../electron/main/store'
 
@@ -13,7 +14,108 @@ const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'prime-work-mcp-')); dirs.push(dir); return dir }
 
+describe('bounded plugin file reads', () => {
+  it.skipIf(process.platform === 'win32')('rejects FIFOs without waiting for a writer', async () => {
+    const root = temp()
+    const fifo = join(root, 'config.json')
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+    await expect(readAtMost(fifo, 100)).rejects.toThrow('regular file')
+  })
+
+  it('rejects directories and bounds oversized ordinary files', async () => {
+    const root = temp()
+    await expect(readAtMost(root, 100)).rejects.toThrow('regular file')
+    const file = join(root, 'large.json')
+    writeFileSync(file, 'abcdef')
+    expect(await readAtMost(file, 3)).toEqual({ content: 'abc', truncated: true })
+  })
+})
+
+describe('OMP project package actions', () => {
+  it.each(['enable', 'disable', 'remove'] as const)('runs %s within the authorized project', async (action) => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    const project = join(root, 'project')
+    const capture = join(root, 'action.json')
+    const executable = join(root, 'omp.cjs')
+    mkdirSync(agentDir); mkdirSync(project)
+    writeFileSync(executable, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }))\n`)
+    chmodSync(executable, 0o755)
+    const service = new PluginService(executable, async (path) => realpathSync(path), { agentDir, harness: 'omp' })
+    expect((await service.mutateCapability({ kind: 'package', name: 'tools', source: 'npm:tools', action, scope: 'project', projectPath: project })).ok).toBe(true)
+    expect(JSON.parse(readFileSync(capture, 'utf8'))).toEqual({ args: ['plugin', action === 'remove' ? 'uninstall' : action, 'tools', '--json', '--scope', 'project'], cwd: realpathSync(project) })
+  })
+})
+
 describe('PluginService discovery', () => {
+  it('discovers OMP stdio definitions with omitted transport and git sources ending in a slash', async () => {
+    const root = temp()
+    writeFileSync(join(root, 'mcp.json'), JSON.stringify({ mcpServers: { files: { command: 'node', args: ['server.js'] } } }))
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ packages: ['git:https://example.test/owner/tools.git/'] }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir: root, harness: 'omp' })
+    const catalog = await service.list()
+    expect(catalog.skills.find((skill) => skill.kind === 'mcp' && skill.name === 'files')).toBeDefined()
+    // OMP owns its plugin package catalog; Prime's settings package display still normalizes repository names.
+    const prime = new PluginService(null, async (path) => resolve(path), { agentDir: root })
+    expect((await prime.list()).skills.find((skill) => skill.kind === 'package')?.name).toBe('tools')
+  })
+
+  it('starts a fresh post-mutation discovery and prevents an older scan from replacing reveal grants', async () => {
+    const root = temp()
+    const oldPath = join(root, 'old.md')
+    const newPath = join(root, 'new.md')
+    writeFileSync(oldPath, 'old'); writeFileSync(newPath, 'new')
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ packages: ['npm:tools'] }))
+    let release!: () => void
+    let entered!: () => void
+    const admission = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let discoveries = 0
+    const service = new PluginService(null, async (path) => resolve(path), {
+      agentDir: root,
+      discover: async () => {
+        const first = ++discoveries === 1
+        if (first) { entered(); await gate }
+        return { skills: [{ id: 'tools', name: 'Tools', description: '', kind: 'skill', location: 'user', enabled: !first, path: realpathSync(first ? oldPath : newPath) }], warnings: [] }
+      },
+    })
+    const older = service.list()
+    await admission
+    try {
+      await service.mutateCapability({ kind: 'package', action: 'disable', source: 'npm:tools', name: 'tools', scope: 'user' })
+      expect((await service.list()).skills[0].path).toBe(realpathSync(newPath))
+      release()
+      await older
+      expect(discoveries).toBe(2)
+      expect(service.authorizeReveal(newPath)).toBe(realpathSync(newPath))
+      expect(() => service.authorizeReveal(oldPath)).toThrow('not discovered')
+    } finally { release() }
+  })
+
+  it.each([
+    ['>-\n  A folded\n  description.', 'A folded description.'],
+    ['|-\n  First line\n  Second line', 'First line\nSecond line'],
+    ['A continued\n  description', 'A continued description'],
+    ['"A quoted: description"', 'A quoted: description'],
+  ])('parses skill frontmatter description %s', async (yaml, expected) => {
+    const root = temp()
+    const skill = join(root, 'skills', 'example')
+    mkdirSync(skill, { recursive: true })
+    writeFileSync(join(skill, 'SKILL.md'), `---\nname: Example\ndescription: ${yaml}\n---\n# Example\nBody fallback.\n`)
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir: root })
+    expect((await service.list()).skills.find((item) => item.name === 'Example')?.description).toBe(expected)
+  })
+
+  it('observes parallel discovery failures even when built-in discovery throws synchronously', async () => {
+    const service = new PluginService(null, async (path) => resolve(path), {
+      agentDir: temp(),
+      discover: async () => { throw new Error('Discovery failed') },
+      builtInSkills: () => { throw new Error('Built-in discovery failed') },
+    })
+    await expect(service.list()).rejects.toThrow(/discovery failed/i)
+    await new Promise<void>((resolveTurn) => setImmediate(resolveTurn))
+  })
+
   it('reads dynamic bundled capability state on each refreshed catalog', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
@@ -29,7 +131,7 @@ describe('PluginService discovery', () => {
 
     expect((await service.list()).skills[0].enabled).toBe(true)
     enabled = false
-    expect((await service.refresh()).skills[0].enabled).toBe(false)
+    expect((await service.list()).skills[0].enabled).toBe(false)
   })
 
   it('lets the harness label records it cannot load, built-ins included', async () => {
@@ -56,14 +158,14 @@ describe('PluginService discovery', () => {
     for (const item of (await plain.list()).skills) expect(item).not.toHaveProperty('availability')
   })
 
-  it('coalesces duplicate refreshes while discovery is in flight', async () => {
+  it('coalesces duplicate catalog reads while discovery is in flight', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
     mkdirSync(agentDir)
     const service = new PluginService(null, async (path) => resolve(path), { agentDir })
 
     const first = service.list()
-    const duplicate = service.refresh()
+    const duplicate = service.list()
 
     expect(duplicate).toBe(first)
     await expect(first).resolves.toEqual({ skills: expect.any(Array), warnings: [] })
@@ -517,7 +619,7 @@ describe('PluginService discovery', () => {
     expect(service.authorizeReveal(projectPrompt)).toBe(realpathSync(projectPrompt))
 
     expect(await projectsService.remove('project')).toBe(true)
-    await expect(service.refresh()).rejects.toThrow(/not inside an added Prime Work project/)
+    await expect(service.list(project)).rejects.toThrow(/not inside an added Prime Work project/)
     expect(() => service.authorizeReveal(projectPrompt)).toThrow('plugin path was not discovered')
   })
 
@@ -972,6 +1074,43 @@ describe('PluginService MCP connections', () => {
     expect(JSON.parse(readFileSync(join(agentDir, 'settings.json'), 'utf8')).mcpServers).toEqual({})
   })
 
+  it('enables an externally disabled package without changing partially filtered packages', async () => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    mkdirSync(agentDir)
+    const settingsPath = join(agentDir, 'settings.json')
+    const partial = { source: 'npm:partial', extensions: [], skills: ['skills/review'], prompts: [], themes: [] }
+    writeFileSync(settingsPath, JSON.stringify({ packages: [{ source: 'npm:disabled', extensions: [], skills: [], prompts: [], themes: [] }, partial] }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir })
+    const before = await service.list()
+    expect(before.skills.find((skill) => skill.source === 'npm:disabled')?.enabled).toBe(false)
+    expect(before.skills.find((skill) => skill.source === 'npm:partial')?.enabled).toBe(true)
+    expect((await service.mutateCapability({ kind: 'package', action: 'enable', name: 'disabled', source: 'npm:disabled', scope: 'user' })).ok).toBe(true)
+    expect((await service.mutateCapability({ kind: 'package', action: 'enable', name: 'partial', source: 'npm:partial', scope: 'user' })).ok).toBe(true)
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8')).packages).toEqual(['npm:disabled', partial])
+  })
+
+  it.skipIf(process.platform === 'win32')('updates user settings through a symlink without replacing the link', async () => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    mkdirSync(agentDir)
+    const actual = join(root, 'real-settings.json')
+    const settings = join(agentDir, 'settings.json')
+    writeFileSync(actual, JSON.stringify({ packages: ['npm:tools'], keep: true }))
+    symlinkSync(actual, settings)
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir })
+    expect((await service.mutateCapability({ kind: 'package', action: 'disable', name: 'tools', source: 'npm:tools', scope: 'user' })).ok).toBe(true)
+    expect(lstatSync(settings).isSymbolicLink()).toBe(true)
+    expect(JSON.parse(readFileSync(actual, 'utf8'))).toMatchObject({ keep: true, packages: [{ source: 'npm:tools', skills: [] }] })
+  })
+
+  it('reports an unreadable settings source separately from invalid JSON', async () => {
+    const root = temp()
+    const settings = join(root, 'settings.json')
+    mkdirSync(settings)
+    await expect(removeMcpDefinition(settings, { name: 'tools' })).rejects.toThrow('could not be read')
+  })
+
   it('disables and restores a package while preserving its original filters', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
@@ -1166,6 +1305,50 @@ describe('PluginService MCP connections', () => {
     expect(response.ok).toBe(true)
     expect(JSON.parse(readFileSync(settingsPath, 'utf8')).mcpServers['after-crash'].command).toBe('mcp-after-crash')
     expect(() => readFileSync(join(lockPath, 'owner.json'))).toThrow()
+  })
+
+  it('leaves ownerless native lock directories intact instead of inferring stale ownership', async () => {
+    const settings = join(temp(), 'settings.json')
+    const lock = `${settings}.lock`
+    mkdirSync(lock)
+    await expect(acquireSettingsLock(settings)).rejects.toThrow('settings are busy')
+    expect(lstatSync(lock).isDirectory()).toBe(true)
+    expect(readdirSync(lock)).toEqual([])
+  })
+
+  it('recovers only branded abandoned same-process locks and preserves an active owner', async () => {
+    const settings = join(temp(), 'settings.json')
+    const lock = `${settings}.lock`
+    mkdirSync(lock)
+    writeFileSync(join(lock, 'owner.json'), JSON.stringify({ application: 'gooeypi', version: 1, pid: process.pid, token: 'abandoned-token', createdAt: Date.now() - 1000 }))
+    const release = await acquireSettingsLock(settings)
+    const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'))
+    expect(owner.token).not.toBe('abandoned-token')
+    expect(owner.application).toBe('gooeypi')
+    try { await expect(acquireSettingsLock(settings)).rejects.toThrow('settings are busy') }
+    finally { await release() }
+    expect(existsSync(lock)).toBe(false)
+  })
+
+  it('retains the original backup if a concurrent writer makes post-rename rollback unsafe', async () => {
+    const root = temp()
+    const settings = join(root, 'settings.json')
+    const original = '{"original":true}'
+    writeFileSync(settings, original)
+    let replaced = false
+    const update = updateMcpSettings({ path: settings, verify: async () => {
+      if (!replaced && JSON.parse(readFileSync(settings, 'utf8')).mcpServers?.test) {
+        replaced = true
+        renameSync(settings, `${settings}.moved`)
+        writeFileSync(settings, '{"concurrent":true}')
+        throw new Error('Directory identity changed after rename')
+      }
+    } }, { name: 'test', scope: 'user', type: 'stdio', command: 'node' }, undefined, { harness: 'omp' })
+    await expect(update).rejects.toThrow('original settings recovery copy:')
+    const backups = readdirSync(root).filter((name) => name.endsWith('.bak'))
+    expect(backups).toHaveLength(1)
+    expect(readFileSync(join(root, backups[0]), 'utf8')).toBe(original)
+    expect(readFileSync(settings, 'utf8')).toBe('{"concurrent":true}')
   })
 
   it('detects and merges a non-cooperating writer update before rename', async () => {

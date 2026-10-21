@@ -56,20 +56,6 @@
 .activity-status { align-self: center; padding: 2px 6px; border-radius: 5px; color: var(--text-secondary); background: var(--surface-hover); font-size: 9.5px; text-transform: capitalize; }
 .activity-status--running, .activity-status--complete { color: var(--prime); background: var(--prime-soft); }
 .activity-status--waiting, .activity-status--failed { color: var(--warning); background: var(--warning-soft); }
-.schedule-list { display: flex; flex-direction: column; }
-.schedule-list article { min-height: 100px; display: flex; align-items: flex-start; gap: 13px; padding: 15px 8px; border-bottom: 1px solid var(--border); }
-.schedule-icon { width: 34px; height: 34px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 8px; color: var(--prime); background: var(--prime-soft); }
-.schedule-icon--paused { color: var(--text-tertiary); background: var(--surface-hover); }
-.schedule-main { min-width: 0; flex: 1; }
-.schedule-main > div:first-child { display: flex; align-items: center; gap: 7px; }
-.schedule-main h2 { margin: 0; font-size: 12.5px; font-weight: 560; }
-.schedule-state { padding: 1px 5px; border-radius: 4px; color: var(--success); background: var(--success-soft); font-size: 9px; text-transform: capitalize; }
-.schedule-state--paused { color: var(--text-tertiary); background: var(--surface-hover); }
-.schedule-main p { margin: 4px 0 8px; color: var(--text-secondary); font-size: 11.5px; }
-.schedule-main > div:last-child { display: flex; flex-wrap: wrap; gap: 13px; color: var(--text-tertiary); font-size: 10px; }
-.schedule-main > div:last-child span { display: flex; align-items: center; gap: 4px; }
-.schedule-actions { display: flex; opacity: 0; }
-.schedule-list article:hover .schedule-actions, .schedule-list article:focus-within .schedule-actions { opacity: 1; }
 
 
 

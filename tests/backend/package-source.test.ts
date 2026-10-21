@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { PluginService } from '../../electron/main/plugins'
-import { validatePackageSource } from '../../electron/main/plugins/package-execution'
+import { executeOmpPluginAction, executeOmpPluginInstall, validatePackageSource } from '../../electron/main/plugins/package-execution'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -98,6 +98,12 @@ describe('validatePackageSource', () => {
     'npm:alias@npm:pkg@^1.0.0',
   ])('rejects nested non-registry npm target %s', (source) => {
     expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
+  })
+
+  it.each(['git:-bad/repo', 'git:--help', 'git: --help', 'npm: --help'])('rejects option-like nested git source %s', async (source) => {
+    expect(() => validatePackageSource(source)).toThrow()
+    await expect(executeOmpPluginInstall('/does-not-exist', source)).rejects.toThrow('Invalid OMP plugin target')
+    await expect(executeOmpPluginAction('/does-not-exist', 'uninstall', source)).rejects.toThrow('Invalid OMP plugin target')
   })
 
   it('accepts well-formed secure git and HTTPS sources', () => {

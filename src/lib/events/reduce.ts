@@ -1,14 +1,11 @@
 import { translate } from '@/lib/i18n'
 import type { MessagePart, QueuedPrompt, TranscriptMessage } from '@/types/api'
-import { isSystemReport } from '@/lib/system-rows'
 import { applyCompactionEvent, isCompactionEvent } from './compaction'
 import { nextTranscriptId, withPartId } from './ids'
 import { fallbackModelFromRecord, fallbackNoticeText } from './model-fallback'
 import { agentMessagePart, record, resultText, string } from './parse'
 
-// This reducer runs while agent events stream in, outside React, so its
-// system-row copy is resolved on demand through the interface locale mirror.
-// English output is unchanged (the mirror defaults to `en`).
+// Structured notices keep canonical English fallback text for render-time translation.
 
 export interface PrimeEventReplayStats {
   messageScans: number
@@ -30,7 +27,6 @@ interface PartDraft {
   firstToolById: Map<string | undefined, PartNode>
 }
 
-/** Applies a frame batch with one transcript scan and one scan of each drafted part list. */
 /**
  * Tool events without a toolCallId must still pair their start/update/end
  * events onto one tool row instead of appending a phantom second row, so
@@ -61,6 +57,7 @@ export function createSteerPickupEvent(prompts: QueuedPrompt[]): Record<string, 
   return { type: 'gooeypi_steer_pickup', prompts, [LOCAL_STEER_PICKUP]: true }
 }
 
+/** Applies a frame batch with one transcript scan and one scan of each drafted part list. */
 export function replayPrimeEvents(
   messages: TranscriptMessage[],
   events: Record<string, unknown>[],
@@ -164,6 +161,21 @@ export function replayPrimeEvents(
       return existing
     }
     return appendNode(draft, withPartId(tool))
+  }
+  const toolIndex = (id: string): number => {
+    if (lastStreamingAssistant >= 0 && draftParts(lastStreamingAssistant).firstToolById.has(id)) return lastStreamingAssistant
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      const message = next[index]
+      if (message.role === 'user' && !message.steerState) break
+      if (message.role !== 'assistant' || index === lastStreamingAssistant) continue
+      const draft = partDrafts.get(index)
+      const call = draft?.firstToolById.get(id)
+      const at = draft ? -1 : message.parts.findIndex((part) => part.type === 'toolCall' && part.id === id)
+      if (!call && at < 0) continue
+      const result = call ? call.next?.part : message.parts[at + 1]
+      if (result?.type !== 'toolResult' || result.streaming === true) return index === next.length - 1 ? assistantIndex() : index
+    }
+    return assistantIndex()
   }
   const setToolResult = (draft: PartDraft, call: PartNode, result: MessagePart) => {
     if (call.next?.part.type === 'toolResult') call.next.part = { ...result, partId: call.next.part.partId }
@@ -308,14 +320,15 @@ export function replayPrimeEvents(
     if (type === 'tool_execution_start') {
       const rawName = string(raw.toolName)
       const name = rawName ?? 'Tool'
-      upsertToolDraft(assistantIndex(), effectiveToolId(string(raw.toolCallId), rawName), name, raw.args)
+      const id = effectiveToolId(string(raw.toolCallId), rawName)
+      upsertToolDraft(toolIndex(id), id, name, raw.args)
       continue
     }
     if (type === 'tool_execution_update') {
-      const index = assistantIndex()
       const rawName = string(raw.toolName)
       const name = rawName ?? 'Tool'
       const id = effectiveToolId(string(raw.toolCallId), rawName)
+      const index = toolIndex(id)
       upsertToolDraft(index, id, name, raw.args)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
@@ -323,10 +336,10 @@ export function replayPrimeEvents(
       continue
     }
     if (type === 'tool_execution_end') {
-      const index = assistantIndex()
       const rawName = string(raw.toolName)
       const name = rawName ?? 'Tool'
       const id = effectiveToolId(string(raw.toolCallId), rawName)
+      const index = toolIndex(id)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
       const resultPart: MessagePart = { type: 'toolResult', name, text: resultText(raw.result), isError: raw.isError === true }
@@ -378,18 +391,26 @@ export function replayPrimeEvents(
       // An error right after agent_end says why the run failed, so the turn
       // must not keep the fallback that reads as a completed empty turn.
       if (type === 'error' && next.at(-1)?.role === 'assistant') dropTailFallback(next.length - 1)
-      if (isSystemReport(next.at(-1))) continue
+      if (next.at(-1)?.kind === 'error') continue
       copyTranscript()
-      next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text })] })
+      next.push({ id: nextTranscriptId('error'), role: 'system', kind: 'error', timestamp: Date.now(), parts: [withPartId({ type: 'text', text })] })
       continue
     }
     if (type === 'runtime_exit') {
       finalizeStreaming(Date.now(), false)
-      if (raw.expected === true || isSystemReport(next.at(-1))) continue
+      // No later compaction_end can arrive from a runtime that has exited.
+      for (let index = 0; index < next.length; index += 1) {
+        if (!next[index].parts.some((part) => part.type === 'compaction' && part.status === 'running')) continue
+        const message = draftMessage(index)
+        message.parts = message.parts.map((part) => part.type === 'compaction' && part.status === 'running'
+          ? { ...part, status: 'cancelled', outcome: 'cancelled' }
+          : part)
+      }
+      if (raw.expected === true || next.at(-1)?.kind === 'error') continue
       const reason = raw.code !== null && raw.code !== undefined ? `exit code ${String(raw.code)}` : string(raw.signal) ?? 'an unknown error'
       copyTranscript()
       // Harness-neutral: this reducer serves Pi, OMP, and Prime Agent events.
-      next.push({ id: nextTranscriptId('error'), role: 'system', timestamp: Date.now(), parts: [withPartId({ type: 'text', text: `The agent stopped unexpectedly (${reason}). Send the message again to restart it.` })] })
+      next.push({ id: nextTranscriptId('error'), role: 'system', kind: 'error', timestamp: Date.now(), parts: [withPartId({ type: 'text', text: `The agent stopped unexpectedly (${reason}). Send the message again to restart it.` })] })
     }
   }
 

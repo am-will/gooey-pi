@@ -18,6 +18,7 @@ jobs:
   production-audit:
     name: Production dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # pull_request defaults to a synthetic merge ref; audit the immutable PR
       # head itself so this required status names the exact proposed lockfile.
@@ -35,8 +36,11 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Audit model-neutral skill routing
+        run: python3 .agents/scripts/audit-model-routing.py --self-test
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -54,11 +58,9 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - run: npm run release:preflight:toolchain
-      - run: npm run typecheck
-      - run: npm run check
-      - run: npm run test:coverage
-      - run: npm run build:bundle
-      - run: npm run release:bundle-size
+      # The same aggregate the release quality job runs, so vendor patch drift
+      # and every other release gate fail on the pull request, not at release time.
+      - run: npm run release:verify:package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage
@@ -67,6 +69,7 @@ jobs:
 
   hermetic-e2e:
     runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -97,6 +100,7 @@ jobs:
 
   windows-state-migration:
     runs-on: windows-2022
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -113,6 +117,8 @@ jobs:
       - run: npm ci
       - run: npm run release:preflight:toolchain
       - run: npm exec -- vitest run tests/backend/store-windows-migration.test.ts
+      - run: npm exec -- vitest run tests/backend/windows-git-resolution.test.ts
+      - run: node node_modules/vitest/vitest.mjs run tests/backend/process-utils.test.ts -t "Windows Git executable resolution"
 
   packaging-smoke:
     if: github.event_name == 'pull_request'
@@ -133,6 +139,7 @@ jobs:
             arch: x64
             extra_args: ''
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -198,12 +205,13 @@ jobs:
           - runner: windows-2022
             package: npm run package:win:local-qa
             artifact: gooeypi-local-qa-windows
+            # Unsigned QA builds produce no AppX/MSIX: without a signature it
+            # would be a Store-only package Windows refuses to install.
             path: |
               release/win/**/*.exe
               release/win/**/*.zip
-              release/win/**/*.appx
-              release/win/**/*.msix
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0

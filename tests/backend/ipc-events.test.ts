@@ -1,3 +1,4 @@
+import { harnessStub, serviceStub } from '../helpers/ipc-harness'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -19,18 +20,9 @@ vi.mock('electron', () => electronMocks)
 
 import { registerIpc } from '../../electron/main/ipc'
 
-function serviceStub(): Record<string, unknown> {
-  return new Proxy({}, { get: () => vi.fn(async () => undefined) })
-}
 
-function harnessStub(): Record<string, unknown> {
-  return {
-    projects: { ...serviceStub(), authorizePath: vi.fn(async () => { throw new Error('denied') }) },
-    sessions: { ...serviceStub(), onDidChange: vi.fn(() => () => undefined), requireSessionPath: vi.fn(async () => { throw new Error('denied') }) },
-    agents: { ...serviceStub(), has: vi.fn(() => false) },
-    catalog: serviceStub(),
-  }
-}
+
+
 
 describe('app:reveal-path authorization', () => {
   const expectedUrl = 'prime-work://app/'

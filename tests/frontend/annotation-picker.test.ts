@@ -5,13 +5,10 @@ import {
   annotationMarkersScript,
   annotationPickerScript,
   annotationTakeScript,
-  annotationTeardownScript,
   boundInnerText,
   buildSelectorPath,
 } from '../../src/lib/annotation-picker'
 import { sanitizeCapturedElement } from '../../src/lib/browser-annotations'
-
-type AnnotatorWindow = Window & { __primeAnnotator?: { take(): string | null } }
 
 // Runs an injected-picker script the same way webview.executeJavaScript would:
 // as plain page-level code against the (jsdom) document.
@@ -21,7 +18,7 @@ function runScript(source: string): unknown {
 }
 
 afterEach(() => {
-  runScript(annotationTeardownScript())
+  runScript(`${annotationPickerScript('stop')}\n${annotationMarkersScript([])}\ndelete window.__primeAnnotator;`)
   document.body.innerHTML = ''
 })
 
@@ -132,17 +129,14 @@ describe('injected picker script', () => {
     expect(document.querySelector('div[style*="2147483645"]')).toBeNull()
   })
 
-  it('tears down every overlay and the namespace itself', () => {
+  it('clears picker and marker overlays through the production stop APIs', () => {
     document.body.innerHTML = '<p id="a">a</p>'
     runScript(annotationPickerScript('start'))
     runScript(annotationMarkersScript([{ selector: '#a', index: 1 }]))
-    expect(runScript(annotationTeardownScript())).toBe(true)
-
-    expect((window as AnnotatorWindow).__primeAnnotator).toBeUndefined()
+    runScript(annotationPickerScript('stop'))
+    runScript(annotationMarkersScript([]))
     expect(document.querySelector('div[style*="2147483646"]')).toBeNull()
     expect(document.querySelector('div[style*="2147483645"]')).toBeNull()
-    // Teardown when nothing was injected reports false and stays quiet.
-    expect(runScript(annotationTeardownScript())).toBe(false)
   })
 
   it('embeds marker selectors safely even with hostile content', () => {

@@ -31,7 +31,7 @@ describe('archive finished scheduled chats', () => {
     document.body.append(host)
     const root = createRoot(host)
     const archive = vi.fn(async () => undefined)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const noop = async () => undefined
     const render = (sessions: SessionRecord[]) => root.render(<ScheduledPage harness="prime" schedules={[task]} selectedScheduleId="task" nativeHeartbeats={[]} projects={[]} sessions={sessions} models={[]} lastSelectedModel="" onCreate={noop} onUpdate={noop} onPause={noop} onResume={noop} onDelete={noop} onRunNow={noop} onPreview={async (timing) => ({ timing, occurrences: [] })} onOpenSession={() => undefined} onManageHeartbeat={noop} onArchiveSessions={archive} />)
     try {
@@ -39,9 +39,13 @@ describe('archive finished scheduled chats', () => {
       const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('Archive finished (1)'))!
       await act(async () => button.click())
       expect(archive).not.toHaveBeenCalled()
+      expect(document.body.querySelector('.modal')?.textContent).toContain('Archive 1 finished run chat?')
+      await act(async () => document.body.querySelector<HTMLButtonElement>('.modal__footer button')!.click())
+      expect(archive).not.toHaveBeenCalled()
       await act(async () => button.click())
+      await act(async () => document.body.querySelector<HTMLButtonElement>('.modal__footer .button--danger')!.click())
       expect(archive).toHaveBeenCalledExactlyOnceWith([chat])
-      expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining('Archive 1 finished run chat?'))
+      expect(confirm).not.toHaveBeenCalled()
       await act(async () => render([{ ...chat, archived: true }]))
       expect(host.textContent).toContain('Archived')
       expect(host.textContent).not.toContain('Archive finished')
@@ -51,4 +55,21 @@ describe('archive finished scheduled chats', () => {
       confirm.mockRestore()
     }
   })
+})
+
+it('rechecks archive eligibility after confirmation instead of archiving a newly running chat', async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  const archive = vi.fn(async () => undefined)
+  const noop = async () => undefined
+  const render = (sessions: SessionRecord[]) => root.render(<ScheduledPage harness="prime" schedules={[task]} selectedScheduleId="task" nativeHeartbeats={[]} projects={[]} sessions={sessions} models={[]} lastSelectedModel="" onCreate={noop} onUpdate={noop} onPause={noop} onResume={noop} onDelete={noop} onRunNow={noop} onPreview={async (timing) => ({ timing, occurrences: [] })} onOpenSession={() => undefined} onManageHeartbeat={noop} onArchiveSessions={archive} />)
+  try {
+    await act(async () => render([chat]))
+    await act(async () => [...host.querySelectorAll('button')].find((button) => button.textContent?.includes('Archive finished'))!.click())
+    await act(async () => render([{ ...chat, status: 'running' }]))
+    await act(async () => document.querySelector<HTMLButtonElement>('.modal__footer .button--danger')!.click())
+    expect(archive).not.toHaveBeenCalled()
+  } finally { await act(async () => root.unmount()); host.remove() }
 })

@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PetsSettings } from '../../src/pages/settings/PetsSettings'
+import { BUILT_IN_PETS } from '../../src/lib/pets'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
 import type { PetDefinition, PrimeWorkApi } from '../../src/types/api'
 
@@ -19,6 +20,16 @@ describe('PetsSettings', () => {
     root = createRoot(container)
   })
   afterEach(() => { act(() => root.unmount()); container.remove() })
+
+  it('refreshes the mounted selected avatar after its sprite changes', async () => {
+    let sprite = 'data:image/webp;base64,first'
+    const pets = { list: vi.fn(async () => BUILT_IN_PETS), sprite: vi.fn(async () => sprite) }
+    await act(async () => { root.render(<PetsSettings settings={{ ...DEFAULT_SETTINGS, petId: 'gooey-pi' }} onUpdate={() => undefined} pets={pets} />) })
+    expect(container.querySelector('.pet-hero .pet-sprite img')?.getAttribute('src')).toBe(sprite)
+    sprite = 'data:image/webp;base64,second'
+    await act(async () => { [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Refresh'))!.click() })
+    expect(container.querySelector('.pet-hero .pet-sprite img')?.getAttribute('src')).toBe(sprite)
+  })
 
   it('shows bundled and Codex pets and persists a selected companion', async () => {
     const update = vi.fn()

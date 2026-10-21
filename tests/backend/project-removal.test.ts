@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync, lstatSync } from 'node:fs'
+import { lstat, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -28,6 +29,28 @@ function fixture() {
 }
 
 describe('project removal', () => {
+  it('does not republish a removed grant when another grant and list run during process teardown', async () => {
+    const { folder, service, store, session } = fixture()
+    const other = join(folder, '..', 'other-project'); mkdirSync(other)
+    const now = new Date().toISOString()
+    await store.update((state) => state.projects.push({ id: 'project-a', harness: 'prime', name: 'A', path: folder, folders: [folder], primaryFolder: folder, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(folder) }))
+    let entered!: () => void
+    let release!: () => void
+    const stopping = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    service.bindProviders({ sessions: async () => [{ ...session, projectPath: other }], branch: async () => undefined, stopProjectProcesses: async () => { entered(); await gate } })
+    await service.list()
+    const removing = service.remove('project-a')
+    try {
+      await stopping
+      await service.grantInferred(other)
+      await service.list()
+    } finally { release() }
+    expect(await removing).toBe(true)
+    await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
+    await expect(service.authorizeCwd(other)).resolves.toBe(realpathSync(other))
+  })
+
   it('keeps a removed persisted project dismissed instead of immediately re-inferring it', async () => {
     const { folder, marker, store, service } = fixture()
     const now = new Date().toISOString()
@@ -154,24 +177,26 @@ describe('project removal', () => {
     expect(projects[0].sessionCount).toBe(1)
   })
   it('does not complete an authorization whose grant is removed during identity verification', async () => {
-    const { folder, store, service } = fixture()
+    const { folder, store } = fixture()
     const now = new Date().toISOString()
     await store.update((state) => { state.projects.push({
       id: 'project-1', harness: 'prime', name: 'Project', path: folder, folders: [folder], primaryFolder: folder,
       pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(folder),
     }) })
-    await service.list()
-
-    const internal = service as unknown as {
-      verifyFolderIdentity(path: string, expected?: { dev: string; ino: string; birthtimeNs?: string }, grantedAt?: string): Promise<{ path: string; identity: { dev: string; ino: string; birthtimeNs?: string } } | undefined>
-    }
-    const original = internal.verifyFolderIdentity.bind(service)
     let releaseVerification!: () => void
     let markEntered!: () => void
     const entered = new Promise<void>((resolve) => { markEntered = resolve })
     const release = new Promise<void>((resolve) => { releaseVerification = resolve })
-    internal.verifyFolderIdentity = async (path, expected, grantedAt) => { markEntered(); await release; return original(path, expected, grantedAt) }
-
+    let pauseVerification = false
+    const service = new ProjectService(store, () => null, 'prime', {
+      realpath,
+      lstat: async (path) => {
+        if (pauseVerification) { pauseVerification = false; markEntered(); await release }
+        return lstat(path, { bigint: true })
+      },
+    })
+    await service.list()
+    pauseVerification = true
     const pendingAuthorization = service.authorizeCwd(folder)
     await entered
     expect(await service.remove('project-1')).toBe(true)

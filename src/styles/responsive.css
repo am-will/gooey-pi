@@ -55,7 +55,7 @@
   .title-toolbar__nav .icon-button:not(:first-child) { display: none; }
   .traffic-light-clearance--toolbar { width: 64px; flex-basis: 64px; }
   .title-toolbar__identity strong { max-width: 24vw; }
-  .branch-pill, .title-toolbar__actions .button, .toolbar-divider { display: none; }
+  .branch-pill, .title-toolbar__actions .button { display: none; }
   .icon-button { width: 36px; height: 36px; }
   .sidebar .icon-button { width: 32px; height: 32px; }
   .inspector { top: 52px; left: 0; width: 100vw; max-width: none; }

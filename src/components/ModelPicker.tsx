@@ -1,3 +1,4 @@
+import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 import { Brain, Check, ChevronDown, Search } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { PrimeModelDescriptor, PrimeProviderDescriptor } from '@/types/api'
@@ -89,14 +90,8 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
     document.getElementById(`${listId}-${activeKey}`)?.scrollIntoView?.({ block: 'nearest' })
   }, [activeKey, listId, open])
 
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) close()
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [open])
+  // Escape remains on the popover so it also restores the trigger's focus.
+  useDismissableLayer(open, (target) => target instanceof Node && Boolean(rootRef.current?.contains(target)), () => close(), { escape: false })
 
   const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') { event.preventDefault(); moveActive(1) }

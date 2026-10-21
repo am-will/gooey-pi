@@ -1,3 +1,6 @@
+import { Readable } from 'node:stream'
+import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -8,7 +11,7 @@ import { AgentRpcManager } from '../../electron/main/agent-rpc'
 import { ProjectService } from '../../electron/main/projects'
 import { SessionService, type SessionServiceOptions } from '../../electron/main/sessions'
 import { boundedSessionDiscoveryNames, SessionMetadataCatalog, type SessionCatalogIo } from '../../electron/main/sessions/catalog'
-import { applyLiveMetadata, createSessionMetadataReader, METADATA_VERIFY_TAIL_BYTES, readSessionMetadata, type SessionMetadata } from '../../electron/main/sessions/metadata'
+import { applyLiveMetadata, createSessionMetadataReader, ingestMessageActivity, statusFrom, METADATA_VERIFY_TAIL_BYTES, type SessionMetadata } from '../../electron/main/sessions/metadata'
 import { JsonStateStore } from '../../electron/main/store'
 import { waitUntil } from '../helpers/wait'
 
@@ -56,6 +59,40 @@ describe('live session metadata', () => {
     id: 'session', filePath: '/sessions/session.jsonl', projectPath: '/project', title: 'Untitled session',
     createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
     status: 'unknown', depth: 0, pinned: false,
+  })
+
+  it.each([
+    [undefined, 'crash', 'user', undefined, 'failed'],
+    [undefined, 'archived', 'user', 'error', 'complete'],
+    ['completed', undefined, 'user', 'error', 'complete'],
+    ['needs_input', undefined, 'assistant', undefined, 'waiting'],
+    [undefined, undefined, 'assistant', 'error', 'failed'],
+    [undefined, undefined, 'assistant', undefined, 'complete'],
+    [undefined, undefined, 'toolResult', undefined, 'complete'],
+    [undefined, undefined, 'user', undefined, 'idle'],
+    [undefined, undefined, undefined, undefined, 'unknown'],
+  ])('derives status with precedence (%s, %s, %s, %s)', (task, lifecycle, role, stop, expected) => {
+    expect(statusFrom(task, lifecycle, role, stop)).toBe(expected)
+  })
+
+  it.each([
+    [{ workerState: 'failed', isStreaming: true }, 'failed'],
+    [{ lifecycle: 'archived' }, 'complete'],
+    [{ taskState: 'completed' }, 'complete'],
+    [{ taskState: 'needs_input' }, 'waiting'],
+  ])('derives live status from %o', (live, expected) => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, live)
+    expect(record.status).toBe(expected)
+  })
+
+  it('copies valid live metadata without accepting invalid depth or stale timestamps', () => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, { thinkingLevel: 'high', sessionName: '  ', rlmDepth: 2, modified: '2026-01-01T00:00:00Z', model: { id: 'model', provider: 'provider' } })
+    expect(record).toMatchObject({ title: 'Untitled session', thinkingLevel: 'high', depth: 2, updatedAt: '2026-01-01T00:00:00.000Z', model: 'model', provider: 'provider' })
+    for (const rlmDepth of [-1, 1.5]) applyLiveMetadata(record, { rlmDepth, modified: 'invalid' })
+    applyLiveMetadata(record, { modified: '2025-01-01T00:00:00Z' })
+    expect(record).toMatchObject({ depth: 2, updatedAt: '2026-01-01T00:00:00.000Z' })
   })
 
   it('does not show stale inactive daemon work as running', () => {
@@ -139,6 +176,29 @@ describe('Rust Prime native archives', () => {
     await expect(service.requireSessionPath(file)).rejects.toThrow('outside')
   })
 
+  it('rescans native archives after attaching even when startup writes produce no watch event', async () => {
+    const closed = vi.fn()
+    const { root, project, service, store } = setup(undefined, {
+      primeImplementation: () => 'rust',
+      watchDirectory: () => {
+        const watcher = { close: closed, on: () => watcher }
+        return watcher
+      },
+    })
+    await store.ready()
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    expect(await service.list()).toEqual([])
+    const changed = vi.fn()
+    const unsubscribe = service.onDidChange(changed)
+    try {
+      writeSession(join(archive, 'initial.jsonl'), project, 'initial')
+      await waitUntil(() => changed.mock.calls.length > 0, 1_000)
+      expect((await service.list()).map((session) => session.id)).toEqual(['initial'])
+    } finally { unsubscribe() }
+    expect(closed).toHaveBeenCalledTimes(2)
+  })
+
   it('publishes changes to native archived transcripts and closes its watcher', async () => {
     const { root, project, service } = setup(undefined, { primeImplementation: () => 'rust' })
     const archive = join(root, '..', 'sessions-archive')
@@ -214,7 +274,6 @@ describe('SessionService catalog scaling', () => {
 
     expect(records).toHaveLength(1)
     expect(records[0].projectPath).toBe(realpathSync(project))
-    expect(await service.projectPaths()).toEqual([realpathSync(project)])
 
     const info = lstatSync(project, { bigint: true })
     const now = new Date().toISOString()
@@ -357,6 +416,39 @@ describe('incremental session metadata reads', () => {
     expect(statSync(file).size).toBeGreaterThan(METADATA_VERIFY_TAIL_BYTES)
   }
 
+  it('frames a large CRLF record linearly without corrupting split UTF-8', async () => {
+    const { root } = setup()
+    const file = join(root, 'fragmented.jsonl')
+    writeSession(file, '/project', 'fragmented')
+    const content = `visible 🌿 ${'x'.repeat(20 * 1024 * 1024)}`
+    const data = Buffer.from(`${readFileSync(file, 'utf8')}${JSON.stringify({ type: 'message', message: { role: 'user', content } })}\r\n`)
+    const info = Object.assign(statSync(file), { size: data.length })
+    const reader = (chunkSize: number) => createSessionMetadataReader({
+      inspect: async () => info,
+      openStream: () => Readable.from((function* () {
+        for (let offset = 0; offset < data.length; offset += chunkSize) yield data.subarray(offset, offset + chunkSize)
+      })()),
+    })
+    expect(await reader(1_024)(file)).toEqual(await reader(data.length)(file))
+  })
+
+  it.each([false, true])('enforces record byte bounds with a trailing LF: %s', async (terminated) => {
+    const { root } = setup()
+    const file = join(root, 'limit.jsonl')
+    writeFileSync(file, '')
+    const chunk = Buffer.alloc(64 * 1024, 'x')
+    const reader = (extraByte: boolean) => createSessionMetadataReader({
+      inspect: async () => Object.assign(statSync(file), { size: SESSION_FILE_RECORD_LIMIT_BYTES + Number(extraByte) + Number(terminated) }),
+      openStream: () => Readable.from((function* () {
+        for (let size = 0; size < SESSION_FILE_RECORD_LIMIT_BYTES; size += chunk.length) yield chunk
+        if (extraByte) yield Buffer.from('x')
+        if (terminated) yield Buffer.from('\n')
+      })()),
+    })
+    await expect(reader(false)(file)).resolves.toMatchObject({ title: 'Untitled session' })
+    await expect(reader(true)(file)).rejects.toThrow('JSONL record exceeded the maximum frame size')
+  })
+
   it('reads only the appended byte range plus the verification tail after the initial parse', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-incremental-')); dirs.push(dir)
     const file = join(dir, 'incremental.jsonl')
@@ -377,7 +469,7 @@ describe('incremental session metadata reads', () => {
     expect(opens).toHaveLength(2)
     expect(opens[1]).toEqual({ start: firstSize - METADATA_VERIFY_TAIL_BYTES, end: secondSize - 1 })
     expect(opens[1]!.start).toBeGreaterThan(0)
-    expect(second).toEqual(await readSessionMetadata(file))
+    expect(second).toEqual(await createSessionMetadataReader()(file))
   })
 
   it('resumes a verified partial line and matches the one-shot parser', async () => {
@@ -392,7 +484,7 @@ describe('incremental session metadata reads', () => {
     appendFileSync(file, record.slice(0, 25))
     const speculative = await reader(file)
     // The unterminated tail parses speculatively, exactly like a full read.
-    expect(speculative).toEqual(await readSessionMetadata(file))
+    expect(speculative).toEqual(await createSessionMetadataReader()(file))
     expect(opens[1]?.start).toBe(baseSize - METADATA_VERIFY_TAIL_BYTES)
 
     appendFileSync(file, `${record.slice(25)}\n`)
@@ -401,7 +493,7 @@ describe('incremental session metadata reads', () => {
     expect(opens[2]?.start).toBe(statSync(file).size - record.length - 1 - (METADATA_VERIFY_TAIL_BYTES - 25))
     expect(opens[2]!.start).toBeGreaterThan(0)
     expect(completed.preview).toBe('split record')
-    expect(completed).toEqual(await readSessionMetadata(file))
+    expect(completed).toEqual(await createSessionMetadataReader()(file))
   })
 
   it('falls back to a full re-read on truncation and rewritten tails', async () => {
@@ -416,7 +508,7 @@ describe('incremental session metadata reads', () => {
     const rewritten = await reader(file)
     expect(rewritten.preview).toBe('rewritten')
     expect(opens.at(-1)?.start).toBe(0)
-    expect(rewritten).toEqual(await readSessionMetadata(file))
+    expect(rewritten).toEqual(await createSessionMetadataReader()(file))
 
     const longer = [
       JSON.stringify({ type: 'session', id: 'replaced', cwd: '/project' }),
@@ -428,7 +520,7 @@ describe('incremental session metadata reads', () => {
     const replaced = await reader(file)
     expect(replaced.preview).toBe('a completely different transcript body')
     expect(opens.at(-1)?.start).toBe(0)
-    expect(replaced).toEqual(await readSessionMetadata(file))
+    expect(replaced).toEqual(await createSessionMetadataReader()(file))
   })
 })
 
@@ -449,7 +541,7 @@ describe('Prime task-state freshness', () => {
     appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'assistant', parentId: 'user', message: { role: 'assistant', content: 'answered' } })}\n`)
     const staleVerdict = await reader(file)
     expect(staleVerdict.status).toBe('complete')
-    expect(staleVerdict).toEqual(await readSessionMetadata(file))
+    expect(staleVerdict).toEqual(await createSessionMetadataReader()(file))
 
     appendFileSync(file, `${JSON.stringify({ type: 'agent_status', status: { summary: 'Waiting again', taskState: 'needs_input', basedOnMessageCount: 2 } })}\n`)
     expect((await reader(file)).status).toBe('waiting')
@@ -487,6 +579,64 @@ describe('SessionService user-message ordering', () => {
     const refreshed = new SessionService(store, null)
     Object.defineProperty(refreshed, 'sessionRoot', { value: root })
     expect((await refreshed.list()).map((record) => record.id)).toEqual(['older-user', 'newer-user'])
+  })
+})
+
+describe('Prime session previews', () => {
+  it('shows only visible assistant text and keeps it across a reasoning-only tool turn', async () => {
+    const { root, project, service } = setup()
+    const file = join(root, 'thinking.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'thinking', cwd: project, timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'question' } }),
+      JSON.stringify({ type: 'message', id: 'answer', parentId: 'user', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'plan...' }, { type: 'text', text: 'Final answer' }] } }),
+      '',
+    ].join('\n'))
+    expect((await service.list())[0]?.preview).toBe('Final answer')
+
+    appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'tool-turn', parentId: 'answer', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'more reasoning' }, { type: 'toolCall', name: 'bash', arguments: {} }] } })}\n`)
+    expect((await service.list(undefined, false, true))[0]?.preview).toBe('Final answer')
+    expect((await createSessionMetadataReader()(file)).preview).toBe('Final answer')
+  })
+})
+
+describe('retained metadata parse state', () => {
+  it('stores one-line clips of message text instead of 4 KiB strings', () => {
+    const state = { createdAt: '2025-01-01T00:00:00.000Z', firstUser: '', preview: '' }
+    ingestMessageActivity(state, { message: { role: 'user', content: 'x'.repeat(16 * 1024) } })
+    expect(state.firstUser).toHaveLength(160)
+    expect(state.preview).toBe(state.firstUser)
+  })
+
+  it('bounds an oversized session name without changing the visible title or preview', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-retained-name-')); dirs.push(dir)
+    const file = join(dir, 'named.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'named', cwd: '/project', timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'word '.repeat(2_000) } }),
+      JSON.stringify({ type: 'session_info', id: 'name', parentId: 'user', name: 'n'.repeat(1024 * 1024) }),
+      '',
+    ].join('\n'))
+
+    const metadata = await createSessionMetadataReader()(file)
+    expect(metadata.title).toBe(`${'n'.repeat(99)}…`)
+    expect(metadata).not.toHaveProperty('sessionName')
+    expect(metadata.preview).toBe(`${'word '.repeat(31)}word…`)
+  })
+
+  it('does not let whitespace-only names or replies blank the title or preview', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-retained-blank-')); dirs.push(dir)
+    const file = join(dir, 'blank.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'blank', cwd: '/project', timestamp: '2025-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, message: { role: 'user', content: 'real prompt' } }),
+      JSON.stringify({ type: 'message', id: 'reply', parentId: 'user', message: { role: 'assistant', content: 'visible reply' } }),
+      JSON.stringify({ type: 'message', id: 'blank-reply', parentId: 'reply', message: { role: 'assistant', content: '  \n\t ' } }),
+      JSON.stringify({ type: 'session_info', id: 'name', parentId: 'blank-reply', name: '   ' }),
+      '',
+    ].join('\n'))
+
+    expect(await createSessionMetadataReader()(file)).toMatchObject({ title: 'real prompt', preview: 'visible reply' })
   })
 })
 
@@ -648,6 +798,48 @@ process.exit(0)
     expect(spawnCount()).toBe(2)
   })
 
+  it('keeps a live-catalog result that finished after a mid-spawn invalidation as the throttle fallback', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-catalog-churn-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const file = join(root, 'churn.jsonl')
+    writeSession(file, project, 'churn')
+    const spawnLog = join(dir, 'spawns.log')
+    writeFileSync(spawnLog, '')
+    const executable = join(dir, 'prime-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.appendFileSync(${JSON.stringify(spawnLog)}, 'spawn\\n')
+const spawn = fs.readFileSync(${JSON.stringify(spawnLog)}, 'utf8').split('\\n').filter(Boolean).length
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ sessions: [{ sessionFile: ${JSON.stringify(file)}, sessionName: 'live-v' + spawn }] }))
+}, 200)
+`)
+    chmodSync(executable, 0o755)
+    const catalog = new SessionMetadataCatalog(
+      () => root,
+      executable,
+      20,
+      async (filePath) => metadata(filePath, project, 'churn'),
+    )
+    const spawnCount = () => readFileSync(spawnLog, 'utf8').split('\n').filter(Boolean).length
+
+    expect((await catalog.all())[0]?.title).toBe('live-v1')
+    const throttleHarness = catalog as unknown as { lastCatalogSpawn: { at: number } }
+    throttleHarness.lastCatalogSpawn.at = Date.now() - 60_000
+    catalog.invalidateLiveCatalog()
+    const busy = catalog.all()
+    // A watcher flush lands while the CLI is still running.
+    await waitUntil(() => spawnCount() === 2)
+    catalog.invalidateLiveCatalog()
+
+    expect((await busy)[0]?.title).toBe('live-v2')
+    // Inside the spawn throttle window the newest finished fetch is served,
+    // not the snapshot from before the churn started.
+    expect((await catalog.all())[0]?.title).toBe('live-v2')
+    expect(spawnCount()).toBe(2)
+  })
+
   it('does not let an in-flight pre-append scan satisfy a post-invalidation refresh', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-scan-race-')); dirs.push(dir)
     const root = join(dir, 'sessions'); mkdirSync(root)
@@ -783,6 +975,46 @@ describe('SessionService live changes', () => {
     }
   })
 
+  it('watches the most recently modified buckets when more exist than the watcher bound', async () => {
+    const watchBound = 512
+    const { root, project, service } = setup(undefined, {
+      recursiveWatch: true,
+      watchDirectory: () => {
+        const watcher = { close: () => undefined, on: () => watcher }
+        return watcher
+      },
+    })
+    const old = new Date('2020-01-01T00:00:00.000Z')
+    const buckets = Array.from({ length: watchBound }, (_, index) => `bucket-${String(index).padStart(3, '0')}`)
+    for (const name of buckets) {
+      mkdirSync(join(root, name))
+      utimesSync(join(root, name), old, old)
+    }
+    // Alphabetically last, but the only recently active bucket.
+    mkdirSync(join(root, 'zzz-bucket'))
+    const watcherHarness = service as unknown as { bucketWatchers: Map<string, unknown> }
+    const unsubscribe = service.onDidChange(() => undefined)
+
+    try {
+      await waitUntil(() => watcherHarness.bucketWatchers.has('zzz-bucket') && watcherHarness.bucketWatchers.size === watchBound, 4_000)
+      // Equal mtimes fall back to name order, so the last old bucket is dropped.
+      expect(watcherHarness.bucketWatchers.has('bucket-511')).toBe(false)
+
+      // A session created in a dormant bucket gets a watcher on the next forced
+      // list, without waiting for a root watch event.
+      writeSession(join(root, 'bucket-511', 'fresh.jsonl'), project, 'fresh')
+      const now = new Date()
+      utimesSync(join(root, 'bucket-511'), now, now)
+      await service.list(undefined, false, true)
+      await waitUntil(() => watcherHarness.bucketWatchers.has('bucket-511'), 4_000)
+      expect(watcherHarness.bucketWatchers.has('zzz-bucket')).toBe(true)
+      expect(watcherHarness.bucketWatchers.has('bucket-510')).toBe(false)
+      expect(watcherHarness.bucketWatchers.size).toBe(watchBound)
+    } finally {
+      unsubscribe()
+    }
+  })
+
   it('emits refreshes during continuous JSONL writes instead of waiting for the stream to stop', async () => {
     const { root, project, service } = setup()
     const file = join(root, 'streaming.jsonl')
@@ -796,8 +1028,7 @@ describe('SessionService live changes', () => {
     }, 25)
 
     try {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 350))
-      expect(events.some((event) => event.filePath === realpathSync(file))).toBe(true)
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
     } finally {
       clearInterval(writes)
       unsubscribe()
@@ -892,6 +1123,145 @@ describe('SessionService transcript read admission', () => {
     expect(results[0]).toBe(results[2])
     expect(results[3]).not.toBe(results[0])
     expect(results[0][0]?.parts).toEqual([{ type: 'text', text: 'original' }])
+  })
+
+  it('does not hand a caller arriving after an append the in-flight pre-append read', async () => {
+    let releaseReads: (() => void) | undefined
+    const gate = new Promise<void>((resolveGate) => { releaseReads = resolveGate })
+    const transcriptReader = vi.fn(async (filePath: string) => {
+      await gate
+      return [{ id: filePath, role: 'user' as const, parts: [{ type: 'text' as const, text: readFileSync(filePath, 'utf8') }] }]
+    })
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'appended.jsonl')
+    writeSession(file, project, 'appended')
+
+    const before = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(1))
+    appendFileSync(file, `${JSON.stringify({ type: 'message', id: 'late', parentId: 'appended-message', message: { role: 'user', content: 'late' } })}\n`)
+    const after = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(2))
+
+    releaseReads?.()
+    const [first, second] = await Promise.all([before, after])
+    expect(first).not.toBe(second)
+  })
+
+  it('does not coalesce reads across a runtime streaming-phase change', async () => {
+    let releaseReads: (() => void) | undefined
+    const gate = new Promise<void>((resolveGate) => { releaseReads = resolveGate })
+    const transcriptReader = vi.fn(async () => {
+      await gate
+      return []
+    })
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'phase.jsonl')
+    writeSession(file, project, 'phase')
+    const safePath = await service.requireSessionPath(file)
+    const phases = [{ isStreaming: true }, { isStreaming: false }]
+    service.bindRuntimeHooks({ get: () => phases.shift(), stop: async () => undefined, rename: async () => false })
+
+    const streaming = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(1))
+    const settled = service.read(file)
+    await vi.waitFor(() => expect(transcriptReader).toHaveBeenCalledTimes(2))
+    releaseReads?.()
+    await Promise.all([streaming, settled])
+
+    expect(transcriptReader.mock.calls).toEqual([[safePath, true], [safePath, false]])
+  })
+})
+
+describe('bounded transcript result caching', () => {
+  it('reuses unchanged reads and invalidates on bytes or runtime phase changes', async () => {
+    const transcriptReader = vi.fn(async () => [{ id: 'result', role: 'user' as const, parts: [] }])
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'cached.jsonl')
+    writeSession(file, project, 'cached')
+    const first = await service.read(file)
+    expect(await service.read(file)).toBe(first)
+    expect(transcriptReader).toHaveBeenCalledOnce()
+    appendFileSync(file, '\n')
+    expect(await service.read(file)).not.toBe(first)
+    expect(transcriptReader).toHaveBeenCalledTimes(2)
+    service.bindRuntimeHooks({ get: () => ({ isStreaming: true }), stop: async () => undefined, rename: async () => false })
+    await service.read(file)
+    expect(transcriptReader).toHaveBeenCalledTimes(3)
+    expect(transcriptReader).toHaveBeenLastCalledWith(await service.requireSessionPath(file), true)
+  })
+
+  it('invalidates same-size rewrites even when mtime is restored', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const file = join(root, 'rewrite.jsonl')
+    writeSession(file, project, 'rewrite')
+    const fixed = new Date('2025-01-01T00:00:00.000Z')
+    utimesSync(file, fixed, fixed)
+    await service.read(file)
+    const before = statSync(file)
+    // Wait for an observable filesystem revision, not an assumed clock resolution.
+    await waitUntil(() => {
+      writeFileSync(file, readFileSync(file, 'utf8').replace('rewrite', 'changed'))
+      utimesSync(file, fixed, fixed)
+      return statSync(file).ctimeMs !== before.ctimeMs
+    }, 4_000)
+    expect(statSync(file).size).toBe(before.size)
+    expect(statSync(file).mtimeMs).toBe(before.mtimeMs)
+    await service.read(file)
+    expect(transcriptReader).toHaveBeenCalledTimes(2)
+  })
+
+  it('evicts the least recently used path and never caches reader failures', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, project, service } = setup(undefined, { transcriptReader })
+    const files = Array.from({ length: 5 }, (_, index) => join(root, `${index}.jsonl`))
+    for (const [index, file] of files.entries()) writeSession(file, project, String(index))
+    for (const file of files.slice(0, 4)) await service.read(file)
+    await service.read(files[0]!)
+    await service.read(files[4]!)
+    await service.read(files[0]!)
+    expect(transcriptReader).toHaveBeenCalledTimes(5)
+    await service.read(files[1]!)
+    expect(transcriptReader).toHaveBeenCalledTimes(6)
+    transcriptReader.mockRejectedValueOnce(new Error('transient read failure'))
+    await expect(service.read(files[2]!)).rejects.toThrow('transient read failure')
+    await expect(service.read(files[2]!)).resolves.toEqual([])
+    expect(transcriptReader).toHaveBeenCalledTimes(8)
+  })
+})
+
+describe('SessionService session path authorization', () => {
+  it('also rejects non-regular files in the Rust native archive', async () => {
+    const { root, service } = setup(undefined, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const directory = join(archive, 'x.jsonl')
+    mkdirSync(directory)
+    await expect(service.requireSessionPath(directory)).rejects.toThrow('Session path is not a regular file')
+  })
+
+  it('rejects a directory named like a session file before any transcript read', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, service } = setup(undefined, { transcriptReader })
+    const directory = join(root, 'x.jsonl')
+    mkdirSync(directory)
+
+    await expect(service.requireSessionPath(directory)).rejects.toThrow('Session path is not a regular file')
+    await expect(service.read(directory)).rejects.toThrow('Session path is not a regular file')
+    expect(transcriptReader).not.toHaveBeenCalled()
+  })
+
+  // Only the authorization stat runs against the FIFO: opening it would block
+  // a libuv threadpool thread until a writer appears and wedge the worker.
+  it.skipIf(process.platform === 'win32')('rejects a FIFO named like a session file without opening it', async () => {
+    const transcriptReader = vi.fn(async () => [])
+    const { root, service } = setup(undefined, { transcriptReader })
+    const fifo = join(root, 'pipe.jsonl')
+    execFileSync('mkfifo', [fifo])
+
+    await expect(service.requireSessionPath(fifo)).rejects.toThrow('Session path is not a regular file')
+    await expect(service.read(fifo)).rejects.toThrow('Session path is not a regular file')
+    expect(transcriptReader).not.toHaveBeenCalled()
   })
 })
 
@@ -1400,8 +1770,48 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       rename: async () => false,
     })
 
-    await expect(service.rename(file, 'Prime title')).resolves.toBe(false)
+    await expect(service.rename(file, 'Prime title')).rejects.toThrow(/could not rename this session/)
     expect(renameFile).not.toHaveBeenCalled()
+  })
+
+  it('reports bounded ANSI-free CLI rename failures', async () => {
+    const { root, project, service } = setup()
+    const executable = join(root, 'rename.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+process.stderr.write('\\u001b[31m' + 'failure '.repeat(100) + '\\u001b[0m')
+process.exit(1)
+`)
+    chmodSync(executable, 0o755)
+    Object.defineProperty(service, 'primeAgentPath', { value: executable })
+    const file = join(root, 'rename.jsonl')
+    writeSession(file, project, 'rename')
+    const error = await service.rename(file, 'Title').catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    expect(error).toMatchObject({ message: `Prime Agent could not rename this session: ${'failure '.repeat(100).trim().slice(0, 500)}` })
+  })
+
+  it('never passes an option-shaped session id to the Prime rename CLI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-rename-argv-')); dirs.push(dir)
+    const root = join(dir, 'sessions'); mkdirSync(root)
+    const project = join(dir, 'project'); mkdirSync(project)
+    const marker = join(dir, 'cli-invoked')
+    const executable = join(dir, 'prime-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+require('node:fs').appendFileSync(${JSON.stringify(marker)}, process.argv.slice(2).join(' ') + '\\n')
+process.exit(0)
+`)
+    chmodSync(executable, 0o755)
+    const headerId = join(root, 'header.jsonl')
+    writeSession(headerId, project, '--evil')
+    const basenameId = join(root, '-x.jsonl')
+    writeFileSync(basenameId, `${JSON.stringify({ type: 'session', cwd: project, timestamp: '2025-01-01T00:00:00.000Z' })}\n`)
+    const service = new SessionService(new JsonStateStore(join(dir, 'state.json')), executable, undefined, {})
+    Object.defineProperty(service, 'sessionRoot', { value: root })
+    service.bindRuntimeHooks({ get: () => undefined, stop: async () => undefined, rename: async () => false })
+
+    await expect(service.rename(headerId, 'Title')).rejects.toThrow(/session id/)
+    await expect(service.rename(basenameId, 'Title')).rejects.toThrow(/session id/)
+    expect(existsSync(marker)).toBe(false)
   })
 })
 

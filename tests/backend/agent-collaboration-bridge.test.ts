@@ -81,9 +81,11 @@ class FakeCollaborationWaitClock {
 
   constructor(private currentTime = 10_000) {}
 
+  readonly cancelled = vi.fn()
+
   readonly now = (): number => this.currentTime
 
-  readonly setTimeout = (callback: () => void, delayMs: number): { unref(): void } => {
+  readonly setTimeout = (callback: () => void, delayMs: number): { unref(): void; cancel(): void } => {
     const timer: ScheduledFakeTimer = {
       callback,
       requestedAt: this.currentTime,
@@ -94,7 +96,7 @@ class FakeCollaborationWaitClock {
     const waiter = this.waiters.shift()
     if (waiter) waiter(timer)
     else this.pending.push(timer)
-    return { unref: timer.unref }
+    return { unref: timer.unref, cancel: () => { this.cancelled(); const index = this.pending.indexOf(timer); if (index >= 0) this.pending.splice(index, 1) } }
   }
 
   takeNextTimer(): Promise<ScheduledFakeTimer> {
@@ -159,9 +161,9 @@ async function fixture(
   await bridge.start()
   bridges.push(bridge)
   const environment = bridge.environmentFor({ cwd: '/project', sessionPath: source.filePath, harness: 'prime' })
-  const call = async (method: string, params: Record<string, unknown> = {}, token = environment.GOOEYPI_COLLABORATION_TOKEN) => {
+  const call = async (method: string, params: Record<string, unknown> = {}, token = environment.GOOEYPI_COLLABORATION_TOKEN, signal?: AbortSignal) => {
     const response = await fetch(environment.GOOEYPI_COLLABORATION_URL!, {
-      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ method, params }),
+      method: 'POST', signal, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ method, params }),
     })
     return { status: response.status, body: await response.json() as { ok: boolean; result?: Record<string, unknown> | Array<Record<string, unknown>>; error?: string } }
   }
@@ -274,6 +276,17 @@ describe('AgentCollaborationBridge', () => {
     expect(messages[0]?.text).toContain('_END')
   })
 
+  it('queues against the runtime state after an asynchronous transcript read', async () => {
+    const { call, primeManager, primeSessions } = await fixture()
+    primeSessions.read.mockImplementationOnce(async () => {
+      primeManager.list.mockReturnValue([{ runtimeId: 'runtime-target', harness: 'prime', cwd: '/project', isStreaming: true }])
+      return defaultTargetTranscript
+    })
+    const response = await call('send', { target_session_id: target.id, message: 'Next task' })
+    expect(response.body.result).toMatchObject({ delivered: true, queued: true })
+    expect(primeManager.command).toHaveBeenCalledWith('runtime-target', expect.objectContaining({ type: 'follow_up' }))
+  })
+
   it('delivers attributed messages to a live target and returns a wait cursor', async () => {
     const { call, primeManager } = await fixture()
     const sent = await call('send', { target_session_id: target.id, message: 'Please claim src/api.ts.' })
@@ -366,6 +379,21 @@ describe('AgentCollaborationBridge', () => {
     expect(primeManager.command).not.toHaveBeenCalled()
   })
 
+  it('cancels disconnected waits immediately and releases their target admission', async () => {
+    const clock = new FakeCollaborationWaitClock()
+    const { call } = await fixture(false, defaultTargetTranscript, clock)
+    const read = await call('read', { target_session_id: target.id })
+    const cursor = (read.body.result as { cursor: string }).cursor
+    const controller = new AbortController()
+    const waiting = call('wait', { target_session_id: target.id, after_cursor: cursor }, undefined, controller.signal)
+    const rejected = expect(waiting).rejects.toThrow()
+    await clock.takeNextTimer()
+    controller.abort()
+    await rejected
+    await vi.waitFor(() => expect(clock.cancelled).toHaveBeenCalledOnce())
+    expect(await call('wait', { target_session_id: target.id, timeout_ms: 0 })).toMatchObject({ status: 200 })
+  })
+
   it('starts normally and reports unavailable when fast mode is requested without model support', async () => {
     const { call, primeManager } = await fixture()
     const response = await call('create', { prompt: 'Review the fallback.', fast: true })
@@ -378,15 +406,16 @@ describe('AgentCollaborationBridge', () => {
   })
 
   it('serializes concurrent deliveries to the same target', async () => {
-    const { call, primeManager } = await fixture()
+    const { call, primeManager, primeSessions } = await fixture()
     let releaseFirst!: () => void
     primeManager.command
       .mockImplementationOnce(() => new Promise((resolveCommand) => { releaseFirst = () => resolveCommand({ ok: true }) }))
       .mockResolvedValue({ ok: true })
     const first = call('send', { target_session_id: target.id, message: 'First' })
     await vi.waitFor(() => expect(primeManager.command).toHaveBeenCalledTimes(1))
+    const catalogCalls = primeSessions.list.mock.calls.length
     const second = call('send', { target_session_id: target.id, message: 'Second' })
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20))
+    await vi.waitFor(() => expect(primeSessions.list.mock.calls.length).toBeGreaterThan(catalogCalls))
     expect(primeManager.command).toHaveBeenCalledTimes(1)
     releaseFirst()
     await expect(Promise.all([first, second])).resolves.toEqual([
@@ -396,15 +425,17 @@ describe('AgentCollaborationBridge', () => {
   })
 
   it('allows only one active wait per target and bounds idle transcript polling', async () => {
-    const { call, primeSessions } = await fixture()
+    const clock = new FakeCollaborationWaitClock()
+    const { call, primeSessions } = await fixture(true, defaultTargetTranscript, clock)
     const read = await call('read', { target_session_id: target.id })
     const cursor = (read.body.result as Record<string, unknown>).cursor
     const readsBefore = primeSessions.read.mock.calls.length
     const first = call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 150 })
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20))
+    const timer = await clock.takeNextTimer()
     const duplicate = await call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 150 })
     expect(duplicate.status).toBe(409)
     expect(duplicate.body.error).toContain('already active')
+    clock.fireAt(timer, timer.dueAt)
     const completed = await first
     expect(completed.body.result).toMatchObject({ timed_out: true })
     expect(primeSessions.read.mock.calls.length - readsBefore).toBeLessThanOrEqual(2)

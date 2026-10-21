@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { describe, expect, test } from 'vitest'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { FuseState, FuseV1Options, FuseVersion, flipFuses, getCurrentFuseWire } from '@electron/fuses'
+import { describe, expect, test, vi } from 'vitest'
+import { LOCALE_PREFERENCES } from '../src/types/api'
 import {
   bootstrapNpm,
   parsePinnedNpmArtifact,
@@ -17,28 +19,31 @@ import {
 } from '../scripts/release/bootstrap-npm.mjs'
 import { installAppDependencies } from '../scripts/release/install-app-deps.mjs'
 import {
-  artifactArchitectures,
-  assertArchitectureCoverage,
-  assertAsarLayout,
-  assertExactArchitectures,
-  assertPackagedExtensions,
   assertSupportedNpm,
   assertSupportedNode,
   assertSupportedToolchain,
-  assertUnpackedNativeLayout,
-  expectedUnpackedNativeLayout,
+  packagingPlan,
   parseToolchainMetadata,
-  parseArchitectures,
-  parseTeamIdentifier,
   readNpmOutput,
   readNpmVersion,
   readRepositoryToolchain,
-  requireReleaseArtifacts,
   resolveCommandInvocation,
   validateReleaseCredentials,
   validateWindowsReleaseCredentials,
   withoutReleaseCredentials,
 } from '../scripts/release/lib.mjs'
+import {
+  artifactArchitectures,
+  assertArchitectureCoverage,
+  assertAsarLayout,
+  assertExactArchitectures,
+  assertMacUnpackedNativeLayout,
+  assertPackagedExtensions,
+  expectedUnpackedNativeLayout,
+  parseArchitectures,
+  parseTeamIdentifier,
+  requireReleaseArtifacts,
+} from '../scripts/release/package-layout.mjs'
 import { SHIPPED_EXTENSION_FILENAMES } from '../electron/main/extension-manifest'
 import { producedReleaseArtifactNames, readElectronBuilderConfig, RELEASE_BUILD_MATRIX } from '../scripts/release/artifact-names.mjs'
 import {
@@ -52,12 +57,14 @@ import {
 import { parseDraftAssetNames, staleDraftReleaseAssets } from '../scripts/release/prune-draft-release-assets.mjs'
 import { assertBundleSizeBudgets, assertPackageSizeBudgets, BUNDLE_SIZE_BUDGETS, collectBundleSizeMetrics, collectPackageSizeMetrics, PACKAGE_SIZE_BUDGETS } from '../scripts/release/size-budgets.mjs'
 import { assertReleaseTag } from '../scripts/release/validate-release-tag.mjs'
+import { basePinIntegrity, PACKAGES as VENDOR_PATCH_PACKAGES, run as runVendorPatchCommand } from '../scripts/release/verify-vendor-patches.mjs'
 // after-pack.cjs is CommonJS; the interop layer exposes module.exports properties as named exports.
 import { executablePath } from '../scripts/release/after-pack.cjs'
+import { assertFuseWire, ELECTRON_FUSE_CONFIG } from '../scripts/release/fuses.cjs'
 import { collectAuditAdvisories, describeAuditEvaluation, evaluateAuditReport, parseAuditExceptions, readAuditExceptions } from '../scripts/release/audit-exceptions.mjs'
 import {
   assertValidAuthenticode,
-  assertUnpackedNativeLayout as assertCrossPlatformUnpackedNativeLayout,
+  assertCrossPlatformUnpackedNativeLayout,
   expectedArtifactExtensions,
   expectedAuthenticodeSigner,
   expectedNativeFiles,
@@ -184,19 +191,50 @@ describe('release preflight', () => {
     expect(result.stdout).not.toContain('pipeline passed')
   })
 
-  test('verify-package runs when invoked as a script and fails closed on a missing entrypoint', async () => {
-    const { invokedAsScript } = await import('../scripts/release/verify-package.mjs')
-    const original = process.argv[1]
+  test('release CLIs still run their checks when launched through a symlinked directory', () => {
+    // Node resolves the entry module through realpath while argv[1] keeps the link spelling.
+    const link = join(mkdtempSync(join(tmpdir(), 'gooeypi-release-link-')), 'release')
+    symlinkSync(fileURLToPath(new URL('../scripts/release', import.meta.url)), link, process.platform === 'win32' ? 'junction' : 'dir')
     try {
-      process.argv[1] = fileURLToPath(new URL('../scripts/release/verify-package.mjs', import.meta.url))
-      expect(invokedAsScript()).toBe(true)
-      process.argv[1] = join(tmpdir(), 'another-entrypoint.mjs')
-      expect(invokedAsScript()).toBe(false)
-      process.argv[1] = undefined as unknown as string
-      expect(invokedAsScript()).toBe(true)
+      const verify = spawnSync(process.execPath, [join(link, 'verify-package.mjs'), '--mode', 'bogus'], { encoding: 'utf8' })
+      expect(verify.status).not.toBe(0)
+      expect(verify.stderr).toContain('Verification mode must be public or qa')
+      const tag = spawnSync(process.execPath, [join(link, 'validate-release-tag.mjs'), '--tag', 'v0.0.0'], { encoding: 'utf8' })
+      expect(tag.status).not.toBe(0)
+      expect(tag.stderr).toContain('Release tag validation failed')
     } finally {
-      process.argv[1] = original
+      rmSync(dirname(link), { recursive: true, force: true })
     }
+  })
+
+  test('importing a release CLI module does not run its checks', () => {
+    const moduleUrl = new URL('../scripts/release/verify-package.mjs', import.meta.url).href
+    const imported = spawnSync(process.execPath, ['--input-type=module', '-e', 'await import(process.argv[1]); console.log("exitCode=" + (process.exitCode ?? 0))', moduleUrl], { encoding: 'utf8' })
+    expect(imported.status, imported.stderr).toBe(0)
+    expect(imported.stdout).toBe('exitCode=0\n')
+    expect(imported.stderr).toBe('')
+  })
+
+  test('release CLIs reject unknown flags and a flag taken as a missing value', () => {
+    const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'
+    const cli = (script: string, args: string[]) => spawnSync(process.execPath, [`scripts/release/${script}`, ...args], { encoding: 'utf8' })
+    // A --dry-run typo must not start a real build, which begins by deleting the previous release output.
+    const typo = cli('package.mjs', ['--qa', '--platform', platform, '--dryrun'])
+    expect(typo.status).toBe(2)
+    expect(typo.stderr).toContain("Unknown option '--dryrun'")
+    const swallowed = cli('package.mjs', ['--qa', '--platform', '--dry-run'])
+    expect(swallowed.status).toBe(2)
+    expect(swallowed.stderr).toContain("Option '--platform' argument is ambiguous")
+
+    const prepare = cli('prepare-github-release.mjs', ['--input', '--output', 'x'])
+    expect(prepare.status).toBe(1)
+    expect(prepare.stderr).toMatch(/GitHub Release preparation failed: Option '--input' argument is ambiguous/)
+    const prune = cli('prune-draft-release-assets.mjs', ['--assets', 'draft.json', '--expected', 'release-assets', '--dry-run'])
+    expect(prune.status).toBe(1)
+    expect(prune.stderr).toContain("Draft release asset pruning failed: Unknown option '--dry-run'")
+    const verify = cli('verify-package.mjs', ['--mode', 'qa', '--arch'])
+    expect(verify.status).toBe(1)
+    expect(verify.stderr).toContain("Option '--arch <value>' argument missing")
   })
 
   test('binds the requested target architecture to the produced mac artifacts', async () => {
@@ -208,8 +246,6 @@ describe('release preflight', () => {
     expect(() => assertRequestedArchitecture({ ...artifacts, zip: 'release/mac/x64/Prime Work-1.0.0-x64.zip' }, 'arm64')).toThrow(/declares architecture x64/)
     expect(() => assertRequestedArchitecture(artifacts, 'universal')).toThrow(/must be arm64 or x64/)
     expect(() => assertRequestedArchitecture(artifacts, '')).toThrow(/must be arm64 or x64/)
-    // package.mjs forwards the authoritative arch into mac post-package verification.
-    expect(readFileSync('scripts/release/package.mjs', 'utf8')).toContain("'--arch', arch, '--release-directory'")
 
     const entitlement = 'com.apple.security.device.audio-input'
     expect(() => assertBooleanEntitlement(`<key>${entitlement}</key><true/>`, entitlement, 'fixture')).not.toThrow()
@@ -581,9 +617,49 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
   test('fails closed without Windows Authenticode credentials', () => {
     expect(() => validateWindowsReleaseCredentials({})).toThrow(/WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD/)
     expect(() => validateWindowsReleaseCredentials({ WIN_CSC_LINK: 'certificate', WIN_CSC_KEY_PASSWORD: 'password' })).not.toThrow()
-    const packaging = readFileSync('scripts/release/package.mjs', 'utf8')
-    expect(packaging).toContain("builderArgs.push('--config.forceCodeSigning=true')")
-    expect(packaging).toContain("'--mode', isPublic ? 'public' : 'qa'")
+  })
+
+  const builderOutput = (platform: string) => ['--publish', 'never', `--config.directories.output=release/${platform}/arm64`]
+  test.each([
+    { mode: 'public', platform: 'mac', builderArgs: ['--mac', '--arm64', ...builderOutput('mac')] },
+    { mode: 'public', platform: 'linux', builderArgs: ['--linux', '--arm64', ...builderOutput('linux')] },
+    { mode: 'public', platform: 'win', builderArgs: ['--win', '--arm64', ...builderOutput('win'), '--config.forceCodeSigning=true'] },
+    { mode: 'qa', platform: 'mac', builderArgs: ['--mac', '--arm64', ...builderOutput('mac'), '--config.mac.identity=null', '--config.mac.notarize=false'] },
+    { mode: 'qa', platform: 'linux', builderArgs: ['--linux', '--arm64', ...builderOutput('linux')] },
+    // Unsigned Windows QA builds skip the Store-only AppX target.
+    { mode: 'qa', platform: 'win', builderArgs: ['--win', 'nsis', 'zip', '--arm64', ...builderOutput('win')] },
+  ])('plans $mode $platform packaging with mode-specific signing and verification', ({ mode, platform, builderArgs }) => {
+    const outputDirectory = `/repo/release/${platform}/arm64`
+    const plan = packagingPlan({ mode, platform, arch: 'arm64', skipVerify: false, outputDirectory })
+    expect(plan.preVerify).toEqual({ command: 'npm', args: ['run', platform === 'mac' ? 'release:verify' : 'release:verify:package'] })
+    expect(plan.builder.command).toBe('electron-builder')
+    expect(plan.builder.args).toEqual(builderArgs)
+    expect(plan.builder.args.includes('--config.forceCodeSigning=true')).toBe(mode === 'public' && platform === 'win')
+    expect(plan.builder.args.includes('--config.mac.identity=null')).toBe(mode === 'qa' && platform === 'mac')
+    // Only QA disables keychain identity discovery; public builds must find the signing identity.
+    expect(plan.builder.env).toEqual(mode === 'qa' ? { CSC_IDENTITY_AUTO_DISCOVERY: 'false' } : {})
+    if (platform === 'mac') {
+      // Public mac verification needs the Team ID to check the signature; every other credential is stripped.
+      expect(plan.verify).toEqual({
+        command: 'node',
+        args: ['scripts/release/verify-package.mjs', '--mode', mode, '--arch', 'arm64', '--release-directory', outputDirectory],
+        keepCredentials: ['RELEASE_SIGNING_TEAM_ID'],
+      })
+    } else {
+      expect(plan.verify).toEqual({
+        command: 'node',
+        args: ['scripts/release/verify-cross-platform-package.mjs', '--platform', platform, '--arch', 'arm64', '--mode', mode],
+        keepCredentials: [],
+      })
+    }
+  })
+
+  test('plans only a bundle build before packaging when verification is skipped and rejects unknown modes', () => {
+    for (const platform of ['mac', 'linux', 'win']) {
+      expect(packagingPlan({ mode: 'public', platform, arch: 'x64', skipVerify: true, outputDirectory: '/repo/release' }).preVerify).toEqual({ command: 'npm', args: ['run', 'build:bundle'] })
+    }
+    expect(packagingPlan({ mode: 'qa', platform: 'linux', arch: 'x64', skipVerify: true, outputDirectory: '/repo/release' }).builder.args).toContain('--x64')
+    expect(() => packagingPlan({ mode: 'release', platform: 'win', arch: 'x64', skipVerify: true, outputDirectory: '/repo/release' })).toThrow('Packaging mode must be public or qa')
   })
 
   test('removes release credentials from untrusted verification commands', () => {
@@ -788,6 +864,8 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/latest*.yml')
     expect(releaseWorkflow).toContain('release/win/**/latest*.yml')
+    // Differential auto-updates need the blockmaps of the files electron-updater downloads.
+    expect(releaseWorkflow).toContain('release/win/**/*.exe.blockmap')
     expect(releaseWorkflow).toMatch(/needs: \[validate, production-audit, package, package-linux, package-windows\]/)
     expect(releaseWorkflow).toContain("needs.package-windows.result != 'skipped'")
     expect(releaseWorkflow).toContain('--platforms "$platforms"')
@@ -815,6 +893,14 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(workflow).toContain('--verify-tag')
     expect(workflow).toContain('--fail-on-no-commits')
     expect(workflow).toContain('--generate-notes')
+    // Unsigned beta Windows releases publish no MSIX and say so in the notes;
+    // signed mode wins when both Windows inputs are enabled.
+    const unsignedOnly = `if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then`
+    expect(workflow).toContain(`${unsignedOnly} flags='--windows-unsigned'; fi`)
+    expect(workflow).toContain('--platforms "$platforms" $flags')
+    const publish = workflow.slice(workflow.indexOf('- name: Publish GitHub Release'))
+    expect(publish).toContain(`${unsignedOnly}\n            notes="$notes Windows packages in this release are unsigned beta builds and will trigger SmartScreen warnings."`)
+    expect(workflow).toMatch(/gh release create "\$RELEASE_TAG" release-assets\/\*[\s\S]*?--notes "\$notes"/)
     // always() keeps the aggregate job from being skipped; the first step
     // fails explicitly when a prerequisite failed or was cancelled.
     expect(workflow).toMatch(/release-packages:\n {4}needs: \[validate, production-audit, package, package-linux, package-windows\]\n(?: {4}#.*\n)* {4}if: always\(\)\n {4}runs-on: ubuntu-22\.04/)
@@ -825,7 +911,9 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
 
   test('pins every release job to one commit SHA resolved by validate', () => {
     const workflow = readFileSync('.github/workflows/release.yml', 'utf8')
-    const parsed = load(workflow) as { jobs: Record<string, { outputs?: Record<string, string>; steps?: Array<{ id?: string; run?: string; with?: Record<string, unknown> }> }> }
+    const parsed = load(workflow) as {
+      jobs: Record<string, { outputs?: Record<string, string>; steps?: Array<{ id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }> }>
+    }
     expect(parsed.jobs.validate.outputs).toEqual({ sha: '${{ steps.resolve.outputs.sha }}' })
     expect(parsed.jobs.validate.steps?.find((step) => step.id === 'resolve')?.run).toContain('git rev-parse HEAD^{commit}')
     // validate resolves the movable tag once; every other job checks out that
@@ -835,9 +923,69 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
       expect(checkouts.length, name).toBeGreaterThan(0)
       for (const step of checkouts) expect(step.with?.ref, name).toBe(name === 'validate' ? '${{ env.RELEASE_REF }}' : '${{ needs.validate.outputs.sha }}')
     }
+    // A dispatched tag resolves as a tag, never a same-named branch, and the
+    // publish job refuses a tag that no longer points at the validated commit.
+    expect(workflow).toContain("RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}")
+    expect(workflow).toMatch(
+      /release-packages:[\s\S]*?git ls-remote origin "refs\/tags\/\$RELEASE_TAG" "refs\/tags\/\$RELEASE_TAG\^\{\}"[\s\S]*?"\$EXPECTED_SHA"[\s\S]*?Attest release assets[\s\S]*?gh release create "\$RELEASE_TAG"/,
+    )
+    expect(parsed.jobs['release-packages'].steps?.find((step) => step.run?.includes('git ls-remote'))).toMatchObject({ env: { EXPECTED_SHA: '${{ needs.validate.outputs.sha }}' } })
     // The ancestry check depends on the full history fetched above.
     expect(workflow).toContain('# fetch-depth: 0 above is what populates refs/remotes/origin/*')
     expect(workflow).toMatch(/fetch-depth: 0\n[\s\S]*?git merge-base --is-ancestor HEAD refs\/remotes\/origin\/main/)
+  })
+
+  test('the publish-time tag check accepts only the exact tag at the validated commit', () => {
+    const parsed = load(readFileSync('.github/workflows/release.yml', 'utf8')) as { jobs: Record<string, { steps: Array<{ name?: string; run?: string }> }> }
+    const script = parsed.jobs['release-packages'].steps.find((step) => step.name === 'Require the release tag to still point at the validated commit')?.run
+    expect(script).toBeDefined()
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-tag-check-'))
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync('git', ['-c', 'user.name=GooeyPi Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', ...args], {
+        cwd,
+        encoding: 'utf8',
+      })
+      if (result.status !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    try {
+      const origin = join(directory, 'origin')
+      const checkout = join(directory, 'checkout')
+      mkdirSync(origin)
+      mkdirSync(checkout)
+      git(origin, 'init', '-q')
+      git(origin, 'commit', '-q', '--allow-empty', '-m', 'validated')
+      const validated = git(origin, 'rev-parse', 'HEAD')
+      git(origin, 'commit', '-q', '--allow-empty', '-m', 'moved')
+      const moved = git(origin, 'rev-parse', 'HEAD')
+      git(checkout, 'init', '-q')
+      git(checkout, 'remote', 'add', 'origin', origin)
+      // GitHub runs `run:` steps with bash -eo pipefail.
+      const check = () =>
+        spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', script as string], {
+          cwd: checkout,
+          encoding: 'utf8',
+          env: { ...process.env, RELEASE_TAG: 'v1.2.3', EXPECTED_SHA: validated },
+        })
+
+      git(origin, 'tag', '-a', 'v1.2.3', '-m', 'release', validated)
+      expect(check().status).toBe(0)
+      git(origin, 'tag', '-f', 'v1.2.3', validated)
+      expect(check().status).toBe(0)
+      // ls-remote also lists refs whose names end in the tag; such a decoy at
+      // the validated commit must not hide that the real tag moved.
+      git(origin, 'update-ref', 'refs/tags/w/refs/tags/v1.2.3', validated)
+      git(origin, 'tag', '-f', '-a', 'v1.2.3', '-m', 'release', moved)
+      const movedResult = check()
+      expect(movedResult.status).toBe(1)
+      expect(movedResult.stdout).toContain(`Tag v1.2.3 resolves to ${moved}, not the validated commit ${validated}.`)
+      git(origin, 'tag', '-d', 'v1.2.3')
+      const missing = check()
+      expect(missing.status).toBe(1)
+      expect(missing.stdout).toContain('Tag v1.2.3 resolves to <missing>')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test('deletes stale draft assets before publishing a resumed release', () => {
@@ -858,6 +1006,32 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(security).toContain('when neither is configured, public Windows packaging fails closed')
   })
 
+  test('bounds every workflow job with a job-level timeout', () => {
+    // GitHub's default is 360 minutes, so a hung notarization, hdiutil, smoke, or audit step would bill for hours.
+    for (const path of ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/audit.yml']) {
+      const workflow = load(readFileSync(path, 'utf8')) as { jobs: Record<string, { 'timeout-minutes'?: unknown }> }
+      const jobs = Object.entries(workflow.jobs)
+      expect(jobs.length, path).toBeGreaterThan(0)
+      for (const [name, job] of jobs) {
+        const timeout = job['timeout-minutes']
+        expect(Number.isInteger(timeout), `${path} ${name} timeout-minutes`).toBe(true)
+        expect(timeout as number, `${path} ${name} timeout-minutes`).toBeGreaterThan(0)
+        expect(timeout as number, `${path} ${name} timeout-minutes`).toBeLessThanOrEqual(90)
+      }
+    }
+  })
+
+  test('runs the same release quality aggregate on pull requests as at release time', () => {
+    const qualityRuns = (path: string) =>
+      ((load(readFileSync(path, 'utf8')) as { jobs: { quality: { steps: Array<{ run?: string }> } } }).jobs.quality.steps ?? []).flatMap((step) => (step.run ? [step.run] : []))
+    const ci = qualityRuns('.github/workflows/ci.yml')
+    // A hand-copied subset of the aggregate once left out vendor patch verification.
+    expect(ci).toEqual(qualityRuns('.github/workflows/release.yml'))
+    expect(ci).toContain('npm run release:verify:package')
+    const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts as Record<string, string>
+    expect(scripts['release:verify:package']).toContain('npm run vendor:verify-patches')
+  })
+
   test('ships both mac architectures as separate builds from native-arch runners', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     // Two matrix legs, each on a runner whose native architecture matches the
@@ -873,6 +1047,7 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(releaseWorkflow).toContain('name: gooeypi-public-macos-${{ matrix.arch }}')
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/*.dmg')
     expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/*.zip')
+    expect(releaseWorkflow).toContain('release/mac/${{ matrix.arch }}/*.zip.blockmap')
     expect(releaseWorkflow).toContain('electron-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles(')
     // Universal binaries are excluded by design: the release ships two builds.
     expect(releaseWorkflow).not.toContain('--universal')
@@ -896,8 +1071,24 @@ describe('GitHub Release publication', () => {
   test('selects an exact enabled platform set', () => {
     expect(parseReleasePlatforms('mac,linux')).toEqual(['mac', 'linux'])
     expect(expectedGitHubReleaseAssets('0.2.0', ['mac', 'linux'])).not.toContain('GooeyPi-0.2.0-win-x64.exe')
-    expect(expectedGitHubReleaseAssets('0.2.0', ['mac'])).toEqual(['GooeyPi-0.2.0-arm64.zip', 'GooeyPi-0.2.0-intel-chip.dmg', 'GooeyPi-0.2.0-m-chip.dmg', 'GooeyPi-0.2.0-x64.zip', 'latest-mac.yml'])
-    expect(expectedDownloadedReleaseAssets('0.2.0', ['mac'])).toEqual(['GooeyPi-0.2.0-arm64.zip', 'GooeyPi-0.2.0-x64.dmg', 'GooeyPi-0.2.0-arm64.dmg', 'GooeyPi-0.2.0-x64.zip', 'latest-mac.yml'])
+    expect(expectedGitHubReleaseAssets('0.2.0', ['mac'])).toEqual([
+      'GooeyPi-0.2.0-arm64.zip',
+      'GooeyPi-0.2.0-arm64.zip.blockmap',
+      'GooeyPi-0.2.0-intel-chip.dmg',
+      'GooeyPi-0.2.0-m-chip.dmg',
+      'GooeyPi-0.2.0-x64.zip',
+      'GooeyPi-0.2.0-x64.zip.blockmap',
+      'latest-mac.yml',
+    ])
+    expect(expectedDownloadedReleaseAssets('0.2.0', ['mac'])).toEqual([
+      'GooeyPi-0.2.0-arm64.zip',
+      'GooeyPi-0.2.0-arm64.zip.blockmap',
+      'GooeyPi-0.2.0-x64.dmg',
+      'GooeyPi-0.2.0-arm64.dmg',
+      'GooeyPi-0.2.0-x64.zip',
+      'GooeyPi-0.2.0-x64.zip.blockmap',
+      'latest-mac.yml',
+    ])
     expect(expectedGitHubReleaseAssets('0.2.0', ['linux'])).toEqual([
       'GooeyPi-0.2.0-linux-aarch64.pacman',
       'GooeyPi-0.2.0-linux-aarch64.rpm',
@@ -912,6 +1103,78 @@ describe('GitHub Release publication', () => {
     ])
     expect(() => parseReleasePlatforms('mac,mac')).toThrow(/duplicates/)
     expect(() => parseReleasePlatforms('mac,android')).toThrow(/Unsupported/)
+    expect(expectedGitHubReleaseAssets('0.2.0', ['win'])).toEqual([
+      'GooeyPi-0.2.0-win-x64.exe',
+      'GooeyPi-0.2.0-win-x64.exe.blockmap',
+      'GooeyPi-0.2.0-win-x64.msix',
+      'GooeyPi-0.2.0-win-x64.zip',
+      'latest.yml',
+    ])
+    // Unsigned beta Windows builds cannot install as an MSIX, so they never publish one.
+    expect(expectedGitHubReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).toEqual([
+      'GooeyPi-0.2.0-win-x64.exe',
+      'GooeyPi-0.2.0-win-x64.exe.blockmap',
+      'GooeyPi-0.2.0-win-x64.zip',
+      'latest.yml',
+    ])
+    expect(expectedDownloadedReleaseAssets('0.2.0', ['win'], { windowsUnsigned: true })).not.toContain('GooeyPi-0.2.0-win-x64.appx')
+    expect(() => releaseAssetNames('0.2.0', ['mac', 'linux'], { windowsUnsigned: true })).toThrow(/require the win release platform/)
+  })
+
+  test('publishes only the NSIS installer and ZIP for unsigned Windows betas', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-github-release-unsigned-'))
+    const projectDirectory = join(directory, 'project')
+    const inputDirectory = join(directory, 'downloaded')
+    mkdirSync(projectDirectory, { recursive: true })
+    mkdirSync(join(inputDirectory, 'gooeypi-public-windows'), { recursive: true })
+    writeFileSync(join(projectDirectory, 'package.json'), JSON.stringify({ version: '0.2.0' }))
+    writeFileSync(join(projectDirectory, 'package-lock.json'), JSON.stringify({ version: '0.2.0', packages: { '': { version: '0.2.0' } } }))
+    // A stray Store-only package in the downloaded artifacts must not be published.
+    for (const name of ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.exe.blockmap', 'GooeyPi-0.2.0-win-x64.zip', 'GooeyPi-0.2.0-win-x64.appx', 'GooeyPi-0.2.0-win-x64.msix']) {
+      writeFileSync(join(inputDirectory, 'gooeypi-public-windows', name), `asset ${name}`)
+    }
+    writeFileSync(
+      join(inputDirectory, 'gooeypi-public-windows', 'latest.yml'),
+      'version: 0.2.0\nfiles:\n  - url: GooeyPi-0.2.0-win-x64.exe\n    sha512: exe-digest\n    size: 42\npath: GooeyPi-0.2.0-win-x64.exe\nsha512: exe-digest\n',
+    )
+    const expected = ['GooeyPi-0.2.0-win-x64.exe', 'GooeyPi-0.2.0-win-x64.exe.blockmap', 'GooeyPi-0.2.0-win-x64.zip', 'latest.yml']
+    try {
+      const outputDirectory = join(directory, 'release-assets')
+      const result = await prepareGitHubRelease({ inputDirectory, outputDirectory, projectDirectory, platforms: ['win'], windowsUnsigned: true, tag: 'v0.2.0' })
+      expect(result.assets).toEqual(expected)
+      expect(readdirSync(outputDirectory).sort()).toEqual([...expected, 'SHA256SUMS.txt'].sort())
+      expect(readFileSync(join(outputDirectory, 'SHA256SUMS.txt'), 'utf8')).not.toMatch(/\.(?:msix|appx)$/m)
+
+      // The CLI threads --windows-unsigned through, and rejects it without the win platform.
+      const script = join(process.cwd(), 'scripts/release/prepare-github-release.mjs')
+      const cli = (output: string, platforms: string) =>
+        spawnSync(process.execPath, [script, '--input', inputDirectory, '--output', join(directory, output), '--tag', 'v0.2.0', '--platforms', platforms, '--windows-unsigned'], {
+          cwd: projectDirectory,
+          encoding: 'utf8',
+        })
+      const published = cli('cli-assets', 'win')
+      expect(published.status, published.stderr).toBe(0)
+      expect(readdirSync(join(directory, 'cli-assets')).sort()).toEqual([...expected, 'SHA256SUMS.txt'].sort())
+      const misused = cli('misused-assets', 'mac,linux')
+      expect(misused.status).toBe(1)
+      expect(misused.stderr).toMatch(/require the win release platform/)
+
+      // The installer's blockmap is what makes updates differential, so it is required too.
+      const blockmap = join(inputDirectory, 'gooeypi-public-windows', 'GooeyPi-0.2.0-win-x64.exe.blockmap')
+      rmSync(blockmap)
+      await expect(
+        prepareGitHubRelease({ inputDirectory, outputDirectory: join(directory, 'no-blockmap'), projectDirectory, platforms: ['win'], windowsUnsigned: true, tag: 'v0.2.0' }),
+      ).rejects.toThrow(/missing GooeyPi-0\.2\.0-win-x64\.exe\.blockmap$/)
+      writeFileSync(blockmap, 'asset blockmap')
+
+      // A signed release still requires the MSIX.
+      rmSync(join(inputDirectory, 'gooeypi-public-windows', 'GooeyPi-0.2.0-win-x64.appx'))
+      await expect(prepareGitHubRelease({ inputDirectory, outputDirectory: join(directory, 'signed'), projectDirectory, platforms: ['win'], tag: 'v0.2.0' })).rejects.toThrow(
+        /missing GooeyPi-0\.2\.0-win-x64\.msix$/,
+      )
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test('keeps every release asset name in exact correspondence with electron-builder artifacts', () => {
@@ -924,8 +1187,17 @@ describe('GitHub Release publication', () => {
     const feeds = [...names.keys()].filter((name) => name.endsWith('.yml'))
     expect(feeds).toEqual(['latest-linux-arm64.yml', 'latest-linux.yml', 'latest-mac.yml', 'latest.yml'])
     // Every produced artifact is published and every published asset (other than
-    // the updater feeds) is produced - both directions, no index coupling.
-    expect([...names.values()].filter((name) => !name.endsWith('.yml')).sort()).toEqual(produced)
+    // the updater feeds and blockmaps) is produced - both directions, no index coupling.
+    expect([...names.values()].filter((name) => !name.endsWith('.yml') && !name.endsWith('.blockmap')).sort()).toEqual(produced)
+    // electron-updater fetches `<update file>.blockmap` for exactly the macOS ZIPs and the NSIS installer.
+    const blockmaps = [...names].filter(([published]) => published.endsWith('.blockmap'))
+    expect(blockmaps.every(([published, downloaded]) => published === downloaded)).toBe(true)
+    expect(blockmaps.map(([published]) => published)).toEqual(
+      produced
+        .filter((name) => /^GooeyPi-0\.2\.0-(?:arm64|x64)\.zip$/.test(name) || name.endsWith('.exe'))
+        .map((name) => `${name}.blockmap`)
+        .sort(),
+    )
     const targetCount = Object.entries(RELEASE_BUILD_MATRIX).reduce((total, [platform, architectures]) => total + architectures.length * config[platform].target.length, 0)
     expect(produced).toHaveLength(targetCount)
     // Only the two macOS DMGs are renamed for the public download page.
@@ -1042,6 +1314,9 @@ describe('GitHub Release publication', () => {
     expect(() => assertReleaseTag('v0.2.0', '0.2.0', '0.1.9')).toThrow(/does not match/)
     expect(() => assertReleaseTag('v0.2.0', '0.2.0', '0.2.0', '0.1.9')).toThrow(/root package version/)
     expect(() => assertReleaseTag('v01.2.3', '01.2.3', '01.2.3')).toThrow(/not a supported semantic version/)
+    // Releases publish as GitHub's latest stable release, so a prerelease would reach every installed client.
+    expect(() => assertReleaseTag('v1.2.0-beta.1', '1.2.0-beta.1', '1.2.0-beta.1')).toThrow(/Prerelease version 1\.2\.0-beta\.1 is not supported/)
+    expect(() => assertReleaseTag('v1.2.0-', '1.2.0-', '1.2.0-')).toThrow(/not a supported semantic version/)
   })
 
   test('selects the exact cross-platform asset set and writes reproducible checksums', async () => {
@@ -1142,7 +1417,56 @@ describe('fuse hardening configuration', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
     expect(packageJson.build.afterPack).toBe('scripts/release/after-pack.cjs')
     expect(() => readFileSync('scripts/afterPack.cjs', 'utf8')).toThrow()
-    expect(readFileSync(packageJson.build.afterPack, 'utf8')).toContain('FuseV1Options.OnlyLoadAppFromAsar')
+    // after-pack flips the same shared fuse map both package verifiers read back.
+    expect(readFileSync(packageJson.build.afterPack, 'utf8')).toContain('...ELECTRON_FUSE_CONFIG')
+  })
+
+  test('pins every hardened fuse value independently of the shared config', () => {
+    expect(ELECTRON_FUSE_CONFIG).toEqual({
+      [FuseV1Options.RunAsNode]: false,
+      [FuseV1Options.EnableCookieEncryption]: true,
+      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+      [FuseV1Options.EnableNodeCliInspectArguments]: false,
+      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+      [FuseV1Options.OnlyLoadAppFromAsar]: true,
+      [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
+      [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
+      [FuseV1Options.WasmTrapHandlers]: true,
+    })
+  })
+
+  test('rejects a fuse wire that differs from the hardened config', () => {
+    const wire = Object.fromEntries(Object.entries(ELECTRON_FUSE_CONFIG).map(([option, enabled]) => [option, enabled ? FuseState.ENABLE : FuseState.DISABLE]))
+    expect(() => assertFuseWire(wire)).not.toThrow()
+    expect(() => assertFuseWire({ ...wire, [FuseV1Options.RunAsNode]: FuseState.ENABLE })).toThrow('Electron fuse RunAsNode is ENABLE, expected DISABLE')
+    expect(() => assertFuseWire({ ...wire, [FuseV1Options.OnlyLoadAppFromAsar]: FuseState.DISABLE })).toThrow('Electron fuse OnlyLoadAppFromAsar is DISABLE, expected ENABLE')
+    expect(() => assertFuseWire({ ...wire, [FuseV1Options.EnableNodeCliInspectArguments]: FuseState.REMOVED })).toThrow(/EnableNodeCliInspectArguments is REMOVED/)
+    const { [FuseV1Options.WasmTrapHandlers]: _omitted, ...truncated } = wire
+    expect(() => assertFuseWire(truncated)).toThrow('Electron fuse WasmTrapHandlers is undefined, expected ENABLE')
+    // Every hardened fuse is enforced on its own: flipping or dropping any one of them fails.
+    for (const option of Object.keys(ELECTRON_FUSE_CONFIG)) {
+      const name = FuseV1Options[Number(option)]
+      const flipped = wire[option] === FuseState.ENABLE ? FuseState.DISABLE : FuseState.ENABLE
+      expect(() => assertFuseWire({ ...wire, [option]: flipped })).toThrow(`Electron fuse ${name} is ${FuseState[flipped]}`)
+      const { [option]: _dropped, ...missing } = wire
+      expect(() => assertFuseWire(missing)).toThrow(`Electron fuse ${name} is undefined`)
+    }
+    expect(Object.keys(ELECTRON_FUSE_CONFIG)).toHaveLength(9)
+  })
+
+  test('accepts the wire after-pack flips into a binary and rejects an unflipped one', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'gooeypi-fuses-'))
+    try {
+      // A minimal stand-in for an Electron binary: @electron/fuses' sentinel,
+      // a V1 header, and a fuse wire with every fuse at Electron's default ENABLE.
+      const binary = join(directory, 'gooeypi')
+      writeFileSync(binary, Buffer.concat([Buffer.from('prefix'), Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX'), Buffer.from([1, 9]), Buffer.alloc(9, FuseState.ENABLE), Buffer.from('suffix')]))
+      await expect(getCurrentFuseWire(binary).then(assertFuseWire)).rejects.toThrow(/RunAsNode is ENABLE/)
+      await flipFuses(binary, { version: FuseVersion.V1, ...ELECTRON_FUSE_CONFIG })
+      await expect(getCurrentFuseWire(binary).then(assertFuseWire)).resolves.toBeUndefined()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
 
@@ -1249,10 +1573,34 @@ describe('post-package verification helpers', () => {
   test('verifies and uploads every configured Linux installer format', () => {
     expect(expectedArtifactExtensions('linux')).toEqual(['.AppImage', '.deb', '.rpm', '.pacman'])
     expect(expectedArtifactExtensions('win')).toEqual(['.exe', '.zip', '.appx'])
+    // Unsigned QA builds skip the Store-only AppX that Windows refuses to install.
+    expect(expectedArtifactExtensions('win', 'qa')).toEqual(['.exe', '.zip'])
+    expect(expectedArtifactExtensions('linux', 'qa')).toEqual(['.AppImage', '.deb', '.rpm', '.pacman'])
     const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8')
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     expect(ciWorkflow).toContain('release/linux/**/*.pacman')
     expect(releaseWorkflow).toContain('release/linux/${{ matrix.arch }}/*.pacman')
+    // The Windows local-QA upload lists exactly the artifacts a QA build produces.
+    const localQa = load(ciWorkflow) as { jobs: { 'local-qa-package': { strategy: { matrix: { include: Array<{ runner: string; path: string }> } } } } }
+    const windowsLeg = localQa.jobs['local-qa-package'].strategy.matrix.include.find((leg) => leg.runner.startsWith('windows-'))
+    expect(windowsLeg?.path.trim().split('\n')).toEqual(expectedArtifactExtensions('win', 'qa').map((extension) => `release/win/**/*${extension}`))
+  })
+
+  test('keeps a Chromium locale for every language the app can display', () => {
+    // electron-builder deletes every Chromium locale outside electronLanguages,
+    // and Chromium then reports en-US to the renderer, so 'Follow system' could
+    // never resolve to a language whose locale was stripped. The match below is
+    // electron-builder's own cleanup rule.
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+    const normalize = (locale: string) => locale.trim().toLowerCase().replaceAll('_', '-')
+    const kept = (packageJson.build.electronLanguages as string[]).map(normalize)
+    // The explicit locale preferences the settings validator accepts.
+    for (const locale of LOCALE_PREFERENCES.filter((value) => value !== 'system').map(normalize)) {
+      expect(
+        kept.some((wanted) => wanted === locale || locale.startsWith(`${wanted}-`) || wanted.startsWith(`${locale}-`)),
+        locale,
+      ).toBe(true)
+    }
   })
 
   test('fails closed when Windows Authenticode verification is not valid', () => {
@@ -1313,42 +1661,32 @@ describe('post-package verification helpers', () => {
 
   test('excludes other platform native build trees and declares zeromq directly', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-    const optimizedAgentExclusions = [
-      '!**/node_modules/prime-agent/docs/**',
-      '!**/node_modules/prime-agent/dist/bundle/**',
-      '!**/node_modules/prime-agent/dist/modes/**',
-      '!**/node_modules/prime-agent/**/*.map',
-      '!**/node_modules/prime-agent/**/*.d.ts',
-      '!**/node_modules/@earendil-works/pi-tui/**',
-      '!**/node_modules/koffi/**',
-    ]
+    // Builder normalization creates separate root FileSets and platform matchers.
+    // Each platform needs the positive allowlist or its matcher defaults to **/*.
     expect(packageJson.build.mac.files).toEqual([
-      'out/**/*',
-      'package.json',
-      ...optimizedAgentExclusions,
+      ...packageJson.build.files,
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.linux-*.node',
       '!**/node_modules/extract-zip/index.win32-*.node',
     ])
     expect(packageJson.build.linux.files).toEqual([
-      'out/**/*',
-      'package.json',
-      ...optimizedAgentExclusions,
+      ...packageJson.build.files,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
       '!**/node_modules/extract-zip/index.win32-*.node',
     ])
     expect(packageJson.build.win.files).toEqual([
-      'out/**/*',
-      'package.json',
-      ...optimizedAgentExclusions,
+      ...packageJson.build.files,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
       '!**/node_modules/extract-zip/index.linux-*.node',
     ])
+    for (const platform of ['mac', 'linux', 'win']) {
+      expect(packageJson.build[platform].files.slice(0, packageJson.build.files.length)).toEqual(packageJson.build.files)
+    }
     // Pin the app to the zeromq range prime-agent uses so the packaged addon
     // and the agent's runtime expectations cannot drift apart silently.
     const primeAgent = JSON.parse(readFileSync(new URL('../node_modules/prime-agent/package.json', import.meta.url), 'utf8'))
@@ -1362,7 +1700,7 @@ describe('post-package verification helpers', () => {
     mkdirSync(dirname(fallback), { recursive: true })
     writeFileSync(fallback, 'fixture')
     try {
-      expect(() => assertUnpackedNativeLayout(fallbackDirectory, architectures, () => architectures)).not.toThrow()
+      expect(() => assertMacUnpackedNativeLayout(fallbackDirectory, architectures, () => architectures)).not.toThrow()
     } finally {
       rmSync(fallbackDirectory, { recursive: true, force: true })
     }
@@ -1375,7 +1713,7 @@ describe('post-package verification helpers', () => {
     }
     try {
       // A future runtime-library name still matches the bounded wildcard.
-      expect(() => assertUnpackedNativeLayout(futureDirectory, architectures, () => architectures)).not.toThrow()
+      expect(() => assertMacUnpackedNativeLayout(futureDirectory, architectures, () => architectures)).not.toThrow()
     } finally {
       rmSync(futureDirectory, { recursive: true, force: true })
     }
@@ -1385,7 +1723,7 @@ describe('post-package verification helpers', () => {
     const architectures = new Set(['arm64'])
     const directory = createUnpackedFixture(architectures)
     try {
-      expect(() => assertUnpackedNativeLayout(directory, architectures, () => new Set(['arm64']))).not.toThrow()
+      expect(() => assertMacUnpackedNativeLayout(directory, architectures, () => new Set(['arm64']))).not.toThrow()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
@@ -1396,7 +1734,7 @@ describe('post-package verification helpers', () => {
     const missingDirectory = createUnpackedFixture(architectures)
     rmSync(join(missingDirectory, expectedUnpackedNativeLayout(architectures).files.at(-1)!))
     try {
-      expect(() => assertUnpackedNativeLayout(missingDirectory, architectures, () => architectures)).toThrow(/Missing unpacked/)
+      expect(() => assertMacUnpackedNativeLayout(missingDirectory, architectures, () => architectures)).toThrow(/Missing unpacked/)
     } finally {
       rmSync(missingDirectory, { recursive: true, force: true })
     }
@@ -1406,7 +1744,7 @@ describe('post-package verification helpers', () => {
     mkdirSync(dirname(extraPath), { recursive: true })
     writeFileSync(extraPath, 'fixture')
     try {
-      expect(() => assertUnpackedNativeLayout(extraDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*extra/)
+      expect(() => assertMacUnpackedNativeLayout(extraDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*extra/)
     } finally {
       rmSync(extraDirectory, { recursive: true, force: true })
     }
@@ -1414,7 +1752,7 @@ describe('post-package verification helpers', () => {
     const extraPrefixDirectory = createUnpackedFixture(architectures)
     mkdirSync(join(extraPrefixDirectory, 'empty-prefix'))
     try {
-      expect(() => assertUnpackedNativeLayout(extraPrefixDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*empty-prefix/)
+      expect(() => assertMacUnpackedNativeLayout(extraPrefixDirectory, architectures, () => architectures)).toThrow(/Unexpected unpacked.*empty-prefix/)
     } finally {
       rmSync(extraPrefixDirectory, { recursive: true, force: true })
     }
@@ -1424,7 +1762,7 @@ describe('post-package verification helpers', () => {
     const architectures = new Set(['arm64'])
     const directory = createUnpackedFixture(architectures)
     try {
-      expect(() => assertUnpackedNativeLayout(directory, architectures, (path: string) => (path.endsWith('addon.node') ? new Set(['x86_64']) : new Set(['arm64'])))).toThrow(
+      expect(() => assertMacUnpackedNativeLayout(directory, architectures, (path: string) => (path.endsWith('addon.node') ? new Set(['x86_64']) : new Set(['arm64'])))).toThrow(
         /addon\.node is missing app architecture.*arm64/,
       )
     } finally {
@@ -1545,13 +1883,29 @@ describe('cross-platform packaging repair', () => {
     expect(builder.shell).toBe(false)
     expect(builder.args[0]).toMatch(/electron-builder[\\/]cli\.js$/)
     expect(builder.args.at(-1)).toBe('install-app-deps')
-    const packageScript = readFileSync('scripts/release/package.mjs', 'utf8')
-    expect(packageScript).toContain("run('electron-builder', builderArgs, builderEnv)")
-    expect(packageScript).not.toContain("['exec', '--', 'electron-builder'")
+    // package.mjs spawns electron-builder through this resolver, never through `npm exec`.
+    expect(packagingPlan({ mode: 'public', platform: 'win', arch: 'x64', skipVerify: true, outputDirectory: 'C:/release/win/x64' }).builder.command).toBe('electron-builder')
     const npmViaLifecycle = resolveCommandInvocation('npm', ['run', 'release:verify'], 'win32', { npm_execpath: 'C:/npm/npm-cli.js' })
     expect(npmViaLifecycle).toEqual({ file: process.execPath, args: ['C:/npm/npm-cli.js', 'run', 'release:verify'], shell: false })
     expect(() => resolveCommandInvocation('npm', ['ci'], 'win32', { npm_execpath: 'C:/npm/npm.cmd' })).toThrow(/JavaScript npm CLI/)
     expect(resolveCommandInvocation('npm', ['ci'], 'darwin', {})).toEqual({ file: 'npm', args: ['ci'], shell: false })
+  })
+
+  test('spawns vendor patch commands through the Windows-safe resolver', () => {
+    const calls: Array<{ file: string; args: string[]; cwd: string; shell: boolean }> = []
+    const spawn = (file: string, args: string[], options: { cwd: string; shell: boolean }) => {
+      calls.push({ file, args, cwd: options.cwd, shell: options.shell })
+      return { status: 0, stdout: ' packed \n', stderr: '' }
+    }
+    // npm on Windows is a .cmd shim, so it must run as `node <npm-cli.js>`, never as bare `npm`.
+    expect(runVendorPatchCommand('npm', ['pack', 'package'], 'C:/repo', { platform: 'win32', env: { npm_execpath: 'C:/npm/npm-cli.js' }, spawn: spawn as never })).toBe('packed')
+    runVendorPatchCommand('git', ['apply', 'fix.patch'], 'C:/work', { platform: 'win32', env: {}, spawn: spawn as never })
+    expect(calls).toEqual([
+      { file: process.execPath, args: ['C:/npm/npm-cli.js', 'pack', 'package'], cwd: 'C:/repo', shell: false },
+      { file: 'git', args: ['apply', 'fix.patch'], cwd: 'C:/work', shell: false },
+    ])
+    const failing = () => ({ status: 1, stdout: '', stderr: 'patch does not apply\n' })
+    expect(() => runVendorPatchCommand('git', ['apply', 'fix.patch'], 'C:/work', { spawn: failing as never })).toThrow('git apply fix.patch failed: patch does not apply')
   })
 
   test('installs Electron before rebuilding native app dependencies', () => {
@@ -1569,20 +1923,62 @@ describe('cross-platform packaging repair', () => {
     expect(calls[0].env).toBe(calls[1].env)
     expect(calls[0].env).toMatchObject({ TASK_MARKER: 'kept', PYTHON: '/usr/bin/python3' })
   })
+
+  test('resolves the renderer @ alias for checkouts whose path has spaces or non-ASCII characters', () => {
+    // URL.pathname would percent-encode the alias (%20, %C3%A9), which Vite
+    // never decodes, so dev and build broke in a profile like C:\Users\Jane Doe.
+    // Node resolves the imported module through symlinks such as macOS's /var.
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'gooeypi checkout é-')))
+    try {
+      writeFileSync(join(directory, 'electron.vite.config.ts'), readFileSync('electron.vite.config.ts'))
+      symlinkSync(join(process.cwd(), 'node_modules'), join(directory, 'node_modules'), 'junction')
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          "const { default: config } = await import(process.argv[1]); console.log(config.renderer.resolve.alias['@'])",
+          pathToFileURL(join(directory, 'electron.vite.config.ts')).href,
+        ],
+        { encoding: 'utf8' },
+      )
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout.trim()).toBe(join(directory, 'src'))
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('DMG verification cleanup', () => {
-  test('detach failures are logged instead of masking the original error and cleanup always runs', () => {
-    const source = readFileSync('scripts/release/verify-package.mjs', 'utf8')
-    const verifyDmg = source.slice(source.indexOf('async function verifyDmg'), source.indexOf('export async function verifyPackage'))
-    // hdiutil detach runs inside its own try/catch that only logs.
-    expect(verifyDmg).toMatch(/try\s*\{\s*run\('hdiutil', \['detach', mountPoint\]\)\s*\}\s*catch \(detachError\)\s*\{\s*console\.error/)
-    // The rmSync cleanup is attempted unconditionally after the detach attempt.
-    const finallyIndex = verifyDmg.indexOf('} finally {')
-    const cleanupIndex = verifyDmg.indexOf('rmSync(mountPoint, { recursive: true, force: true })')
-    expect(finallyIndex).toBeGreaterThan(-1)
-    expect(cleanupIndex).toBeGreaterThan(finallyIndex)
-    expect(verifyDmg.slice(cleanupIndex)).not.toContain('detach')
+  test('detach failures are logged instead of masking the original error and cleanup always runs', async () => {
+    const releaseDirectory = mkdtempSync(join(tmpdir(), 'gooeypi-dmg-release-'))
+    writeFileSync(join(releaseDirectory, 'GooeyPi-1.0.0-arm64.dmg'), '')
+    writeFileSync(join(releaseDirectory, 'GooeyPi-1.0.0-arm64.zip'), '')
+    let mountPoint: string | undefined
+    const spawnSync = vi.fn((command: string, args: string[]) => {
+      if (command === 'hdiutil' && args[0] === 'attach') mountPoint = args[args.indexOf('-mountpoint') + 1]
+      if (command === 'hdiutil' && args[0] === 'detach') return { status: 1, stdout: '', stderr: 'resource busy' }
+      return { status: 0, stdout: '', stderr: '' }
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Scoped rather than hoisted so the other tests in this file keep spawning real processes.
+    vi.resetModules()
+    vi.doMock('node:child_process', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:child_process')>()), spawnSync }))
+    try {
+      const { verifyPackage } = await import('../scripts/release/verify-package.mjs')
+      // The empty mount holds no .app; that original error must survive the failed detach.
+      await expect(verifyPackage({ mode: 'qa', releaseDirectory })).rejects.toThrow(/Expected exactly one packaged \.app/)
+      expect(spawnSync).toHaveBeenCalledWith('hdiutil', ['detach', mountPoint], expect.anything())
+      expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/hdiutil detach failed/))
+      expect(mountPoint).toBeDefined()
+      expect(existsSync(mountPoint as string)).toBe(false)
+    } finally {
+      vi.doUnmock('node:child_process')
+      vi.resetModules()
+      consoleError.mockRestore()
+      rmSync(releaseDirectory, { recursive: true, force: true })
+    }
   })
 })
 
@@ -1653,8 +2049,10 @@ describe('vendored supply-chain pins', () => {
     // the vendored Prime Agent tarballs. A regenerated lockfile silently
     // re-anchors them to whatever bytes are present; this pin file makes that
     // a deliberate, reviewed change. To upgrade Prime Agent on purpose:
-    // verify the new tarballs, replace them in vendor/, update the lockfile,
-    // then mirror the new resolved/integrity values here in the same commit.
+    // verify the new base tarballs, replace them in vendor/, regenerate the
+    // vendor/patches diffs and *-gooeypi.N.tgz archives, update the lockfile,
+    // mirror the new resolved/integrity values here, and run
+    // `npm run vendor:verify-patches` before committing them together.
     expect(nonRegistry.length).toBeGreaterThan(0)
     for (const [name, entry] of nonRegistry) {
       const pin = pins[name]
@@ -1713,6 +2111,17 @@ describe('vendored supply-chain pins', () => {
 
     const unpinned = readdirSync('vendor').filter((name) => name.endsWith('.tgz') && !pinned.has(`vendor/${name}`))
     expect(unpinned, 'vendored tarballs without any pin').toEqual([])
+  })
+
+  test('vendor patch verification reads base archive digests from the reference pins', () => {
+    const reference = JSON.parse(readFileSync('scripts/release/dependency-pins.json', 'utf8'))['reference-artifacts'] as Record<string, { path: string; integrity: string }>
+    for (const { base } of VENDOR_PATCH_PACKAGES) {
+      const pin = Object.values(reference).find((entry) => entry.path === `vendor/${base}`)
+      expect(basePinIntegrity(base), `base archive not read from its pin: ${base}`).toBe(pin?.integrity)
+    }
+    // A base archive missing from the pin store, or pinned with a weaker digest, fails closed.
+    expect(() => basePinIntegrity('prime-agent-9.9.9.tgz')).toThrow('Base archive is not pinned in dependency-pins.json reference-artifacts: prime-agent-9.9.9.tgz')
+    expect(() => basePinIntegrity('base.tgz', { weak: { path: 'vendor/base.tgz', integrity: 'sha1-abc' } })).toThrow(/not pinned/)
   })
 
   test('the checked-in npm bootstrap archive matches its strict artifact pin and provenance record', () => {
@@ -1811,6 +2220,7 @@ describe('vendor patch verification', () => {
     try {
       // The copied verifier resolves vendor/ from its own location; its helpers still load from the repository.
       copyFileSync('scripts/release/verify-vendor-patches.mjs', join(release, 'verify-vendor-patches.mjs'))
+      copyFileSync('scripts/release/dependency-pins.json', join(release, 'dependency-pins.json'))
       writeFileSync(join(release, 'lib.mjs'), `export * from ${JSON.stringify(new URL('../scripts/release/lib.mjs', import.meta.url).href)}\n`)
       copyFileSync('vendor/prime-agent-0.7.0.tgz', join(root, 'vendor', 'prime-agent-0.7.0.tgz'))
       writeFileSync(join(root, 'vendor', 'patches', patch), readFileSync(join('vendor', 'patches', patch), 'utf8').replaceAll('\n', '\r\n'))

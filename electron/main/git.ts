@@ -1,17 +1,16 @@
 import { lstat } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { basename, isAbsolute, join, resolve } from 'node:path'
-import type { GitDiff, GitFileChange, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
-import { restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
+import { basename, join, resolve } from 'node:path'
+import type { GitDiff, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
+import { resolveGitExecutable, restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
+import { protectedScopeOverrides, readGlobalConfigValue, readProtectedScopeSettings } from './git-protected-config'
+import { changedPathStatesFromStatus, nextNulField, parseNumstat, parseStatus } from './git-porcelain'
+export { GIT_STATUS_ENTRY_LIMIT } from './git-porcelain'
 import { errorMessage, requireGitPath, requireString, stripAnsi } from './validation'
 
-interface Numstat { additions: number; deletions: number }
-interface ParsedNumstat { values: Map<string, Numstat>; truncated: boolean }
-
-export const GIT_STATUS_ENTRY_LIMIT = 1_000
 export const GIT_DIFF_LINE_LIMIT = 5_000
 const GIT_STATUS_OUTPUT_LIMIT = 4 * 1024 * 1024
 const GIT_CONFIG_OUTPUT_LIMIT = 512 * 1024
+const CHECK_ATTR_RECORD_OVERHEAD = Buffer.byteLength('\0filter\0unspecified\0')
 const GIT_DIFF_OUTPUT_LIMIT = 2 * 1024 * 1024
 const GIT_ERROR_LIMIT = 2_000
 const GIT_IDENTITY_VALUE_LIMIT = 320
@@ -36,8 +35,9 @@ function hardenedGitArgs(args: readonly string[], extraConfig: readonly string[]
   return [...result, ...args]
 }
 
-function runGit(cwd: string, args: readonly string[], options: { timeoutMs: number; maxBytes: number; input?: string }, extraConfig: readonly string[] = []): Promise<ProcessResult> {
-  return runProcess('git', hardenedGitArgs(args, extraConfig), { cwd, ...options, env: restrictedGitEnvironment() })
+async function runGit(cwd: string, args: readonly string[], options: { timeoutMs: number; maxBytes: number; input?: string }, extraConfig: readonly string[] = []): Promise<ProcessResult> {
+  const { safeDirectories } = await readProtectedScopeSettings(cwd)
+  return runProcess(resolveGitExecutable(cwd), hardenedGitArgs(args, [...safeDirectories.map((path) => `safe.directory=${path}`), ...extraConfig]), { cwd, ...options, env: restrictedGitEnvironment() })
 }
 
 function resultDetail(result: ProcessResult): string {
@@ -58,98 +58,6 @@ function requireProcessSuccess(operation: string, result: ProcessResult): void {
 
 export function isNotARepositoryFailure(error: unknown): boolean {
   return /not a git repository/i.test(errorMessage(error))
-}
-
-function nextNulField(output: string, cursor: number): { value: string; cursor: number } {
-  const end = output.indexOf('\0', cursor)
-  if (end < 0) return { value: output.slice(cursor), cursor: output.length }
-  return { value: output.slice(cursor, end), cursor: end + 1 }
-}
-
-/** Porcelain marks untracked nested repositories with a trailing '/'; strip that directory marker. */
-function statusRecordPath(record: string): string {
-  const value = record.slice(3)
-  return value.endsWith('/') ? value.slice(0, -1) : value
-}
-
-function parseNumstat(output: string, maxEntries = GIT_STATUS_ENTRY_LIMIT): ParsedNumstat {
-  const values = new Map<string, Numstat>()
-  let cursor = 0
-  let truncated = false
-  while (cursor < output.length) {
-    const header = nextNulField(output, cursor)
-    cursor = header.cursor
-    if (!header.value) continue
-    const firstTab = header.value.indexOf('\t')
-    const secondTab = header.value.indexOf('\t', firstTab + 1)
-    if (firstTab < 0 || secondTab < 0) continue
-    const additions = Number.parseInt(header.value.slice(0, firstTab), 10)
-    const deletions = Number.parseInt(header.value.slice(firstTab + 1, secondTab), 10)
-    let path = header.value.slice(secondTab + 1)
-    if (!path) {
-      // With -z, renames are: numstat header, old path, new path.
-      const oldPath = nextNulField(output, cursor)
-      const newPath = nextNulField(output, oldPath.cursor)
-      cursor = newPath.cursor
-      path = newPath.value || oldPath.value
-    }
-    if (!path) continue
-    if (values.size >= maxEntries) { truncated = true; break }
-    values.set(path, {
-      additions: Number.isFinite(additions) ? additions : 0,
-      deletions: Number.isFinite(deletions) ? deletions : 0,
-    })
-  }
-  return { values, truncated }
-}
-
-function parseBranch(header: string, status: GitStatus): void {
-  let value = header.slice(3)
-  if (value.startsWith('No commits yet on ')) value = value.slice('No commits yet on '.length)
-  if (value.startsWith('Initial commit on ')) value = value.slice('Initial commit on '.length)
-  const detailIndex = value.indexOf(' [')
-  const details = detailIndex >= 0 ? value.slice(detailIndex + 2, -1) : ''
-  const name = detailIndex >= 0 ? value.slice(0, detailIndex) : value
-  const upstreamIndex = name.indexOf('...')
-  status.branch = upstreamIndex >= 0 ? name.slice(0, upstreamIndex) : name
-  if (upstreamIndex >= 0) status.upstream = name.slice(upstreamIndex + 3)
-  const ahead = details.match(/ahead (\d+)/)
-  const behind = details.match(/behind (\d+)/)
-  if (ahead) status.ahead = Number(ahead[1])
-  if (behind) status.behind = Number(behind[1])
-}
-
-function addStatusChange(status: GitStatus, path: string, code: string, staged: boolean, stats: Map<string, Numstat>): boolean {
-  if (status.files.length >= GIT_STATUS_ENTRY_LIMIT) { status.truncated = true; return false }
-  const values = stats.get(path) ?? { additions: 0, deletions: 0 }
-  const change: GitFileChange = { path, status: code.trim() || code, staged, ...values }
-  status.files.push(change)
-  return true
-}
-
-function parseStatus(output: string, staged: ParsedNumstat, unstaged: ParsedNumstat): GitStatus {
-  const status: GitStatus = { isRepo: true, files: [] }
-  if (staged.truncated || unstaged.truncated) status.truncated = true
-  let cursor = 0
-  while (cursor < output.length) {
-    const field = nextNulField(output, cursor)
-    cursor = field.cursor
-    const record = field.value
-    if (!record) continue
-    if (record.startsWith('## ')) { parseBranch(record, status); continue }
-    if (record.length < 4) continue
-    const code = record.slice(0, 2)
-    const path = statusRecordPath(record)
-    if (!path) continue
-    const renamed = code[0] === 'R' || code[0] === 'C' || code[1] === 'R' || code[1] === 'C'
-    if (renamed) cursor = nextNulField(output, cursor).cursor
-
-    const hasIndexChange = code[0] !== ' ' && code[0] !== '?'
-    const hasWorktreeChange = code[1] !== ' ' && code[1] !== '!'
-    if (hasIndexChange && !addStatusChange(status, path, code, true, staged.values)) break
-    if (hasWorktreeChange && !addStatusChange(status, path, code, false, unstaged.values)) break
-  }
-  return status
 }
 
 function capDiffLines(text: string): { text: string; truncated: boolean } {
@@ -226,74 +134,6 @@ function validIdentityValue(value: string): string | undefined {
   return trimmed
 }
 
-async function readGlobalConfigValue(cwd: string, key: 'user.name' | 'user.email' | 'core.excludesFile'): Promise<string | undefined> {
-  const env = restrictedGitEnvironment()
-  delete env.GIT_CONFIG_GLOBAL
-  for (const name of process.platform === 'win32' ? ['USERPROFILE', 'HOME', 'XDG_CONFIG_HOME'] : ['HOME', 'XDG_CONFIG_HOME']) {
-    const value = process.env[name]
-    if (value !== undefined) env[name] = value
-  }
-  const result = await runProcess('git', hardenedGitArgs(['config', '--global', '--no-includes', '--get', key]), {
-    cwd,
-    timeoutMs: 5_000,
-    maxBytes: GIT_CONFIG_OUTPUT_LIMIT,
-    env,
-  })
-  if (result.code === 1 && !result.timedOut && !result.outputExceeded) return undefined
-  requireProcessSuccess('Git global configuration inspection', result)
-  return result.stdout.trim() || undefined
-}
-
-function validExcludesFilePath(value: string): string | undefined {
-  let candidate = value.trim()
-  if (!candidate || candidate.length > 4096 || /[\0\r\n]/.test(candidate)) return undefined
-  if (candidate === '~' || candidate.startsWith('~/')) {
-    candidate = join(homedir(), candidate.slice(1))
-  } else if (process.platform === 'win32' && /^%USERPROFILE%($|[/\\])/i.test(candidate)) {
-    const profile = process.env.USERPROFILE
-    if (!profile) return undefined
-    candidate = join(profile, candidate.slice('%USERPROFILE%'.length))
-  }
-  return isAbsolute(candidate) ? candidate : undefined
-}
-
-// The value is global scope, so the cache key is the environment the read
-// resolves against; the TTL bounds staleness for status polling without a
-// respawn of `git config` per call.
-const GLOBAL_EXCLUDES_CACHE_TTL_MS = 30_000
-let globalExcludesCache: { key: string; value: string | undefined; expiresAt: number } | undefined
-
-async function readGlobalExcludesFile(cwd: string): Promise<string | undefined> {
-  const key = `${process.env.HOME ?? ''}|${process.env.XDG_CONFIG_HOME ?? ''}|${process.env.USERPROFILE ?? ''}`
-  const now = Date.now()
-  if (globalExcludesCache && globalExcludesCache.key === key && globalExcludesCache.expiresAt > now) {
-    return globalExcludesCache.value
-  }
-  let value: string | undefined
-  try {
-    const raw = await readGlobalConfigValue(cwd, 'core.excludesFile')
-    if (raw !== undefined) value = validExcludesFilePath(raw)
-  } catch {
-    value = undefined
-  }
-  globalExcludesCache = { key, value, expiresAt: now + GLOBAL_EXCLUDES_CACHE_TTL_MS }
-  return value
-}
-
-/**
- * `restrictedGitEnvironment` disables the global config scope, so a user's
- * `core.excludesFile` never reaches Git on its own. Read that one key safely
- * and supply it via `-c` so status, diff, and restore match plain `git status`.
- * A repository-scope setting must still win: `-c` would otherwise override it.
- */
-async function globalExcludesOverride(cwd: string, config: ReadonlyMap<string, string>): Promise<string[]> {
-  for (const key of config.keys()) {
-    if (key.toLowerCase() === 'core.excludesfile') return []
-  }
-  const path = await readGlobalExcludesFile(cwd)
-  return path ? [`core.excludesFile=${path}`] : []
-}
-
 /**
  * Derives commit identity from the already-fetched repository configuration;
  * only a missing repository-scope value costs an extra (global-scope) spawn.
@@ -313,42 +153,16 @@ async function commitIdentityOverrides(cwd: string, config: ReadonlyMap<string, 
   ]
 }
 
-interface ChangedPathState {
-  untracked: boolean
-  restorePaths: string[]
-}
-
-function changedPathStatesFromStatus(output: string): Map<string, ChangedPathState> {
-  const states = new Map<string, ChangedPathState>()
-  let cursor = 0
-  while (cursor < output.length) {
-    const field = nextNulField(output, cursor)
-    cursor = field.cursor
-    const record = field.value
-    if (!record || record.startsWith('## ') || record.length < 4) continue
-    const code = record.slice(0, 2)
-    const path = requireGitPath(statusRecordPath(record), 'Git status path')
-    const restorePaths = [path]
-    if (code.includes('R') || code.includes('C')) {
-      const previous = nextNulField(output, cursor)
-      cursor = previous.cursor
-      if (previous.value) restorePaths.push(requireGitPath(previous.value, 'Git status path'))
-    }
-    states.set(path, { untracked: code === '??', restorePaths })
-  }
-  return states
-}
-
-
 async function rejectFilteredPaths(cwd: string, paths: readonly string[], overrides: readonly string[]): Promise<void> {
   if (!paths.length) return
   // Feed the paths to one bounded process. Status output and direct mutation inputs
   // are capped, so this inspects every path without an attacker causing an
   // unbounded sequence of check-attr subprocesses.
+  const input = `${paths.join('\0')}\0`
   const result = await runGit(cwd, ['check-attr', '-z', '--stdin', 'filter'], {
     timeoutMs: 10_000,
-    maxBytes: GIT_CONFIG_OUTPUT_LIMIT,
-    input: `${paths.join('\0')}\0`,
+    maxBytes: Buffer.byteLength(input) + paths.length * CHECK_ATTR_RECORD_OVERHEAD + GIT_CONFIG_OUTPUT_LIMIT,
+    input,
   }, overrides)
   requireProcessSuccess('Git filter attribute inspection', result)
   const affected: string[] = []
@@ -389,13 +203,14 @@ interface RepositoryContext {
 function parseWorktreeList(output: string, repositoryRoot: string): GitWorktree[] {
   const records = output.split('\0\0').filter(Boolean)
   if (records.length > GIT_WORKTREE_LIMIT) throw new Error('Git worktree list exceeded the safety limit')
-  return records.map((record, index) => {
+  return records.flatMap((record, index) => {
     const fields = record.split('\0').filter(Boolean)
     const pathField = fields.find((field) => field.startsWith('worktree '))
     const headField = fields.find((field) => field.startsWith('HEAD '))
     const branchField = fields.find((field) => field.startsWith('branch '))
     const pathValue = pathField?.slice('worktree '.length)
     const head = headField?.slice('HEAD '.length)
+    if (pathValue && pathValue.length <= 4096 && fields.includes('bare') && head === undefined) return []
     if (!pathValue || pathValue.length > 4096 || !head || !/^[0-9a-fA-F]{4,64}$/.test(head)) {
       throw new Error(`Git worktree list returned an invalid record at index ${index}`)
     }
@@ -405,14 +220,14 @@ function parseWorktreeList(output: string, repositoryRoot: string): GitWorktree[
       throw new Error(`Git worktree list returned an invalid branch at index ${index}`)
     }
     const branch = branchRef?.slice('refs/heads/'.length)
-    return {
+    return [{
       path,
       name: basename(path) || path,
       branch,
       head: head.toLowerCase(),
       current: path === resolve(repositoryRoot),
       detached: fields.includes('detached') || branch === undefined,
-    }
+    }]
   })
 }
 
@@ -426,6 +241,12 @@ async function inspectRepositoryRoot(cwd: string): Promise<string> {
 
 export function resolveGitRepositoryRoot(cwd: string): Promise<string> {
   return inspectRepositoryRoot(cwd)
+}
+
+/** A granted subfolder cannot authorize operations on an ungranted repository ancestor. */
+export async function authorizedRepositoryRoot(value: string, authorize: (cwd: string) => Promise<string>): Promise<string> {
+  const cwd = await authorize(value)
+  return authorize(await resolveGitRepositoryRoot(cwd))
 }
 
 /** Caller must authorize cwd before invoking this privileged fixed-argv helper. */
@@ -449,13 +270,17 @@ export async function validateGitBranch(cwd: string, branchValue: unknown): Prom
 export async function createGitWorktree(cwd: string, targetPath: string, branchValue: unknown): Promise<void> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
   const branch = await validateGitBranch(repositoryRoot, branchValue)
-  const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT })
+  const config = await repositoryConfig(repositoryRoot)
+  if (filterOverridesFromConfig(config).length) {
+    throw new Error('Git worktree creation is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
+  }
+  const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT }, await protectedScopeOverrides(repositoryRoot, config))
   requireProcessSuccess('Git worktree creation', result)
 }
 
 export async function listLocalGitBranches(cwd: string): Promise<LocalGitBranch[]> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
-  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:short)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
+  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:lstrip=2)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
     timeoutMs: 10_000,
     maxBytes: GIT_BRANCH_OUTPUT_LIMIT,
   })
@@ -484,7 +309,7 @@ export type GitBranchChangeResult =
   | Extract<GitWorktreeCleanliness, { kind: 'dirty' }>
 
 async function inspectGitWorktreeCleanAtRoot(repositoryRoot: string, overrides: readonly string[]): Promise<GitWorktreeCleanliness> {
-  const result = await runGit(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
+  const result = await runGit(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all', '-z'], {
     timeoutMs: 10_000,
     maxBytes: GIT_STATUS_OUTPUT_LIMIT,
   }, overrides)
@@ -506,7 +331,8 @@ async function inspectGitWorktreeCleanAtRoot(repositoryRoot: string, overrides: 
 
 export async function inspectGitWorktreeClean(cwd: string): Promise<GitWorktreeCleanliness> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
-  return inspectGitWorktreeCleanAtRoot(repositoryRoot, filterOverridesFromConfig(await repositoryConfig(repositoryRoot)))
+  const config = await repositoryConfig(repositoryRoot)
+  return inspectGitWorktreeCleanAtRoot(repositoryRoot, [...filterOverridesFromConfig(config), ...await protectedScopeOverrides(repositoryRoot, config)])
 }
 
 async function changeGitBranch(cwd: string, branchValue: unknown, create: boolean): Promise<GitBranchChangeResult> {
@@ -516,11 +342,13 @@ async function changeGitBranch(cwd: string, branchValue: unknown, create: boolea
   const existing = branches.find((candidate) => candidate.name === branch)
   if (!create && !existing) return { kind: 'not-found' }
   if (create && existing) return { kind: 'already-exists' }
-  const overrides = filterOverridesFromConfig(await repositoryConfig(repositoryRoot))
+  const config = await repositoryConfig(repositoryRoot)
+  const filterOverrides = filterOverridesFromConfig(config)
+  const overrides = [...filterOverrides, ...await protectedScopeOverrides(repositoryRoot, config)]
   const cleanliness = await inspectGitWorktreeCleanAtRoot(repositoryRoot, overrides)
   if (cleanliness.kind === 'dirty') return cleanliness
   if (existing?.current) return { kind: 'unchanged' }
-  if (overrides.length) throw new Error('Git branch checkout is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
+  if (filterOverrides.length) throw new Error('Git branch checkout is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
   const result = await runGit(repositoryRoot, create ? ['switch', '--create', branch] : ['switch', '--no-guess', branch], {
     timeoutMs: 2 * 60_000,
     maxBytes: GIT_BRANCH_OUTPUT_LIMIT,
@@ -535,6 +363,12 @@ export function switchGitBranch(cwd: string, branchValue: unknown): Promise<GitB
 
 export function createAndSwitchGitBranch(cwd: string, branchValue: unknown): Promise<GitBranchChangeResult> {
   return changeGitBranch(cwd, branchValue, true)
+}
+
+async function hasHead(cwd: string, overrides: readonly string[]): Promise<boolean> {
+  const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 }, overrides)
+  if (head.timedOut || head.outputExceeded || (head.code !== 0 && head.code !== 1)) requireProcessSuccess('Git HEAD inspection', head)
+  return head.code === 0
 }
 
 export class GitService {
@@ -557,17 +391,17 @@ export class GitService {
     options?: { readOnly?: boolean },
   ): Promise<RepositoryContext> {
     const authorizer = options?.readOnly ? this.authorizeReadOnlyCwd : this.authorizeCwd
-    const cwd = await this.repositoryCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }), authorizer)
+    const cwd = await authorizedRepositoryRoot(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }), authorizer)
     const config = await repositoryConfig(cwd)
     const overrides = filterOverridesFromConfig(config)
-    overrides.push(...await globalExcludesOverride(cwd, config))
+    overrides.push(...await protectedScopeOverrides(cwd, config))
     if (paths?.length) await rejectFilteredPaths(cwd, paths, overrides)
     return { cwd, overrides, config }
   }
 
   async branch(cwd: string): Promise<string | undefined> {
     try {
-      const safeCwd = await this.repositoryCwd(cwd, this.authorizeReadOnlyCwd)
+      const safeCwd = await authorizedRepositoryRoot(cwd, this.authorizeReadOnlyCwd)
       const result = await runGit(safeCwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
       if (result.code === 0 && !result.timedOut && !result.outputExceeded) return result.stdout.trim() || undefined
       const detached = await runGit(safeCwd, ['rev-parse', '--verify', '--short', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
@@ -587,7 +421,7 @@ export class GitService {
       ])
       requireProcessSuccess('Git unstaged statistics', unstagedResult)
       requireProcessSuccess('Git staged statistics', stagedResult)
-      return parseStatus(statusResult.stdout, parseNumstat(stagedResult.stdout), parseNumstat(unstagedResult.stdout))
+      return { ...parseStatus(statusResult.stdout, parseNumstat(stagedResult.stdout), parseNumstat(unstagedResult.stdout)), root: cwd }
     } catch (error) {
       const message = errorMessage(error).slice(0, GIT_ERROR_LIMIT)
       // Only a genuine "not a repository" detection may claim there is no repo.
@@ -650,11 +484,16 @@ export class GitService {
   async unstage(cwdValue: unknown, pathsValue: unknown): Promise<boolean> {
     const paths = this.validPaths(pathsValue)
     const { cwd, overrides } = await this.withRepositoryGuards(cwdValue)
-    const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 }, overrides)
-    if (head.timedOut || head.outputExceeded || (head.code !== 0 && head.code !== 1)) requireProcessSuccess('Git HEAD inspection', head)
-    const args = head.code === 0
-      ? ['restore', '--staged', '--', ...paths]
-      : ['rm', '--cached', '--ignore-unmatch', '-r', '-f', '--', ...paths]
+    const status = await runGit(cwd, ['status', '--porcelain=v1', '--untracked-files=no', '--ignore-submodules=all', '-z'], { timeoutMs: 15_000, maxBytes: GIT_STATUS_OUTPUT_LIMIT }, overrides)
+    requireProcessSuccess('Git status', status)
+    const states = changedPathStatesFromStatus(status.stdout)
+    const restorePaths = [...new Set(paths.flatMap((path) => {
+      const source = states.get(path)?.indexRenameSource
+      return source ? [path, source] : [path]
+    }))]
+    const args = await hasHead(cwd, overrides)
+      ? ['restore', '--staged', '--', ...restorePaths]
+      : ['rm', '--cached', '--ignore-unmatch', '-r', '-f', '--', ...restorePaths]
     const result = await runGit(cwd, args, { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
     requireProcessSuccess('Git unstage', result)
     return true
@@ -672,9 +511,8 @@ export class GitService {
     await rejectFilteredPaths(cwd, restorePaths, overrides)
     const untracked = restorePaths.filter((path) => states.get(path)?.untracked === true)
     const tracked = restorePaths.filter((path) => !untracked.includes(path))
-    const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 }, overrides)
-    if (head.code !== 0 && head.code !== 1) requireProcessSuccess('Git HEAD inspection', head)
-    if (head.code === 0) {
+    const existingHead = await hasHead(cwd, overrides)
+    if (existingHead) {
       if (tracked.length) {
         const result = await runGit(cwd, ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...tracked], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
         requireProcessSuccess('Git restore', result)
@@ -683,7 +521,7 @@ export class GitService {
       const result = await runGit(cwd, ['rm', '--cached', '--ignore-unmatch', '-r', '-f', '--', ...tracked], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
       requireProcessSuccess('Git restore', result)
     }
-    const pathsToClean = head.code === 0 ? untracked : restorePaths
+    const pathsToClean = existingHead ? untracked : restorePaths
     if (pathsToClean.length) {
       const result = await runGit(cwd, ['clean', '-f', '--', ...pathsToClean], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
       requireProcessSuccess('Git clean', result)
@@ -704,18 +542,6 @@ export class GitService {
     const output = stripAnsi(`${result.stdout}${result.stderr}`).trim()
     if (result.code !== 0) return { ok: false, reason: 'exit', output: output || processError('Git commit', result).message }
     return { ok: true, output: output || 'Commit created.' }
-  }
-
-  private async repositoryCwd(
-    value: string,
-    authorizer: (cwd: string) => Promise<string> = this.authorizeCwd,
-  ): Promise<string> {
-    const cwd = await authorizer(value)
-    const result = await runGit(cwd, ['rev-parse', '--show-toplevel'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
-    requireProcessSuccess('Git repository root inspection', result)
-    const repositoryRoot = result.stdout.trim()
-    if (!repositoryRoot) throw new Error('Git repository root inspection returned no path')
-    return authorizer(repositoryRoot)
   }
 
   private validPaths(value: unknown): string[] {

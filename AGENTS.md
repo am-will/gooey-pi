@@ -40,13 +40,42 @@ owns the `hermetic-e2e` gate.
 
 ## pstack
 
-This repository vendors [pstack](https://github.com/cursor/plugins/tree/main/pstack) under `.agents/skills/pstack/` so Cloud Agents can run `/poteto-mode` and the rest of the skill set. Subagents live in `.cursor/agents/`. Per-role model overrides live in `.cursor/rules/pstack-models.mdc`.
+This repository vendors [pstack](https://github.com/cursor/plugins/tree/main/pstack) under `.agents/skills/pstack/` so Cloud Agents can run `/poteto-mode` and the rest of the skill set. Subagents live in `.cursor/agents/`.
 
-pstack skills read `~/.cursor/rules/pstack-models.mdc`. Cloud Agents do not inherit that user-level path. If it is missing, copy the workspace rule before running a pstack skill:
+All skill delegations inherit the current chat/session model by omitting the
+`model` argument. [The delegation rule](.cursor/rules/pstack-models.mdc) applies
+across roles. Use `/setup-pstack` only to reset inheritance or record a model
+choice the user explicitly requests; do not detect or assign role defaults.
 
-```
-mkdir -p ~/.cursor/rules
-cp .cursor/rules/pstack-models.mdc ~/.cursor/rules/pstack-models.mdc
-```
+After editing skills or agent instructions, run
+`python3 .agents/scripts/audit-model-routing.py --self-test` to check the
+[repository routing policy](.agents/scripts/audit-model-routing.py), including
+skill references, helpers, and agent prompts.
 
-Re-run `/setup-pstack` to change role models. Only write Task `model` slugs that are available in the current session.
+## Architecture and boundaries
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [documentation index](docs/README.md)
+for service ownership, isolation, and localization. Main-process services own
+filesystem, subprocess, credential, and project authorization. Keep the sandboxed
+preload bridge allowlisted and validate untrusted requests in the main process.
+Read [docs/security.md](docs/security.md) before changing those boundaries.
+
+Interface copy comes from `src/lib/locales/english.ts` through `src/lib/i18n.tsx`.
+Update the Japanese and Simplified Chinese catalogs with interface changes;
+English is the fallback. Do not make translated text the only stable test selector.
+
+## Verification and commits
+
+Use [docs/validation.md](docs/validation.md) for exact toolchain and gate commands.
+After selecting Node, run `npm run toolchain:bootstrap` before `npm ci` in a fresh
+checkout. Run focused checks for each change and the required aggregate checks
+before delivery. Build fresh output before Electron UI verification, and record
+commands, revision, and results. Do not report old artifacts as current evidence.
+
+Development shares the installed application's user data and single-instance
+lock. Follow the isolated development guidance in CONTRIBUTING.md when testing
+state changes. Keep author and committer email set to `freeme62410@gmail.com` or
+`am.will.ryan@gmail.com`; verify both identities on committed work.
+
+Repository engineering and security guidance takes precedence over vendored
+workflow suggestions. Skills do not authorize changes outside the user's scope.

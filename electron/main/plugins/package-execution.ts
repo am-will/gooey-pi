@@ -33,6 +33,7 @@ export function validatePackageSource(value: unknown, options: { allowOmpMarketp
   }
   if (source.startsWith('git:') && !source.startsWith('git://')) {
     const spec = source.slice(4)
+    if (spec.startsWith('-')) throw new TypeError('Invalid git package source')
     const protocolUrl = /^(?:https?|ssh|git):\/\//i.test(spec)
     const sshShorthand = /^git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+(?:@[A-Za-z0-9._/-]+)?$/.test(spec)
     const hostShorthand = /^[A-Za-z0-9.-]+\/[A-Za-z0-9._~/-]+(?:@[A-Za-z0-9._/-]+)?$/.test(spec)
@@ -71,16 +72,22 @@ export async function executePackageRemove(primeAgentPath: string, source: strin
   return processOutcome(result, stripAnsi(`${result.stdout}${result.stderr}`).trim())
 }
 
+function ompTarget(source: string): string {
+  const target = (source.startsWith('npm:') || source.startsWith('git:') ? source.slice(4) : source).trim()
+  if (!target || target.startsWith('-') || /[\r\n\u2028\u2029]/.test(target)) throw new TypeError('Invalid OMP plugin target')
+  return target
+}
+
 export async function executeOmpPluginInstall(ompPath: string, source: string): Promise<ProcessOutcome> {
-  const target = source.startsWith('npm:') || source.startsWith('git:') ? source.slice(4) : source
+  const target = ompTarget(source)
   const result = await runProcess(ompPath, ['plugin', 'install', target, '--json'], { timeoutMs: 10 * 60_000, maxBytes: 8 * 1024 * 1024 })
   return processOutcome(result, stripAnsi(`${result.stdout}${result.stderr}`).trim())
 }
 
-export async function executeOmpPluginAction(ompPath: string, action: 'enable' | 'disable' | 'uninstall', source: string, project = false): Promise<ProcessOutcome> {
-  const target = source.startsWith('npm:') || source.startsWith('git:') ? source.slice(4) : source
-  const args = ['plugin', action, target, '--json', ...(project ? ['--scope', 'project'] : [])]
-  const result = await runProcess(ompPath, args, { timeoutMs: 10 * 60_000, maxBytes: 8 * 1024 * 1024 })
+export async function executeOmpPluginAction(ompPath: string, action: 'enable' | 'disable' | 'uninstall', source: string, localCwd?: string): Promise<ProcessOutcome> {
+  const target = ompTarget(source)
+  const args = ['plugin', action, target, '--json', ...(localCwd ? ['--scope', 'project'] : [])]
+  const result = await runProcess(ompPath, args, { cwd: localCwd, timeoutMs: 10 * 60_000, maxBytes: 8 * 1024 * 1024 })
   return processOutcome(result, stripAnsi(`${result.stdout}${result.stderr}`).trim())
 }
 

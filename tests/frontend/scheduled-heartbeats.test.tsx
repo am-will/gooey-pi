@@ -66,6 +66,11 @@ describe('native heartbeat actions', () => {
     const stop = heartbeatButton('active-job', 'Stop')
     expect(stop.disabled).toBe(false)
     await click(stop)
+    expect(onManageHeartbeat).not.toHaveBeenCalled()
+    await click(document.body.querySelector<HTMLButtonElement>('.modal__footer button')!)
+    expect(onManageHeartbeat).not.toHaveBeenCalled()
+    await click(stop)
+    await click(document.body.querySelector<HTMLButtonElement>('.modal__footer .button--danger')!)
     expect(onManageHeartbeat).toHaveBeenCalledWith('active-job', 'stop')
   })
 

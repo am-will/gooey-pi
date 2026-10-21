@@ -1,15 +1,13 @@
+import { HARNESSES } from '../harness'
+import { compactText } from '../../../src/lib/text'
 import { closeSync, openSync, readSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
-import type { SessionCatalogIo } from './catalog'
 import {
   createBranchSummaryTranscriptReader,
-  createBucketedCatalogIo,
+  bucketedSessionServiceOptions,
   createBucketedMetadataParser,
-  isBucketedSessionPath,
-  timestampFromBucketedSessionName,
 } from './bucketed'
 import {
   createIncrementalMetadataReader,
@@ -17,7 +15,7 @@ import {
   type SessionMetadataReader,
   type SessionMetadataReaderIo,
 } from './metadata'
-import { compactText, type TranscriptFileReader } from './transcript'
+import type { TranscriptFileReader } from './transcript'
 
 /**
  * OMP session JSONL v3 layout under `~/.omp/agent/sessions/<bucket>/`:
@@ -33,17 +31,6 @@ import { compactText, type TranscriptFileReader } from './transcript'
  */
 export const OMP_TITLE_SLOT_BYTES = 256
 
-export function ompSessionRoot(): string {
-  return join(homedir(), '.omp', 'agent', 'sessions')
-}
-
-export const ompTimestampFromSessionName = timestampFromBucketedSessionName
-
-export function createOmpCatalogIo(): SessionCatalogIo {
-  return createBucketedCatalogIo()
-}
-
-export const isOmpSessionPath = isBucketedSessionPath
 
 const ompMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change' && typeof value.model === 'string') {
@@ -55,7 +42,7 @@ const ompMetadataParser = createBucketedMetadataParser((state, value) => {
       state.model = separator > 0 ? value.model.slice(separator + 1) : value.model
     }
   } else if ((value.type === 'title_change' || value.type === 'title') && typeof value.title === 'string') {
-    state.displayName = value.title
+    state.displayName = compactText(value.title, 100)
   }
 })
 
@@ -140,18 +127,6 @@ export const readOmpTranscript: TranscriptFileReader = createBranchSummaryTransc
  * Fully wired SessionService options for an OMP session root. Construct the
  * service with a null CLI path: OMP has no `prime-agent list` live overlay.
  */
-export function ompSessionServiceOptions(sessionRoot = ompSessionRoot()): SessionServiceOptions {
-  return {
-    harness: 'omp',
-    sessionRoot,
-    catalogIo: createOmpCatalogIo(),
-    catalogNameTimestamp: ompTimestampFromSessionName,
-    metadataReader: createOmpSessionMetadataReader(),
-    transcriptReader: readOmpTranscript,
-    isSessionPathAuthorized: isOmpSessionPath,
-    // Session files sit one bucket directory below the root; bounded one-level
-    // watchers keep catalog refresh behavior identical across platforms.
-    recursiveWatch: true,
-    renameFile: writeOmpTitleSlot,
-  }
+export function ompSessionServiceOptions(sessionRoot = HARNESSES.omp.sessionRoot(homedir())): SessionServiceOptions {
+  return bucketedSessionServiceOptions('omp', sessionRoot, createOmpSessionMetadataReader(), readOmpTranscript, writeOmpTitleSlot)
 }

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { installCrashGuards, type CrashGuard } from '../../electron/main/crash-guard'
+import { installCrashGuards, writeCrashLog, type CrashGuard } from '../../electron/main/crash-guard'
 import { waitUntil } from '../helpers/wait'
 
 const dirs: string[] = []
@@ -33,6 +33,13 @@ function install(options: Partial<Parameters<typeof installCrashGuards>[0]> & { 
 }
 
 describe('crash guards', () => {
+  it('records startup failures without installing fatal process handlers', () => {
+    const path = join(temp(), 'startup.log')
+    writeCrashLog(() => path, 'startup', new Error('Missing resource'))
+    expect(readFileSync(path, 'utf8')).toMatch(/startup: Error: Missing resource/)
+    expect(() => writeCrashLog(() => { throw new Error('Unavailable path') }, 'startup', 'original')).not.toThrow()
+  })
+
   it('registers last-resort process handlers and removes them on dispose', () => {
     const beforeExceptions = process.listenerCount('uncaughtException')
     const beforeRejections = process.listenerCount('unhandledRejection')

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing semantic version tag to publish (for example, v0.2.0)
+        description: Existing stable semantic version tag to publish (for example, v0.2.0)
         required: true
         type: string
       include_windows:
@@ -30,7 +30,11 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-  RELEASE_REF: ${{ inputs.tag || github.ref }}
+  # A bare dispatch tag name would let actions/checkout prefer a same-named branch.
+  RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  # Signed mode wins when both Windows modes are enabled. RELEASE_WINDOWS_ENABLED
+  # is the OR of the two env flags (signed or unsigned), unlike
+  # vars.RELEASE_WINDOWS_ENABLED, which enables signed builds only.
   RELEASE_WINDOWS_SIGNED_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_ENABLED == 'true') }}
   RELEASE_WINDOWS_UNSIGNED_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.include_windows_unsigned) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true') }}
   RELEASE_WINDOWS_ENABLED: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))) }}
@@ -38,6 +42,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     # Every downstream job checks out this commit SHA instead of the tag, so a
     # tag moved mid-run cannot make two jobs build different commits.
     outputs:
@@ -68,6 +73,7 @@ jobs:
     name: Production dependency audit
     needs: validate
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -84,10 +90,13 @@ jobs:
   quality:
     needs: validate
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.sha }}
+      - name: Audit model-neutral skill routing
+        run: python3 .agents/scripts/audit-model-routing.py --self-test
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -100,6 +109,7 @@ jobs:
   hermetic-e2e:
     needs: validate
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -137,6 +147,7 @@ jobs:
           - arch: x64
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -182,6 +193,7 @@ jobs:
           path: |
             release/mac/${{ matrix.arch }}/*.dmg
             release/mac/${{ matrix.arch }}/*.zip
+            release/mac/${{ matrix.arch }}/*.zip.blockmap
             release/mac/${{ matrix.arch }}/latest*.yml
           if-no-files-found: error
 
@@ -202,6 +214,7 @@ jobs:
             runner: ubuntu-22.04
             unpacked_dir: linux-unpacked
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -249,9 +262,12 @@ jobs:
           if-no-files-found: error
 
   package-windows:
+    # Job-level conditions cannot read env, so this repeats env.RELEASE_WINDOWS_ENABLED:
+    # the OR of RELEASE_WINDOWS_SIGNED_ENABLED and RELEASE_WINDOWS_UNSIGNED_ENABLED.
     if: (github.event_name == 'workflow_dispatch' && (inputs.include_windows || inputs.include_windows_unsigned)) || (github.event_name == 'push' && (vars.RELEASE_WINDOWS_ENABLED == 'true' || vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true'))
     needs: [validate, production-audit, quality, hermetic-e2e]
     runs-on: windows-2022
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -271,7 +287,7 @@ jobs:
       - run: npm run release:preflight:toolchain
       # Signed builds remain fail-closed and require the configured Authenticode identity.
       - name: Build, Authenticode-sign, and verify Windows packages
-        if: (github.event_name == 'workflow_dispatch' && inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_ENABLED == 'true')
+        if: env.RELEASE_WINDOWS_SIGNED_ENABLED == 'true'
         run: node scripts/release/package.mjs --public --platform win --skip-verify
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
@@ -279,7 +295,7 @@ jobs:
           GOOEYPI_WINDOWS_CERT_SUBJECT: ${{ vars.GOOEYPI_WINDOWS_CERT_SUBJECT }}
           GOOEYPI_WINDOWS_CERT_THUMBPRINT: ${{ vars.GOOEYPI_WINDOWS_CERT_THUMBPRINT }}
       - name: Build unsigned Windows packages for beta distribution
-        if: (github.event_name == 'workflow_dispatch' && inputs.include_windows_unsigned && !inputs.include_windows) || (github.event_name == 'push' && vars.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true' && vars.RELEASE_WINDOWS_ENABLED != 'true')
+        if: env.RELEASE_WINDOWS_UNSIGNED_ENABLED == 'true' && env.RELEASE_WINDOWS_SIGNED_ENABLED != 'true'
         run: node scripts/release/package.mjs --qa --platform win --skip-verify
       # Artifacts are only publishable once the packaged executable itself boots.
       - name: Launch the packaged application
@@ -295,6 +311,7 @@ jobs:
           name: gooeypi-public-windows
           path: |
             release/win/**/*.exe
+            release/win/**/*.exe.blockmap
             release/win/**/*.zip
             release/win/**/*.appx
             release/win/**/*.msix
@@ -308,6 +325,7 @@ jobs:
     # the job-level condition. Windows may legitimately be skipped.
     if: always()
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     permissions:
       contents: write
       id-token: write
@@ -339,17 +357,42 @@ jobs:
         with:
           pattern: gooeypi-public-*
           path: downloaded-release-artifacts
+      # Unsigned beta Windows builds publish only the NSIS installer and ZIP: the
+      # MSIX needs a signature to install. Signed mode wins when both are enabled,
+      # matching the package-windows build steps.
       - name: Select release assets and generate SHA-256 checksums
         run: |
           platforms='mac,linux'
           if [ "$RELEASE_WINDOWS_ENABLED" = 'true' ]; then platforms="$platforms,win"; fi
-          node scripts/release/prepare-github-release.mjs --input downloaded-release-artifacts --output release-assets --tag "$RELEASE_TAG" --platforms "$platforms"
+          flags=''
+          if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then flags='--windows-unsigned'; fi
+          node scripts/release/prepare-github-release.mjs --input downloaded-release-artifacts --output release-assets --tag "$RELEASE_TAG" --platforms "$platforms" $flags
+      # gh attaches the release to wherever the tag points at publish time, so a
+      # tag moved after validate would describe a commit other than the one the
+      # assets and attestations were built from. ls-remote patterns also match
+      # any ref ending in /refs/tags/<tag>, so awk reads only the exact tag ref
+      # and prefers its peeled ^{} commit when the tag is annotated.
+      - name: Require the release tag to still point at the validated commit
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" | awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { sha = $1 } $2 == (ref "^{}") { peeled = $1 } END { print (peeled != "" ? peeled : sha) }')
+          if [ -z "$tag_sha" ] || [ "$tag_sha" != "$EXPECTED_SHA" ]; then
+            echo "Tag $RELEASE_TAG resolves to ${tag_sha:-<missing>}, not the validated commit $EXPECTED_SHA."
+            exit 1
+          fi
       - name: Attest release assets
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: release-assets/*
+      # A resumed draft keeps the notes it already has, so an unsigned Windows
+      # label must be added to such a draft by hand.
       - name: Publish GitHub Release
         run: |
+          notes='Every installer and archive is covered by SHA256SUMS.txt and GitHub build-provenance attestations.'
+          if [ "$RELEASE_WINDOWS_UNSIGNED_ENABLED" = 'true' ] && [ "$RELEASE_WINDOWS_SIGNED_ENABLED" != 'true' ]; then
+            notes="$notes Windows packages in this release are unsigned beta builds and will trigger SmartScreen warnings."
+          fi
           existing=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
           if [ "$existing" = 'false' ]; then
             echo "Release $RELEASE_TAG is already published and will not be replaced."
@@ -370,7 +413,7 @@ jobs:
               --verify-tag \
               --fail-on-no-commits \
               --generate-notes \
-              --notes "Every installer and archive is covered by SHA256SUMS.txt and GitHub build-provenance attestations." \
+              --notes "$notes" \
               --title "GooeyPi ${RELEASE_TAG#v}" \
               --latest
           fi

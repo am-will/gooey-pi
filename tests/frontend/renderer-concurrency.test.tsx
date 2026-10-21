@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from '../../src/types/agent-command'
 // @vitest-environment jsdom
 
 import { act, type ReactNode, useState } from 'react'
@@ -89,8 +90,8 @@ describe('settings queue reconciliation', () => {
     }
     await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
 
-    let firstMutation!: Promise<void>
-    let secondMutation!: Promise<void>
+    let firstMutation!: Promise<boolean>
+    let secondMutation!: Promise<boolean>
     let reconciliation!: ReturnType<typeof state.reconcileExternalSettings>
     await act(async () => {
       firstMutation = state.updateSettings({ sidebarOpen: false })
@@ -134,8 +135,9 @@ describe('settings queue reconciliation', () => {
     const update = vi.fn()
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise)
+    let persisted = DEFAULT_SETTINGS
     const bridge = {
-      settings: { get: async () => DEFAULT_SETTINGS, update },
+      settings: { get: async () => persisted, update },
     } as unknown as PrimeWorkApi
     const errors: unknown[] = []
     const reportError = (error: unknown) => { errors.push(error) }
@@ -146,8 +148,8 @@ describe('settings queue reconciliation', () => {
     }
     await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
 
-    let firstMutation!: Promise<void>
-    let secondMutation!: Promise<void>
+    let firstMutation!: Promise<boolean>
+    let secondMutation!: Promise<boolean>
     await act(async () => {
       firstMutation = state.updateSettings({ sidebarOpen: false })
       secondMutation = state.updateSettings({ terminalOpen: true })
@@ -155,7 +157,7 @@ describe('settings queue reconciliation', () => {
     expect([state.sidebarOpen, state.inspectorOpen, state.terminalOpen]).toEqual([false, true, true])
 
     const saved = { ...DEFAULT_SETTINGS, sidebarOpen: false, inspectorOpen: false, terminalOpen: false }
-    await act(async () => { first.resolve(saved); await firstMutation })
+    await act(async () => { persisted = saved; first.resolve(saved); await firstMutation })
     await act(async () => { second.reject(new Error('save failed')); await secondMutation })
 
     expect([state.sidebarOpen, state.inspectorOpen, state.terminalOpen]).toEqual([false, false, false])
@@ -176,7 +178,7 @@ describe('settings queue reconciliation', () => {
     }
     await act(async () => { root.render(<SettingsProbe />); await Promise.resolve() })
 
-    let mutation!: Promise<void>
+    let mutation!: Promise<boolean>
     await act(async () => {
       mutation = state.updateSettings({ sidebarOpen: false })
       state.setInspectorOpen(false)
@@ -479,7 +481,9 @@ describe('agent event git refresh timer', () => {
           bridge,
           runtimeIdRef: { current: 'runtime' },
           runtimeSessionsRef: { current: new Map([['runtime', session.filePath]]) },
-          runtimeOwnerRef: { current: null },
+
+          dropPendingSteers: vi.fn(),
+          detachRuntime: vi.fn(),
           workspaceRef: { current: { generation: 0, sessionFile: session.filePath, cwd: '/project' } },
           setSessions: vi.fn(),
           setRuntime: vi.fn(),
@@ -537,7 +541,6 @@ describe('bootstrap critical path', () => {
       } as unknown as PrimeWorkApi
       const runtimeIdRef = { current: runtime.runtimeId as string | null }
       const runtimeSessionsRef = { current: new Map([[runtime.runtimeId, session.filePath]]) }
-      const runtimeOwnerRef = { current: null }
       const workspaceRef = { current: { generation: 0, project, session, cwd: project.path, sessionFile: session.filePath } }
       const setProjects = vi.fn()
       const setSchedules = vi.fn()
@@ -572,7 +575,8 @@ describe('bootstrap critical path', () => {
           bridge,
           runtimeIdRef,
           runtimeSessionsRef,
-          runtimeOwnerRef,
+          dropPendingSteers: vi.fn(),
+          detachRuntime: vi.fn(),
           workspaceRef,
           setSessions,
           setRuntime,
@@ -1212,9 +1216,152 @@ describe('plugin request ownership', () => {
     await act(async () => { refresh = state.refresh(); await Promise.resolve() })
     await act(async () => { root.render(<PluginProbe scope="/project" generation={2} />) })
     await act(async () => { requests[2].resolve({ skills: [skill('stale-refresh')], warnings: [] }); await refresh })
-    expect(state.skills).toEqual([])
+    expect(state.skills.map(({ id }) => id)).toEqual(['project-one'])
     await act(async () => { requests[3].resolve({ skills: [skill('project-two')], warnings: [] }); await requests[3].promise })
     expect(state.skills.map(({ id }) => id)).toEqual(['project-two'])
     expect(reportError).not.toHaveBeenCalled()
   })
+})
+
+
+it('cancels recognized malformed dialogs instead of leaving the harness waiting', async () => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  let state!: ReturnType<typeof useExtensionUi>
+  function ExtensionProbe() {
+    state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef: { current: new Map() }, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+    return null
+  }
+  await act(async () => root.render(<ExtensionProbe />))
+  await act(async () => {
+    for (const method of ['select', 'confirm', 'input', 'editor']) state.showExtensionUi('runtime', { type: 'extension_ui_request', method, id: method, title: '' })
+    state.showExtensionUi('runtime', { type: 'extension_ui_request', method: 'notify', id: 'notice', title: '' })
+  })
+  expect(command.mock.calls).toEqual(['select', 'confirm', 'input', 'editor'].map((id) => ['runtime', { type: 'extension_ui_response', id, cancelled: true }]))
+  expect(state.extensionUi).toBeNull()
+})
+
+
+it('sends questionnaire answers concurrently and releases only failed response ids', async () => {
+  const first = deferred<unknown>()
+  const second = deferred<unknown>()
+  const command = vi.fn((_runtimeId: string, payload: AgentRpcCommand) => {
+    if (payload.type === 'extension_ui_response' && !('cancelled' in payload)) return payload.id === 'q1' ? first.promise : second.promise
+    return Promise.resolve({})
+  })
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const reportError = vi.fn()
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  let state!: ReturnType<typeof useExtensionUi>
+  function ExtensionProbe() {
+    state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions: vi.fn(), setRuntime: vi.fn(), reportError })
+    return null
+  }
+  await act(async () => root.render(<ExtensionProbe />))
+  await act(async () => {
+    for (const [index, id] of ['q1', 'q2'].entries()) state.showExtensionUi('runtime', { type: 'extension_ui_request', method: 'select', id, title: id, options: [`__prime_ask_user__group:${index}:2`, 'A'] })
+  })
+  let reply: Promise<void> | undefined
+  act(() => { reply = state.respondToExtensionUi({ values: { q1: 'A', q2: 'A' } }) })
+  expect(command).toHaveBeenCalledTimes(2)
+  const error = new Error('q1 transport failed')
+  await act(async () => { first.reject(error); second.resolve({}); await reply })
+  expect(command.mock.calls.filter(([, payload]) => payload.type === 'extension_ui_response' && 'cancelled' in payload)).toEqual([['runtime', { type: 'extension_ui_response', id: 'q1', cancelled: true }]])
+  expect(reportError).toHaveBeenCalledExactlyOnceWith(error)
+})
+
+it('returns false for rolled-back persistence and true only for a saved settings update', async () => {
+  const failure = new Error('disk unavailable')
+  const update = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({ ...DEFAULT_SETTINGS, browserHome: 'https://saved.example/' })
+  const bridge = { settings: { get: async () => DEFAULT_SETTINGS, update } } as unknown as PrimeWorkApi
+  const reportError = vi.fn()
+  let state!: ReturnType<typeof useAppSettings>
+  function SettingsProbe() { state = useAppSettings({ bridge, reportError }); return null }
+  await act(async () => root.render(<SettingsProbe />))
+  await act(async () => { expect(await state.updateSettings({ browserHome: 'https://failed.example/' })).toBe(false) })
+  expect(state.settings.browserHome).toBe(DEFAULT_SETTINGS.browserHome)
+  expect(reportError).toHaveBeenCalledExactlyOnceWith(failure)
+  await act(async () => { expect(await state.updateSettings({ browserHome: 'https://saved.example/' })).toBe(true) })
+  expect(state.settings.browserHome).toBe('https://saved.example/')
+})
+
+it.each([false, true])('restores only unanswered questionnaire members with authoritative settled indexes (late=%s)', async (late) => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  const setSessions = vi.fn(), setRuntime = vi.fn(), reportError = vi.fn()
+  let state!: ReturnType<typeof useExtensionUi>
+  function Probe() { state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions, setRuntime, reportError }); return null }
+  await act(async () => root.render(<Probe />))
+  const question = { type: 'extension_ui_request', method: 'select', id: 'q2', title: 'Remaining question', options: ['__prime_ask_user__group:1:2', 'A'] }
+  const snapshot = { runtimeId: 'runtime', pendingExtensionUi: late ? undefined : [question], pendingExtensionUiGroups: [{ groupId: 'group', total: 2, arrived: late ? [0] : [0, 1], settled: [0] }] }
+  act(() => state.rehydrateExtensionUi(snapshot))
+  if (late) {
+    expect(state.extensionUi).toBeNull()
+    act(() => state.showExtensionUi('runtime', { ...question, id: 'q1', options: ['__prime_ask_user__group:0:2', 'A'] }))
+    expect(state.extensionUi).toBeNull()
+    act(() => state.showExtensionUi('runtime', question))
+  } else {
+    const deadline = state.extensionUi?.deadline
+    act(() => state.rehydrateExtensionUi(snapshot))
+    expect(state.extensionUi?.deadline).toBe(deadline)
+  }
+  expect(state.extensionUi?.request).toMatchObject({ method: 'questionnaire', total: 1, complete: true, questions: [{ id: 'q2', index: 0 }] })
+  expect(command).not.toHaveBeenCalled()
+  await act(async () => state.respondToExtensionUi({ values: { q2: 'A' } }))
+  expect(command).toHaveBeenCalledExactlyOnceWith('runtime', { type: 'extension_ui_response', id: 'q2', value: 'A' })
+})
+
+it('does not infer completion from a partial snapshot and completes only after the later live member arrives', async () => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  const setSessions = vi.fn(), setRuntime = vi.fn(), reportError = vi.fn()
+  let state!: ReturnType<typeof useExtensionUi>
+  function Probe() { state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions, setRuntime, reportError }); return null }
+  await act(async () => root.render(<Probe />))
+  act(() => state.rehydrateExtensionUi({ runtimeId: 'runtime', pendingExtensionUi: [{ type: 'extension_ui_request', method: 'select', id: 'q1', title: 'First', options: ['__prime_ask_user__group:0:2', 'A'] }], pendingExtensionUiGroups: [{ groupId: 'group', total: 2, arrived: [0], settled: [] }] }))
+  expect(state.extensionUi?.request).toMatchObject({ complete: false, total: 2 })
+  act(() => state.showExtensionUi('runtime', { type: 'extension_ui_request', method: 'select', id: 'q2', title: 'Second', options: ['__prime_ask_user__group:1:2', 'B'] }))
+  expect(state.extensionUi?.request).toMatchObject({ complete: true, total: 2 })
+  expect(command).not.toHaveBeenCalled()
+})
+
+it('rehydrates ordinary dialogs idempotently and retires an authoritative empty snapshot without another response', async () => {
+  const command = vi.fn().mockResolvedValue({})
+  const bridge = { agent: { command } } as unknown as PrimeWorkApi
+  const runtimeSessionsRef = { current: new Map<string, string>() }
+  const setSessions = vi.fn(), setRuntime = vi.fn(), reportError = vi.fn()
+  let state!: ReturnType<typeof useExtensionUi>
+  function Probe() { state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', runtimeSessionsRef, setSessions, setRuntime, reportError }); return null }
+  await act(async () => root.render(<Probe />))
+  const snapshot = { runtimeId: 'runtime', pendingExtensionUi: [{ type: 'extension_ui_request', method: 'input', id: 'name', title: 'Name' }] }
+  act(() => { state.rehydrateExtensionUi(snapshot); state.rehydrateExtensionUi(snapshot) })
+  expect(state.extensionUi?.request).toMatchObject({ method: 'input', id: 'name' })
+  act(() => state.rehydrateExtensionUi({ runtimeId: 'runtime' }))
+  expect(state.extensionUi?.request.id).toBe('name')
+  act(() => state.rehydrateExtensionUi({ runtimeId: 'runtime', pendingExtensionUi: [], pendingExtensionUiGroups: [] }))
+  expect(state.extensionUi).toBeNull()
+  expect(command).not.toHaveBeenCalled()
+})
+
+it('keeps the agent subscription and scheduled Git refresh while page visibility changes', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    let deliver!: (payload: { runtimeId: string; event: Record<string, unknown> }) => void
+    const subscribe = vi.fn((listener: typeof deliver) => { deliver = listener; return vi.fn() })
+    const refreshGit = vi.fn(async () => undefined)
+    const options = { bridge: { agent: { onEvent: subscribe } } as unknown as PrimeWorkApi,
+      runtimeIdRef: { current: 'runtime' }, runtimeSessionsRef: { current: new Map([['runtime', session.filePath]]) },
+      workspaceRef: { current: { generation: 0, sessionFile: session.filePath } },
+      setSessions: vi.fn(), setRuntime: vi.fn(), dropPendingSteers: vi.fn(), detachRuntime: vi.fn(), queueAgentEvent: vi.fn(), reconcileTranscriptForEvent: vi.fn(),
+      showExtensionUi: vi.fn(), clearExtensionUi: vi.fn(), refreshGit, refreshGitOnTerminalEvent: true }
+    function Probe({ visible }: { visible: boolean }) { useAgentEvents({ ...options, activeSessionVisible: visible }); return null }
+    await act(async () => root.render(<Probe visible />))
+    act(() => deliver({ runtimeId: 'runtime', event: { type: 'agent_end' } }))
+    await act(async () => root.render(<Probe visible={false} />))
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(161) })
+    expect(refreshGit).toHaveBeenCalledOnce()
+  } finally { vi.useRealTimers() }
 })

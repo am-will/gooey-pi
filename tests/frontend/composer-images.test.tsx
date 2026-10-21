@@ -1,12 +1,13 @@
+import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '../../src/lib/rpc-frame'
 // @vitest-environment jsdom
 
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as ComposerImageHooks from '../../src/hooks/useComposerImages'
 import { Composer } from '../../src/components/Composer'
 import { groupModelsByProvider } from '../../src/hooks/useProviderCatalog'
-import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '../../src/lib/harness'
-import type { HarnessId, PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo, SkillRecord } from '../../src/types/api'
+import type { HarnessId, PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -46,8 +47,6 @@ function renderComposer(onSend = vi.fn(), imageInputSupported = true, busy = fal
   act(() => root.render(<Composer
     busy={busy}
     harness={harness}
-    agentName={harness && HARNESS_AGENT_NAMES[harness]}
-    shortName={harness && HARNESS_SHORT_NAMES[harness]}
     model="provider/vision"
     effort="medium"
     modelsByProvider={modelsByProvider}
@@ -141,6 +140,21 @@ async function dropFiles(files: File[]): Promise<void> {
 }
 
 describe('Composer image ingestion', () => {
+  it('rejects a composed JSONL frame exactly one byte over the shared limit', async () => {
+    const onSend = renderComposer()
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!
+    const length = RPC_WRITE_FRAME_LIMIT_BYTES - rpcRequestFrameBytes({ type: 'follow_up', message: '' }) + 1
+    const text = 'x'.repeat(length)
+    expect(rpcRequestFrameBytes({ type: 'follow_up', message: text })).toBe(RPC_WRITE_FRAME_LIMIT_BYTES + 1)
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click())
+    expect(onSend).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('too large')
+  })
+
   it('previews and sends a pasted image through the prompt callback', async () => {
     const onSend = renderComposer(vi.fn(async () => undefined))
     await paste(pastedPng())
@@ -351,7 +365,7 @@ describe('Composer image ingestion', () => {
     expect(container.querySelector('.composer-menu')).toBeNull()
     act(() => trigger.click())
     expect(container.querySelector('.composer-menu')).not.toBeNull()
-    act(() => document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+    act(() => document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
     expect(container.querySelector('.composer-menu')).toBeNull()
   })
 
@@ -516,6 +530,7 @@ describe('Composer submission lifecycle', () => {
     const onSend = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve }))
     renderComposer(onSend)
     const textarea = await setDraft('First message')
+    textarea.focus()
     await pressEnter(textarea)
     // Typing and pressing Enter again while the first send is in flight must
     // not double-submit, because the textarea stays enabled.
@@ -602,31 +617,69 @@ describe('Composer memoization', () => {
   }
 
   it('does not re-render when a streaming parent re-renders with identical props', () => {
-    // Composer's render body scans `skills` for enabled entries, so counting
-    // those scans counts Composer renders.
-    let renderProbes = 0
-    const probedSkills = new Proxy([] as SkillRecord[], {
-      get(target, key, receiver) {
-        if (key === 'filter') renderProbes += 1
-        return Reflect.get(target, key, receiver)
-      },
-    })
+    const renderProbe = vi.spyOn(ComposerImageHooks, 'useComposerImages')
     let forceParentRender: () => void = () => undefined
     function Parent() {
       const [, setTick] = useState(0)
       forceParentRender = () => setTick((value) => value + 1)
-      return <Composer {...stableProps} skills={probedSkills} />
+      return <Composer {...stableProps} />
     }
 
     act(() => root.render(<Parent />))
-    const initialRenders = renderProbes
+    const initialRenders = renderProbe.mock.calls.length
     expect(initialRenders).toBeGreaterThan(0)
 
     act(() => forceParentRender())
     act(() => forceParentRender())
     // memo(Composer) bails out for identical props: no further renders.
-    expect(renderProbes).toBe(initialRenders)
+    expect(renderProbe.mock.calls.length).toBe(initialRenders)
 
     expect(container.querySelector('.model-picker__trigger')?.textContent).toContain('Vision')
   })
+})
+
+
+describe('Composer suggestion keyboard behavior', () => {
+  function input(value: string) {
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, value)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    return textarea
+  }
+  function key(target: EventTarget, value: string) {
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true })) })
+  }
+  it('cycles command options, selects a command and dismisses from textarea or document', () => {
+    renderComposer()
+    const textarea = input('/')
+    const initial = textarea.getAttribute('aria-activedescendant')
+    key(textarea, 'ArrowUp')
+    expect(textarea.getAttribute('aria-activedescendant')).toMatch(/-option-4$/)
+    key(textarea, 'ArrowDown')
+    expect(textarea.getAttribute('aria-activedescendant')).toBe(initial)
+    key(textarea, 'ArrowDown')
+    expect(textarea.getAttribute('aria-activedescendant')).toMatch(/-option-1$/)
+    key(textarea, 'Escape')
+    expect(container.querySelector('.composer-menu')).toBeNull()
+    input('/re')
+    expect(container.querySelector('.composer-menu')?.textContent).toContain('/review')
+    key(document, 'Escape')
+    expect(container.querySelector('.composer-menu')).toBeNull()
+    input('/rev')
+    key(textarea, 'Enter')
+    expect(textarea.value).toBe('/review ')
+  })
+  it.each(['omp', 'pi'] as const)('omits Prime-only commands for %s', (harness) => {
+    renderComposer(vi.fn(), true, false, 'queue', undefined, undefined, harness)
+    input('/mcp')
+    expect(container.querySelector('.composer-menu')).toBeNull()
+  })
+  it('offers the Prime-only mcp command', () => {
+    renderComposer()
+    input('/mcp')
+    expect(container.querySelector('.composer-menu')?.textContent).toContain('/mcp')
+  })
+
 })

@@ -30,7 +30,7 @@ function renderTranscript(harness: HarnessId, streaming: boolean): string {
     { id: 'user', role: 'user', timestamp: 1_000, parts: [{ type: 'text', text: 'Run the tests' }] },
     { id: 'reply', role: 'assistant', timestamp: 1_001, streaming, parts: [{ type: 'text', text: 'Running them now.' }] },
   ]
-  act(() => root.render(<Transcript messages={messages} git={{ isRepo: false, files: [] }} harness={harness} onOpenChanges={vi.fn()} onSuggestion={vi.fn()} />))
+  act(() => root.render(<Transcript messages={messages} harness={harness} onSuggestion={vi.fn()} />))
   return container.querySelector('.sr-only[role="status"]')?.textContent ?? ''
 }
 

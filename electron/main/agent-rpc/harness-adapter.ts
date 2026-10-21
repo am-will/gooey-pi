@@ -1,4 +1,6 @@
-import type { HarnessId, PrimeContextUsage, PrimeImplementation, RuntimeInfo, SessionActionSnapshot, SessionUsage, SessionUsageTokens } from '../../../src/types/api'
+import { parseContextUsage } from '../../../src/lib/usage'
+export { parseContextUsage, parseSessionUsage } from '../../../src/lib/usage'
+import type { HarnessId, PrimeContextUsage, PrimeImplementation, RuntimeInfo, SessionActionSnapshot } from '../../../src/types/api'
 import { RUST_PRIME_AGENT_NAME } from '../../../src/lib/prime-compat'
 import { MAX_QUEUED_ACTIONS, consumeDeliveredPrompt } from '../../../src/lib/session-actions'
 import { extensionInjections } from '../extension-manifest'
@@ -6,6 +8,7 @@ import { HARNESSES } from '../harness'
 import { isRecord } from '../validation'
 import { providerErrorDetail } from './limits'
 import type { RpcObject } from './types'
+import type { ValidatedRpcCommand } from './command-schema'
 
 /** Normalized start inputs the manager resolves before the harness turns them into argv. */
 export interface HarnessStartArgsInput {
@@ -42,12 +45,6 @@ export interface HarnessRpcAdapter {
   readonly negotiateProtocolVersion?: number
   /** Whether v2 base64 rpc_chunk frames may arrive and must be reassembled. */
   readonly chunkedFrames: boolean
-  /**
-   * True when the harness has no --cwd flag and derives its working directory
-   * (and session bucket) from the process it was spawned as: the runtime must
-   * spawn the child with the authorized cwd as its working directory.
-   */
-  readonly spawnsInCwd?: boolean
   /** The Prime build an alternative Prime adapter speaks; absent for TypeScript Prime and the other harnesses. */
   readonly implementation?: PrimeImplementation
   /**
@@ -65,7 +62,7 @@ export interface HarnessRpcAdapter {
   readonly compactRefusal: RegExp
   buildStartArgs(input: HarnessStartArgsInput): string[]
   /** Renderer command vocabulary → harness wire vocabulary. Throws for commands the harness does not support. */
-  translateCommand(command: RpcObject): RpcObject
+  translateCommand(command: ValidatedRpcCommand): RpcObject
   /**
    * Harness event → Prime event vocabulary, given the runtime state before the
    * event. One harness event may expand into several, which the runtime
@@ -76,40 +73,6 @@ export interface HarnessRpcAdapter {
   buildServiceTierCommand?(serviceTier: 'default' | 'priority'): RpcObject
   /** Reads harness-specific state fields out of get_state data. */
   readState(data: RpcObject): HarnessStateReading
-}
-
-export function parseContextUsage(raw: unknown): PrimeContextUsage | null {
-  if (!isRecord(raw) || !Number.isSafeInteger(raw.contextWindow) || Number(raw.contextWindow) <= 0) return null
-  const tokens = raw.tokens === null ? null : Number.isSafeInteger(raw.tokens) && Number(raw.tokens) >= 0 ? Number(raw.tokens) : undefined
-  const percent = raw.percent === null ? null : typeof raw.percent === 'number' && Number.isFinite(raw.percent) && raw.percent >= 0 ? raw.percent : undefined
-  if (tokens === undefined || percent === undefined) return null
-  return { tokens, contextWindow: Number(raw.contextWindow), percent }
-}
-
-const SESSION_TOKEN_FIELDS: Array<keyof SessionUsageTokens> = ['input', 'output', 'cacheRead', 'cacheWrite', 'total']
-
-function parseSessionUsageTokens(raw: unknown): SessionUsageTokens | undefined {
-  if (!isRecord(raw)) return undefined
-  const tokens: Partial<SessionUsageTokens> = {}
-  for (const field of SESSION_TOKEN_FIELDS) {
-    const value = raw[field]
-    if (!Number.isSafeInteger(value) || Number(value) < 0) return undefined
-    tokens[field] = Number(value)
-  }
-  return tokens as SessionUsageTokens
-}
-
-/**
- * Reads the cost/token totals out of get_session_stats data. A missing or
- * malformed cost becomes null (older harness builds omit it); malformed token
- * fields drop the breakdown. Returns null only when neither is present.
- */
-export function parseSessionUsage(raw: unknown): SessionUsage | null {
-  if (!isRecord(raw)) return null
-  const cost = typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? raw.cost : null
-  const tokens = parseSessionUsageTokens(raw.tokens)
-  if (cost === null && tokens === undefined) return null
-  return tokens ? { cost, tokens } : { cost }
 }
 
 const unsafeArgValue = (value: string): boolean => value.startsWith('-') || /[\r\n]/.test(value)
@@ -130,9 +93,9 @@ export class UnsupportedRpcCommandError extends Error {
 }
 
 /** A command translator that refuses the `unsupported` commands and passes every other command through. */
-function rejectCommands(unsupported: ReadonlySet<string>, harnessLabel: string): (command: RpcObject) => RpcObject {
+function rejectCommands(unsupported: ReadonlySet<string>, harnessLabel: string): (command: ValidatedRpcCommand) => ValidatedRpcCommand {
   return (command) => {
-    const type = String(command.type)
+    const type = command.type
     if (unsupported.has(type)) throw new UnsupportedRpcCommandError(type, harnessLabel)
     return command
   }
@@ -273,19 +236,19 @@ export function primeStartRecovery(redetect: () => Promise<PrimeImplementation |
   }
 }
 
-const OMP_UNSUPPORTED_COMMANDS = new Set([
+const PRIME_ONLY_COMMANDS = new Set([
   'send_message', 'clone', 'set_heartbeat', 'update_heartbeat', 'manage_heartbeat', 'observe', 'unobserve',
   'list_heartbeats', 'get_heartbeat', 'agent_messages_status', 'agent_messages_pause', 'agent_messages_resume',
   'agent_messages_clear',
 ])
 
-const rejectOmpCommands = rejectCommands(OMP_UNSUPPORTED_COMMANDS, 'OMP')
+const rejectOmpCommands = rejectCommands(PRIME_ONLY_COMMANDS, 'OMP')
 // pi keeps Prime's vocabulary (fork/get_fork_messages pass through
 // untranslated) but lacks the same Prime-only daemon/heartbeat family OMP
 // rejects, clone included.
-const rejectPiCommands = rejectCommands(OMP_UNSUPPORTED_COMMANDS, 'Pi')
+const rejectPiCommands = rejectCommands(PRIME_ONLY_COMMANDS, 'Pi')
 
-const OMP_APPROVAL_MODES = new Set(['always-ask', 'write', 'yolo'])
+const RUNTIME_APPROVAL_MODES = new Set(['always-ask', 'write', 'yolo'])
 
 export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'omp',
@@ -306,7 +269,7 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
     }
     if (input.thinking) args.push('--thinking', input.thinking)
     if (input.approvalMode !== undefined) {
-      if (!OMP_APPROVAL_MODES.has(input.approvalMode)) throw new TypeError('Invalid approval mode')
+      if (!RUNTIME_APPROVAL_MODES.has(input.approvalMode)) throw new TypeError('Invalid approval mode')
       args.push('--approval-mode', input.approvalMode)
     }
     const computerUseSkillPath = input.environment.GOOEYPI_COMPUTER_USE_SKILL_PATH
@@ -368,9 +331,6 @@ export const PI_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'pi',
   agentName: HARNESSES.pi.agentName,
   chunkedFrames: false,
-  // pi has no --cwd flag: the session bucket derives from the child process
-  // working directory, which the runtime sets to the authorized cwd.
-  spawnsInCwd: true,
   compactRefusal: /^(?:Already compacted|Nothing to compact \(session too small\))$/,
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc']

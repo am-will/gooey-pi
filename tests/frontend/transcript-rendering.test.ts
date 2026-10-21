@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { Transcript } from '../../src/components/Transcript'
-import { LiveElapsed } from '../../src/components/transcript/timeline'
+import { LiveElapsed, WorkTimeline } from '../../src/components/transcript/timeline'
 import { replayPrimeEvents } from '../../src/lib/events/reduce'
 import type { TranscriptMessage } from '../../src/types/api'
 
@@ -12,21 +12,68 @@ vi.mock('../../src/components/ui', async () => {
   return { ...actual, PrimeMark: ({ size = 24 }: { size?: number }) => element('span', { className: 'prime-mark', style: { width: size, height: size } }) }
 })
 
-const git = { isRepo: false, files: [] }
 const noop = () => undefined
 
 function render(messages: TranscriptMessage[], active = false, showTools = true): string {
   return renderToStaticMarkup(createElement(Transcript, {
     messages,
-    git,
     active,
     showTools,
-    onOpenChanges: noop,
     onSuggestion: noop,
   }))
 }
 
 describe('transcript rendering', () => {
+  it.each([false, true])('keeps grouped question prompts in the activity summary when completed=%s', (completed) => {
+    const events = [
+      { type: 'tool_execution_start', toolCallId: 'ask-2', toolName: 'ask_user', args: { questions: [
+        { question: 'Which release channel?', options: ['Stable', 'Beta'] },
+        { question: 'What should I optimize for?', options: ['Speed', 'Safety'] },
+      ] } },
+      ...(completed ? [{ type: 'tool_execution_end', toolCallId: 'ask-2', toolName: 'ask_user', result: { values: { answer: 'Safety' } } }] : []),
+    ]
+    const messages = replayPrimeEvents([], events)
+    const html = renderToStaticMarkup(createElement(WorkTimeline, { parts: messages.flatMap((message) => message.parts), showReasoning: true, showTools: true }))
+    expect(html).toContain('activity-line--question')
+    expect(html).toContain('Which release channel?')
+    expect(html).toContain('What should I optimize for?')
+    expect(html).not.toContain('activity-tool__contents')
+  })
+
+  it('bounds grouped question previews and ignores malformed question entries', () => {
+    const html = renderToStaticMarkup(createElement(WorkTimeline, {
+      parts: [{ type: 'toolCall', name: 'ask_user', args: { questions: [null, 'invalid', { question: 42 }, { question: 'x'.repeat(500) }] } }],
+      showReasoning: true, showTools: true,
+    }))
+    const preview = /<code class="activity-tool__preview">([\s\S]*?)<\/code>/.exec(html)?.[1].replace(/<[^>]+>/g, '')
+    expect(preview).toBe(`${'x'.repeat(180)}…`)
+    expect(html).not.toContain('activity-tool__contents')
+  })
+
+  it('never visits historical questionnaire entries beyond the supported five questions', () => {
+    const questions = Array.from({ length: 5 }, (_, index) => ({ question: `Question ${index + 1}?` }))
+    questions.length = 1_000_000
+    Object.defineProperty(questions, 5, { get() { throw new Error('Visited an out-of-contract question') } })
+    const html = renderToStaticMarkup(createElement(WorkTimeline, {
+      parts: [{ type: 'toolCall', name: 'ask_user', args: { questions } }], showReasoning: true, showTools: true,
+    }))
+    const preview = /<code class="activity-tool__preview">([\s\S]*?)<\/code>/.exec(html)?.[1].replace(/<[^>]+>/g, '')
+    expect(preview).toContain('Question 1?')
+    expect(preview).toContain('Question 5?')
+  })
+
+  it('normalizes only bounded question prefixes while the tool details are collapsed', () => {
+    const replace = vi.spyOn(String.prototype, 'replace')
+    try {
+      renderToStaticMarkup(createElement(WorkTimeline, {
+        parts: [{ type: 'toolCall', name: 'ask_user', args: { questions: [{ question: 'x'.repeat(1_000_000) }] } }], showReasoning: true, showTools: true,
+      }))
+      const normalizedLengths = replace.mock.calls.flatMap((args, index) => args[0] instanceof RegExp && args[0].source === '\\s+' ? [String(replace.mock.contexts[index]).length] : [])
+      expect(normalizedLengths.length).toBeGreaterThan(0)
+      expect(Math.max(...normalizedLengths)).toBeLessThanOrEqual(5 * 181 + 4 * 3)
+    } finally { replace.mockRestore() }
+  })
+
   it('streams reasoning inside a distinct process rail with animated thinking dots', () => {
     const html = render([{
       id: 'active',
@@ -181,11 +228,9 @@ describe('transcript rendering', () => {
         { id: 'user-queued-steer', role: 'user', steerState: 'accepted', timestamp: 2_000, parts: [{ type: 'text', text: 'Pick this up' }] },
         { id: 'active', role: 'assistant', timestamp: 2_001, streaming: true, parts: [] },
       ],
-      git,
-      harness,
+        harness,
       active: true,
-      onOpenChanges: noop,
-      onSuggestion: noop,
+        onSuggestion: noop,
     }))
 
     expect(html).toContain('Current response')
@@ -228,16 +273,15 @@ describe('transcript rendering', () => {
   })
 
 
-  it('renders one file changes card in the pinned transcript footer', () => {
+  it('reserves docked change clearance without mounting a second changes card', () => {
     const html = renderToStaticMarkup(createElement(Transcript, {
       messages: [{ id: 'assistant', role: 'assistant', parts: [{ type: 'text', text: 'Done' }] }],
-      git: { isRepo: true, files: [{ path: 'src/App.tsx', status: 'modified', additions: 2, deletions: 1, staged: false }] },
-      onOpenChanges: noop,
-      onSuggestion: noop,
+      bottomDockHasChanges: true,
+        onSuggestion: noop,
     }))
-    expect(html).toContain('transcript-changes-pin')
-    expect(html.match(/class="changes-card"/g)).toHaveLength(1)
-    expect(html).toContain('1 file changed')
+    expect(html).toContain('has-docked-changes')
+    expect(html).not.toContain('class="changes-card"')
+    expect(html).toContain('Done')
   })
 
   it('renders valid user images and keeps truncated history as a safe placeholder', () => {

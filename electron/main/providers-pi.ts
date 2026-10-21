@@ -1,12 +1,10 @@
 import type { PrimeModelDescriptor } from '../../src/types/api'
-import type { CliModelCatalogOptions, ValidatedModelEntry } from './model-catalog-cli'
+import type { ValidatedModelEntry } from './model-catalog-cli'
 import { RpcModelCatalogService, thinkingLevelsFromMap } from './model-catalog-rpc'
 
 export { MAX_CATALOG_PROVIDERS } from './model-catalog-cli'
 
 export const PI_NOT_INSTALLED_WARNING = 'Pi is not installed. Install the pi CLI to load its model catalog.'
-
-export type PiModelCatalogOptions = CliModelCatalogOptions
 
 /**
  * Model catalog service for the pi harness. Pi has no CLI JSON model list

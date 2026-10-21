@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
 import { findUnpackedDirectory, packagedExecutablePath } from './verify-cross-platform-package.mjs'
 
 /**
@@ -21,6 +21,8 @@ export const PACKAGED_SMOKE_READY_EVENT = 'gooeypi-packaged-smoke-ready'
 export const MAX_MARKER_BYTES = 4 * 1024
 export const MAX_DIAGNOSTICS_BYTES = 64 * 1024
 export const SMOKE_TIMEOUT_MS = 45_000
+/** How long helpers that inherited stdio may hold the pipes open after the application process exits. */
+export const SMOKE_EXIT_GRACE_MS = 5_000
 /** Prime runs the schedule skill from this user-data mirror, and a failed mirror only logs before falling back to the signed bundle. */
 export const MIRRORED_SCHEDULE_SKILL = join('bundled-skills', 'prime-work-schedules', 'SKILL.md')
 
@@ -43,16 +45,18 @@ export function killTreeCommand(pid, platform = process.platform) {
 }
 
 export function killProcessTree(child, platform = process.platform) {
-  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return
+  if (!child.pid) return
+  const alive = child.exitCode === null && child.signalCode === null
   const taskkill = killTreeCommand(child.pid, platform)
   if (taskkill) {
-    spawn(taskkill.command, taskkill.args, { stdio: 'ignore' }).unref()
+    if (alive) spawn(taskkill.command, taskkill.args, { stdio: 'ignore' }).unref()
     return
   }
+  // A detached POSIX launch leads its own process group, which outlives the leader while any helper still runs.
   try {
     process.kill(-child.pid, 'SIGKILL')
   } catch {
-    child.kill('SIGKILL')
+    if (alive) child.kill('SIGKILL')
   }
 }
 
@@ -107,7 +111,7 @@ function readMarker(markerPath) {
   return parseReadinessMarker(readFileSync(markerPath, 'utf8'))
 }
 
-function runPackagedApp(executable, args, { cwd, timeoutMs, platform = process.platform }) {
+function runPackagedApp(executable, args, { cwd, timeoutMs, exitGraceMs = SMOKE_EXIT_GRACE_MS, platform = process.platform }) {
   const { command, args: launchArgs } = launchCommand(executable, args, { platform })
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, launchArgs, {
@@ -135,15 +139,26 @@ function runPackagedApp(executable, args, { cwd, timeoutMs, platform = process.p
       killProcessTree(child, platform)
       rejectPromise(error)
     })
+    let grace
+    child.once('exit', () => {
+      clearTimeout(deadline)
+      // Helpers that inherited stdio can hold the pipes after the app exits; 'close' would then never arrive.
+      grace = setTimeout(() => {
+        killProcessTree(child, platform)
+        child.stdout.destroy()
+        child.stderr.destroy()
+      }, exitGraceMs)
+    })
     child.on('close', (code, signal) => {
       clearTimeout(deadline)
+      clearTimeout(grace)
       killProcessTree(child, platform)
       resolvePromise({ code, signal, timedOut, diagnostics: boundedDiagnostics(chunks), command, args: launchArgs })
     })
   })
 }
 
-export async function smokePackagedApp(target, architecture, { timeoutMs = SMOKE_TIMEOUT_MS, diagnosticsPath = '' } = {}) {
+export async function smokePackagedApp(target, architecture, { timeoutMs = SMOKE_TIMEOUT_MS, exitGraceMs = SMOKE_EXIT_GRACE_MS, diagnosticsPath = '' } = {}) {
   const outputDirectory = resolve('release', target, architecture)
   const report = diagnosticsPath || join(outputDirectory, 'packaged-smoke-diagnostics.log')
   let workspace = ''
@@ -154,7 +169,7 @@ export async function smokePackagedApp(target, architecture, { timeoutMs = SMOKE
     workspace = mkdtempSync(join(tmpdir(), 'gooeypi-packaged-smoke-'))
     const markerPath = join(workspace, 'ready.json')
     const userData = join(workspace, 'user-data')
-    launch = await runPackagedApp(executable, smokeArguments(markerPath, userData), { cwd: unpacked, timeoutMs })
+    launch = await runPackagedApp(executable, smokeArguments(markerPath, userData), { cwd: unpacked, timeoutMs, exitGraceMs })
     if (launch.timedOut) throw new Error(`Packaged application did not report renderer readiness within ${timeoutMs}ms`)
     if (launch.code !== 0) throw new Error(`Packaged application exited with code ${launch.code ?? 'null'} (signal ${launch.signal ?? 'none'})`)
     const marker = readMarker(markerPath)
@@ -179,15 +194,11 @@ function requireOption(value, label, allowed) {
   return value
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-if (invokedDirectly) {
-  const option = (name) => {
-    const index = process.argv.indexOf(name)
-    return index === -1 ? undefined : process.argv[index + 1]
-  }
+if (import.meta.main) {
   try {
-    await smokePackagedApp(requireOption(option('--platform'), 'platform', ['linux', 'win']), requireOption(option('--arch'), 'arch', ['arm64', 'x64']), {
-      diagnosticsPath: option('--diagnostics') ?? '',
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { platform: { type: 'string' }, arch: { type: 'string' }, diagnostics: { type: 'string' } } })
+    await smokePackagedApp(requireOption(values.platform, 'platform', ['linux', 'win']), requireOption(values.arch, 'arch', ['arm64', 'x64']), {
+      diagnosticsPath: values.diagnostics ?? '',
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

@@ -19,7 +19,7 @@ const electron = vi.hoisted(() => {
   return {
     app: {
       isPackaged: false,
-      getLoginItemSettings: vi.fn(() => ({ openAtLogin: false })),
+      getLoginItemSettings: vi.fn((): { openAtLogin: boolean, status?: string } => ({ openAtLogin: false })),
       setActivationPolicy: vi.fn(),
       setLoginItemSettings: vi.fn(),
       show: vi.fn(),
@@ -164,6 +164,9 @@ describe('MacBackgroundController', () => {
     expect(electron.app.setLoginItemSettings).not.toHaveBeenCalled()
 
     const previous = defaultSettings()
+    electron.app.getLoginItemSettings
+      .mockReturnValueOnce({ openAtLogin: false })
+      .mockReturnValueOnce({ openAtLogin: true, status: 'enabled' })
     packaged.controller.applySettings(previous, { ...previous, launchAtLogin: true })
     expect(electron.app.setLoginItemSettings).toHaveBeenLastCalledWith({ openAtLogin: true })
 
@@ -181,6 +184,52 @@ describe('MacBackgroundController', () => {
     packaged.controller.applySettings(enabled, { ...enabled, launchAtLogin: false })
 
     expect(electron.app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: false })
+  })
+
+  it('reports a login item that macOS left awaiting approval or did not register', () => {
+    const packaged = makeController({ packaged: true })
+    const previous = defaultSettings()
+
+    electron.app.getLoginItemSettings
+      .mockReturnValueOnce({ openAtLogin: false })
+      .mockReturnValueOnce({ openAtLogin: false, status: 'requires-approval' })
+    expect(() => packaged.controller.applySettings(previous, { ...previous, launchAtLogin: true })).toThrow(/System Settings/)
+
+    electron.app.getLoginItemSettings
+      .mockReturnValueOnce({ openAtLogin: false })
+      .mockReturnValueOnce({ openAtLogin: false, status: 'not-registered' })
+    expect(() => packaged.controller.applySettings(previous, { ...previous, launchAtLogin: true })).toThrow(/did not add/)
+  })
+
+  it('does not report approval state when launch at login is disabled', () => {
+    const packaged = makeController({ packaged: true })
+    const enabled = { ...defaultSettings(), launchAtLogin: true }
+    electron.app.getLoginItemSettings
+      .mockReturnValueOnce({ openAtLogin: true, status: 'enabled' })
+      .mockReturnValueOnce({ openAtLogin: false, status: 'requires-approval' })
+
+    expect(() => packaged.controller.applySettings(enabled, { ...enabled, launchAtLogin: false })).not.toThrow()
+    expect(electron.app.setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: false })
+  })
+
+  it('keeps startup and tray changes working when the login item is refused', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const startup = makeController({
+        packaged: true,
+        getSettings: () => ({ keepRunningInBackground: true, launchAtLogin: true }),
+      })
+      expect(() => startup.controller.start()).not.toThrow()
+      expect(electron.trays).toHaveLength(1)
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not update its login item'))
+
+      const patched = makeController({ packaged: true })
+      const previous = defaultSettings()
+      expect(() => patched.controller.applySettings(previous, { ...previous, keepRunningInBackground: true, launchAtLogin: true })).toThrow(/did not add/)
+      expect(electron.trays).toHaveLength(2)
+    } finally {
+      error.mockRestore()
+    }
   })
 
   it('adds and removes the menu-bar item as the keep-running setting changes', () => {

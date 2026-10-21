@@ -1,4 +1,6 @@
 import type { RuntimeInfo, ScheduleExecution, AutomationScheduleRecord, ScheduleTarget } from '../../../src/types/api'
+import { isRuntimeIdle } from '../../../src/lib/session-actions'
+import { createKeyedMutex, delay } from '../lib/async'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import type { AgentRpcManager } from '../agent-rpc'
 import type { ModelCatalogProvider } from '../model-catalog'
@@ -6,13 +8,15 @@ import type { ProjectService } from '../projects'
 import type { SessionService } from '../sessions'
 import { ScheduleBlockedError, type ScheduleRunResult } from './service'
 
+const SESSION_LEASE_CONFLICT = /\bsession is already active in\b|\bcould not acquire session lease\b|\bholds the file's runtime lease\b/i
+
 interface ResolvedTarget {
   cwd: string
   sessionPath?: string
 }
 
 export class ScheduledRunExecutor {
-  private readonly sessionTails = new Map<string, Promise<void>>()
+  private readonly sessionLock = createKeyedMutex<string>()
 
   constructor(
     private readonly projects: ProjectService,
@@ -43,22 +47,8 @@ export class ScheduledRunExecutor {
     const target = await this.resolveTarget(task.target)
     await this.validateExecution(task.execution)
     return target.sessionPath
-      ? this.withSessionLock(target.sessionPath, () => this.runInSession(task, target.cwd, target.sessionPath!))
+      ? this.sessionLock.run(target.sessionPath, () => this.runInSession(task, target.cwd, target.sessionPath!))
       : this.runInNewSession(task, target.cwd)
-  }
-
-  private async withSessionLock<T>(sessionPath: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.sessionTails.get(sessionPath) ?? Promise.resolve()
-    let release = (): void => undefined
-    const gate = new Promise<void>((resolveGate) => { release = resolveGate })
-    const tail = previous.catch(() => undefined).then(() => gate)
-    this.sessionTails.set(sessionPath, tail)
-    await previous.catch(() => undefined)
-    try { return await work() }
-    finally {
-      release()
-      if (this.sessionTails.get(sessionPath) === tail) this.sessionTails.delete(sessionPath)
-    }
   }
 
   private async resolveTarget(target: ScheduleTarget): Promise<ResolvedTarget> {
@@ -129,7 +119,7 @@ export class ScheduledRunExecutor {
     } catch (error) {
       if (error instanceof ScheduleBlockedError) throw error
       const message = error instanceof Error ? error.message : String(error)
-      if (/lease|already active|already.*open|in use/i.test(message)) throw new ScheduleBlockedError('The thread is active in another client. Close it there or use inherited thread settings.')
+      if (SESSION_LEASE_CONFLICT.test(message)) throw new ScheduleBlockedError('The thread is active in another client. Close it there or use inherited thread settings.')
       throw new Error(message)
     } finally {
       if (runtime) await this.agents.stop(runtime.runtimeId)
@@ -141,11 +131,8 @@ export class ScheduledRunExecutor {
     while (Date.now() < deadline) {
       const runtime = this.agents.list().find((candidate) => candidate.runtimeId === runtimeId)
       if (!runtime) return
-      if (!runtime.isStreaming && !runtime.isCompacting) return
-      await new Promise<void>((resolveDelay) => {
-        const timer = setTimeout(resolveDelay, 500)
-        timer.unref()
-      })
+      if (isRuntimeIdle(runtime)) return
+      await delay(500)
     }
     throw new Error('The scheduled thread remained busy for 15 minutes')
   }

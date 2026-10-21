@@ -18,7 +18,7 @@ export function TerminalSettings({ settings, onUpdate, platform = 'darwin' }: Se
           label={t('settings.terminal.shell.label')}
           description={t('settings.terminal.shell.description')}
           committedValue={settings.terminalShell}
-          validate={terminalShellValidation}
+          validate={(value) => terminalShellValidation(value, platform)}
           onCommit={(terminalShell) => onUpdate({ terminalShell })}
           className="mono"
         />

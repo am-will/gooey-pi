@@ -11,6 +11,4 @@ export {
   createPrimeEventBuffer,
   replayPrimeEvents,
   type PrimeEventBuffer,
-  type PrimeEventReplayStats,
 } from './events/reduce'
-export { resetTranscriptIdsForTests } from './events/ids'

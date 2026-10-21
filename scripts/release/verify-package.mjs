@@ -3,19 +3,20 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
 import { listPackage } from '@electron/asar'
-import { FuseState, FuseV1Options, getCurrentFuseWire } from '@electron/fuses'
+import { getCurrentFuseWire } from '@electron/fuses'
+import { assertFuseWire } from './fuses.cjs'
 import {
   artifactArchitectures,
   assertAsarLayout,
   assertExactArchitectures,
   assertPackagedExtensions,
-  assertUnpackedNativeLayout,
+  assertMacUnpackedNativeLayout,
   parseArchitectures,
   parseTeamIdentifier,
   requireReleaseArtifacts,
-} from './lib.mjs'
+} from './package-layout.mjs'
 import { assertPackageSizeBudgets, collectPackageSizeMetrics, describeSizeMetrics } from './size-budgets.mjs'
 import { assertMacOSBundleMinimum, assertMacOSDeploymentTargets } from './macos-compatibility.mjs'
 
@@ -45,23 +46,6 @@ function findSingleApp(directory, label) {
   const apps = findFiles(directory, (path, stat) => stat.isDirectory() && path.endsWith('.app'))
   if (apps.length !== 1) throw new Error(`Expected exactly one packaged .app in ${label}, found ${apps.length}`)
   return apps[0]
-}
-
-function assertFuses(wire) {
-  const expected = new Map([
-    [FuseV1Options.RunAsNode, FuseState.DISABLE],
-    [FuseV1Options.EnableCookieEncryption, FuseState.ENABLE],
-    [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE],
-    [FuseV1Options.EnableNodeCliInspectArguments, FuseState.DISABLE],
-    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.ENABLE],
-    [FuseV1Options.OnlyLoadAppFromAsar, FuseState.ENABLE],
-    [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot, FuseState.DISABLE],
-    [FuseV1Options.GrantFileProtocolExtraPrivileges, FuseState.DISABLE],
-    [FuseV1Options.WasmTrapHandlers, FuseState.ENABLE],
-  ])
-  for (const [name, state] of expected) {
-    if (wire[name] !== state) throw new Error(`Electron fuse ${name} is ${wire[name]}, expected ${state}`)
-  }
 }
 
 export function assertBooleanEntitlement(output, key, label) {
@@ -100,11 +84,11 @@ async function verifyApp({ app, artifact, mode, expectedTeam, minimumSystemVersi
   assertExactArchitectures(appArchitectures, artifactArchitectures(artifact), basename(artifact))
   const unpacked = join(resources, 'app.asar.unpacked')
   if (!existsSync(unpacked)) throw new Error(`${basename(artifact)} application must contain Resources/app.asar.unpacked`)
-  assertUnpackedNativeLayout(unpacked, appArchitectures, (path) => {
+  assertMacUnpackedNativeLayout(unpacked, appArchitectures, (path) => {
     assertMacOSDeploymentTargets(run('otool', ['-l', path]), minimumSystemVersion, path)
     return parseArchitectures(run('lipo', ['-archs', path]))
   })
-  assertFuses(await getCurrentFuseWire(executable))
+  assertFuseWire(await getCurrentFuseWire(executable))
 
   if (mode === 'public') {
     run('codesign', ['--verify', '--deep', '--strict', '--verbose=4', app])
@@ -194,27 +178,16 @@ export async function verifyPackage({ mode, releaseDirectory = resolve('release'
   )
 }
 
-// Fail closed: run verification unless this module was provably imported by
-// another entrypoint. A malformed or missing argv[1] must not skip the checks.
-export function invokedAsScript() {
-  if (!process.argv[1]) return true
+// Node marks the realpath-resolved entry module, so a symlinked or junctioned
+// checkout still runs the verification instead of silently exiting 0.
+if (import.meta.main) {
   try {
-    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-  } catch {
-    return true
-  }
-}
-
-if (invokedAsScript()) {
-  const modeIndex = process.argv.indexOf('--mode')
-  const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : undefined
-  const releaseDirectoryIndex = process.argv.indexOf('--release-directory')
-  const releaseDirectory = releaseDirectoryIndex >= 0 ? process.argv[releaseDirectoryIndex + 1] : undefined
-  const archIndex = process.argv.indexOf('--arch')
-  // A --arch flag with a missing value must fail closed, not skip the check.
-  const arch = archIndex >= 0 ? (process.argv[archIndex + 1] ?? '') : undefined
-  verifyPackage({ mode, ...(releaseDirectory ? { releaseDirectory } : {}), ...(arch !== undefined ? { arch } : {}) }).catch((error) => {
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { mode: { type: 'string' }, 'release-directory': { type: 'string' }, arch: { type: 'string' } } })
+    const { mode, 'release-directory': releaseDirectory, arch } = values
+    // A bare --arch fails at parse time and an empty --arch= reaches the check, so neither skips it.
+    await verifyPackage({ mode, ...(releaseDirectory ? { releaseDirectory } : {}), ...(arch !== undefined ? { arch } : {}) })
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1
-  })
+  }
 }

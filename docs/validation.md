@@ -8,7 +8,7 @@ The repository's `main` branch protection must require pull requests and require
 
 The required checks are exactly the seven normal pull-request gates:
 
-- `production-audit`
+- `Production dependency audit`
 - `quality`
 - `hermetic-e2e`
 - `windows-state-migration`
@@ -18,7 +18,7 @@ The required checks are exactly the seven normal pull-request gates:
 
 Do not require `local-qa-package`: it is manual local QA, runs only through `workflow_dispatch`, and is intentionally excluded from pull-request validation.
 
-`Production dependency audit` is a seventh pull-request gate: it runs the exception-aware `npm run audit:production` evaluator against the exact PR head, and the release workflow runs the same evaluator against its validated immutable SHA before any package or publication job. After the check context first appears on a pull request, a repository administrator must add `Production dependency audit` to the required status checks on `main`. The scheduled [dependency-audit workflow](../.github/workflows/audit.yml) remains for advisories disclosed after merge.
+`Production dependency audit` uses the workflow job name reported by GitHub: it runs the exception-aware `npm run audit:production` evaluator against the exact PR head, and the release workflow runs the same evaluator against its validated immutable SHA before any package or publication job. Branch protection uses that reported name, not the internal `production-audit` YAML key. The scheduled [dependency-audit workflow](../.github/workflows/audit.yml) remains for advisories disclosed after merge.
 
 GitHub merge queues are not available to this public repository while it is owned by a personal account. Consequently, `merge_group` or a required merge queue cannot enforce this policy here; strict up-to-date branch protection is the supported latest-main control. If the repository moves to an organization, merge-queue support should be designed and tested separately before enabling it.
 
@@ -68,11 +68,11 @@ The [CI workflow](../.github/workflows/ci.yml) runs on pull requests, pushes to 
 
 | Job | When it runs | What a pass establishes |
 |---|---|---|
-| `production-audit` | Pull request, `main`, manual dispatch | The exception-aware production dependency audit passes for the exact checked-out commit. |
-| `quality` | Pull request, `main`, manual dispatch | TypeScript checks; configured lint and format checks; the coverage suite and thresholds; production bundle creation; bundle-size budgets; coverage artifact upload. |
+| `Production dependency audit` | Pull request, `main`, manual dispatch | The exception-aware production dependency audit passes for the exact checked-out commit. |
+| `quality` | Pull request, `main`, manual dispatch | Vendored harness-patch verification; TypeScript checks; configured lint and format checks; the coverage suite and thresholds; production bundle creation; bundle-size budgets; coverage artifact upload. |
 | `hermetic-e2e` | Pull request, `main`, manual dispatch | The built application passes the Playwright Electron suite on the pinned macOS runner without relying on developer state. Failure artifacts are uploaded when available. |
 | `windows-state-migration` | Pull request, `main`, manual dispatch | The state migration suite passes on a real `windows-2022` runner, including the production-platform fresh-install, migration, restart, and update path. Simulating `platform: 'win32'` on another OS is useful unit coverage but is not a substitute for this job. |
-| `packaging-smoke` | Pull requests only | Native macOS arm64, Linux x64, and Windows x64 runners can build unpacked application directories. Linux and Windows additionally verify the ASAR layout and exact native-unpack allowlist. These are unsigned smoke builds, not public installers. |
+| `packaging-smoke` | Pull requests only | Native macOS arm64, Linux x64, and Windows x64 runners can build unpacked application directories. Linux and Windows additionally verify the ASAR layout and exact native-unpack allowlist, then launch the packaged app with isolated user data and require its renderer startup marker. These are unsigned smoke builds, not public installers. |
 | `local-qa-package` | Manual dispatch only | Native runners create and verify installable local-QA artifacts for macOS, Linux, and Windows, then upload the configured artifact set. These artifacts are not represented as signed or notarized public releases. |
 
 Expected skips are part of this design:
@@ -90,11 +90,14 @@ Use focused tests while developing, then choose the aggregate that matches the c
 
 | Command | Scope |
 |---|---|
-| `npm run release:verify:package` | Toolchain preflight, typecheck, configured code checks, coverage tests, production bundle, and bundle-size gate. It does not create an installer or run Electron E2E. |
+| `npm run release:verify:package` | Toolchain preflight, vendored harness-patch verification, typecheck, configured code checks, coverage tests, production bundle, and bundle-size gate. It does not create an installer or run Electron E2E. |
+| `npm run vendor:verify-patches` | Verifies the installed vendored harness patch contracts against their pinned artifact metadata. |
+| `npm run test:e2e:hermetic` | Runs Electron E2E against the existing bundle. Run `npm run build` after source changes first. |
+| `node scripts/release/smoke-packaged-app.mjs --platform PLATFORM --arch ARCH` | Launches the unpacked Linux or Windows app with isolated user data and requires its renderer startup marker. Use the matching native runner and an existing unpacked package. |
 | `npm run release:verify` | The package-verification aggregate above plus the hermetic Electron E2E suite. |
 | `npm run test:e2e` | Builds the application, then runs the hermetic Electron E2E suite. |
 | `npm run audit:production` | Fetches npm's production audit report and applies the repository's high/critical advisory and exception policy. Network access is required. |
-| `npm run package:mac:local-qa` | On macOS, runs the relevant verification aggregate, creates unsigned/unnotarized DMG and ZIP artifacts, and applies macOS post-package checks in QA mode. |
+| `npm run package:mac:local-qa` | On macOS, runs `release:verify`, including the hermetic Electron E2E suite, creates unsigned/unnotarized DMG and ZIP artifacts, and applies macOS post-package checks in QA mode. |
 | `npm run package:linux:local-qa` | On Linux, runs the package-verification aggregate, creates the configured Linux artifacts, and verifies their runtime layout in QA mode. |
 | `npm run package:win:local-qa` | On Windows, runs the package-verification aggregate, creates the configured Windows artifacts, and verifies their runtime layout in QA mode. |
 
@@ -104,7 +107,7 @@ Packaging is native: run each platform command on its matching operating system 
 
 The [dependency-audit workflow](../.github/workflows/audit.yml) runs weekly and on manual dispatch. It uses the repository toolchain and executes `npm run audit:production` against the production dependency graph. This scheduled job supplies advisory coverage for vendored package forms that Dependabot cannot parse.
 
-Ordinary PR CI validates the exception file and its expiry rules, but it does not replace the live registry-backed audit. Use the scheduled or manually dispatched audit workflow when making a current dependency-advisory claim.
+The pull-request `Production dependency audit` job and the scheduled audit both run the live registry-backed evaluator. The ordinary release-script tests also validate the exception file and its expiry rules. Record the exact audit run and checked-out commit when making a dependency-advisory claim.
 
 The project gate and raw npm output answer different questions:
 
@@ -122,7 +125,7 @@ The [release workflow](../.github/workflows/release.yml) runs for a semantic-ver
 | Release job | Responsibility |
 |---|---|
 | `validate` | Enforce the repository toolchain, validate tag/package versions and `main` ancestry, and expose the exact release SHA. |
-| `production-audit` | Apply the exception-aware production dependency audit to that immutable SHA before any package job. |
+| `Production dependency audit` | Apply the exception-aware production dependency audit to that immutable SHA before any package job. |
 | `quality` | Run `release:verify:package` for that SHA. |
 | `hermetic-e2e` | Build and run the Electron E2E suite for that SHA. |
 | `package` | Build both native macOS architectures. Credential preflight is fail-closed; public verification checks the signing identity, required microphone entitlements on the app and every Electron helper, the notarization staple on each packaged app, Gatekeeper, artifact integrity, fuses, native layout/architecture, and package budgets. |

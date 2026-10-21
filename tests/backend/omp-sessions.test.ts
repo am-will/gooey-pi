@@ -1,3 +1,5 @@
+import { waitUntil } from '../helpers/wait'
+import { isBucketedSessionPath, timestampFromBucketedSessionName } from '../../electron/main/sessions/bucketed'
 import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,10 +9,8 @@ import { SessionService, type SessionWatchFactory } from '../../electron/main/se
 import { METADATA_VERIFY_TAIL_BYTES } from '../../electron/main/sessions/metadata'
 import {
   createOmpSessionMetadataReader,
-  isOmpSessionPath,
   OMP_TITLE_SLOT_BYTES,
   ompSessionServiceOptions,
-  ompTimestampFromSessionName,
   writeOmpTitleSlot,
 } from '../../electron/main/sessions/omp'
 import { JsonStateStore } from '../../electron/main/store'
@@ -69,10 +69,10 @@ const NAME_C = '2026-08-10T12-30-15-250Z_019fdf24-0000-7000-8000-000000000002.js
 
 describe('OMP session file names', () => {
   it('derives ordering timestamps from the ISO file-name prefix, with or without a bucket prefix', () => {
-    expect(ompTimestampFromSessionName(NAME_A)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
-    expect(ompTimestampFromSessionName(`-tmp/${NAME_C}`)).toBe(Date.parse('2026-08-10T12:30:15.250Z'))
-    expect(ompTimestampFromSessionName('legacy.jsonl')).toBeUndefined()
-    expect(ompTimestampFromSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName(NAME_A)).toBe(Date.parse('2026-08-08T02:12:49.414Z'))
+    expect(timestampFromBucketedSessionName(`-tmp/${NAME_C}`)).toBe(Date.parse('2026-08-10T12:30:15.250Z'))
+    expect(timestampFromBucketedSessionName('legacy.jsonl')).toBeUndefined()
+    expect(timestampFromBucketedSessionName('01900000-0001-7000-8000-000000000000.jsonl')).toBeUndefined()
   })
 })
 
@@ -133,6 +133,23 @@ describe('OMP metadata reader', () => {
     const titles = new Map((await service.list()).map((record) => [record.filePath.endsWith(NAME_B) ? 'renamed' : 'untitled', record.title]))
     expect(titles.get('untitled')).toBe('name me by prompt')
     expect(titles.get('renamed')).toBe('Renamed in tail')
+  })
+
+  it('bounds an oversized title_change title to the title length', async () => {
+    const { root, project, service } = setup()
+    mkdirSync(join(root, '-bucket'))
+    const file = join(root, '-bucket', NAME_A)
+    writeOmpSession(file, {
+      cwd: project,
+      entries: [
+        ompEntry('message', 'aa11bb22', null, { message: { role: 'user', content: 'original prompt' } }),
+        ompEntry('title_change', 'bb22cc33', 'aa11bb22', { title: 't'.repeat(1024 * 1024) }),
+      ],
+    })
+
+    const title = (await service.list())[0]?.title ?? ''
+    expect(title).toHaveLength(100)
+    expect(title.endsWith('…')).toBe(true)
   })
 
   it('picks up an in-place title-slot rewrite without losing incremental tail state', async () => {
@@ -236,11 +253,11 @@ describe('OMP session path authorization', () => {
   })
 
   it('validates candidate shapes without touching the filesystem', () => {
-    expect(isOmpSessionPath('/root', `/root/-bucket/${NAME_A}`)).toBe(true)
-    expect(isOmpSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
-    expect(isOmpSessionPath('/root', `/root/-bucket/deep/${NAME_A}`)).toBe(false)
-    expect(isOmpSessionPath('/root', `/elsewhere/-bucket/${NAME_A}`)).toBe(false)
-    expect(isOmpSessionPath('/root', '/root/-bucket/session.txt')).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/-bucket/${NAME_A}`)).toBe(true)
+    expect(isBucketedSessionPath('/root', `/root/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/root/-bucket/deep/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', `/elsewhere/-bucket/${NAME_A}`)).toBe(false)
+    expect(isBucketedSessionPath('/root', '/root/-bucket/session.txt')).toBe(false)
   })
 })
 
@@ -282,14 +299,14 @@ describe('OMP session service harness identity', () => {
       const watcherHarness = service as unknown as { queueSessionChange(filename: string): void }
       // Recursive watchers report bucket-relative names one directory deep.
       watcherHarness.queueSessionChange(`-bucket/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
       expect(events).toContainEqual({ filePath: realpathSync(file), harness: 'omp' })
 
       // Deeper or hidden names cannot resolve to one session file and coalesce
       // into a catalog-wide refresh instead.
       events.splice(0)
       watcherHarness.queueSessionChange(`-bucket/nested/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.length > 0, 4_000)
       expect(events).toEqual([{ harness: 'omp' }])
     } finally {
       unsubscribe()

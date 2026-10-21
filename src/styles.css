@@ -1,6 +1,7 @@
 @import './styles/base.css';
 @import './styles/workbench.css';
 @import './styles/sidebar.css';
+@import './styles/child-history.css';
 @import './styles/transcript.css';
 @import './styles/composer.css';
 @import './styles/voice.css';

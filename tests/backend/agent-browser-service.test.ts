@@ -27,6 +27,7 @@ class FakeGuest extends EventEmitter {
   readonly inputEvents: Array<Record<string, unknown>> = []
   readonly insertedText: string[] = []
   readonly executedScripts: string[] = []
+  readonly executedWorlds: number[] = []
   debuggerAttached = false
   readonly debugger = {
     isAttached: () => this.debuggerAttached,
@@ -39,7 +40,7 @@ class FakeGuest extends EventEmitter {
     },
   }
   scriptResult: (code: string) => unknown = (code) => {
-    if (code.includes('readyState')) {
+    if (code.includes('innerWidth')) {
       return JSON.stringify({ url: this.url, title: this.title, innerWidth: 640, innerHeight: 480, scrollY: 0, scrollHeight: 900, readyState: 'complete' })
     }
     return JSON.stringify({})
@@ -49,6 +50,13 @@ class FakeGuest extends EventEmitter {
   isLoading() { return this.loading }
   getURL() { return this.url }
   getTitle() { return this.title }
+  readonly history = { back: false, forward: false, backCalls: 0, forwardCalls: 0 }
+  readonly navigationHistory = {
+    canGoBack: () => this.history.back,
+    canGoForward: () => this.history.forward,
+    goBack: () => { this.history.backCalls += 1 },
+    goForward: () => { this.history.forwardCalls += 1 },
+  }
   canGoBack() { return false }
   canGoForward() { return false }
   goBack() {}
@@ -75,6 +83,12 @@ class FakeGuest extends EventEmitter {
     this.emit('did-start-navigation', details, url, isSameDocument, isMainFrame, 1, 2)
   }
   async executeJavaScript(code: string) {
+    this.executedScripts.push(code)
+    return this.scriptResult(code)
+  }
+  async executeJavaScriptInIsolatedWorld(worldId: number, scripts: Electron.WebSource[]) {
+    this.executedWorlds.push(worldId)
+    const code = scripts.map((script) => script.code).join("\n")
     this.executedScripts.push(code)
     return this.scriptResult(code)
   }
@@ -135,10 +149,112 @@ function fixture(options?: { actionTimeoutMs?: number }) {
 }
 
 describe('AgentBrowserService', () => {
+  it('rejects inherited key and modifier names before dispatching input', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    for (const key of ['constructor', 'toString', '__proto__']) {
+      await expect(service.pressKey('/sessions/a.jsonl', { tabId, key })).rejects.toThrow(/key must/)
+    }
+    await expect(service.pressKey('/sessions/a.jsonl', { tabId, key: 'Enter', modifiers: ['constructor'] })).rejects.toThrow(/modifiers may/)
+    expect(guest.inputEvents).toEqual([])
+  })
+
+  it('validates coordinate actions against the current viewport', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    for (const params of [{ x: 640, y: 10 }, { x: 1, y: 480 }, { x: Infinity, y: 1 }]) {
+      await expect(service.click('/sessions/a.jsonl', { tabId, ...params })).rejects.toThrow(/viewport|coordinates/)
+    }
+    await expect(service.scroll('/sessions/a.jsonl', { tabId, direction: 'down', x: 900, y: 10 })).rejects.toThrow(/viewport/)
+    expect(guest.inputEvents).toEqual([])
+  })
+
+  it('rounds finite element centers before validating the viewport', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    const original = guest.scriptResult
+    guest.scriptResult = (code) => code.includes('__primeWorkAgentRefs') ? JSON.stringify({ x: 12.2, y: 34.4 }) : original(code)
+    await service.click('/sessions/a.jsonl', { tabId, ref: 0 })
+    expect(guest.inputEvents.find((event) => event.type === 'mousePressed')).toMatchObject({ x: 12, y: 34 })
+  })
+
+  it('keeps navigation metadata authoritative when a scroll script returns page fields', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const original = guest.scriptResult
+    guest.scriptResult = (code) => code.includes('window.scrollBy') ? JSON.stringify({ url: 'https://spoofed.test/', title: 'Spoofed', scrollY: 25 }) : original(code)
+    await expect(service.scroll('/sessions/a.jsonl', { tabId, direction: 'down' })).resolves.toMatchObject({ url: 'https://example.com/', scrollY: 25 })
+  })
+
+  it('dispatches agent input without focusing the guest webContents', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    const focus = vi.spyOn(guest, 'focus')
+    await service.click('/sessions/a.jsonl', { tabId, x: 10, y: 10 })
+    await service.type('/sessions/a.jsonl', { tabId, text: 'hello' })
+    await service.pressKey('/sessions/a.jsonl', { tabId, key: 'Enter' })
+    expect(focus).not.toHaveBeenCalled()
+    expect(guest.insertedText).toEqual(['hello'])
+  })
+
+  it('uses navigationHistory for agent and toolbar back and forward', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.history.back = true
+    guest.history.forward = true
+    guest.canGoBack = () => { throw new Error('Deprecated history API') }
+    guest.canGoForward = () => { throw new Error('Deprecated history API') }
+    await service.navigate('/sessions/a.jsonl', { tabId, action: 'back' })
+    await service.navigate('/sessions/a.jsonl', { tabId, action: 'forward' })
+    service.navigateTab(tabId, 'back')
+    service.navigateTab(tabId, 'forward')
+    expect(guest.history.backCalls).toBe(2)
+    expect(guest.history.forwardCalls).toBe(2)
+    expect(service.state().tabs[0]).toMatchObject({ canGoBack: true, canGoForward: true })
+  })
+
+  it('captures screenshots when optional cursor injection throws synchronously', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    await service.click('/sessions/a.jsonl', { tabId, x: 10, y: 10 })
+    const execute = guest.executeJavaScriptInIsolatedWorld.bind(guest)
+    vi.spyOn(guest, 'executeJavaScriptInIsolatedWorld').mockImplementation((world, scripts) => {
+      if (scripts.some((script) => script.code.includes('__primeWorkAgentCursorMarker'))) throw new Error('Cursor unavailable')
+      return execute(world, scripts)
+    })
+    await expect(service.screenshot('/sessions/a.jsonl', { tabId })).resolves.toMatchObject({ mimeType: 'image/jpeg' })
+  })
+
+  it.each([
+    ['a', 'KeyA', 65], ['7', 'Digit7', 55], ['?', 'Slash', 191], [':', 'Semicolon', 186], ['+', 'Equal', 187],
+  ])('dispatches a physical key mapping for %s', async (key, code, keyCode) => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    await service.pressKey('/sessions/a.jsonl', { tabId, key })
+    expect(guest.inputEvents[0]).toMatchObject({ key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode })
+  })
+
+  it('bounds oversized script responses before parsing them', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.scriptResult = () => JSON.stringify({ value: 'x'.repeat(300_000) })
+    await expect(service.evaluate('/sessions/a.jsonl', { tabId, code: 'return 1' })).rejects.toThrow(/byte limit/)
+  })
+
+  it('runs agent scripts outside the page main world', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    guest.executeJavaScript = async () => { throw new Error('Page replaced main-world globals') }
+    await service.readPage('/sessions/a.jsonl', { tabId })
+    await service.evaluate('/sessions/a.jsonl', { tabId, code: 'return 1' })
+    expect(guest.executedWorlds.length).toBeGreaterThan(0)
+    expect(guest.executedWorlds.every((worldId) => worldId === 1001)).toBe(true)
+  })
+
   it('opens a tab once the renderer attaches an approved guest and navigates it', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId, result } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
-    expect(guest.loadedUrls).toContain('https://example.com/')
+    expect(guest.loadedUrls).toEqual(['https://example.com/'])
     expect(guest.throttling).toBe(false)
     expect(result.url).toBe('https://example.com/')
     const snapshot = service.state()
@@ -269,6 +385,27 @@ describe('AgentBrowserService', () => {
     await service.screenshot('/sessions/a.jsonl', {})
     expect(guest.executedScripts.some((code) => code.includes('__primeWorkAgentCursorMarker') && code.includes("style.left = '10px'"))).toBe(true)
     expect(guest.executedScripts.some((code) => code.includes('marker.remove()'))).toBe(true)
+  })
+
+  it('bounds a navigation whose loadURL promise never settles', async () => {
+    const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.loadURL = () => new Promise<void>(() => {})
+    vi.useFakeTimers()
+    try {
+      const navigation = service.navigate('/sessions/a.jsonl', { tabId, url: 'https://example.org/' })
+      const assertion = expect(navigation).rejects.toThrow(/did not answer this action in time/)
+      await vi.advanceTimersByTimeAsync(51)
+      await assertion
+    } finally { vi.useRealTimers() }
+  })
+
+  it('bounds stalled debugger input and insertText fallback', async () => {
+    const { service, openAttached } = fixture({ actionTimeoutMs: 50 })
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.debugger.sendCommand = () => new Promise<void>(() => {})
+    guest.insertText = () => new Promise<void>(() => {})
+    await expect(service.type('/sessions/a.jsonl', { tabId, text: 'hello' })).rejects.toThrow(/did not answer this action in time/)
   })
 
   it('rejects a guest call that never answers after actionTimeoutMs', async () => {

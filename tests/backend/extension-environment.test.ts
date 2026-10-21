@@ -1,25 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const electron = vi.hoisted(() => ({
-  app: {
-    getAppPath: vi.fn(() => '/tmp/prime-work'),
-    isPackaged: false,
-    on: vi.fn(),
-    quit: vi.fn(),
-    requestSingleInstanceLock: vi.fn(() => false),
-  },
-  BrowserWindow: class {},
-  dialog: { showMessageBoxSync: vi.fn() },
-  Menu: { buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })) },
-  nativeImage: { createFromPath: vi.fn() },
-  protocol: { registerSchemesAsPrivileged: vi.fn() },
-  session: {},
-  Tray: class {},
-}))
-
-vi.mock('electron', () => electron)
-
-import { extensionRuntimeEnvironment, type CapabilityExtensionPaths } from '../../electron/main/index'
+import { extensionRuntimeEnvironment, type CapabilityExtensionPaths } from '../../electron/main/capability-runtime'
 import { OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter } from '../../electron/main/agent-rpc'
 
 const extensionPaths: CapabilityExtensionPaths = {

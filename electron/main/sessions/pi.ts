@@ -1,19 +1,18 @@
+import { HARNESSES } from '../harness'
+import { compactText } from '../../../src/lib/text'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { isRecord } from '../validation'
 import type { SessionServiceOptions } from '../sessions'
-import type { SessionCatalogIo } from './catalog'
 import {
   createBranchSummaryTranscriptReader,
-  createBucketedCatalogIo,
+  bucketedSessionServiceOptions,
   createBucketedMetadataParser,
-  isBucketedSessionPath,
-  timestampFromBucketedSessionName,
 } from './bucketed'
 import {
   createIncrementalMetadataReader,
+  ingestSplitModelChange,
   nodeMetadataReaderIo,
   type SessionMetadataReader,
   type SessionMetadataReaderIo,
@@ -34,27 +33,15 @@ import type { TranscriptFileReader } from './transcript'
  * Everything except the display-name and `model_change` record shapes is shared
  * with OMP through `./bucketed`.
  */
-export function piSessionRoot(): string {
-  return join(homedir(), '.pi', 'agent', 'sessions')
-}
-
-export const piTimestampFromSessionName = timestampFromBucketedSessionName
-
-export function createPiCatalogIo(): SessionCatalogIo {
-  return createBucketedCatalogIo()
-}
-
-export const isPiSessionPath = isBucketedSessionPath
 
 const piMetadataParser = createBucketedMetadataParser((state, value) => {
   if (value.type === 'model_change') {
     // Pi records split `provider` + `modelId` fields (Prime's shape), unlike
     // OMP's single `provider/id` string.
-    if (typeof value.modelId === 'string') state.model = value.modelId
-    if (typeof value.provider === 'string') state.provider = value.provider
+    ingestSplitModelChange(state, value)
   } else if (value.type === 'session_info' && typeof value.name === 'string') {
     // The latest session_info name wins; an empty name falls back to the prompt.
-    state.displayName = value.name
+    state.displayName = compactText(value.name, 100)
   }
 })
 
@@ -77,7 +64,11 @@ export function createPiSessionMetadataReader(io: SessionMetadataReaderIo = node
  */
 export function appendPiSessionInfo(filePath: string, title: string): boolean {
   try {
-    const parentId = currentPiLeafId(filePath)
+    const content = readFileSync(filePath, 'utf8')
+    const parentId = currentPiLeafId(content)
+    // A crash-truncated (unterminated) last line would otherwise swallow the
+    // new record into one unparseable line and silently lose the rename.
+    const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : ''
     const record = `${JSON.stringify({
       type: 'session_info',
       id: randomBytes(4).toString('hex'),
@@ -85,15 +76,15 @@ export function appendPiSessionInfo(filePath: string, title: string): boolean {
       timestamp: new Date().toISOString(),
       name: title,
     })}\n`
-    appendFileSync(filePath, record, 'utf8')
+    appendFileSync(filePath, `${separator}${record}`, 'utf8')
     return true
   } catch {
     return false
   }
 }
 
-function currentPiLeafId(filePath: string): string | null {
-  const lines = readFileSync(filePath, 'utf8').split('\n')
+function currentPiLeafId(content: string): string | null {
+  const lines = content.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!.trim()
     if (!line) continue
@@ -110,18 +101,6 @@ export const readPiTranscript: TranscriptFileReader = createBranchSummaryTranscr
  * Fully wired SessionService options for a pi session root. Construct the
  * service with a null CLI path: pi has no `prime-agent list` live overlay.
  */
-export function piSessionServiceOptions(sessionRoot = piSessionRoot()): SessionServiceOptions {
-  return {
-    harness: 'pi',
-    sessionRoot,
-    catalogIo: createPiCatalogIo(),
-    catalogNameTimestamp: piTimestampFromSessionName,
-    metadataReader: createPiSessionMetadataReader(),
-    transcriptReader: readPiTranscript,
-    isSessionPathAuthorized: isPiSessionPath,
-    // Session files sit one bucket directory below the root; bounded one-level
-    // watchers keep catalog refresh behavior identical across platforms.
-    recursiveWatch: true,
-    renameFile: appendPiSessionInfo,
-  }
+export function piSessionServiceOptions(sessionRoot = HARNESSES.pi.sessionRoot(homedir())): SessionServiceOptions {
+  return bucketedSessionServiceOptions('pi', sessionRoot, createPiSessionMetadataReader(), readPiTranscript, appendPiSessionInfo)
 }

@@ -113,7 +113,7 @@ describe('OMP transcript system entries', () => {
 
   it('renders a persisted fallback notice exactly like its live counterpart', async () => {
     const render = (messages: TranscriptMessage[]) => renderToStaticMarkup(createElement(Transcript, {
-      messages, git: { isRepo: false, files: [] }, onOpenChanges: () => undefined, onSuggestion: () => undefined,
+      messages, onSuggestion: () => undefined,
     }))
     const live = replayPrimeEvents([], [{ type: 'model_change', model: 'anthropic/claude-sonnet', resolvedModelIsFallback: true }])
     const persisted = await readOmpTranscript(ompSessionFile([

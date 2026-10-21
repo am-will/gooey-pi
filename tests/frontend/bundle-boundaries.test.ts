@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 describe('renderer bundle boundaries', () => {
   const appSource = readFileSync('src/App.tsx', 'utf8')
+  const terminalStackSource = readFileSync('src/components/TerminalDrawerStack.tsx', 'utf8')
   const terminalStyles = readFileSync('src/styles/terminal.css', 'utf8')
 
   it('keeps Transcript and its Markdown graph out of the initial App module graph', () => {
@@ -13,8 +14,14 @@ describe('renderer bundle boundaries', () => {
     expect(appSource).toContain('<Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><Transcript')
   })
 
+  it('loads sample workspace data only through the browser demo entry', () => {
+    expect(appSource).toContain("const DemoApp = lazy(() => import('@/app/DemoApp'))")
+    expect(appSource).not.toMatch(/import \{ SAMPLE_/)
+    expect(readFileSync('src/app/DemoApp.tsx', 'utf8')).toContain("import * as demo from '@/lib/demo-workspace'")
+  })
+
   it('continues to lazy-load the terminal dependency graph', () => {
-    expect(appSource).toContain("const TerminalDrawer = lazy(() => import('@/components/TerminalDrawer')")
+    expect(terminalStackSource).toContain("const TerminalDrawer = lazy(() => import('@/components/TerminalDrawer')")
     expect(appSource).not.toContain("import { TerminalDrawer } from '@/components/TerminalDrawer'")
   })
 
@@ -25,7 +32,8 @@ describe('renderer bundle boundaries', () => {
   })
 
   it('reserves the terminal drawer height while its lazy bundle loads', () => {
-    expect(appSource).toContain('fallback={terminal.id === activeTerminalSession?.id ? <TerminalLoadingPanel /> : null}')
+    expect(terminalStackSource).toContain('const active = visible && terminal.id === activeId')
+    expect(terminalStackSource).toContain('fallback={active ? <TerminalLoadingPanel /> : null}')
     expect(appSource).not.toContain('<LoadingPanel label="terminal" />')
     expect(terminalStyles).toContain('.terminal-drawer--loading')
   })

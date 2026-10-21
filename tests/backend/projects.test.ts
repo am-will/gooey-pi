@@ -65,6 +65,43 @@ function deferred<T>() {
 }
 
 describe('ProjectService list enrichment', () => {
+  it('skips discovery on an explicit cached authorization miss', async () => {
+    const { root, service, store } = setup()
+    await store.ready()
+    const sessions = vi.fn(async () => [])
+    service.bindProviders({ sessions, branch: async () => undefined })
+    await expect(service.authorizeReadOnlyCwd(root, { refreshOnMiss: false })).rejects.toThrow(/not inside/)
+    expect(sessions).not.toHaveBeenCalled()
+  })
+
+  it('rejects coerced and relative inferred grants and file roots at the boundary', async () => {
+    const { service, store } = setup()
+    await store.ready()
+    for (const input of [{ toString: () => '/tmp' }, 123, 'relative']) {
+      await expect(service.grantInferred(input)).rejects.toThrow()
+      await expect(service.listFiles(input)).rejects.toThrow()
+    }
+  })
+
+  it('recovers a writable root after a transient identity read failure without rebuilding unrelated roots', async () => {
+    const { root, store } = setup()
+    const other = join(root, '..', 'other'); mkdirSync(other)
+    const now = new Date().toISOString()
+    await store.update((state) => { for (const [index, path] of [root, other].entries()) state.projects.push({ id: `project-${index}`, harness: 'prime', name: 'Project', path, folders: [path], primaryFolder: path, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(path) }) })
+    let failOnce = false
+    const service = new ProjectService(store, () => null, 'prime', {
+      realpath,
+      lstat: async (path) => {
+        if (failOnce && path === realpathSync(root)) { failOnce = false; throw new Error('Transient I/O failure') }
+        return lstat(path, { bigint: true })
+      },
+    })
+    await service.list()
+    failOnce = true
+    await expect(service.authorizeCwd(root)).rejects.toThrow(/not inside/)
+    await expect(service.authorizeCwd(root, { refreshOnMiss: false })).resolves.toBe(realpathSync(root))
+  })
+
   it('coalesces concurrent denied read-only checks without branch enrichment', async () => {
     const { root, service } = setup()
     const sessionsStarted = deferred<void>()
@@ -367,6 +404,9 @@ describe('broad project root authorization', () => {
     ['Windows UNC share root', '\\\\server\\share', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
     ['Windows extended UNC share root', '\\\\?\\UNC\\server\\share\\', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
     ['Windows home directory case-insensitively', 'c:\\users\\alice', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
+    ['macOS home ancestor', '/Users', { platform: 'darwin', homePath: '/Users/alice' }],
+    ['Linux home ancestor', '/home', { platform: 'linux', homePath: '/home/alice' }],
+    ['Windows home ancestor case-insensitively', 'c:\\USERS', { platform: 'win32', homePath: 'C:\\Users\\Alice' }],
   ] as const)('classifies %s as too broad', (_label, path, options) => {
     expect(isBroadProjectRoot(path, options)).toBe(true)
   })
@@ -739,11 +779,9 @@ describe('ProjectService file listing', () => {
         return realpath(path)
       },
     })
-    const captureFolderIdentity = (service as unknown as {
-      captureFolderIdentity(path: string): Promise<unknown>
-    }).captureFolderIdentity.bind(service)
-
-    await expect(captureFolderIdentity(root)).rejects.toThrow(/identity changed while it was being verified/)
+    await store.ready()
+    electronMocks.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [root] })
+    await expect(service.add()).rejects.toThrow(/identity changed while it was being verified/)
   })
 
   it('keeps a fingerprinted grant across a filesystem device renumber', async () => {
@@ -1064,9 +1102,16 @@ describe('ProjectService worktrees', () => {
       expect.objectContaining({ path: realpathSync(root), current: true }),
       expect.objectContaining({ path: realpathSync(linked), branch: 'linked-test', current: false }),
     ]) })
+    await store.update((state) => { state.projects.push({ ...state.projects[0], id: 'different-owner' }) })
+    const beforeWrongOwner = store.getProjects()
+    await expect(service.adoptCheckoutWorktree('different-owner', root, realpathSync(linked))).rejects.toThrow('different project grant')
+    expect(store.getProjects()).toEqual(beforeWrongOwner)
+    await store.update((state) => { state.projects = state.projects.filter((project) => project.id !== 'different-owner') })
+
     const transition = await checkouts.execute('project', { strategy: 'worktree', operation: 'open', path: realpathSync(linked) })
     if (transition.kind !== 'applied') throw new Error(`Expected applied transition, received ${transition.kind}`)
     const opened = transition.project
+    expect(opened).not.toHaveProperty('folderIdentities')
     expect(opened.id).toBe('project')
     expect(opened.path).toBe(root)
     expect(opened.primaryFolder).toBe(realpathSync(linked))

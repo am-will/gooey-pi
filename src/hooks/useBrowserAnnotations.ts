@@ -9,7 +9,7 @@ export interface BrowserAnnotationsApi {
   add(input: BrowserAnnotationInput): boolean
   remove(id: string): void
   clear(): void
-  /** Marks annotations from other pages stale after a full navigation; returning to a page revives its markers. */
+  /** Marks annotations from other pages stale after a main-frame navigation; returning to a page revives its markers. */
   handleNavigation(url: string): void
   /** Monotonic counter; each bump asks the composer to send the current draft immediately. */
   sendSignal: number

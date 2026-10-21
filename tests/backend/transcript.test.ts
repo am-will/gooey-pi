@@ -1,10 +1,11 @@
+import { SESSION_FILE_MAX_BYTES, SESSION_FILE_MAX_RECORDS } from '../../electron/main/jsonl-limits'
 import { createHmac } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readSessionMetadata } from '../../electron/main/sessions/metadata'
-import { createTranscriptReader, readTranscript } from '../../electron/main/sessions/transcript'
+import { createSessionMetadataReader } from '../../electron/main/sessions/metadata'
+import { createTranscriptReader, readTranscript, textFromContent } from '../../electron/main/sessions/transcript'
 import { PRIME_RUST_RPC_ADAPTER } from '../../electron/main/agent-rpc'
 import { configureGooeyPiAgentMessageSigning, encodeGooeyPiAgentMessage, loadOrCreateGooeyPiAgentMessageKey, parseGooeyPiAgentMessage } from '../../electron/main/collaboration/message-envelope'
 
@@ -25,13 +26,74 @@ describe('session file record tolerance', () => {
     ].join('\n'))
 
     // The catalog admits this session, so the transcript reader must open it too.
-    const metadata = await readSessionMetadata(file)
+    const metadata = await createSessionMetadataReader()(file)
     expect(metadata.id).toBe('big-record')
     expect(metadata.preview?.length).toBeGreaterThan(0)
 
     const transcript = await readTranscript(file, false)
     expect(transcript).toHaveLength(1)
     expect(transcript[0]).toMatchObject({ id: 'user-1', role: 'user' })
+  })
+
+  it('refuses oversized sparse files in both readers before opening them', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-limit-')); dirs.push(dir)
+    const file = join(dir, 'oversized.jsonl')
+    writeFileSync(file, '')
+    truncateSync(file, SESSION_FILE_MAX_BYTES + 1)
+    await expect(readTranscript(file, false)).rejects.toThrow(/too large/)
+    await expect(createSessionMetadataReader()(file)).rejects.toThrow(/too large/)
+  })
+
+  it('tolerates malformed and non-object records in both same-file readers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-malformed-')); dirs.push(dir)
+    const file = join(dir, 'malformed.jsonl')
+    writeFileSync(file, [
+      JSON.stringify({ type: 'session', id: 'session' }),
+      JSON.stringify({ type: 'message', id: 'u', parentId: null, message: { role: 'user', content: 'question' } }),
+      '{not json', '[1]', 'null', '42',
+      JSON.stringify({ type: 'message', id: 'a', parentId: 'u', message: { role: 'assistant', content: 'answer' } }), '',
+    ].join('\n'))
+    expect((await readTranscript(file, false)).map(({ id }) => id)).toEqual(['u', 'a'])
+    expect(await createSessionMetadataReader()(file)).toMatchObject({ status: 'complete', preview: 'answer' })
+  })
+
+  it('shares the exact record cap across full and incremental readers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-record-limit-')); dirs.push(dir)
+    const file = join(dir, 'records.jsonl')
+    writeFileSync(file, '{"type":"x"}\n\n'.repeat(SESSION_FILE_MAX_RECORDS))
+    const incremental = createSessionMetadataReader()
+    await expect(readTranscript(file, false)).resolves.toEqual([])
+    await expect(incremental(file)).resolves.toMatchObject({ title: 'Untitled session' })
+    appendFileSync(file, '{"type":"x"}\n')
+    await expect(readTranscript(file, false)).rejects.toThrow(/too many records/)
+    await expect(incremental(file)).rejects.toThrow(/too many records/)
+    await expect(createSessionMetadataReader()(file)).rejects.toThrow(/too many records/)
+  })
+
+  it('refuses to stream a path that is not a regular file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prime-work-transcript-'))
+    dirs.push(dir)
+    const directory = join(dir, 'x.jsonl')
+    mkdirSync(directory)
+    await expect(readTranscript(directory, false)).rejects.toThrow('Session transcript is not a regular file')
+  })
+})
+
+describe('textFromContent', () => {
+  const content = [
+    { type: 'thinking', thinking: 'plan...' },
+    { type: 'text', text: 'Final answer' },
+    { type: 'toolCall', name: 'bash', arguments: {} },
+  ]
+
+  it('includes thinking parts by default for transcript rendering', () => {
+    expect(textFromContent(content)).toBe('plan...\nFinal answer')
+  })
+
+  it('drops thinking parts when only visible text is requested', () => {
+    expect(textFromContent(content, 4_096, { includeThinking: false })).toBe('Final answer')
+    expect(textFromContent([{ type: 'thinking', thinking: 'only reasoning' }], 4_096, { includeThinking: false })).toBe('')
+    expect(textFromContent('plain string', 4_096, { includeThinking: false })).toBe('plain string')
   })
 })
 

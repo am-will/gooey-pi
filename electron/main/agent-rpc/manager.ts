@@ -1,9 +1,9 @@
 import type { PrimeEventEnvelope, PrimeImplementation, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
+import { isRuntimeIdle, parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
 import { resolveExecutable, type ExecutableSource } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
-import { isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
+import { errorMessage, isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
 import { isThinkingLevel, validateRpcCommand } from './command-schema'
 import { PRIME_RPC_ADAPTER, type HarnessRpcAdapter, type StartRecovery } from './harness-adapter'
 import { RpcRuntime } from './runtime'
@@ -32,6 +32,8 @@ export interface RuntimeEnvironmentScope {
 export class AgentRpcManager {
   private readonly runtimes = new Map<string, RpcRuntime>()
   private readonly startingRuntimes = new Set<string>()
+  private readonly pendingProjectStarts = new Set<{ cwd: string; cancelled: boolean }>()
+  private readonly retirementPolls = new Map<string, NodeJS.Timeout>()
   private readonly retiringRuntimes = new Set<string>()
   private readonly runtimeEnvironmentRevisions = new Map<string, number>()
   private runtimeEnvironmentRevision = 0
@@ -95,7 +97,11 @@ export class AgentRpcManager {
 
   setStartRecovery(recover: StartRecovery): void { this.recoverStart = recover }
 
-  beginShutdown(): void { this.closed = true }
+  beginShutdown(): void {
+    this.closed = true
+    for (const timer of this.retirementPolls.values()) clearTimeout(timer)
+    this.retirementPolls.clear()
+  }
 
   async start(raw: unknown): Promise<RuntimeInfo> {
     return this.startRecovering(raw, true)
@@ -151,25 +157,35 @@ export class AgentRpcManager {
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
     const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, implementation: adapter.implementation })
     let runtime: RpcRuntime | undefined
-    let workspaceUse!: WorkspaceUseLease
-    workspaceUse = await this.beginWorkspaceUse(
-      cwd,
-      { kind: 'agent', harness: this.adapter.id, runtimeId: `starting-${Date.now()}` },
-      async () => {
-        if (!runtime) return false
-        const retired = await this.retireForCheckout(runtime)
-        if (retired) workspaceUse.release()
-        return retired
-      },
-    )
+    let workspaceUse: WorkspaceUseLease | undefined
     let environmentEnded = false
     const notifyRuntimeEnd = (info?: RuntimeInfo): void => {
       if (environmentEnded) return
       environmentEnded = true
-      workspaceUse.release()
+      workspaceUse?.release()
       try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
     }
+    const projectStart = { cwd, cancelled: false }
+    this.pendingProjectStarts.add(projectStart)
+    const requireProjectStart = (): void => {
+      this.requireOpen()
+      if (projectStart.cancelled) throw new Error('Project was removed while its runtime was starting')
+    }
     try {
+      workspaceUse = await this.beginWorkspaceUse(
+        cwd,
+        { kind: 'agent', harness: this.adapter.id, runtimeId: `starting-${Date.now()}` },
+        async () => {
+          if (!runtime) return false
+          const retired = await this.retireForCheckout(runtime)
+          if (retired) workspaceUse?.release()
+          return retired
+        },
+      )
+      requireProjectStart()
+      const authorizedCwd = await this.authorizeCwd(cwd)
+      requireProjectStart()
+      if (authorizedCwd !== cwd) throw new Error('Project directory authority changed while its runtime was starting')
       const args = adapter.buildStartArgs({
         cwd,
         sessionPath,
@@ -180,6 +196,7 @@ export class AgentRpcManager {
         environment: runtimeEnvironment,
       })
       runtime = await this.admitRuntime(() => {
+        requireProjectStart()
         const created = new RpcRuntime(
           executable,
           args,
@@ -189,6 +206,7 @@ export class AgentRpcManager {
             this.startingRuntimes.delete(closed.runtimeId)
             this.runtimes.delete(closed.runtimeId)
             this.retiringRuntimes.delete(closed.runtimeId)
+            this.cancelRetirementPoll(closed.runtimeId)
             this.runtimeEnvironmentRevisions.delete(closed.runtimeId)
             notifyRuntimeEnd(closed.snapshot())
           },
@@ -205,6 +223,7 @@ export class AgentRpcManager {
       await runtime.handshake()
       await this.decorate(runtime)
       if (runtime.snapshot().fastModeSupported && options.fast === true) await runtime.setServiceTier('priority', true)
+      requireProjectStart()
       try { this.runtimeStartListener(runtimeEnvironment, runtime.snapshot()) } catch { /* capability binding must never fail a start */ }
       this.startingRuntimes.delete(runtime.runtimeId)
       return runtime.snapshot()
@@ -222,6 +241,8 @@ export class AgentRpcManager {
       // can also leave an unreapable child. The once guard joins all paths.
       notifyRuntimeEnd(runtime?.snapshot())
       throw error
+    } finally {
+      this.pendingProjectStarts.delete(projectStart)
     }
   }
 
@@ -253,7 +274,7 @@ export class AgentRpcManager {
     if (this.retiringRuntimes.has(runtime.runtimeId)) throw new Error('Runtime is being retired for a branch checkout')
     const command = await validateRpcCommand(rawCommand, this.validateSessionPath)
     this.requireOpen()
-    const policyPrompt = command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up'
+    const policyPrompt = command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up' || command.type === 'send_message'
       ? command.message
       : command.type === 'set_heartbeat' ? command.prompt : undefined
     if (typeof policyPrompt === 'string') assertNoMcpAuthenticationCommand(policyPrompt, this.adapter.id)
@@ -262,15 +283,15 @@ export class AgentRpcManager {
     // interception below routes it via runtime.setServiceTier instead.
     const translated = runtime.adapter.translateCommand(command)
     if (command.type === 'set_model' && this.providers) {
-      await this.providers.requireAvailableModel(`${String(command.provider)}/${String(command.modelId)}`, this.disabledProviders(), this.disabledModels())
+      await this.providers.requireAvailableModel(`${command.provider}/${command.modelId}`, this.disabledProviders(), this.disabledModels())
     }
     if (command.type === 'set_service_tier') {
-      const serviceTier = command.serviceTier === 'priority' ? 'priority' : 'default'
+      const serviceTier = command.serviceTier
       const supported = await runtime.setServiceTier(serviceTier)
       if (!supported) throw new Error('Fast mode is not supported by the selected model')
       return { type: 'response', command: 'set_service_tier', success: true }
     }
-    if (Array.isArray(command.images) && command.images.length > 0 && runtime.snapshot().imageInputSupported === false) {
+    if ((command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up') && command.images && command.images.length > 0 && runtime.snapshot().imageInputSupported === false) {
       throw new Error('The active model does not accept images. Choose a vision model and try again.')
     }
     const response = await runtime.command(translated)
@@ -332,6 +353,15 @@ export class AgentRpcManager {
     return runtime.stop()
   }
 
+  /** Main-owned OMP roster query; never accepts renderer commands or child paths. */
+  async readOmpSubagents(filePath: string): Promise<unknown> {
+    if (this.adapter.id !== 'omp') return undefined
+    const info = this.getForSession(filePath)
+    if (!info) return undefined
+    const response = await this.requireRuntime(info.runtimeId).command({ type: 'get_subagents' })
+    return response.success === true ? response.data : undefined
+  }
+
   list(): RuntimeInfo[] { return [...this.runtimes.values()].map((runtime) => runtime.snapshot()) }
 
   /** Cheap ownership probe for IPC routing; requireRuntime keeps the authoritative not-found error. */
@@ -352,6 +382,9 @@ export class AgentRpcManager {
   }
 
   async stopForProjectRoots(roots: string[]): Promise<void> {
+    for (const pending of this.pendingProjectStarts) {
+      if (roots.some((root) => isPathWithin(root, pending.cwd))) pending.cancelled = true
+    }
     const matches = [...this.runtimes.values()].filter((runtime) => roots.some((root) => isPathWithin(root, runtime.snapshot().cwd)))
     await Promise.all(matches.map((runtime) => runtime.stop()))
   }
@@ -376,14 +409,29 @@ export class AgentRpcManager {
 
   private async retireWhenIdle(runtime: RpcRuntime): Promise<void> {
     const wantedRevision = this.runtimeEnvironmentRevision
-    if (!this.runtimes.has(runtime.runtimeId)
-      || (this.runtimeEnvironmentRevisions.get(runtime.runtimeId) ?? wantedRevision) >= wantedRevision) return
+    if (this.closed || !this.runtimes.has(runtime.runtimeId)
+      || (this.runtimeEnvironmentRevisions.get(runtime.runtimeId) ?? wantedRevision) >= wantedRevision) {
+      this.cancelRetirementPoll(runtime.runtimeId)
+      return
+    }
     if (this.isIdle(runtime)) {
+      this.cancelRetirementPoll(runtime.runtimeId)
       await runtime.stop()
       return
     }
-    const timer = setTimeout(() => { void this.retireWhenIdle(runtime) }, 250)
+    if (this.retirementPolls.has(runtime.runtimeId)) return
+    const timer = setTimeout(() => {
+      this.retirementPolls.delete(runtime.runtimeId)
+      void this.retireWhenIdle(runtime).catch((error) => console.error('[agent-rpc] Runtime retirement failed:', errorMessage(error)))
+    }, 250)
+    this.retirementPolls.set(runtime.runtimeId, timer)
     timer.unref()
+  }
+
+  private cancelRetirementPoll(runtimeId: string): void {
+    const timer = this.retirementPolls.get(runtimeId)
+    if (timer) clearTimeout(timer)
+    this.retirementPolls.delete(runtimeId)
   }
 
   private async retireForCheckout(runtime: RpcRuntime): Promise<boolean> {
@@ -407,10 +455,7 @@ export class AgentRpcManager {
   private isIdle(runtime: RpcRuntime): boolean {
     if (this.startingRuntimes.has(runtime.runtimeId)) return false
     if (this.retiringRuntimes.has(runtime.runtimeId)) return false
-    const snapshot = runtime.snapshot()
-    const actions = snapshot.sessionActions
-    return !snapshot.isStreaming && !snapshot.isCompacting && !actions?.active
-      && (actions?.queuedCount ?? 0) === 0
+    return isRuntimeIdle(runtime.snapshot())
   }
 
   private requireOpen(): void {
@@ -451,7 +496,9 @@ export class AgentRpcManager {
   private async decorate(runtime: RpcRuntime): Promise<void> {
     if (!this.providers) return
     const snapshot = runtime.snapshot()
-    runtime.applyCapabilities(await this.providers.capabilities(snapshot.model?.provider, snapshot.model?.id))
+    try {
+      runtime.applyCapabilities(await this.providers.capabilities(snapshot.model?.provider, snapshot.model?.id))
+    } catch { /* Catalog outages must not fail a healthy runtime or erase known capabilities. */ }
   }
 
   private requireRuntime(value: unknown): RpcRuntime {

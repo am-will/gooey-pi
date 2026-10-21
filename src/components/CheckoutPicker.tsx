@@ -1,5 +1,7 @@
+import { errorMessage } from '@/lib/errors'
+import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 import { Check, ChevronDown, FolderGit2 } from 'lucide-react'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import type { CheckoutAction, CheckoutCatalog } from '@/types/api'
 import { useI18n } from '@/lib/i18n'
 
@@ -30,30 +32,18 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
   const rootRef = useRef<HTMLDivElement>(null)
   const strategy = catalog?.strategy ?? 'worktree'
 
-  useEffect(() => {
-    if (!open) return
-    const close = (event: MouseEvent) => {
-      if (!(event.target instanceof Node) || !rootRef.current?.contains(event.target)) setOpen(false)
-    }
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', close)
-    document.addEventListener('keydown', onEscape)
-    return () => {
-      document.removeEventListener('mousedown', close)
-      document.removeEventListener('keydown', onEscape)
-    }
-  }, [open])
+  useDismissableLayer(open, (target) => target instanceof Node && Boolean(rootRef.current?.contains(target)), () => setOpen(false))
 
-  const execute = async (action: CheckoutAction): Promise<void> => {
-    if (!onExecute) return
+  const execute = async (action: CheckoutAction): Promise<boolean> => {
+    if (!onExecute) return false
     setError('')
     try {
       await onExecute(action)
       setOpen(false)
+      return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('checkout.error'))
+      setError(errorMessage(cause, t('checkout.error')))
+      return false
     }
   }
 
@@ -62,8 +52,7 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
     if (!name || creating || !onExecute) return
     setCreating(true)
     try {
-      await execute({ strategy, operation: 'create', branch: name })
-      setBranch('')
+      if (await execute({ strategy, operation: 'create', branch: name })) setBranch('')
     } finally {
       setCreating(false)
     }

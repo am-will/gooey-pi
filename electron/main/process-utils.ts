@@ -1,8 +1,10 @@
-import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
+import { accessSync, constants as fsConstants, readdirSync, realpathSync, statSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import { delimiter, posix, win32 } from 'node:path'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions, type SpawnOptionsWithoutStdio } from 'node:child_process'
 import { homedir } from 'node:os'
+import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
+export { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 import { createAdmissionQueue } from './lib/async'
 import { HARNESSES, type HarnessDescriptor } from './harness'
 import type { ProcessFailureReason, ProcessOutcome } from '../../src/types/api'
@@ -40,7 +42,9 @@ export function processOutcome(result: ProcessResult, output: string): ProcessOu
 }
 
 export const PROCESS_CONCURRENCY_LIMIT = 8
-export const PROCESS_QUEUE_LIMIT = 64
+const PROCESS_QUEUE_LIMIT = 64
+
+const POSIX_SYSTEM_PATH_DIRS = new Set(['/opt/homebrew/bin', '/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
 
 const PROCESS_INPUT_LIMIT = 4 * 1024 * 1024
 const activeChildren = new Set<ChildProcess>()
@@ -50,12 +54,19 @@ const processAdmission = createAdmissionQueue({
   pendingLimitError: () => new Error(`Process queue limit of ${PROCESS_QUEUE_LIMIT} exceeded`),
   closedError: () => new Error('Process admission is closed during shutdown'),
 })
-let processAdmissionClosed = false
-
 export function beginProcessShutdown(): void {
-  if (processAdmissionClosed) return
-  processAdmissionClosed = true
   processAdmission.close()
+}
+
+/** Registers long-lived probes with shutdown cleanup without consuming one-shot slots. */
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptionsWithoutStdio & { stdio?: 'pipe' | ['pipe', 'pipe', 'pipe'] }): ChildProcessWithoutNullStreams
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptions): ChildProcess
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptions): ChildProcess {
+  if (processAdmission.isClosed) throw new Error('Process admission is closed during shutdown')
+  const child = spawn(file, args, options)
+  activeChildren.add(child)
+  child.once('close', () => activeChildren.delete(child))
+  return child
 }
 
 export interface KillLadderRung {
@@ -203,7 +214,8 @@ export function safeChildEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.Proc
  * Makes an absolute executable's own directory available to `/usr/bin/env`
  * shebangs without evaluating a shell profile. Finder-launched macOS apps get
  * a minimal PATH, while npm-installed Pi-family CLIs commonly use
- * `#!/usr/bin/env node` with `node` beside the CLI shim.
+ * `#!/usr/bin/env node` with `node` beside the CLI shim. Fallbacks precede
+ * system directories while preserving the user's earlier PATH selections.
  */
 export function executableChildEnvironment(
   executable: string,
@@ -218,21 +230,30 @@ export function executableChildEnvironment(
   const separator = platform === 'win32' ? ';' : delimiter
   const homeValue = platform === 'win32' ? result.USERPROFILE : result.HOME
   const home = homeValue && isAbsolutePathForPlatform(homeValue, platform) ? homeValue : homedir()
+  const inherited = (result[pathKey] ?? '').split(separator)
+  const systemIndex = inherited.findIndex((directory) => POSIX_SYSTEM_PATH_DIRS.has(directory))
+  const insertAt = platform === 'win32' ? 0 : systemIndex === -1 ? inherited.length : systemIndex
+  const nvmBin = result.NVM_BIN && isAbsolutePathForPlatform(result.NVM_BIN, platform) ? [result.NVM_BIN] : []
   const directories = [
     executableDirectory,
+    ...inherited.slice(0, insertAt),
+    ...nvmBin,
     ...versionManagerRuntimeDirs(result, platform, home),
     ...sharedHarnessCandidateDirs(result, platform, home),
-    ...(result[pathKey] ?? '').split(separator),
+    ...inherited.slice(insertAt),
   ]
+  result[pathKey] = uniquePaths(directories, platform).join(separator)
+  return result
+}
+
+function uniquePaths(paths: readonly string[], platform: NodeJS.Platform): string[] {
   const seen = new Set<string>()
-  result[pathKey] = directories.filter((directory) => {
-    if (!directory) return false
-    const key = platform === 'win32' ? directory.toLowerCase() : directory
-    if (seen.has(key)) return false
+  return paths.filter((path) => {
+    const key = platform === 'win32' ? path.toLowerCase() : path
+    if (!path || seen.has(key)) return false
     seen.add(key)
     return true
-  }).join(separator)
-  return result
+  })
 }
 
 export interface ExecutableSpawnInvocation {
@@ -249,6 +270,37 @@ interface PrepareExecutableSpawnOptions {
 
 function canAccessPath(candidate: string, mode: number): boolean {
   try { accessSync(candidate, mode); return true } catch { return false }
+}
+
+/** Windows implicitly searches cwd for bare executable names, before PATH. */
+export function resolveGitExecutable(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { platform?: NodeJS.Platform; canonicalExecutable?: (path: string) => string | undefined } = {},
+): string {
+  if ((options.platform ?? process.platform) !== 'win32') return 'git'
+  const canonicalExecutable = options.canonicalExecutable ?? ((path: string) => {
+    try { return statSync(path).isFile() ? realpathSync(path) : undefined } catch { return undefined }
+  })
+  const insideProject = (path: string): boolean => {
+    const rel = win32.relative(win32.toNamespacedPath(cwd), win32.toNamespacedPath(path))
+    return rel === '' || rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel)
+  }
+  const seen = new Set<string>()
+  for (const value of [env.Path, env.PATH]) {
+    for (const entry of (value ?? '').split(';')) {
+      const directory = entry.trim().replace(/^"(.*)"$/, '$1')
+      if (!win32.isAbsolute(directory) || win32.parse(directory).root === '\\') continue
+      const normalized = win32.normalize(directory)
+      const key = normalized.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (insideProject(normalized)) continue
+      const executable = canonicalExecutable(win32.join(normalized, 'git.exe'))
+      if (executable && win32.isAbsolute(executable) && !insideProject(executable)) return executable
+    }
+  }
+  throw new Error('Git was not found in an absolute PATH directory outside this project. Install Git and add its executable directory to PATH.')
 }
 
 /**
@@ -287,14 +339,7 @@ export function prepareExecutableSpawn(
     childEnvironment.ProgramFiles ? win32.join(childEnvironment.ProgramFiles, 'nodejs') : '',
     childEnvironment.LOCALAPPDATA ? win32.join(childEnvironment.LOCALAPPDATA, 'Programs', 'nodejs') : '',
   ]
-  const seen = new Set<string>()
-  const node = nodeDirectories
-    .filter((directory) => {
-      const key = directory.toLowerCase()
-      if (!directory || seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+  const node = uniquePaths(nodeDirectories.filter((directory) => isAbsolutePathForPlatform(directory, platform)), platform)
     .map((directory) => win32.join(directory, 'node.exe'))
     .find((candidate) => canAccess(candidate, fsConstants.X_OK))
   if (!node) throw new Error(`Node.js was not found for the ${descriptor.agentName} npm command shim`)
@@ -306,6 +351,13 @@ export function prepareExecutableSpawn(
  * A package-manager shim can live outside the Node installation that owns its
  * interpreter (for example pnpm under ~/Library/pnpm with Node under nvm).
  */
+function nvmVersionNames(entries: readonly { name: string; isDirectory(): boolean }[]): string[] {
+  return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .sort((left, right) => right.localeCompare(left, 'en', { numeric: true }))
+    .slice(0, 64)
+}
+
 function versionManagerRuntimeDirs(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
@@ -318,11 +370,7 @@ function versionManagerRuntimeDirs(
   const root = env.NVM_DIR && posix.isAbsolute(env.NVM_DIR) ? env.NVM_DIR : posix.join(home, '.nvm')
   const versionsRoot = posix.join(root, 'versions', 'node')
   try {
-    return readdirSync(versionsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-      .sort((left, right) => right.localeCompare(left, 'en', { numeric: true }))
-      .slice(0, 64)
+    return nvmVersionNames(readdirSync(versionsRoot, { withFileTypes: true }))
       .map((version) => posix.join(versionsRoot, version, 'bin'))
   } catch { return [] }
 }
@@ -332,8 +380,8 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
   // values rather than credentials, provider tokens, signing agents, or Git's
   // many environment-based configuration injection mechanisms. HOME/XDG_CONFIG_HOME
   // are included so Git can still find the user's global excludes file
-  // (~/.config/git/ignore) — GIT_CONFIG_GLOBAL=/dev/null above already keeps it
-  // from reading ~/.gitconfig itself.
+  // (~/.config/git/ignore); GIT_CONFIG_GLOBAL below separately disables
+  // reading ~/.gitconfig itself.
   const env: NodeJS.ProcessEnv = {
     LANG: 'C',
     LC_ALL: 'C',
@@ -357,10 +405,6 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
   return env
 }
 
-export function isAbsolutePathForPlatform(value: string, platform = process.platform): boolean {
-  return platform === 'win32' ? win32.isAbsolute(value) : posix.isAbsolute(value)
-}
-
 function sharedHarnessCandidateDirs(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
@@ -368,7 +412,7 @@ function sharedHarnessCandidateDirs(
 ): string[] {
   const pathApi = platform === 'win32' ? win32 : posix
   const fromRoot = (root: string | undefined, ...segments: string[]) => root ? pathApi.join(root, ...segments) : ''
-  const compact = (values: Array<string | undefined>): string[] => values.filter((value): value is string => Boolean(value))
+  const compact = (values: Array<string | undefined>): string[] => values.filter((value): value is string => Boolean(value && pathApi.isAbsolute(value)))
   const environmentDirs = [
     env.NVM_BIN,
     env.BUN_INSTALL_BIN,
@@ -390,7 +434,7 @@ function sharedHarnessCandidateDirs(
       win32.join(home, '.volta', 'bin'),
     ])
   }
-  const dataHome = env.XDG_DATA_HOME ?? posix.join(home, '.local', 'share')
+  const dataHome = env.XDG_DATA_HOME && posix.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : posix.join(home, '.local', 'share')
   return compact([
     ...environmentDirs,
     posix.join(home, '.local', 'bin'),
@@ -442,13 +486,7 @@ export function harnessExecutableCandidates(
       for (const name of executableNames) candidates.push(pathApi.join(directory, name))
     }
   }
-  const seen = new Set<string>()
-  return candidates.filter((candidate) => {
-    const key = platform === 'win32' ? candidate.toLowerCase() : candidate
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return uniquePaths(candidates, platform)
 }
 
 /** Bounded, shell-free discovery for nvm installs that a desktop app's PATH does not inherit. */
@@ -463,11 +501,7 @@ export async function nvmHarnessExecutableCandidates(
   const versionsRoot = posix.join(root, 'versions', 'node')
   try {
     const entries = await readdir(versionsRoot, { withFileTypes: true })
-    return entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-      .sort((left, right) => right.localeCompare(left, 'en', { numeric: true }))
-      .slice(0, 64)
+    return nvmVersionNames(entries)
       .map((version) => posix.join(versionsRoot, version, 'bin', descriptor.executableName(platform)))
   } catch { return [] }
 }
@@ -506,18 +540,6 @@ export function resolveExecutable(source: ExecutableSource): string | null {
   return typeof source === 'function' ? source() : source
 }
 
-export function primeAgentExecutableName(platform = process.platform): string {
-  return HARNESSES.prime.executableName(platform)
-}
-
-export function primeAgentCandidates(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string[] {
-  return harnessExecutableCandidates(HARNESSES.prime, env, platform)
-}
-
-export async function findPrimeAgent(): Promise<string | null> {
-  return findHarnessExecutable(HARNESSES.prime)
-}
-
 export function runProcess(file: string, args: readonly string[], options: {
   cwd?: string
   timeoutMs?: number
@@ -525,7 +547,6 @@ export function runProcess(file: string, args: readonly string[], options: {
   env?: NodeJS.ProcessEnv
   input?: string
 } = {}): Promise<ProcessResult> {
-  if (processAdmissionClosed) return Promise.reject(new Error('Process admission is closed during shutdown'))
   const timeoutMs = options.timeoutMs ?? 30_000
   const maxBytes = options.maxBytes ?? 16 * 1024 * 1024
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new TypeError('timeoutMs must be positive'))
@@ -536,7 +557,7 @@ export function runProcess(file: string, args: readonly string[], options: {
 
   return processAdmission.run(() => new Promise((resolve, reject) => {
     const invocation = prepareExecutableSpawn(file, args, options.env ?? safeChildEnvironment())
-    const child = spawn(invocation.file, invocation.args, {
+    const child = spawnTrackedChild(invocation.file, invocation.args, {
       cwd: options.cwd,
       env: invocation.env,
       shell: false,
@@ -544,7 +565,6 @@ export function runProcess(file: string, args: readonly string[], options: {
       windowsHide: true,
       detached: process.platform !== 'win32',
     })
-    activeChildren.add(child)
     if (options.input !== undefined) child.stdin?.on('error', () => { /* child close/error reports the process result */ })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
@@ -555,8 +575,9 @@ export function runProcess(file: string, args: readonly string[], options: {
     let outputExceeded = false
     let settled = false
     let limitKillTimer: NodeJS.Timeout | undefined
+    let drainTimer: NodeJS.Timeout | undefined
     const timer = setTimeout(() => {
-      timedOut = true
+      if (child.exitCode === null && child.signalCode === null) timedOut = true
       terminateChild(child, 'SIGTERM')
       limitKillTimer ??= setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) terminateChild(child, 'SIGKILL')
@@ -590,9 +611,9 @@ export function runProcess(file: string, args: readonly string[], options: {
     child.stderr?.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; collect(stderr, chunk) })
 
     const finish = (): void => {
-      activeChildren.delete(child)
       clearTimeout(timer)
       if (limitKillTimer) clearTimeout(limitKillTimer)
+      if (drainTimer) clearTimeout(drainTimer)
     }
     const fail = (error: Error): void => {
       if (settled) return
@@ -605,11 +626,21 @@ export function runProcess(file: string, args: readonly string[], options: {
     // uncaught 'error' events that crash the main process.
     const failPipe = (error: Error): void => {
       if (settled) return
-      terminateChild(child, 'SIGTERM')
+      terminateChild(child, 'SIGKILL')
       fail(error)
     }
     child.stdout?.on('error', failPipe)
     child.stderr?.on('error', failPipe)
+    // A descendant may retain inherited pipes after the direct child exits.
+    child.once('exit', () => {
+      drainTimer = setTimeout(() => setImmediate(() => {
+        if (settled) return
+        terminateChild(child, 'SIGTERM')
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+      }), 1_500)
+      drainTimer.unref()
+    })
     child.once('close', (code, signal) => {
       if (settled) return
       settled = true

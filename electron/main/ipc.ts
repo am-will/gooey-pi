@@ -1,15 +1,17 @@
 import { ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import type { ApplicationMenuName, AppMeta, HarnessId, SessionChangeEvent, ThemeMode } from '../../src/types/api'
+import { APPLICATION_MENU_NAMES, HARNESS_IDS, THEME_MODES, type ApplicationMenuName, type AppMeta, type AppSettings, type HarnessId, type SessionChangeEvent, type ThemeMode } from '../../src/types/api'
 import type { AgentRpcManager } from './agent-rpc'
+import { assertRendererCommand } from './agent-rpc/command-schema'
 import type { GitService } from './git'
 import type { CuaDriverService } from './cua-driver'
+import { HARNESS_VISIBILITY_KEYS, harnessVisibility, withModelVisibility } from './model-visibility'
 import type { ModelCatalogProvider } from './model-catalog'
 import type { PluginService } from './plugins'
 import type { PetService } from './pets'
 import type { PrimeProviderService } from './providers'
 import type { ProjectService } from './projects'
 import type { CheckoutService } from './checkouts'
-import type { SettingsService } from './settings-schedules'
+import type { SettingsService } from './settings'
 import type { AutomationService } from './schedules/service'
 import type { HeartbeatService } from './schedules/heartbeats'
 import type { SessionService } from './sessions'
@@ -17,7 +19,8 @@ import type { TerminalService } from './terminal'
 import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
-import { requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { createKeyedMutex } from './lib/async'
+import { boundedErrorMessage, firstAccepted, isOneOf, requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -59,12 +62,12 @@ interface HarnessServices {
 /** Strict enum gate for the untrusted optional harness argument; absence means 'prime'. */
 function requireHarness(value: unknown): HarnessId {
   if (value === undefined) return 'prime'
-  if (value === 'prime' || value === 'omp' || value === 'pi') return value
+  if (isOneOf(HARNESS_IDS, value)) return value
   throw new TypeError('Invalid harness')
 }
 
 function requireApplicationMenu(value: unknown): ApplicationMenuName {
-  if (value === 'file' || value === 'edit' || value === 'view' || value === 'window' || value === 'help') return value
+  if (isOneOf(APPLICATION_MENU_NAMES, value)) return value
   throw new TypeError('Invalid application menu')
 }
 
@@ -74,7 +77,7 @@ function requireMenuCoordinate(value: unknown): number {
 }
 
 function requireResolvedTheme(value: unknown): Exclude<ThemeMode, 'system'> {
-  if (value === 'light' || value === 'dark') return value
+  if (isOneOf(THEME_MODES, value) && value !== 'system') return value
   throw new TypeError('Invalid resolved theme')
 }
 
@@ -91,7 +94,20 @@ export function isTrustedRendererUrl(url: string, expectedRendererUrl: string): 
   } catch { return false }
 }
 
+export function isTrustedContents(contents: WebContents, expectedUrl: string): boolean {
+  if (contents.isDestroyed()) return false
+  try { return isTrustedRendererUrl(contents.getURL(), expectedUrl) && isTrustedRendererUrl(contents.mainFrame.url, expectedUrl) } catch { return false }
+}
+
+function sendToTrustedRenderer(contents: WebContents | undefined, expectedUrl: string, channel: string, ...payload: unknown[]): void {
+  if (!contents || !isTrustedContents(contents, expectedUrl)) return
+  try { contents.send(channel, ...payload) } catch (error) {
+    console.warn(`GooeyPi renderer delivery failed (${channel}): ${boundedErrorMessage(error)}`)
+  }
+}
+
 export interface IpcRegistration {
+  broadcast(channel: string, ...payload: unknown[]): void
   authorize(webContents: WebContents): void
   revoke(webContentsId: number): void
   dispose(): void
@@ -125,10 +141,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const whenRendererReady = new Promise<void>((resolve) => { announceRendererReady = resolve })
 
   const verify = (event: IpcEvent): void => {
-    const trustedFrame = event.senderFrame === event.sender.mainFrame
-      && isTrustedRendererUrl(event.senderFrame.url, expectedRendererUrl)
-      && isTrustedRendererUrl(event.sender.getURL(), expectedRendererUrl)
-    if (closed || !authorized.has(event.sender.id) || event.sender.isDestroyed() || !trustedFrame) throw new Error('IPC sender is not authorized')
+    if (closed || authorized.get(event.sender.id) !== event.sender || !isTrustedContents(event.sender, expectedRendererUrl)
+      || event.senderFrame !== event.sender.mainFrame) throw new Error('IPC sender is not authorized')
   }
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -168,18 +182,12 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
    * substring checks). Paths no root accepts rethrow the Prime error, so
    * rejection shape and text are unchanged.
    */
-  const sessionsForPath = async (filePath: unknown): Promise<{ harness: HarnessId; service: SessionService }> => {
-    try {
-      await services.sessions.requireSessionPath(filePath)
-      return { harness: 'prime', service: services.sessions }
-    } catch (primeError) {
-      for (const harness of ['omp', 'pi'] as const) {
-        try { await sessionServices[harness].requireSessionPath(filePath) } catch { continue }
-        return { harness, service: sessionServices[harness] }
-      }
-      throw primeError
-    }
-  }
+  const sessionsForPath = (filePath: unknown): Promise<{ harness: HarnessId; service: SessionService }> =>
+    firstAccepted((['prime', 'omp', 'pi'] as const).map((harness) => async () => {
+      const service = sessionServices[harness]
+      await service.requireSessionPath(filePath)
+      return { harness, service }
+    }))
   /** OMP and pi credentials stay CLI-owned; desktop-only visibility is routed separately below. */
   const cliOwnedProviderAuth: Partial<Record<HarnessId, string>> = {
     omp: 'OMP provider authentication is managed by the omp CLI',
@@ -221,19 +229,15 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       () => services.pi.sessions.requireSessionPath(requested),
       () => services.pi.plugins.authorizeReveal(requested),
     ]
-    for (const authorize of authorizations) {
-      let authorized: string
-      try { authorized = await authorize() } catch { continue /* denial here defers to the next authorization domain */ }
-      try {
-        shell.showItemInFolder(authorized)
-        return true
-      } catch (error) {
-        console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
-        return false
-      }
+    let authorized: string
+    try { authorized = await firstAccepted(authorizations) } catch {
+      console.warn('Rejected app:reveal-path: no authorization domain covers the path')
+      return false
     }
-    console.warn('Rejected app:reveal-path: no authorization domain covers the path')
-    return false
+    try { shell.showItemInFolder(authorized); return true } catch (error) {
+      console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
+      return false
+    }
   })
   handle('updates:get-state', () => services.updates.getState())
   handle('updates:check', () => services.updates.check())
@@ -263,6 +267,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   })
   handle('sessions:rename', async (_event, filePath, title) => (await sessionsForPath(filePath)).service.rename(filePath, title))
   handle('sessions:archive', async (_event, filePath, archived) => {
+    requireBoolean(archived, 'archived')
     const routed = await sessionsForPath(filePath)
     const result = await routed.service.archive(filePath, archived)
     if (archived === true) {
@@ -280,38 +285,62 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     const { harness: _harness, ...startOptions } = options
     return agentsFor(harness).start(startOptions)
   })
-  handle('agent:command', (_event, runtimeId, command) => agentsForRuntime(runtimeId).command(runtimeId, command))
+  handle('agent:command', (_event, runtimeId, command) => {
+    assertRendererCommand(command)
+    return agentsForRuntime(runtimeId).command(runtimeId, command)
+  })
   handle('agent:stop', (_event, runtimeId) => agentsForRuntime(runtimeId).stop(runtimeId))
+  let childService: Promise<import('./subagents').OmpChildService> | undefined
+  let loadedChildService: import('./subagents').OmpChildService | undefined
+  const children = (): Promise<import('./subagents').OmpChildService> => childService ??= import('./subagents').then(({ OmpChildService }) => {
+    loadedChildService = new OmpChildService({
+      authorizeParent: (path) => services.omp.sessions.requireSessionPath(path),
+      liveRoster: (path) => services.omp.agents.readOmpSubagents(path),
+    })
+    return loadedChildService
+  }).catch((error) => { childService = undefined; throw error })
+  handle('subagents:list', async (event, parent, harness) => {
+    if (requireHarness(harness) !== 'omp') return { supported: false, reason: 'Child history is currently available for OMP only.' }
+    const service = await children()
+    verify(event)
+    return service.list(event.sender.id, parent)
+  })
+  handle('subagents:history', async (event, parent, childId, options, harness) => {
+    if (requireHarness(harness) !== 'omp') throw new TypeError('Child history is currently available for OMP only.')
+    const service = await children()
+    verify(event)
+    return service.history(event.sender.id, parent, childId, options)
+  })
   handle('agent:list', () => [...services.agents.list(), ...services.omp.agents.list(), ...services.pi.agents.list()])
 
-  const providerCatalog = (force = false) => services.providers.catalog(force, new Set(services.settings.get().disabledProviders), new Set(services.settings.get().disabledModels))
-  const ompProviderCatalog = (force = false) => services.omp.catalog.catalog(force, new Set(services.settings.get().ompDisabledProviders), new Set(services.settings.get().ompDisabledModels))
-  const piProviderCatalog = (force = false) => services.pi.catalog.catalog(force, new Set(services.settings.get().piDisabledProviders), new Set(services.settings.get().piDisabledModels))
-  const providerCatalogs: Record<HarnessId, (force?: boolean) => ReturnType<ModelCatalogProvider['catalog']>> = {
-    prime: providerCatalog, omp: ompProviderCatalog, pi: piProviderCatalog,
+  const catalogSources: Record<HarnessId, ModelCatalogProvider> = {
+    prime: services.providers, omp: services.omp.catalog, pi: services.pi.catalog,
   }
-  /** Desktop-owned provider/model visibility settings keys per harness. */
-  const disabledProvidersKeys = { prime: 'disabledProviders', omp: 'ompDisabledProviders', pi: 'piDisabledProviders' } as const
-  const disabledModelsKeys = { prime: 'disabledModels', omp: 'ompDisabledModels', pi: 'piDisabledModels' } as const
-  handle('providers:catalog', (_event, force, harness) => providerCatalogs[requireHarness(harness)](force === true))
+  const providerCatalog = async (harness: HarnessId, force = false) => {
+    const catalog = await catalogSources[harness].catalog(force)
+    const visibility = harnessVisibility(services.settings.get(), harness)
+    return withModelVisibility(catalog, visibility.disabledProviders, visibility.disabledModels)
+  }
+  handle('providers:catalog', (_event, force, harness) => providerCatalog(requireHarness(harness), force === true))
   handle('providers:save-api-key', async (_event, providerId, apiKey, harness) => {
     requirePrimeProviderAuth(harness)
     await services.providers.saveApiKey(providerId, apiKey)
-    return providerCatalog(true)
+    return providerCatalog('prime', true)
   })
   handle('providers:logout', async (_event, providerId, harness) => {
     requirePrimeProviderAuth(harness)
     await services.providers.logout(providerId)
-    return providerCatalog(true)
+    return providerCatalog('prime', true)
   })
-  handle('providers:set-enabled', async (_event, providerId, enabled, harness) => {
+  const visibilityMutations = createKeyedMutex<'visibility'>()
+  handle('providers:set-enabled', (_event, providerId, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const id = requireString(providerId, 'providerId', { min: 1, max: 128, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
-    const catalog = await providerCatalogs[target]()
+    const catalog = await providerCatalog(target)
     if (!catalog.providers.some((provider) => provider.id === id)) throw new Error('Provider was not found')
-    const providerSettingsKey = disabledProvidersKeys[target]
-    const modelSettingsKey = disabledModelsKeys[target]
+    const providerSettingsKey = HARNESS_VISIBILITY_KEYS[target].providers
+    const modelSettingsKey = HARNESS_VISIBILITY_KEYS[target].models
     const settings = services.settings.get()
     const disabledProviders = new Set(settings[providerSettingsKey])
     const disabledModels = new Set(settings[modelSettingsKey])
@@ -323,32 +352,32 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [providerSettingsKey]: [...disabledProviders].sort(),
       [modelSettingsKey]: [...disabledModels].sort(),
     })
-    return providerCatalogs[target]()
-  })
-  handle('providers:set-disabled', async (_event, providerIds, harness) => {
+    return providerCatalog(target)
+  }))
+  handle('providers:set-disabled', (_event, providerIds, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     if (!Array.isArray(providerIds) || providerIds.length > 256) throw new TypeError('providerIds must be a bounded array')
     const ids = [...new Set(providerIds.map((value, index) => requireString(value, `providerIds[${index}]`, { min: 1, max: 128, trim: true })))].sort()
-    const catalog = await providerCatalogs[target]()
+    const catalog = await providerCatalog(target)
     const known = new Set(catalog.providers.map((provider) => provider.id))
     if (ids.some((id) => !known.has(id))) throw new Error('Provider was not found')
-    const providerSettingsKey = disabledProvidersKeys[target]
-    const modelSettingsKey = disabledModelsKeys[target]
+    const providerSettingsKey = HARNESS_VISIBILITY_KEYS[target].providers
+    const modelSettingsKey = HARNESS_VISIBILITY_KEYS[target].models
     const disabledModels = ids.length ? services.settings.get()[modelSettingsKey] : []
     await services.settings.update({ [providerSettingsKey]: ids, [modelSettingsKey]: disabledModels })
-    return providerCatalogs[target]()
-  })
-  handle('providers:set-model-enabled', async (_event, modelKey, enabled, harness) => {
+    return providerCatalog(target)
+  }))
+  handle('providers:set-model-enabled', (_event, modelKey, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const key = requireString(modelKey, 'modelKey', { min: 3, max: 385, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
-    const catalog = await providerCatalogs[target]()
+    const catalog = await providerCatalog(target)
     const model = catalog.models.find((candidate) => candidate.key === key)
     if (!model) throw new Error('Model was not found')
     const provider = catalog.providers.find((candidate) => candidate.id === model.provider)
     if (!provider) throw new Error('Provider was not found')
-    const providerSettingsKey = disabledProvidersKeys[target]
-    const modelSettingsKey = disabledModelsKeys[target]
+    const providerSettingsKey = HARNESS_VISIBILITY_KEYS[target].providers
+    const modelSettingsKey = HARNESS_VISIBILITY_KEYS[target].models
     const settings = services.settings.get()
     const disabledProviders = new Set(settings[providerSettingsKey])
     const disabledModels = new Set(settings[modelSettingsKey])
@@ -367,8 +396,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [providerSettingsKey]: [...disabledProviders].sort(),
       [modelSettingsKey]: [...disabledModels].sort(),
     })
-    return providerCatalogs[target]()
-  })
+    return providerCatalog(target)
+  }))
   handle('providers:start-oauth', (_event, providerId, harness) => {
     requirePrimeProviderAuth(harness)
     return services.providers.startOAuth(providerId)
@@ -409,14 +438,10 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('plugins:connect-mcp', (_event, input, harness) => pluginsFor(requireHarness(harness)).connectMcp(input))
   handle('plugins:set-mcp-enabled', (_event, input, harness) => pluginsFor(requireHarness(harness)).setMcpEnabled(input))
   handle('plugins:mutate-capability', (_event, input, harness) => pluginsFor(requireHarness(harness)).mutateCapability(input))
-  handle('plugins:refresh', (_event, harness) => pluginsFor(requireHarness(harness)).refresh())
 
   handle('settings:get', () => services.settings.get())
-  handle('settings:update', async (_event, patch) => {
-    const previous = services.settings.get()
-    const patchRecord = requireRecord(patch, 'settings patch')
-    if (patchRecord.computerUseEnabled === true && !previous.computerUseEnabled) await services.cuaDriver.requireAvailable()
-    const settings = await services.settings.update(patch)
+  const settingsTransitions = createKeyedMutex<'settings'>()
+  const reconcileSettings = async (previous: AppSettings, settings: AppSettings): Promise<void> => {
     if (settings.interfaceFontScale !== previous.interfaceFontScale) services.applyInterfaceZoom?.(settings.interfaceFontScale)
     if (settings.askUserEnabled !== previous.askUserEnabled || settings.browserEnabled !== previous.browserEnabled || settings.computerUseEnabled !== previous.computerUseEnabled) {
       await Promise.all([
@@ -424,9 +449,27 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
         services.omp.agents.requestRuntimeEnvironmentRefresh(),
         services.pi.agents.requestRuntimeEnvironmentRefresh(),
       ])
+    } else if (settings.ompApprovalMode !== previous.ompApprovalMode) {
+      await services.omp.agents.requestRuntimeEnvironmentRefresh()
     }
+  }
+  handle('settings:update', (_event, patch) => settingsTransitions.run('settings', async () => {
+    const previous = services.settings.get()
+    const patchRecord = requireRecord(patch, 'settings patch')
+    if (patchRecord.computerUseEnabled === true && !previous.computerUseEnabled) await services.cuaDriver.requireAvailable()
+    let settings: AppSettings
+    try {
+      settings = await services.settings.update(patch)
+    } catch (error) {
+      // OS login-item refusal retains the other saved fields in a mixed patch.
+      try { await reconcileSettings(previous, services.settings.get()) } catch (secondary) {
+        console.error(`GooeyPi could not reconcile saved settings: ${boundedErrorMessage(secondary)}`)
+      }
+      throw error
+    }
+    await reconcileSettings(previous, settings)
     return settings
-  })
+  }))
   handle('settings:reset-browser-data', () => services.settings.resetBrowserData())
 
   handle('browser:state', () => services.browser.state())
@@ -440,7 +483,6 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('heartbeats:manage', (_event, id, action) => services.heartbeats.manage(id, action))
 
   handle('schedules:list', (_event, harness) => services.schedules.list(requireHarness(harness)))
-  handle('schedules:get', (_event, id) => services.schedules.get(id))
   handle('schedules:preview', (_event, timing, count) => services.schedules.preview(timing, count))
   handle('schedules:create', (_event, input, harness) => services.schedules.create(input, 'user', requireHarness(harness)))
   handle('schedules:update', (_event, id, patch) => services.schedules.update(id, patch))
@@ -453,40 +495,37 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const broadcast = (channel: string, ...payload: unknown[]): void => {
     for (const [id, contents] of authorized) {
       if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send(channel, ...payload)
+      sendToTrustedRenderer(contents, expectedRendererUrl, channel, ...payload)
     }
   }
   const forwardSessionChange = (change: SessionChangeEvent): void => broadcast('sessions:changed', change)
   const unsubscribeSessionChanges = services.sessions.onDidChange(forwardSessionChange)
   const unsubscribeOmpSessionChanges = services.omp.sessions.onDidChange(forwardSessionChange)
   const unsubscribePiSessionChanges = services.pi.sessions.onDidChange(forwardSessionChange)
-  const scheduleSubscription = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
-  const unsubscribeScheduleChanges = typeof scheduleSubscription === 'function' ? scheduleSubscription : () => undefined
-  const browserSubscription = services.browser.onDidChange((state) => broadcast('browser:changed', state))
-  const unsubscribeBrowserChanges = typeof browserSubscription === 'function' ? browserSubscription : () => undefined
-  const pointerSubscription = services.browser.onPointer((event) => broadcast('browser:pointer', event))
-  const unsubscribeBrowserPointer = typeof pointerSubscription === 'function' ? pointerSubscription : () => undefined
-  const activitySubscription = services.browser.onActivity((event) => broadcast('browser:activity', event))
-  const unsubscribeBrowserActivity = typeof activitySubscription === 'function' ? activitySubscription : () => undefined
+  const unsubscribeScheduleChanges = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
+  const unsubscribeBrowserChanges = services.browser.onDidChange((state) => broadcast('browser:changed', state))
+  const unsubscribeBrowserPointer = services.browser.onPointer((event) => broadcast('browser:pointer', event))
+  const unsubscribeBrowserActivity = services.browser.onActivity((event) => broadcast('browser:activity', event))
 
   const registration: IpcRegistration = {
+    broadcast,
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
-    revoke(webContentsId) { authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
+    revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId).catch((error: unknown) => console.error(`GooeyPi terminal cleanup failed: ${boundedErrorMessage(error)}`)) },
     notifyHarnessesChanged() { broadcast('app:harnesses-changed') },
     dispose() {
       if (closed) return
       closed = true
       if (activeIpcRegistration === registration) activeIpcRegistration = null
+      for (const owner of authorized.keys()) loadedChildService?.revoke(owner)
       authorized.clear()
       unsubscribeSessionChanges()
       unsubscribeOmpSessionChanges()
       unsubscribePiSessionChanges()
-      if (typeof unsubscribeScheduleChanges === 'function') unsubscribeScheduleChanges()
-      if (typeof unsubscribeBrowserChanges === 'function') unsubscribeBrowserChanges()
-      if (typeof unsubscribeBrowserPointer === 'function') unsubscribeBrowserPointer()
-      if (typeof unsubscribeBrowserActivity === 'function') unsubscribeBrowserActivity()
+      unsubscribeScheduleChanges()
+      unsubscribeBrowserChanges()
+      unsubscribeBrowserPointer()
+      unsubscribeBrowserActivity()
       for (const channel of invokeChannels) ipcMain.removeHandler(channel)
       // Event listeners are removed wholesale only for our private fixed channels.
       for (const channel of eventChannels) ipcMain.removeAllListeners(channel)

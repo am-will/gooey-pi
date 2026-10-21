@@ -2,9 +2,11 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
 import { listPackage } from '@electron/asar'
-import { assertAsarLayout, assertPackagedExtensions } from './lib.mjs'
+import { getCurrentFuseWire } from '@electron/fuses'
+import { assertFuseWire } from './fuses.cjs'
+import { assertAsarLayout, assertPackagedExtensions } from './package-layout.mjs'
 
 function requireOption(value, label, allowed) {
   if (!value || !allowed.includes(value)) throw new Error(`${label} must be one of: ${allowed.join(', ')}`)
@@ -43,15 +45,17 @@ export function packagedExecutablePath(unpackedDirectory, target) {
   return path
 }
 
-export function expectedArtifactExtensions(target) {
-  return target === 'linux' ? ['.AppImage', '.deb', '.rpm', '.pacman'] : ['.exe', '.zip', '.appx']
+/** Unsigned (QA) Windows builds skip the Store-only AppX; see package.mjs. */
+export function expectedArtifactExtensions(target, mode = 'public') {
+  if (target === 'linux') return ['.AppImage', '.deb', '.rpm', '.pacman']
+  return mode === 'qa' ? ['.exe', '.zip'] : ['.exe', '.zip', '.appx']
 }
 
-function assertExpectedArtifacts(outputDirectory, target) {
+function assertExpectedArtifacts(outputDirectory, target, mode) {
   const files = readdirSync(outputDirectory, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
-  for (const extension of expectedArtifactExtensions(target)) {
+  for (const extension of expectedArtifactExtensions(target, mode)) {
     const matches = files.filter((name) => name.endsWith(extension))
     if (matches.length !== 1) throw new Error(`Expected exactly one ${extension} artifact, found ${matches.length}`)
   }
@@ -134,7 +138,7 @@ export function zeroMqAddonPattern(target, architecture) {
   return new RegExp(`^node_modules/zeromq/build/${nativeRuntimeDirectory(target)}/${architecture}/node/[^/]+-Release/addon\\.node$`)
 }
 
-export function assertUnpackedNativeLayout(directory, target, architecture) {
+export function assertCrossPlatformUnpackedNativeLayout(directory, target, architecture) {
   const files = listFiles(directory)
     .map((path) => relative(directory, path).replaceAll('\\', '/'))
     .sort()
@@ -152,10 +156,10 @@ export function assertUnpackedNativeLayout(directory, target, architecture) {
   }
 }
 
-export function verifyPackage(target, architecture, { unpackedOnly = false, mode = 'qa' } = {}) {
+export async function verifyPackage(target, architecture, { unpackedOnly = false, mode = 'qa' } = {}) {
   const outputDirectory = resolve('release', target, architecture)
   if (!existsSync(outputDirectory)) throw new Error(`Release directory does not exist: ${outputDirectory}`)
-  const artifacts = unpackedOnly ? [] : assertExpectedArtifacts(outputDirectory, target)
+  const artifacts = unpackedOnly ? [] : assertExpectedArtifacts(outputDirectory, target, mode)
   const app = findUnpackedDirectory(outputDirectory, target)
   const resources = join(app, 'resources')
   const asar = join(resources, 'app.asar')
@@ -165,31 +169,30 @@ export function verifyPackage(target, architecture, { unpackedOnly = false, mode
   if (existsSync(join(resources, 'app'))) throw new Error('Packaged application contains forbidden loose resources/app')
   if (!existsSync(unpacked)) throw new Error('Packaged application must contain resources/app.asar.unpacked')
   assertAsarLayout(listPackage(asar, { isPack: false }))
-  assertUnpackedNativeLayout(unpacked, target, architecture)
+  assertCrossPlatformUnpackedNativeLayout(unpacked, target, architecture)
+  const executable = packagedExecutablePath(app, target)
+  assertFuseWire(await getCurrentFuseWire(executable))
   if (!unpackedOnly && target === 'win' && mode === 'public') {
     const installer = artifacts.find((name) => name.endsWith('.exe'))
     if (!installer) throw new Error('Windows installer is missing')
     assertValidAuthenticode(join(outputDirectory, installer))
-    assertValidAuthenticode(packagedExecutablePath(app, target))
+    assertValidAuthenticode(executable)
   }
   const scope = unpackedOnly ? 'unpacked directory build' : 'installable artifacts'
   const signature = !unpackedOnly && target === 'win' && mode === 'public' ? ', and valid Authenticode signatures' : ''
-  console.log(`Verified ${target}/${architecture} package: ${scope}, ASAR runtime layout, exact native unpack allowlist${signature}.`)
+  console.log(`Verified ${target}/${architecture} package: ${scope}, ASAR runtime layout, exact native unpack allowlist, Electron fuses${signature}.`)
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-if (invokedDirectly) {
-  const platformIndex = process.argv.indexOf('--platform')
-  const platform = platformIndex === -1 ? undefined : process.argv[platformIndex + 1]
-  const archIndex = process.argv.indexOf('--arch')
-  const arch = archIndex === -1 ? undefined : process.argv[archIndex + 1]
-  const unpackedOnly = process.argv.includes('--unpacked-only')
-  const modeIndex = process.argv.indexOf('--mode')
-  const mode = modeIndex === -1 ? 'qa' : process.argv[modeIndex + 1]
+if (import.meta.main) {
   try {
-    verifyPackage(requireOption(platform, 'platform', ['linux', 'win']), requireOption(arch, 'arch', ['arm64', 'x64']), {
-      unpackedOnly,
-      mode: requireOption(mode, 'mode', ['public', 'qa']),
+    const { values } = parseArgs({
+      strict: true,
+      allowPositionals: false,
+      options: { platform: { type: 'string' }, arch: { type: 'string' }, mode: { type: 'string', default: 'qa' }, 'unpacked-only': { type: 'boolean' } },
+    })
+    await verifyPackage(requireOption(values.platform, 'platform', ['linux', 'win']), requireOption(values.arch, 'arch', ['arm64', 'x64']), {
+      unpackedOnly: values['unpacked-only'] === true,
+      mode: requireOption(values.mode, 'mode', ['public', 'qa']),
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

@@ -60,6 +60,15 @@ export function guardGuestCall<T>(guest: WebContents, call: Promise<T>, timeoutM
   return Promise.race([guarded, interrupted])
 }
 
+/** Bounds input and navigation calls that may themselves replace the document. */
+export function guardGuestDeadline<T>(call: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(ACTION_TIMED_OUT_MESSAGE)), timeoutMs)
+    timer.unref?.()
+    void call.then(resolve, reject).finally(() => clearTimeout(timer))
+  })
+}
+
 /**
  * Keeps the per-tab queue alive. Every guest call is already bounded, so a
  * still-pending action here is pathologically stuck; releasing the tail keeps

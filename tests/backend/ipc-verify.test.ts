@@ -1,3 +1,4 @@
+import { harnessStub, serviceStub } from '../helpers/ipc-harness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const electronMocks = vi.hoisted(() => ({
@@ -17,18 +18,9 @@ import { registerIpc, type IpcRegistration } from '../../electron/main/ipc'
 
 const EXPECTED_URL = 'prime-work://app/'
 
-function serviceStub(): Record<string, unknown> {
-  return new Proxy({}, { get: () => vi.fn(async () => undefined) })
-}
 
-function harnessStub(): Record<string, unknown> {
-  return {
-    projects: { ...serviceStub(), authorizePath: vi.fn(async () => { throw new Error('denied') }) },
-    sessions: { ...serviceStub(), onDidChange: vi.fn(() => () => undefined), requireSessionPath: vi.fn(async () => { throw new Error('denied') }) },
-    agents: { ...serviceStub(), has: vi.fn(() => false) },
-    catalog: serviceStub(),
-  }
-}
+
+
 
 function services(): Record<string, unknown> {
   return {
@@ -99,6 +91,17 @@ describe('registerIpc verify gate', () => {
     const event = fakeEvent()
     registration.authorize(event.sender as never)
     expect(handlers.get('app:get-meta')!(event)).toEqual({ version: '0.0.0-test' })
+    registration.dispose()
+  })
+
+  it('rejects untrusted and revoked child-observer senders before loading history', () => {
+    const event = fakeEvent()
+    for (const channel of ['subagents:list', 'subagents:history']) {
+      expect(() => handlers.get(channel)!(event, '/parent.jsonl', 'omp')).toThrow('not authorized')
+    }
+    registration.authorize(event.sender as never)
+    registration.revoke(event.sender.id)
+    expect(() => handlers.get('subagents:list')!(event, '/parent.jsonl', 'omp')).toThrow('not authorized')
     registration.dispose()
   })
 

@@ -1,124 +1,104 @@
-# OMP (Oh My Pi) integration design
+# OMP integration
 
-This document is the working spec for adding OMP (`omp`, [omp.sh](https://omp.sh/), [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)) as a second agent harness alongside Prime Agent. Both harnesses descend from the same Pi base (pi-mono), so the integration reuses the existing transport, event, and UI machinery wherever the protocols agree, and adapts only where they genuinely differ.
+GooeyPi runs OMP alongside Pi and Prime Agent. Each harness has its own granted
+projects, session catalog, model visibility, and runtimes. Switching the active
+harness leaves work in the other harnesses running.
 
-## Product behavior
+## Runtime and protocol
 
-- The sidebar brand in the top-left gains a chevron. Clicking it opens a harness switcher: **Prime Work** (Prime Intellect butterfly) or **OMP Work** (OMP pi-plug mark, `assets/brand/omp-icon.svg`, MIT-licensed from the oh-my-pi repo).
-- Switching harness swaps the whole workspace context: each harness has its own granted projects, session catalog, model catalog, and runtimes. Settings gain an `activeHarness` field; the choice persists.
-- All existing features work on OMP where the harness supports them: streaming transcripts, steering/follow-ups, abort, model + thinking selection, compaction, session resume/switch/rename/fork(branch), extension-UI dialogs (which is also how OMP surfaces **tool approval prompts**), browser capability bridge, git/terminal (harness-agnostic already).
-- Scheduled tasks are available in both harnesses. Prime retains its heartbeat tools; OMP receives an injected scheduled-task extension backed by Prime Work's local schedule service and executor. Still Prime-only: daemon-socket follow-up to out-of-app sessions and provider OAuth management. OMP credentials remain CLI-owned; Prime Work keeps a separate `ompDisabledProviders` list that only controls which providers appear in its OMP model picker.
-- Capabilities is harness-scoped but available in the same place for both. OMP uses its native plugin manager (`omp plugin install`), user/project plugin roots, `.omp/skills` plus shared `.agents/skills`, and OMP-native `mcp.json`; Prime's package and settings behavior is unchanged.
+[`HARNESSES.omp`](../electron/main/harness.ts) defines OMP's executable and data
+locations. Executable discovery checks the configured path, `OMP_BINARY`, the
+inherited `PATH`, and bounded harness and package-manager locations. Windows
+npm shims are resolved to their known Node entry point. The implementation and
+ordering live in [`process-utils.ts`](../electron/main/process-utils.ts).
 
-## OMP facts (verified on this machine, omp 17.2.11)
+[`OMP_RPC_ADAPTER`](../electron/main/agent-rpc/harness-adapter.ts) builds the RPC
+argv, negotiates protocol version 2, and translates commands and events.
+Requests use JSONL over stdio. The transport bounds frames, pending requests,
+and writes. [`chunk-assembly.ts`](../electron/main/agent-rpc/chunk-assembly.ts)
+validates and reassembles OMP's base64 `rpc_chunk` sequences before dispatch.
 
-- Binary: `omp` (searched: `$OMP_BINARY`, PATH, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`).
-- Spawn for embedding: `omp --mode rpc --cwd <dir>` plus:
-  - resume: `--resume <sessionPath>` (also accepts id prefixes; we always pass validated absolute paths)
-  - model: `--model <provider>/<modelId>` (single flag, unlike Prime's `--provider X --model Y`)
-  - thinking: `--thinking <off|minimal|low|medium|high|xhigh|max>`
-  - approvals: `--approval-mode <always-ask|write|yolo>` — only passed when the user overrides the default in settings; otherwise OMP's own `~/.omp/agent/config.yml` governs.
-  - extensions: `-e <path>` for each injected capability extension. Prime Work injects scheduled-task, browser, and session-collaboration extensions, plus the ask-user extension when the universal **Ask user** capability is enabled. No `--skill <path>` flag exists; skills are discovery-based, so Prime Work's browser *skill* is not injected — the OMP browser *extension* carries the tool surface.
-- Paths: agent dir `~/.omp/agent/`; sessions `~/.omp/agent/sessions/<bucket>/<ISO-timestamp>_<uuid>.jsonl` (bucket = scope-basename-hash of cwd); settings `~/.omp/agent/config.yml`; extensions `~/.omp/agent/extensions/`; auth in `~/.omp/agent/agent.db` (SQLite — never touched by Prime Work).
-- Plugins: `omp plugin install <target> --json` installs user-scoped packages under `~/.omp/plugins` by default; project packages live under `<project>/.omp/plugins`. Native skills are discovered from `~/.omp/skills`, project `.omp/skills`, and shared `.agents/skills`. Native MCP files are `~/.omp/agent/mcp.json` and project `.omp/mcp.json`.
-- Model catalog: `omp models --json` → `{ models: [{ provider, id, selector, name, contextWindow, maxTokens, reasoning, thinking: string[]|null, input: string[], cost }] }`.
-- Target model for validation: `openai-codex/gpt-5.6-luna` (Luna GPT-5.6, already authenticated on this machine).
+The adapter passes the authorized working directory with `--cwd`. Resume uses
+`--resume` with a validated session path. Model selection uses `--model` with a
+provider/model key. Thinking and optional approval mode are separate arguments.
+The default approval setting leaves OMP's own configuration in control.
 
-## Protocol: same JSONL framing, superset commands
-
-OMP RPC is newline-delimited JSON over stdio with the same request/response envelope Prime Work already speaks: requests carry `id`, responses are `{type:'response', id, command, success, data|error}`. `FramedRpcTransport`, `StrictJsonlDecoder`, write budgeting, correlation rules, and `AgentEventForwarder` are reused unchanged.
-
-Differences handled by an OMP adapter inside `electron/main/agent-rpc/`:
-
-### Handshake
-1. On start OMP pushes `{"type":"ready","protocolVersion":1,"supportedProtocolVersions":[1,2],...}`.
-2. We send `negotiate_protocol { protocolVersion: 2 }`.
-3. In v2, oversized frames arrive as base64 `rpc_chunk` sequences (`chunkId`, `index`, `count`, `data`); the OMP runtime reassembles them (bounded by the existing 16 MiB read limit) before normal dispatch.
-4. Then the shared handshake continues as today: `get_state` → `updateFromState` → `get_session_stats`.
-5. OMP also pushes `available_commands_update` (104 slash commands with metadata); forwarded to the renderer for future palette use, ignored by the reducer.
-
-### Command mapping (renderer keeps speaking the existing vocabulary)
-
-The renderer sends the same command objects it sends today; the OMP command schema validates against the same allowlist and translates where names differ:
-
-| Renderer sends | OMP receives |
+| GooeyPi command | OMP command |
 |---|---|
-| `fork {entryId}` | `branch {entryId}` |
+| `fork` | `branch` |
 | `get_fork_messages` | `get_branch_messages` |
-| `set_service_tier {serviceTier}` | `set_fast_mode {enabled: serviceTier === 'priority'}` |
-| everything else | unchanged (`prompt`, `steer`, `follow_up`, `abort`, `new_session`, `get_state`, `set_model`, `set_thinking_level`, `switch_session`, `compact`, `set_auto_compaction`, `set_auto_retry`, `set_session_name`, `set_steering_mode`, `set_follow_up_mode`, `get_*`, `extension_ui_response`) |
+| `set_service_tier` | `set_fast_mode` |
 
-Prime-only commands (`send_message`, heartbeat family, `clone`) are rejected by the OMP schema with a clear error. OMP scheduled tasks do not use heartbeat RPC commands: the injected extension calls a harness-scoped loopback broker, and due work is executed through OMP's normal prompt lifecycle. `prompt` responses may carry `data.agentInvoked === false` (local slash command, no agent turn) and OMP may later push a standalone `prompt_result` frame. No dedicated renderer handling exists or is needed: interactive Prime Work prompts never block on per-prompt turn completion, so a local-only prompt simply completes its request/response cycle, and `prompt_result` frames are forwarded as unknown events the reducer ignores.
+Other supported commands pass through the shared command schema. Prime-only
+heartbeat and daemon commands are rejected. Approval questions use
+`extension_ui_request` and the existing questionnaire UI. Automatic compaction
+and manual compact results are normalized into the common transcript lifecycle.
+The [adapter](../electron/main/agent-rpc/harness-adapter.ts) and
+[runtime](../electron/main/agent-rpc/runtime.ts) define the exact behavior.
 
-The OMP argv contract (`--mode rpc`, `--cwd`, `--resume`, `--model`, `--thinking`, `--approval-mode`, `--extension`) was verified live against omp 17.2.11: `omp --help` lists every long form, and the in-app validation run spawned a runtime with all of them accepted.
+## Sessions and models
 
-### Event normalization (main process, before forwarding)
+OMP sessions live below `~/.omp/agent/sessions`. The
+[OMP session adapter](../electron/main/sessions/omp.ts) reads versioned JSONL
+headers, tree entries, titles, model changes, and transcript content.
+[`SessionService`](../electron/main/sessions.ts) authorizes each path and
+handles archive state. A live rename goes through RPC. An offline rename uses
+the harness-specific file writer and atomic replacement. Session JSONL is
+therefore writable for explicit rename operations, while ordinary catalog and
+transcript reads remain read-only.
 
-| OMP emits | Forwarded as |
-|---|---|
-| `auto_compaction_start` | `compaction_start`, fields unchanged (`reason`, `action`) |
-| `auto_compaction_end` | `compaction_end`. `skipped: true` (a benign no-op) adds `errorSeverity: 'warning'`, so the row reads as skipped. An end with no `result`, not `aborted` and no `errorMessage` (a shake pass that rewrote history in place) adds `completed: true`, so the row reads as done. OMP ends carry no `reason`; `RpcRuntime` stamps the reason of the preceding `compaction_start` onto any end that lacks one |
-| nothing, for a manual `compact` | OMP 18 answers `compact` with the result alone (`summary`, `shortSummary`, `firstKeptEntryId`, `tokensBefore`, `details`) and, since it runs RPC commands one at a time, answers the watchdog's `get_state` polls only after it. `RpcRuntime` publishes the lifecycle from the answer: a synthetic `compaction_start` and `compaction_end` (reason `manual`) carrying the result, or the error. A refusal (`Nothing to compact (session too small)`, `... too small or already rolled over)`, `Already compacted`; `OMP_RPC_ADAPTER.compactRefusal`) ends as a skipped compaction and answers as a successful command |
-| `agent_end` with `isTerminal === false` | swallowed as a turn boundary (not finalized) |
-| `retry_fallback_applied` / `retry_fallback_succeeded` | unchanged; renderer renders a transcript notice from `applied` and a composer "Running on" chip from both; the persisted counterpart is the JSONL `model_change` entry with `resolvedModelIsFallback: true` |
-| `ready`, `available_commands_update`, `config_update`, `session_info_update`, `notice`, etc. | passed through (renderer reducer ignores unknown types) |
-| everything else (`agent_start`, `turn_*`, `message_*`, `tool_execution_*`, `extension_ui_request`, `auto_retry_*`, `model_changed`, ...) | unchanged — same names as Prime |
+Each `list()` call enumerates current catalog files and returns a newly
+decorated result. Unchanged per-file metadata and a bounded live overlay may be
+reused. Transcript reads have a separate cache keyed by file metadata.
 
-Approvals: OMP has no permission frame; approval prompts arrive as `extension_ui_request` `select` dialogs ("Allow tool: …" with Approve/Deny) and are answered with the existing fire-and-forget `extension_ui_response`. The existing ask-user modal covers this; field shapes must be verified against `src/lib/extension-ui.ts` and normalized in the adapter if they drift.
+[`OmpModelCatalogService`](../electron/main/providers-omp.ts) reads the bounded
+`omp models --json` result and maps its thinking levels into the shared catalog.
+[`CliModelCatalogService`](../electron/main/model-catalog-cli.ts) owns refresh
+coalescing, expiry, invalidation, and the last-successful-catalog fallback.
+Provider and model visibility are GooeyPi settings. Authentication remains with
+OMP; GooeyPi does not read its credential database.
 
-## Architecture
+## Plugins, capabilities, and schedules
 
-### Harness descriptors (`electron/main/harness.ts`)
+OMP package installation and actions use `omp plugin`. Project-scoped actions
+run from the authorized project directory. Discovery includes OMP's user and
+project roots and shared `.agents/skills` roots. The complete
+[plugin catalog](../electron/main/plugins/catalog.ts) loads when requested.
 
-```
-HarnessId = 'prime' | 'omp'
-HarnessDescriptor {
-  id, productName ('Prime Work' | 'OMP Work'), agentName ('Prime Agent' | 'OMP'),
-  executableName(s), binaryEnvVar ('PRIME_AGENT_BINARY' | 'OMP_BINARY'), extra search dirs,
-  agentDir (~/.prime/agent | ~/.omp/agent), sessionRoot,
-}
-```
-`process-utils.ts` discovery generalizes to `findHarnessExecutable(descriptor)`; `findPrimeAgent()` stays as a thin wrapper so existing call sites migrate incrementally. `AppMeta` becomes `{ harnesses: { prime: {path, version}, omp: {path, version} }, ... }` (the old `primeAgentPath/Version` fields are migrated, not kept).
+The browser extension [`omp-work-browser.ts`](../assets/extensions/omp-work-browser.ts)
+is shared by Prime, OMP, and Pi. The schedule, collaboration, and optional
+Ask User extensions use the same per-runtime capability construction. Bearer
+claims stay in the child environment and are revoked when construction fails
+or the runtime ends. See the [security model](security.md).
 
-### One manager/service pair per harness
+GooeyPi schedules use OMP's normal prompt lifecycle and its model catalog.
+They do not use Prime heartbeat RPC. Top-level peer messaging is described in
+[session collaboration](session-collaboration.md).
 
-- `AgentRpcManager` gains a per-harness strategy: argv builder, handshake steps, command schema, event normalizer. Two instances are constructed in `index.ts`; `registerIpc` routes `agent:start {harness}` to the right one. `RuntimeInfo` gains `harness: HarnessId`.
-- `SessionService`: second instance with `sessionRoot` parameterized and OMP-specific `catalogIo`/metadata/transcript readers (v3 JSONL: 256-byte `title` slot line, `session` header v3, entries with `id`/`parentId` forming a tree, `model_change.model` as a single `provider/id` string, entry types `message | model_change | thinking_level_change | compaction | branch_summary | custom_message | label | title_change | session_init | mode_change | ...`). Catalog scans one bucket level deep; ordering comes from the filename ISO-timestamp prefix instead of UUIDv7. No live-CLI overlay (OMP has no `list --json`); rename is done via RPC `set_session_name` when a runtime is live, else by rewriting nothing (session files stay read-only; sidebar rename is disabled for offline OMP sessions in v1).
-- Providers: `OmpModelCatalogService` shells out to `omp models --json` (single-flight, 30 s TTL, byte-bounded) and adapts to the existing `PrimeModelCatalog` types. `AgentRpcManager.providers` already accepts an interface-shaped optional dependency; that interface is formalized so both services satisfy it.
-- Projects: `ProjectRecord` gains `harness: HarnessId` (state migration defaults existing records to `'prime'`). Two `ProjectService` views scoped by harness; inferred projects come from each harness's own session catalog.
-- Plugins: two `PluginService` instances preserve one renderer surface while routing discovery, installation, MCP paths, and reveal authorization through the active harness. OMP package installs go through `omp plugin`; catalog discovery includes OMP-native skill/extension roots and enabled package trees. GooeyPi writes only local stdio definitions using OMP's upstream schema and the same pinned-directory, cooperative-lock, fingerprint-retry, atomic-replacement, and rollback safeguards; this is not filesystem compare-and-swap, so a same-user writer that ignores the lock can race the final fingerprint check and rename. Network definitions remain visible but externally managed and read-only.
-- Capability bridges: the browser `CapabilityBridge` is reused; `assets/extensions/omp-work-browser.ts` speaks OMP's extension API (default export `(pi) => void`, `pi.registerTool`) against the same loopback broker env contract. `assets/extensions/omp-work-schedules.ts` exposes list/create/update/manage tools through a separate scoped broker. `assets/extensions/omp-work-collaboration.ts` provides app-owned bounded list/models/create/read/send/wait tools for same-harness, same-working-directory top-level sessions; model-selectable creation and optional fast-mode negotiation use OMP's normal catalog and RPC manager rather than its parent-run task subagents or `/collab` relay rooms. When the universal capability is enabled, `assets/extensions/omp-work-ask-user.ts` registers a self-contained `ask_user` tool whose grouped select requests use the renderer's existing extension-UI questionnaire modal. Fresh installs leave this UI-blocking tool disabled. Schedule records carry their owning harness, the renderer lists only the active harness, and due runs route to the matching RPC manager and model catalog.
+Local stdio MCP configuration uses OMP's `mcp.json` schema. Network definitions
+remain visible but managed outside GooeyPi. The shared writer, locking, and
+Pi-adapter admission rules are documented once in
+[MCP configuration and admission](security.md#mcp-configuration-and-admission).
 
-### Renderer
+## Application ownership
 
-- `useAppSettings` carries `activeHarness`; `App.tsx` scopes workspaces, sessions, projects, and the model catalog by it. Switching harness behaves like a workspace switch (generation bump; running runtimes of the other harness keep running but are not shown).
-- `Sidebar` brand becomes a button with chevron → dropdown listing both harnesses with logos (`PrimeMark` / new `OmpMark` in `src/components/ui.tsx`, adapted to `currentColor` + orange accent). Title strings, `TitleToolbar` fallback, and settings harness card follow the active harness.
-- Settings: Agent section shows both harness status cards; an OMP-only "Approval mode" select (Inherit config / Always ask / Write / YOLO → argv flag only when not Inherit); Providers section per harness. OMP provider toggles update Prime Work's desktop state only, independently from Prime's provider list and without changing OMP configuration; authentication remains owned by OMP.
+[`index.ts`](../electron/main/index.ts) composes the harness services and
+[`ipc.ts`](../electron/main/ipc.ts) routes the validated harness selection.
+The descriptor map and shared service interfaces define the ownership boundary.
+Renderer settings live in [`useAppSettings`](../src/hooks/useAppSettings.ts),
+while workspace state and actions are handled by
+[`useWorkspaceRuntime`](../src/hooks/useWorkspaceRuntime.ts),
+[`useWorkspaceActions`](../src/hooks/useWorkspaceActions.ts), and
+[`workspace.ts`](../src/app/workspace.ts).
 
-## Security invariants (unchanged)
+## Read-only child history (OMP 18.12.2)
 
-Same rules as `docs/security.md`, applied to the second harness: argv arrays only, sanitized child env, path canonicalization + containment for the OMP session root, session JSONL read-only, stderr swallowed, all transport/event limits identical, `~/.omp/agent/agent.db` (credentials) never read, IPC allowlist stays fixed and narrow with `harness` validated as an enum.
+The child inspector uses the released [persisted-agent layout](https://github.com/can1357/oh-my-pi/blob/v18.12.2/packages/coding-agent/src/registry/persisted-agents.ts): a parent `session.jsonl` owns `session/<child>.jsonl`, and nesting follows a child transcript's matching directory. Only descendants discovered from a parent authorized by the OMP session service are readable. Advisor artifacts and unrelated directories are excluded.
 
-## Phase plan (one commit per phase)
+The renderer receives opaque child IDs and cursors scoped to its parent session and renderer. It cannot supply a child filesystem path. Main checks canonical containment, rejects symlinks and non-regular files, and compares file identity when opening. Reads grant no collaboration broker rights, and expose no child prompt, steering, resume, or tool execution controls. Replacing a parent invalidates its child IDs; replacing or shrinking a child resets the displayed history.
 
-1. Design doc + OMP brand asset (this commit).
-2. Harness descriptors + executable discovery + `AppMeta.harnesses`.
-3. OMP RPC adapter (argv, handshake, chunk reassembly, command translation, event normalization) + fake-agent tests mirroring `agent-rpc.test.ts`.
-4. OMP session catalog/metadata/transcript + tests.
-5. OMP model catalog service + tests.
-6. Harness threading through IPC/preload/types, per-harness projects, settings migration.
-7. Renderer harness switcher + scoped state + settings UI.
-8. OMP browser capability extension.
-9. OMP scheduled-task extension, harness-scoped persistence, and executor routing.
-10. OMP plugin, skill, and MCP catalog/install parity.
-11. Live validation against omp 17.2.11 with `openai-codex/gpt-5.6-luna`; fixes.
+Roster refreshes query the running parent's released `get_subagents` command for metadata only, including while its turn runs. Persisted files remain discoverable after the live registry drops completed children or the parent exits. Historical status is unknown when the harness provides no live status. The app does not infer successful completion merely from a transcript existing.
 
-## Non-goals (v1)
+History reads stay local and bounded, rather than calling the released `get_subagent_messages` implementation that reads the entire remaining file. Each request reads at most 1 MiB and renders at most 200 complete JSONL records through the existing transcript normalizer. Newest history loads first, older pages load on demand, and only the viewed child polls for appended records. A record exceeding the byte window is skipped with an explicit truncation flag. System prompt snapshots remain hidden; thinking summaries and tool calls/results already exposed in the transcript remain readable. A tool result across a page boundary renders independently so its output remains visible. Complete child history is available through paging within these limits.
 
-- A GooeyPi-owned OMP credential store or app-driven MCP OAuth. HTTP/SSE
-  definitions remain direct OMP operations outside GooeyPi; GooeyPi intercepts
-  rather than forwards `/mcp reauth`, so authentication must be run in OMP itself;
-  OMP keeps ownership of profile-scoped credentials.
-- Prime heartbeat RPC tools on OMP; OMP schedules use the local extension bridge instead.
-- Host tools / host URI schemes, subagent transcript streaming, native OMP relay-room UI, and handoff. GooeyPi-owned top-level session collaboration is documented separately in `docs/session-collaboration.md`.
-- Importing sessions across harnesses (`--from-claude`/`--from-codex` style).
+Prime and Pi return an explicit unavailable capability. Prime 0.10 has different durable child membership and transcript paths, so it requires its own verified adapter. This inspector neither subscribes to full OMP child event snapshots nor launches child runtimes to read history.

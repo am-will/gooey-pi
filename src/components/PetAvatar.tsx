@@ -1,3 +1,4 @@
+import { cachedPetSprite } from '@/lib/pet-sprite-cache'
 import { useEffect, useState, type CSSProperties } from 'react'
 import type { PetDefinition, PrimeWorkApi } from '@/types/api'
 
@@ -69,7 +70,7 @@ export function PetAvatar({ pet, pets, activity = 'idle', size = 92, reduceMotio
     let active = true
     setDataUrl(null)
     if (pet.kind !== 'spritesheet' || !pets) return () => { active = false }
-    void pets.sprite(pet.id).then((value) => { if (active) setDataUrl(value) }).catch(() => { if (active) setDataUrl(null) })
+    void cachedPetSprite(pets, pet.id).then((value) => { if (active) setDataUrl(value) }).catch(() => { if (active) setDataUrl(null) })
     return () => { active = false }
   }, [pet.id, pet.kind, pets])
   if (pet.kind === 'orb') return <OrbPet activity={activity} size={size} reduceMotion={reduceMotion} />

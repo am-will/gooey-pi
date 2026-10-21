@@ -226,6 +226,9 @@ describe('provider runtime mutations', () => {
     syncRuntime?: (runtimeId: string) => Promise<void>
     setEnabled?: PrimeWorkApi['providers']['setEnabled']
     setDisabled?: PrimeWorkApi['providers']['setDisabled']
+    saveApiKey?: PrimeWorkApi['providers']['saveApiKey']
+    logout?: PrimeWorkApi['providers']['logout']
+    startOAuth?: PrimeWorkApi['providers']['startOAuth']
     harness?: HarnessId
     reportError?: (error: unknown) => void
   }) {
@@ -235,6 +238,9 @@ describe('provider runtime mutations', () => {
       agent: { command: options.command },
       providers: {
         catalog: catalogMock,
+        saveApiKey: options.saveApiKey,
+        logout: options.logout,
+        startOAuth: options.startOAuth,
         onAuthEvent: vi.fn().mockReturnValue(() => undefined),
         setEnabled: options.setEnabled ?? vi.fn().mockResolvedValue(catalog),
         setDisabled: options.setDisabled ?? vi.fn().mockResolvedValue(catalog),
@@ -248,6 +254,18 @@ describe('provider runtime mutations', () => {
     }
     return render(<Harness />).then(() => ({ get value() { return value! }, catalogMock, syncRuntime, setDisabled: bridge.providers.setDisabled, reportError }))
   }
+
+  it.each(['pi', 'omp'] as const)('scopes credentials and authentication to %s', async (harness) => {
+    const saveApiKey = vi.fn().mockResolvedValue(catalog)
+    const logout = vi.fn().mockResolvedValue(catalog)
+    const startOAuth = vi.fn().mockResolvedValue(undefined)
+    const hook = await mountCatalogHook({ command: vi.fn(), harness, saveApiKey, logout, startOAuth })
+    await act(async () => { await hook.value.saveApiKey('openai', 'key'); await hook.value.logout('openai'); await hook.value.startOAuth('openai') })
+    expect(saveApiKey).toHaveBeenCalledWith('openai', 'key', harness)
+    expect(logout).toHaveBeenCalledWith('openai', harness)
+    expect(startOAuth).toHaveBeenCalledWith('openai', harness)
+    expect(hook.value.catalog).toEqual(catalog)
+  })
 
   it('serializes rapid reasoning changes and rolls back/synchronizes the latest rejection', async () => {
     const first = deferred<Record<string, unknown>>()
@@ -351,4 +369,20 @@ describe('provider runtime mutations', () => {
     await act(async () => { await hook.value.setAllEnabled() })
     expect(setDisabled).toHaveBeenCalledWith([], 'pi')
   })
+})
+
+
+it('keeps every provider control busy until the admitted visibility operation settles', async () => {
+  const pending = deferred()
+  const onSetEnabled = vi.fn(() => pending.promise)
+  await render(<ProviderSettings catalog={catalog} onRefresh={noop} onSaveApiKey={noop} onLogout={noop} onSetEnabled={onSetEnabled} onSetAllEnabled={noop} onSetAllDisabled={noop} onSetModelEnabled={noop} onStartOAuth={noop} onOpenDocs={() => undefined} />)
+  const first = container.querySelector<HTMLInputElement>('input[aria-label="Show Anthropic provider"]')!
+  const second = container.querySelector<HTMLInputElement>('input[aria-label="Show ChatGPT Plus/Pro provider"]')!
+  act(() => { first.click(); second.click() })
+  expect(onSetEnabled).toHaveBeenCalledTimes(1)
+  expect(first.disabled).toBe(true)
+  expect(second.disabled).toBe(true)
+  expect(button('Disable all').disabled).toBe(true)
+  await act(async () => { pending.resolve(); await pending.promise })
+  expect(second.disabled).toBe(false)
 })

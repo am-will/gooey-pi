@@ -1,3 +1,4 @@
+import { isAbsolutePathForPlatform } from '@/lib/platform-paths'
 import { formattingLocaleTag, translate, type MessageKey } from '@/lib/i18n'
 
 // This reducer and its validators run outside React, so they resolve their copy
@@ -11,12 +12,6 @@ export interface DraftCommit {
   value: string
   baseline: string
   revision: number
-  sawDifferentSource: boolean
-}
-
-export interface DraftSettlement {
-  value: string
-  baseline: string
 }
 
 export interface DraftState {
@@ -26,7 +21,6 @@ export interface DraftState {
   dirty: boolean
   revision: number
   pending: DraftCommit | null
-  settlement: DraftSettlement | null
   error: string
 }
 
@@ -38,37 +32,18 @@ export type DraftAction =
   | { type: 'reject'; id: number; error: string }
 
 export function createDraftState(value: string): DraftState {
-  return { value, source: value, baseline: value, dirty: false, revision: 0, pending: null, settlement: null, error: '' }
+  return { value, source: value, baseline: value, dirty: false, revision: 0, pending: null, error: '' }
 }
 
 export function reduceDraftState(state: DraftState, action: DraftAction): DraftState {
   switch (action.type) {
     case 'sync': {
-      if (state.pending) {
-        return {
-          ...state,
-          source: action.value,
-          pending: {
-            ...state.pending,
-            sawDifferentSource: state.pending.sawDifferentSource || action.value !== state.pending.baseline,
-          },
-        }
-      }
-      if (state.settlement && action.value === state.settlement.baseline && state.settlement.value !== state.settlement.baseline) {
-        return {
-          ...state,
-          source: action.value,
-          baseline: action.value,
-          dirty: state.value !== action.value,
-          settlement: null,
-          error: copy('settings.draft.saveFailed'),
-        }
-      }
-      if (!state.dirty) return { ...state, value: action.value, source: action.value, baseline: action.value, settlement: null }
+      if (state.pending) return { ...state, source: action.value }
+      if (!state.dirty) return { ...state, value: action.value, source: action.value, baseline: action.value }
       if (action.value === state.value) {
-        return { ...state, source: action.value, baseline: action.value, dirty: false, settlement: null }
+        return { ...state, source: action.value, baseline: action.value, dirty: false }
       }
-      return { ...state, source: action.value, baseline: action.value, dirty: true, settlement: null }
+      return { ...state, source: action.value, baseline: action.value, dirty: true }
     }
     case 'edit': {
       const revision = state.revision + 1
@@ -83,26 +58,13 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
     case 'commit':
       return {
         ...state,
-        pending: { id: action.id, value: action.value, baseline: state.baseline, revision: state.revision, sawDifferentSource: false },
-        settlement: null,
+        pending: { id: action.id, value: action.value, baseline: state.baseline, revision: state.revision },
         error: '',
       }
     case 'resolve': {
       if (state.pending?.id !== action.id) return state
       const submitted = state.pending
-      const rolledBack = submitted.sawDifferentSource && state.source === submitted.baseline && submitted.value !== submitted.baseline
-      if (rolledBack) {
-        return {
-          ...state,
-          baseline: submitted.baseline,
-          dirty: state.value !== submitted.baseline,
-          pending: null,
-          settlement: null,
-          error: state.revision === submitted.revision ? copy('settings.draft.saveFailed') : '',
-        }
-      }
       const committed = state.source !== submitted.baseline ? state.source : submitted.value
-      const settlement = { value: committed, baseline: submitted.baseline }
       if (state.revision === submitted.revision) {
         return {
           ...state,
@@ -110,7 +72,6 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
           baseline: committed,
           dirty: false,
           pending: null,
-          settlement,
           error: '',
         }
       }
@@ -119,7 +80,6 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
         baseline: committed,
         dirty: state.value !== committed,
         pending: null,
-        settlement,
         error: '',
       }
     }
@@ -131,7 +91,6 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
         baseline: state.pending.baseline,
         dirty: state.value !== state.pending.baseline,
         pending: null,
-        settlement: null,
         error: isCurrentDraft ? action.error : '',
       }
     }
@@ -156,14 +115,10 @@ export function normalizeBrowserHome(value: string): string {
   return new URL(value.trim()).toString()
 }
 
-export function terminalShellValidation(value: string): string {
+export function terminalShellValidation(value: string, platform: NodeJS.Platform = 'darwin'): string {
   if (value.length === 0) return copy('settings.draft.shellRequired')
   if (value.includes('\0')) return copy('settings.draft.shellNul')
   if (value.length > 4096) return copy('settings.draft.shellTooLong')
-  if (!value.startsWith('/')) return copy('settings.draft.shellAbsolute')
+  if (!isAbsolutePathForPlatform(value, platform)) return copy('settings.draft.shellAbsolute')
   return ''
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : copy('settings.draft.saveFailed')
 }

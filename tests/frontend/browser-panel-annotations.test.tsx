@@ -3,6 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useBrowserPreviewState } from '../../src/hooks/useBrowserPreviewState'
 import { BrowserPanel } from '../../src/components/inspector/BrowserPanel'
 import { useBrowserAnnotations } from '../../src/hooks/useBrowserAnnotations'
 import type { BrowserAnnotationsApi } from '../../src/hooks/useBrowserAnnotations'
@@ -276,4 +277,82 @@ describe('BrowserPanel annotation mode', () => {
     expect(container.querySelector('.annotation-hint')).not.toBeNull()
     expect(latestApi.annotations).toHaveLength(0)
   })
+})
+
+describe('BrowserPanel navigation admission', () => {
+  it.each(['file:///etc/passwd', 'chrome://gpu', 'about:config', 'https://user:secret@example.com/'])('rejects %s before calling the guest', async (address) => {
+    const loadURL = vi.fn(async () => undefined)
+    webviewProto.loadURL = loadURL
+    await act(async () => root.render(<Harness />))
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, address)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(loadURL).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('credential-free http(s)')
+  })
+  it.each(['https://example.org/', 'http://localhost:5173/', 'about:blank'])('admits %s', async (address) => {
+    const loadURL = vi.fn(async () => undefined)
+    webviewProto.loadURL = loadURL
+    await act(async () => root.render(<Harness />))
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, address)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(loadURL).toHaveBeenCalledWith(address)
+  })
+})
+
+
+it('loads a mount-time terminal link directly without a home request or duplicate loadURL', async () => {
+  const loadURL = vi.fn(async () => undefined)
+  webviewProto.loadURL = loadURL
+  const handled = vi.fn()
+  await act(async () => root.render(<BrowserPanel home="https://home.example/" navigationRequest={{ id: 1, url: 'localhost:3000' }} onNavigationRequestHandled={handled} annotations={{ annotations: [], atCapacity: false, add: () => true, remove: () => undefined, clear: () => undefined, handleNavigation: () => undefined, sendSignal: 0, requestSend: () => undefined }} onOpenExternal={() => undefined} />))
+  expect(webviewElement().getAttribute('src')).toBe('http://localhost:3000')
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')?.value).toBe('http://localhost:3000')
+  expect(handled).toHaveBeenCalledWith(1)
+  expect(loadURL).not.toHaveBeenCalled()
+  await makeDomReady()
+  expect(loadURL).not.toHaveBeenCalled()
+})
+
+
+it('reconciles SPA route annotations without stopping the picker and ignores subframe navigation', async () => {
+  await act(async () => root.render(<Harness />))
+  await makeDomReady()
+  act(() => { latestApi.add({ comment: 'Route note', element: { selector: '#hero', tagName: 'div', id: 'hero', classes: [], text: '', rect: { x: 0, y: 0, width: 10, height: 10 } }, pageUrl: 'https://example.com/', pageTitle: 'Example' }) })
+  await toggleAnnotate()
+  webviewUrl = 'https://example.com/cart'
+  await act(async () => { webviewElement().dispatchEvent(Object.assign(new Event('did-navigate-in-page'), { isMainFrame: true })) })
+  expect(latestApi.annotations[0].stale).toBe(true)
+  expect(executed.at(-1)).toContain('setMarkers([])')
+  expect(container.querySelector('.annotation-hint')).not.toBeNull()
+  webviewUrl = 'https://example.com/'
+  await act(async () => { webviewElement().dispatchEvent(Object.assign(new Event('did-navigate-in-page'), { isMainFrame: false })) })
+  expect(latestApi.annotations[0].stale).toBe(true)
+})
+
+
+it('restores Preview URL and recent pages across panel unmount without reassigning src while navigating', async () => {
+  function PersistentHarness({ show }: { show: boolean }) {
+    const preview = useBrowserPreviewState()
+    const annotations = useBrowserAnnotations()
+    return show ? <BrowserPanel home="https://example.com/" annotations={annotations} previewLocation={preview.location} onOpenExternal={() => undefined} /> : null
+  }
+  await act(async () => root.render(<PersistentHarness show />))
+  await makeDomReady()
+  webviewUrl = 'https://example.com/dev'
+  await act(async () => { webviewElement().dispatchEvent(new Event('did-navigate')) })
+  expect(webviewElement().getAttribute('src')).toBe('https://example.com/')
+  await act(async () => root.render(<PersistentHarness show={false} />))
+  await act(async () => root.render(<PersistentHarness show />))
+  expect(webviewElement().getAttribute('src')).toBe('https://example.com/dev')
+  const history = container.querySelector<HTMLButtonElement>('button[aria-label="Browser history"]')!
+  await act(async () => history.click())
+  expect(container.querySelector('.browser-history')?.textContent).toContain('https://example.com/dev')
 })

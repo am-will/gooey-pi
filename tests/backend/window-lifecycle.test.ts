@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const electron = vi.hoisted(() => ({
   app: {
@@ -10,23 +13,64 @@ const electron = vi.hoisted(() => ({
   },
   BrowserWindow: class {},
   dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
-  Menu: { buildFromTemplate: vi.fn((_template: Array<{ label: string; click(): void }>) => ({ popup: vi.fn() })) },
+  Menu: { buildFromTemplate: vi.fn((_template: MenuItemConstructorOptions[]) => ({ popup: vi.fn() })) },
   nativeImage: { createFromPath: vi.fn() },
-  protocol: { registerSchemesAsPrivileged: vi.fn() },
+  protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
   session: {},
   Tray: class {},
 }))
 
 vi.mock('electron', () => electron)
 
-import { activeShutdownWork, confirmAppClose, hardenRenderer, isMacWindowCloseShortcut, loadInitialRenderer, mainWindowChromeOptions, resolveRendererAssetPath, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/index'
+import '../../electron/main/index'
+import { isMacWindowCloseShortcut, loadInitialRenderer, mainWindowChromeOptions, windowCanvasColor } from '../../electron/main/main-window'
+import { hardenRenderer, registerRendererProtocol, RENDERER_CONTENT_SECURITY_POLICY, resolveRendererAssetPath } from '../../electron/main/renderer-security'
+import { ApplicationRevealQueue, activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/app-lifecycle'
 import { StateMigrationError, UnsupportedStateVersionError } from '../../electron/main/store'
 import type { RuntimeInfo } from '../../src/types/api'
-import type { BrowserWindow } from 'electron'
+import type { BrowserWindow, MenuItemConstructorOptions } from 'electron'
 
 type Handler = (...args: never[]) => void
 
 describe('application window lifecycle', () => {
+  it('queues a second instance until startup is ready and coalesces activation events', () => {
+    const reveal = vi.fn()
+    const queue = new ApplicationRevealQueue(reveal, () => false)
+    queue.request('activation')
+    queue.request('second instance')
+    queue.request('activation')
+    expect(reveal).not.toHaveBeenCalled()
+    queue.startupComplete()
+    expect(reveal.mock.calls).toEqual([['second instance']])
+    queue.request('activation')
+    expect(reveal.mock.calls).toEqual([['second instance'], ['activation']])
+  })
+
+  it('drops queued activation when shutdown begins during startup', () => {
+    const reveal = vi.fn()
+    let shuttingDown = false
+    const queue = new ApplicationRevealQueue(reveal, () => shuttingDown)
+    queue.request('second instance')
+    shuttingDown = true
+    queue.startupComplete()
+    queue.request('activation')
+    expect(reveal).not.toHaveBeenCalled()
+  })
+
+  it('uses the same canvas color for the initial window and native caption background', () => {
+    expect(windowCanvasColor('dark')).toBe('#171716')
+    expect(windowCanvasColor('light')).toBe('#ffffff')
+    expect(mainWindowChromeOptions('win32', 'dark').titleBarOverlay).toMatchObject({ color: windowCanvasColor('dark') })
+  })
+
+  it('keeps the final state drain inside the shutdown watchdog', async () => {
+    const drain = vi.fn(() => new Promise<void>(() => {}))
+    const log = vi.fn()
+    await settleShutdown([], { watchdogMs: 5, drain, log })
+    expect(drain).toHaveBeenCalledOnce()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('did not finish'))
+  })
+
   it('gives migration failures a dedicated actionable startup dialog', () => {
     const migration = new StateMigrationError(
       'Legacy authority retirement failed.',
@@ -40,7 +84,7 @@ describe('application window lifecycle', () => {
       detail: expect.stringMatching(/startup stopped.*retry.*prime-work-state-v4\.json.*prime-work-state\.json.*migrated-v4-backup.*do not delete/i),
     })
     expect(startupFailureDialog(new UnsupportedStateVersionError(99, '/tmp/state.json'))?.title).toBe('GooeyPi update required')
-    expect(startupFailureDialog(new Error('ordinary startup failure'))).toBeNull()
+    expect(startupFailureDialog(new Error('ordinary startup failure'))).toEqual({ title: 'GooeyPi could not start', detail: 'ordinary startup failure' })
   })
 
   it('uses one overlay title bar on Windows and Linux while preserving native macOS chrome', () => {
@@ -170,6 +214,8 @@ function hardenedWindow(currentUrl = 'prime-work://app/index.html') {
     getURL: () => currentUrl,
     isDestroyed: vi.fn(() => false),
     copyImageAt: vi.fn(),
+    replaceMisspelling: vi.fn(),
+    session: { addWordToSpellCheckerDictionary: vi.fn() },
   }
   const window = { webContents, isDestroyed: vi.fn(() => false) }
   hardenRenderer(window as unknown as BrowserWindow, () => 'prime-work://app/index.html')
@@ -213,6 +259,44 @@ describe('renderer hardening', () => {
     }
   })
 
+  it('denies guest popups and file navigation while allowing web and blank destinations', () => {
+    const { handler } = hardenedWindow()
+    const guestHandlers = new Map<string, Handler>()
+    const guest = {
+      id: 42,
+      setWindowOpenHandler: vi.fn(),
+      on: (name: string, listener: Handler) => { guestHandlers.set(name, listener) },
+      once: vi.fn(),
+    }
+    handler('did-attach-webview')(...[{}, guest] as never[])
+    expect(guest.setWindowOpenHandler.mock.calls[0]?.[0]()).toEqual({ action: 'deny' })
+    for (const name of ['will-navigate', 'will-redirect', 'will-frame-navigate']) {
+      const navigate = guestHandlers.get(name)
+      if (!navigate) throw new Error(`Missing guest ${name} guard`)
+      for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'https://example.test/', 'about:blank']) {
+        const event = { url, preventDefault: vi.fn() }
+        navigate(...[event, url] as never[])
+        expect(event.preventDefault.mock.calls.length, `${name}: ${url}`).toBe(url.startsWith('file:') || url.startsWith('javascript:') ? 1 : 0)
+      }
+    }
+  })
+
+  it('offers native text editing and spellcheck suggestions with current edit permissions', () => {
+    electron.Menu.buildFromTemplate.mockClear()
+    const { handler, webContents } = hardenedWindow()
+    handler('context-menu')(...[{}, { isEditable: true, misspelledWord: 'teh', dictionarySuggestions: ['the'], editFlags: { canUndo: false, canRedo: false, canCopy: false, canCut: false, canPaste: true } }] as never[])
+    const template = electron.Menu.buildFromTemplate.mock.calls[0]?.[0]
+    expect(template).toContainEqual({ role: 'paste', enabled: true })
+    expect(template).toContainEqual({ role: 'cut', enabled: false })
+    template?.find((item) => item.label === 'the')?.click?.(undefined as never, undefined as never, undefined as never)
+    expect(webContents.replaceMisspelling).toHaveBeenCalledWith('the')
+    template?.find((item) => item.label === 'Add to Dictionary')?.click?.(undefined as never, undefined as never, undefined as never)
+    expect(webContents.session.addWordToSpellCheckerDictionary).toHaveBeenCalledWith('teh')
+    webContents.isDestroyed.mockReturnValue(true)
+    template?.find((item) => item.label === 'the')?.click?.(undefined as never, undefined as never, undefined as never)
+    expect(webContents.replaceMisspelling).toHaveBeenCalledOnce()
+  })
+
   it('offers native image copying only for decoded images in the trusted renderer', () => {
     electron.Menu.buildFromTemplate.mockClear()
     const { handler, webContents } = hardenedWindow()
@@ -224,7 +308,7 @@ describe('renderer hardening', () => {
     expect(electron.Menu.buildFromTemplate).toHaveBeenCalledOnce()
     const template = electron.Menu.buildFromTemplate.mock.calls[0]?.[0]
     expect(template?.[0]?.label).toBe('Copy Image')
-    template?.[0]?.click()
+    template?.[0]?.click?.(undefined as never, undefined as never, undefined as never)
     expect(webContents.copyImageAt).toHaveBeenCalledWith(14, 27)
   })
 
@@ -239,6 +323,34 @@ describe('renderer hardening', () => {
       handler(name)(...[trusted] as never[])
       expect(trusted.preventDefault, name).not.toHaveBeenCalled()
     }
+  })
+})
+
+describe('packaged renderer protocol', () => {
+  it('serves packaged files with MIME/CSP headers and rejects malformed or out-of-origin requests', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gooeypi-renderer-protocol-'))
+    try {
+      const root = join(directory, 'renderer')
+      await mkdir(root)
+      await writeFile(join(root, 'index.html'), '<html>app</html>')
+      await writeFile(join(root, 'app.js'), 'export const app = true')
+      await writeFile(join(directory, 'private.txt'), 'outside')
+      electron.protocol.handle.mockClear()
+      registerRendererProtocol(root)
+      const handle = electron.protocol.handle.mock.calls[0]?.[1] as ((request: { url: string }) => Promise<Response>) | undefined
+      if (!handle) throw new Error('Renderer protocol was not registered')
+      const html = await handle({ url: 'prime-work://app/' })
+      expect(await html.text()).toBe('<html>app</html>')
+      expect(html.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+      expect(html.headers.get('Content-Security-Policy')).toBe(RENDERER_CONTENT_SECURITY_POLICY)
+      const script = await handle({ url: 'prime-work://app/app.js' })
+      expect(script.headers.get('Content-Type')).toBe('text/javascript; charset=utf-8')
+      for (const url of [
+        'prime-work://other/index.html', 'prime-work://app:123/index.html', 'https://app/index.html',
+        'prime-work://user@app/index.html', 'prime-work://app/index.html?unsafe=1', 'prime-work://app/index.html#unsafe',
+        'prime-work://app/%2e%2e/private.txt', 'prime-work://app/%5c..%5cprivate.txt', 'prime-work://app/%00', 'prime-work://app/%xx',
+      ]) expect((await handle({ url })).status, url).toBe(404)
+    } finally { await rm(directory, { recursive: true, force: true }) }
   })
 })
 

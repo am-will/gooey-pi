@@ -17,6 +17,59 @@ afterEach(() => {
 })
 
 describe('automatic update service', () => {
+  it('observes a notification failure in a manual update check', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const check = createManualUpdateCheck(async () => ({ phase: 'idle' }), async () => { throw new Error('Dialog failed') })
+    check()
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('Dialog failed')))
+  })
+
+  it('can cancel installation without losing the downloaded update', async () => {
+    const updater = new FakeUpdater()
+    const confirmInstall = vi.fn(async () => false)
+    const service = new UpdateService(updater, { enabled: true, confirmInstall })
+    updater.emit('update-downloaded', { version: '0.2.0' })
+    await expect(service.downloadAndInstall()).resolves.toBe(false)
+    expect(confirmInstall).toHaveBeenCalledOnce()
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
+    expect(service.getState().phase).toBe('downloaded')
+  })
+
+  it('restores quit approval if installation throws after confirmation', async () => {
+    const updater = new FakeUpdater()
+    updater.quitAndInstall.mockImplementation(() => { throw new Error('Install failed') })
+    const onInstallAborted = vi.fn()
+    const service = new UpdateService(updater, { enabled: true, confirmInstall: async () => true, onInstallAborted })
+    updater.emit('update-downloaded', { version: '0.2.0' })
+    await expect(service.downloadAndInstall()).resolves.toBe(false)
+    expect(onInstallAborted).toHaveBeenCalledOnce()
+    expect(service.getState()).toMatchObject({ phase: 'error', message: 'Install failed' })
+  })
+
+  it('coalesces install confirmation and cancels it when disposed', async () => {
+    const updater = new FakeUpdater()
+    let approve!: (approved: boolean) => void
+    const confirmInstall = vi.fn(() => new Promise<boolean>((resolve) => { approve = resolve }))
+    const service = new UpdateService(updater, { enabled: true, confirmInstall })
+    updater.emit('update-downloaded', { version: '0.2.0' })
+    const first = service.downloadAndInstall()
+    expect(service.downloadAndInstall()).toBe(first)
+    await vi.waitFor(() => expect(confirmInstall).toHaveBeenCalledOnce())
+    service.dispose()
+    approve(true)
+    await expect(first).resolves.toBe(false)
+    expect(updater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('uses the injected timeout canceller when disposed', () => {
+    const updater = new FakeUpdater()
+    const clearTimeout = vi.fn(globalThis.clearTimeout)
+    const service = new UpdateService(updater, { enabled: true, clearTimeout })
+    service.start()
+    service.dispose()
+    expect(clearTimeout).toHaveBeenCalledOnce()
+  })
+
   it('uses explicit system messages for manual update checks', () => {
     expect(manualUpdateNotification({ phase: 'not-available' })).toMatchObject({ type: 'info', message: 'No GooeyPi Update Available' })
     expect(manualUpdateNotification({ phase: 'available', version: '0.2.0' })).toMatchObject({ type: 'info', message: 'GooeyPi Update Available' })
@@ -106,7 +159,7 @@ describe('automatic update service', () => {
 
     updater.emit('update-downloaded', { version: '0.2.0' })
     expect(service.getState()).toEqual({ phase: 'downloaded', version: '0.2.0' })
-    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
+    await vi.waitFor(() => expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true))
     finishDownload()
     await expect(accepted).resolves.toBe(true)
     expect(changed).toHaveBeenCalled()

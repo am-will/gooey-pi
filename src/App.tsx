@@ -1,25 +1,31 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { useTerminalSessions } from '@/hooks/useTerminalSessions'
+import { useProjectScriptRuns } from '@/hooks/useProjectScriptRuns'
+import { useAutomations } from '@/hooks/useAutomations'
+import { TerminalDrawerStack } from '@/components/TerminalDrawerStack'
+import { composerDraftScope } from '@/lib/composer-draft'
+import { useCheckoutCatalog } from '@/hooks/useCheckoutCatalog'
+import { useGitStatus } from '@/hooks/useGitStatus'
+import { useSessionAttention } from '@/hooks/useSessionAttention'
+import { useNativeHeartbeats } from '@/hooks/useNativeHeartbeats'
+import { useBrowserPreviewState } from '@/hooks/useBrowserPreviewState'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { TitleToolbar } from '@/components/TitleToolbar'
-import type { ProjectScriptKind } from '@/components/ProjectRunControl'
 import { ChangesCard } from '@/components/ChangesCard'
 import { Composer } from '@/components/Composer'
-import type { TerminalDrawerHandle } from '@/components/TerminalDrawer'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { NoHarnessPrompt } from '@/components/NoHarnessPrompt'
 import { createAppKeydownHandler } from '@/lib/app-shortcuts'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
-import { activityNotificationSignature, readClearedActivity, readClearedAttention, sessionCompanionNotificationSignature } from '@/app/session-attention'
 import { errorMessage } from '@/lib/errors'
-import { LoadingPanel, TerminalLoadingPanel, VIEW_LOADING_KEYS } from '@/app/loading'
+import { LoadingPanel, VIEW_LOADING_KEYS } from '@/app/loading'
 import { I18nProvider, useLocaleTranslator } from '@/lib/i18n'
 import { openExternalUrl, revealPath } from '@/lib/desktop-actions'
-import { createSingleFlightAdmission, findProjectForSession, gitStatusForWorkspace, shouldRefreshGitOnSessionTransition, workspaceCwd } from '@/lib/workspace'
+import { createSingleFlightAdmission, findProjectForSession, workspaceCwd } from '@/lib/workspace'
 import { waitForVoiceSession } from '@/lib/voice'
-import { activeProjectScriptKind, ProjectScriptBusyError, setupNeedsRun } from '@/lib/project-scripts'
-import { SAMPLE_GIT, SAMPLE_PROJECTS, SAMPLE_SCHEDULES, SAMPLE_SESSIONS, SAMPLE_SKILLS, SAMPLE_TRANSCRIPT } from '@/lib/data'
-import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { activeProjectScriptKind } from '@/lib/project-scripts'
+import type * as DemoWorkspaceData from '@/lib/demo-workspace'
+import { HARNESS_PROVIDER_DOCS, HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { harnessOffersFastMode } from '@/lib/prime-compat'
 import { AgentBrowserLayer, type AgentSlotRect } from '@/components/AgentBrowserLayer'
 import { useAgentBrowserTabs } from '@/hooks/useAgentBrowserTabs'
@@ -28,7 +34,8 @@ import { useAppSettings } from '@/hooks/useAppSettings'
 import { useAppUpdates } from '@/hooks/useAppUpdates'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import { useBrowserAnnotations } from '@/hooks/useBrowserAnnotations'
-import { useComposerDockHeight } from '@/hooks/useComposerDockHeight'
+import { ConversationDock, SessionWorkspace } from '@/components/SessionWorkspace'
+import { useChildWorkspace } from '@/hooks/useChildWorkspace'
 import { useExtensionUi } from '@/hooks/useExtensionUi'
 import { useHarnessRefresh } from '@/hooks/useHarnessRefresh'
 import { INSPECTOR_DEFAULT, INSPECTOR_MIN, TERMINAL_DEFAULT, TERMINAL_MIN, usePanelLayout } from '@/hooks/usePanelLayout'
@@ -39,11 +46,11 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type GitStatus, type HarnessId, type NativeHeartbeatRecord, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { PREVIEW_TAB_ID, HARNESS_IDS, type CheckoutAction, type HarnessId, type RuntimeInfo, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
+const DemoApp = lazy(() => import('@/app/DemoApp'))
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
-const TerminalDrawer = lazy(() => import('@/components/TerminalDrawer').then((module) => ({ default: module.TerminalDrawer })))
 const CommandPalette = lazy(() => import('@/components/CommandPalette').then((module) => ({ default: module.CommandPalette })))
 const ExtensionUiModal = lazy(() => import('@/components/ExtensionUiModal').then((module) => ({ default: module.ExtensionUiModal })))
 const ProviderAuthModal = lazy(() => import('@/components/ProviderAuthModal').then((module) => ({ default: module.ProviderAuthModal })))
@@ -62,51 +69,20 @@ const EMPTY_PROVIDERS: PrimeProviderDescriptor[] = []
 // Stable identity for the Inspector while the Summary tab is inactive: the
 // streaming transcript array must not reach the memoized inspector subtree.
 const EMPTY_MESSAGES: TranscriptMessage[] = []
-const HARNESS_PROVIDER_DOCS: Record<HarnessId, string> = {
-  omp: 'https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md',
-  prime: 'https://github.com/PrimeIntellect-ai/prime-agent',
-  pi: 'https://pi.dev',
-}
-interface TerminalSessionMount {
-  id: string
-  workspaceKey: string
-  cwd?: string
-  sessionPath?: string
-  initialCommand?: { id: string; command: string; label: string; onExit(exitCode: number): void }
-}
-interface ActiveProjectScriptRun {
-  requestId: string
-  projectId: string
-  kind: ProjectScriptKind
-  command: string
-  harness: HarnessId
-  drawerId?: string
-  tabId?: string
-  ownsDrawer: boolean
-}
-type ProjectScriptRunOutcome = { cancelled: true } | { exitCode: number }
-
-
 export default function App() {
-  const composerDockRef = useComposerDockHeight()
-  const bridge = hasBridge() ? window.prime : null
-  const initialProject = bridge ? undefined : SAMPLE_PROJECTS[0]
-  const initialSession = bridge ? undefined : SAMPLE_SESSIONS[0]
-  const [projects, setProjects] = useState<ProjectRecord[]>(() => bridge ? [] : SAMPLE_PROJECTS)
-  const [sessions, setSessions] = useState<SessionRecord[]>(() => bridge ? [] : SAMPLE_SESSIONS)
-  const [clearedAttention, setClearedAttention] = useState<Record<string, string>>(() => readClearedAttention())
-  const [clearedActivity, setClearedActivity] = useState<Record<string, string>>(() => readClearedActivity())
-  const [schedules, setSchedules] = useState<AutomationScheduleRecord[]>(() => bridge ? [] : SAMPLE_SCHEDULES)
-  const [heartbeats, setHeartbeats] = useState<NativeHeartbeatRecord[]>([])
-  const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
-  const [scheduleError, setScheduleError] = useState('')
-  const [gitSnapshot, setGitSnapshot] = useState(() => ({ cwd: bridge ? undefined : SAMPLE_PROJECTS[0]?.primaryFolder, status: bridge ? { isRepo: false, files: [] } as GitStatus : SAMPLE_GIT }))
-  const [checkoutCatalog, setCheckoutCatalog] = useState<CheckoutCatalog>()
-  const [checkoutsLoading, setCheckoutsLoading] = useState(false)
+  const bridge = hasBridge() ? window.prime ?? null : null
+  return bridge ? <WorkspaceApp bridge={bridge} /> : <Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><DemoApp /></Suspense>
+}
+
+export function WorkspaceApp({ bridge, demo }: { bridge: PrimeWorkApi | null; demo?: typeof DemoWorkspaceData }) {
+  const initialProject = demo?.SAMPLE_PROJECTS[0]
+  const initialSession = demo?.SAMPLE_SESSIONS[0]
+  const [projects, setProjects] = useState<ProjectRecord[]>(() => demo?.SAMPLE_PROJECTS ?? [])
+  const [sessions, setSessions] = useState<SessionRecord[]>(() => demo?.SAMPLE_SESSIONS ?? [])
+  const { clearedAttention, clearedActivity, clearSessionAttention, clearActivity } = useSessionAttention({ setSessions })
   const [view, setView] = useState<WorkspaceView>('session')
   const [settingsSectionRequest, setSettingsSectionRequest] = useState<{ section: 'general' | 'agent'; id: number }>({ section: 'general', id: 0 })
   const [noHarnessPromptDismissed, setNoHarnessPromptDismissed] = useState(false)
-  const [browserGeneration, setBrowserGeneration] = useState(0)
   const [browserNavigationRequest, setBrowserNavigationRequest] = useState<{ id: number; url: string }>()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [voiceOrbOpen, setVoiceOrbOpen] = useState(false)
@@ -117,15 +93,7 @@ export default function App() {
   const [changesCardDismissed, setChangesCardDismissed] = useState(false)
   const submissionAdmissionRef = useRef(createSingleFlightAdmission())
   const queuedFlushRef = useRef(false)
-  const gitRequestRef = useRef(0)
-  const checkoutRequestRef = useRef(0)
-  const scheduleRequestRef = useRef(0)
   const demoTimerRef = useRef<number[]>([])
-  const [activeProjectScriptRun, setActiveProjectScriptRun] = useState<ActiveProjectScriptRun>()
-  const activeProjectScriptRunRef = useRef<ActiveProjectScriptRun | undefined>(undefined)
-  const projectScriptStartingRef = useRef(false)
-  activeProjectScriptRunRef.current = activeProjectScriptRun
-
   const reportError = useCallback((error: unknown) => {
     setToast(errorMessage(error))
   }, [])
@@ -139,42 +107,12 @@ export default function App() {
     if (!bridge) return
     void revealPath(bridge.app, path).then((failure) => { if (failure) setToast(failure) })
   }, [bridge])
-  useEffect(() => {
-    window.localStorage.setItem('prime-work.cleared-session-attention', JSON.stringify(clearedAttention))
-  }, [clearedAttention])
-  useEffect(() => {
-    window.localStorage.setItem('prime-work.cleared-activity', JSON.stringify(clearedActivity))
-  }, [clearedActivity])
-  const clearSessionAttention = useCallback((session: SessionRecord) => {
-    const signature = sessionCompanionNotificationSignature(session)
-    if (!signature) return
-    setClearedAttention((current) => current[session.id] === signature ? current : { ...current, [session.id]: signature })
-  }, [])
-  const clearActivity = useCallback((activitySessions: SessionRecord[]) => {
-    if (!activitySessions.length) return
-    const ids = new Set(activitySessions.map((session) => session.id))
-    setClearedActivity((current) => {
-      const next = { ...current }
-      for (const session of activitySessions) {
-        const signature = activityNotificationSignature(session)
-        if (signature) next[session.id] = signature
-      }
-      return next
-    })
-    setClearedAttention((current) => {
-      const next = { ...current }
-      for (const session of activitySessions) {
-        const signature = sessionCompanionNotificationSignature(session)
-        if (signature) next[session.id] = signature
-      }
-      return next
-    })
-    setSessions((items) => items.map((session) => ids.has(session.id) ? { ...session, unread: false } : session))
-  }, [])
   const settingsState = useAppSettings({ bridge, reportError })
+  const browserPreview = useBrowserPreviewState(settingsState.settings.browserHome)
   const { t } = useLocaleTranslator(settingsState.settings.locale)
   const appUpdates = useAppUpdates(bridge, reportError, settingsState.settings.locale)
   const activeHarness = settingsState.settings.activeHarness
+  const { schedules, setSchedules, scheduleError, setScheduleError, scheduleFocusId, setScheduleFocusId, refreshSchedules } = useAutomations({ bridge, harness: activeHarness, initialSchedules: demo?.SAMPLE_SCHEDULES ?? [], reportError })
   const selectHarness = useCallback((harness: HarnessId) => {
     setVoiceOrbOpen(false)
     setFocusPetVoiceControl(false)
@@ -182,9 +120,11 @@ export default function App() {
     void settingsState.updateSettings({ activeHarness: harness })
   }, [settingsState.updateSettings])
   const browserAnnotations = useBrowserAnnotations()
+  const runtimeSnapshotObserverRef = useRef<((snapshot: RuntimeInfo) => void) | undefined>(undefined)
   const workspace = useWorkspaceRuntime({
     bridge, harness: activeHarness, initialProject, initialSession, sessions,
-    initialMessages: bridge ? [] : SAMPLE_TRANSCRIPT, reportError,
+    initialMessages: demo?.SAMPLE_TRANSCRIPT ?? [], reportError,
+    onRuntimeSnapshot: (snapshot) => runtimeSnapshotObserverRef.current?.(snapshot),
   })
   const syncProviderRuntime = useCallback(async (runtimeId: string) => {
     if (!bridge) return
@@ -213,19 +153,17 @@ export default function App() {
     ?? projects.find((project) => project.id === workspace.activeProjectId)
     ?? projects[0], [projects, activeSession, workspace.activeProjectId])
   const activeCwd = workspaceCwd(activeProject, activeSession)
+  const { git, setGitSnapshot, gitRequestRef, refreshGit } = useGitStatus({ bridge, cwd: activeCwd, workspaceRef: workspace.workspaceRef, workspaceGeneration: workspace.workspaceGeneration, sessionStatus: activeSession?.status, locallyOwnedSession: Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath), initialSnapshot: demo ? { cwd: demo.SAMPLE_PROJECTS[0]?.primaryFolder, status: demo.SAMPLE_GIT } : undefined, reportError })
   const mentionableSessions = useMemo(() => sessions.filter((session) => !session.archived
     && session.depth === 0
     && session.id !== activeSession?.id
     && session.projectPath === activeCwd), [activeCwd, activeSession?.id, sessions])
   // Views mount per opened workspace, not per session id; the transcript also outlives a project grant.
-  const workspaceViewKey = `${activeProject?.id ?? 'no-project'}:${workspace.viewKey}`
+  const workspaceViewKey = `${activeHarness}:${workspace.viewKey}`
   const activeTerminalSessionPath = workspace.runtime?.sessionFile ?? activeSession?.filePath
-  const [terminalSessions, setTerminalSessions] = useState<TerminalSessionMount[]>([])
-  const [terminalDrawerRevision, setTerminalDrawerRevision] = useState(0)
-  const activeTerminalSession = useMemo(() => terminalSessions.find((terminal) => terminal.workspaceKey === workspaceViewKey
-    || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath)), [activeTerminalSessionPath, terminalSessions, workspaceViewKey])
-  const terminalOpen = Boolean(activeTerminalSession)
-  const git = gitStatusForWorkspace(gitSnapshot, activeCwd)
+  const beforeTerminalClose = useStableCallback((id: string) => scriptRuns.cancelForDrawer(id))
+  const terminals = useTerminalSessions({ workspaceKey: workspaceViewKey, cwd: activeCwd, sessionPath: activeTerminalSessionPath, onOpenChange: settingsState.setTerminalOpen, beforeClose: beforeTerminalClose })
+  const { terminals: terminalSessions, active: activeTerminalSession, open: terminalOpen, drawerRefs: terminalDrawerRefs, selection: terminalSelection, setSelection: setTerminalSelection, close: closeTerminal, getContext: getTerminalContext, clearSelection: clearTerminalSelection } = terminals
   useEffect(() => { setChangesCardDismissed(false) }, [activeCwd])
   useEffect(() => {
     if (!git.files.length || !settingsState.settings.showFileChangesPopup) setChangesCardDismissed(false)
@@ -240,11 +178,17 @@ export default function App() {
     terminalOpen, view,
   })
   const sidebarVisible = settingsState.sidebarOpen && !layout.sidebarSuppressed
-  const inspectorVisible = settingsState.inspectorOpen && !layout.inspectorSuppressed
+  const childHistory = useChildWorkspace({ bridge, parent: activeSession, harness: activeHarness, visible: view === 'session', rosterVisible: sidebarVisible, compact: layout.compactLayout, setSidebarOpen: settingsState.setSidebarOpen })
+  const inspectorVisible = settingsState.inspectorOpen && !layout.inspectorSuppressed && !childHistory.isOpen
+  const { heartbeats, refreshHeartbeats } = useNativeHeartbeats({ bridge, harness: activeHarness, visible: view === 'scheduled' || view === 'session' && inspectorVisible && settingsState.inspectorTab === 'summary', reportError })
   const extension = useExtensionUi({
     bridge, askUserTimeoutMs: settingsState.settings.askUserTimeoutMs, activeRuntimeId: workspace.runtime?.runtimeId, runtimeSessionsRef: workspace.runtimeSessionsRef,
     setSessions, setRuntime: workspace.setRuntime, reportError,
   })
+  useLayoutEffect(() => {
+    runtimeSnapshotObserverRef.current = extension.rehydrateExtensionUi
+    return () => { runtimeSnapshotObserverRef.current = undefined }
+  }, [extension.rehydrateExtensionUi])
   // Stable identity: the harness-switch reset lives inside the bootstrap
   // effect, and an unstable callback would re-run the whole bootstrap.
   // Shared views stay in place while their harness-scoped data refreshes.
@@ -271,54 +215,20 @@ export default function App() {
     }
   }, [view])
 
-  const refreshGit = useCallback(async () => {
-    const requestId = ++gitRequestRef.current
-    const cwd = activeCwd
-    if (!bridge || !cwd) { setGitSnapshot({ cwd, status: { isRepo: false, files: [] } }); return }
-    try {
-      const next = await bridge.git.status(cwd)
-      if (gitRequestRef.current === requestId && workspace.workspaceRef.current.cwd === cwd) setGitSnapshot({ cwd, status: next })
-    } catch (error) { if (gitRequestRef.current === requestId && workspace.workspaceRef.current.cwd === cwd) reportError(error) }
-  }, [activeCwd, bridge, reportError, workspace.workspaceRef])
-
   useAgentEvents({
     bridge, runtimeIdRef: workspace.runtimeIdRef, runtimeSessionsRef: workspace.runtimeSessionsRef,
-    runtimeOwnerRef: workspace.runtimeOwnerRef, workspaceRef: workspace.workspaceRef,
+    workspaceRef: workspace.workspaceRef,
     setSessions, setRuntime: workspace.setRuntime, reconcileQueuedPrompts: workspace.reconcileQueuedPrompts,
     clearQueuedPromptFlushFailures: workspace.clearQueuedPromptFlushFailures,
-    clearQueuedPrompts: workspace.clearQueuedPrompts, queueAgentEvent: workspace.queueAgentEvent,
+    dropPendingSteers: workspace.dropPendingSteers, detachRuntime: workspace.detachRuntime, queueAgentEvent: workspace.queueAgentEvent,
     reconcileTranscriptForEvent: workspace.reconcileTranscriptForEvent,
     showExtensionUi: extension.showExtensionUi, clearExtensionUi: extension.clearExtensionUi,
     refreshGit, refreshGitOnTerminalEvent: Boolean(activeCwd),
     activeSessionVisible: view === 'session',
   })
 
-  useEffect(() => { void refreshGit(); return () => { gitRequestRef.current += 1 } }, [refreshGit])
-  const refreshCheckouts = useCallback(async () => {
-    const requestId = ++checkoutRequestRef.current
-    if (!bridge || !activeProject || activeProject.inferred) { setCheckoutCatalog(undefined); setCheckoutsLoading(false); return }
-    setCheckoutsLoading(true)
-    try {
-      const next = await bridge.projects.listCheckouts(activeProject.id, activeProject.harness)
-      if (checkoutRequestRef.current === requestId) setCheckoutCatalog(next)
-    } catch (error) {
-      if (checkoutRequestRef.current === requestId) { setCheckoutCatalog(undefined); reportError(error) }
-    } finally {
-      if (checkoutRequestRef.current === requestId) setCheckoutsLoading(false)
-    }
-  }, [activeProject, bridge, reportError, settingsState.settings.checkoutStrategy])
-  useEffect(() => { void refreshCheckouts(); return () => { checkoutRequestRef.current += 1 } }, [refreshCheckouts])
-  const previousSessionStatusRef = useRef<SessionRecord['status'] | undefined>(undefined)
-  const activeSessionStatus = activeSession?.status
-  const locallyOwnedActiveSession = Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath)
-  useEffect(() => {
-    const previousStatus = previousSessionStatusRef.current
-    previousSessionStatusRef.current = activeSessionStatus
-    if (shouldRefreshGitOnSessionTransition(previousStatus, activeSessionStatus, locallyOwnedActiveSession)) void refreshGit()
-  }, [activeSessionStatus, locallyOwnedActiveSession, refreshGit])
+  const { checkoutCatalog, checkoutsLoading } = useCheckoutCatalog({ bridge, project: activeProject, checkoutStrategy: settingsState.settings.checkoutStrategy, reportError })
   const agentBrowser = useAgentBrowserTabs({ bridge, reportError })
-  const terminalDrawerRefs = useRef(new Map<string, TerminalDrawerHandle>())
-  const [terminalSelection, setTerminalSelection] = useState<TerminalSelectionContext>()
   const [agentPreviewSelected, setAgentPreviewSelected] = useState(true)
   const [agentSlotRect, setAgentSlotRect] = useState<AgentSlotRect | null>(null)
   const activeRuntimeSessionFile = workspace.runtime?.sessionFile
@@ -337,73 +247,22 @@ export default function App() {
     const activity = agentBrowser.activityEvent
     if (!activity) return
     if (activity.sessionFile !== activeRuntimeSessionFile && activity.sessionFile !== activeSessionFilePath) return
-    setAgentPreviewSelected(activity.tabId === 'preview')
+    setAgentPreviewSelected(activity.tabId === PREVIEW_TAB_ID)
     settingsState.setInspectorOpen(true)
     settingsState.selectInspectorTab('browser')
   }, [agentBrowser.activityEvent, activeRuntimeSessionFile, activeSessionFilePath, settingsState.setInspectorOpen, settingsState.selectInspectorTab])
   useEffect(() => { if (!activeAgentTabs.length) setAgentPreviewSelected(true) }, [activeAgentTabs.length])
-  const agentTabVisible = view === 'session' && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
+  const agentTabVisible = view === 'session' && !childHistory.isOpen && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
   const pluginScope = activeProject?.primaryFolder && !activeProject.inferred ? activeProject.primaryFolder : undefined
-  const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: bridge ? [] : SAMPLE_SKILLS, reportError })
+  const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: demo?.SAMPLE_SKILLS ?? [], reportError })
   const refreshDetectedHarnesses = useHarnessRefresh({
     bridge, activeHarness, refreshHarnesses, reconcileExternalSettings: settingsState.reconcileExternalSettings, refreshProviders: provider.refresh, refreshCapabilities: pluginSkills.refresh, reportError,
   })
   useEffect(() => () => { demoTimerRef.current.forEach(window.clearTimeout) }, [])
 
-  const refreshSchedules = useCallback(async () => {
-    if (!bridge) return
-    const requestId = ++scheduleRequestRef.current
-    try {
-      const next = await bridge.schedules.list(activeHarness)
-      if (scheduleRequestRef.current === requestId) { setSchedules(next); setScheduleError('') }
-    } catch (error) {
-      if (scheduleRequestRef.current === requestId) setScheduleError(errorMessage(error))
-      reportError(error)
-    }
-  }, [activeHarness, bridge, reportError])
-  useEffect(() => {
-    if (!bridge) return
-    return bridge.schedules.onChanged(() => { void refreshSchedules() })
-  }, [bridge, refreshSchedules])
-  const refreshHeartbeats = useCallback(async () => {
-    if (!bridge) return
-    try { setHeartbeats(await bridge.heartbeats.list()) } catch (error) { reportError(error) }
-  }, [bridge, reportError])
-  useEffect(() => {
-    if (!bridge) return
-    void refreshHeartbeats()
-    // Prime Agent emits this event for both /heartbeat and rlm_heartbeat
-    // mutations. The 30s poll remains a recovery path for jobs created by a
-    // resident daemon outside this renderer, but normal changes are immediate.
-    const unsubscribe = bridge.agent.onEvent(({ event }) => {
-      if (event.type === 'heartbeats_changed') void refreshHeartbeats()
-    })
-    const interval = window.setInterval(() => { void refreshHeartbeats() }, 30_000)
-    return () => { unsubscribe(); window.clearInterval(interval) }
-  }, [bridge, refreshHeartbeats])
   const patchProjectScripts = useCallback((projectId: string, scripts: NonNullable<ProjectRecord['scripts']>) => {
     setProjects((current) => current.map((project) => project.id === projectId ? { ...project, scripts } : project))
   }, [])
-  const finishProjectScriptRun = useCallback((run: ActiveProjectScriptRun, outcome: ProjectScriptRunOutcome) => {
-    if (activeProjectScriptRunRef.current?.requestId !== run.requestId) return
-    activeProjectScriptRunRef.current = undefined
-    setActiveProjectScriptRun(undefined)
-    if ('cancelled' in outcome) return
-    const label = t(run.kind === 'setup' ? 'app.projectScript.setupLabel' : 'app.projectScript.runLabel')
-    const message = outcome.exitCode === 0 ? t('app.projectScript.completed', { label }) : t('app.projectScript.exited', { label, code: outcome.exitCode })
-    if (run.kind === 'setup' && bridge) {
-      void bridge.projects.finishSetup(run.projectId, run.command, outcome.exitCode, run.harness)
-        .then((scripts) => {
-          if (!scripts) return
-          patchProjectScripts(run.projectId, scripts)
-          setToast(message)
-        })
-        .catch(reportError)
-      return
-    }
-    setToast(message)
-  }, [bridge, patchProjectScripts, reportError, t])
-
   const {
     toggleSidebar, toggleInspector, grantProject,
     selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived, setSessionsArchived,
@@ -416,14 +275,10 @@ export default function App() {
     submissionAdmissionRef, gitRequestRef, demoTimerRef,
     setProjects, setSessions, setGitSnapshot, setView, setPaletteOpen, setToast, setSubmitting,
     refreshSchedules, refreshHeartbeats,
-    resetBrowserView: () => setBrowserGeneration((value) => value + 1),
-    closeTerminalForSession: (sessionPath) => {
-      const removed = terminalSessions.find((terminal) => terminal.sessionPath === sessionPath)
-      const projectRun = activeProjectScriptRunRef.current
-      if (removed && projectRun?.drawerId === removed.id) finishProjectScriptRun(projectRun, { cancelled: true })
-      setTerminalSessions((current) => current.filter((terminal) => terminal.sessionPath !== sessionPath))
-    },
-    clearSessionAttention, reportError,
+    onNewWorkspace: (project, generation) => { if (settingsState.settings.terminalOpen) void mountActiveTerminal(project, `${project.harness}:new:${generation}`, generation).catch(reportError) },
+    resetBrowserView: browserPreview.reset,
+    closeTerminalForSession: terminals.closeForSession,
+    sessionHasOpenExtensionUi: extension.hasOpenRequestForSession, clearSessionAttention, reportError,
   })
   const openTerminalLink = useCallback((url: string, external: boolean) => {
     if (external) {
@@ -481,51 +336,30 @@ export default function App() {
   }, [])
   const executeCheckout = useCallback(async (action: CheckoutAction) => {
     if (!bridge || !activeProject) return
-    try {
       const result = await bridge.projects.executeCheckout(activeProject.id, action, activeProject.harness)
       if (result.kind === 'refused') throw new Error(result.message)
       if (result.kind !== 'applied') return
       addOrReplaceProject(result.project)
       newSession(result.project)
-    } catch (error) { reportError(error); throw error }
-  }, [activeProject, addOrReplaceProject, bridge, newSession, reportError])
+  }, [activeProject, addOrReplaceProject, bridge, newSession])
 
-  const closeTerminal = useCallback((id: string) => {
-    const projectRun = activeProjectScriptRunRef.current
-    if (projectRun?.drawerId === id) finishProjectScriptRun(projectRun, { cancelled: true })
-    terminalDrawerRefs.current.delete(id)
-    setTerminalSessions((current) => current.filter((terminal) => terminal.id !== id))
-    if (activeTerminalSession?.id === id) setTerminalSelection(undefined)
-  }, [activeTerminalSession?.id, finishProjectScriptRun])
-  const toggleTerminal = useCallback(async () => {
-    if (activeTerminalSession) {
-      closeTerminal(activeTerminalSession.id)
-      return
-    }
-    if (!activeProject || !activeCwd) return
-    if (activeProject.inferred) {
-      try { await grantProject(activeProject) } catch (error) { reportError(error); return }
-    }
-    setTerminalSessions((current) => {
-      const existing = current.find((terminal) => terminal.workspaceKey === workspaceViewKey
-        || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath))
-      if (existing) return current
-      return [...current, { id: crypto.randomUUID(), workspaceKey: workspaceViewKey, cwd: activeCwd, sessionPath: activeTerminalSessionPath }]
-    })
-  }, [activeCwd, activeProject, activeTerminalSession, activeTerminalSessionPath, closeTerminal, grantProject, reportError, workspaceViewKey])
-  useEffect(() => {
-    settingsState.setTerminalOpen(terminalOpen)
-  }, [settingsState.setTerminalOpen, terminalOpen])
-  useEffect(() => {
-    if (!activeTerminalSession) { setTerminalSelection(undefined); return }
-    setTerminalSessions((current) => current.map((terminal) => {
-      if (terminal.id !== activeTerminalSession.id) return terminal
-      const sessionPath = activeTerminalSessionPath ?? terminal.sessionPath
-      if (terminal.cwd === activeCwd && terminal.sessionPath === sessionPath) return terminal
-      return { ...terminal, cwd: activeCwd, sessionPath }
-    }))
-    setTerminalSelection(terminalDrawerRefs.current.get(activeTerminalSession.id)?.readSelectionContext())
-  }, [activeCwd, activeTerminalSession?.id, activeTerminalSessionPath])
+  const mountActiveTerminal = useStableCallback(async (project: ProjectRecord, workspaceKey: string, generation: number, sessionPath?: string) => {
+    const selected = workspace.workspaceRef.current
+    if (selected.generation !== generation) return
+    const granted = project.inferred ? await grantProject(project) : project
+    if (workspace.workspaceRef.current.generation !== generation) return
+    const cwd = workspaceCwd(granted, selected.session)
+    if (!cwd) return
+    const ownerFile = sessionPath ?? workspace.workspaceRef.current.sessionFile
+    terminals.openTerminal({ workspaceKey, cwd, sessionPath: ownerFile })
+  })
+  const toggleTerminal = useStableCallback(async () => {
+    if (view !== 'session') { navigate('session'); if (activeTerminalSession) return }
+    if (activeTerminalSession) { closeTerminal(activeTerminalSession.id); return }
+    if (!activeProject) return
+    try { await mountActiveTerminal(activeProject, workspaceViewKey, workspace.workspaceRef.current.generation, activeTerminalSessionPath) }
+    catch (error) { reportError(error) }
+  })
   // Stable identities keep the memoized Inspector and Composer from
   // re-rendering at streaming-frame rate; useStableCallback always dispatches
   // to the latest render's closures.
@@ -546,104 +380,13 @@ export default function App() {
   const previewContext = useStableCallback((webContentsId: number | null, sessionFile: string | null) => {
     if (bridge) void bridge.browser.setPreviewContext(webContentsId, sessionFile).catch(() => undefined)
   })
-  const navigateAgentTab = useStableCallback((tabId: string, action: 'back' | 'forward' | 'reload') => {
-    if (bridge) void bridge.browser.navigateTab(tabId, action).catch(reportError)
+  const navigateAgentTab = useStableCallback((...args: Parameters<PrimeWorkApi['browser']['navigateTab']>) => {
+    if (bridge) void bridge.browser.navigateTab(...args).catch(reportError)
   })
   const grantActiveProject = useStableCallback(() => activeProject ? grantProject(activeProject).then(() => undefined).catch(reportError) : undefined)
-  const getTerminalContext = useStableCallback(() => activeTerminalSession ? terminalDrawerRefs.current.get(activeTerminalSession.id)?.readSelectionContext() : undefined)
   const removeQueuedMessage = useStableCallback((message: QueuedPrompt) => workspace.removeQueuedPrompt(message.id))
-  const clearTerminalSelection = useStableCallback(() => {
-    if (activeTerminalSession) terminalDrawerRefs.current.get(activeTerminalSession.id)?.clearSelection()
-  })
-  const startProjectScript = useCallback(async (kind: ProjectScriptKind) => {
-    if (!bridge || !activeProject || !activeCwd) throw new Error(t('app.projectScript.desktopOnly'))
-    if (activeProjectScriptRunRef.current || projectScriptStartingRef.current) throw new ProjectScriptBusyError()
-    projectScriptStartingRef.current = true
-    try {
-      const project = activeProject.inferred ? await grantProject(activeProject) : activeProject
-      const command = project.scripts?.[kind]?.trim() ?? ''
-      if (!command) throw new Error(t(kind === 'setup' ? 'app.projectScript.configureSetup' : 'app.projectScript.configureRun'))
-      if (kind === 'setup') {
-        const scripts = await bridge.projects.markSetupStarted(project.id, command, project.harness)
-        patchProjectScripts(project.id, scripts)
-      }
-      const run: ActiveProjectScriptRun = { requestId: crypto.randomUUID(), projectId: project.id, harness: project.harness, kind, command, ownsDrawer: false }
-      const existing = terminalSessions.find((terminal) => terminal.workspaceKey === workspaceViewKey
-        || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath))
-      if (existing) {
-        const pending = { ...run, drawerId: existing.id, ownsDrawer: false }
-        activeProjectScriptRunRef.current = pending
-        setActiveProjectScriptRun(pending)
-      } else {
-        const drawerId = crypto.randomUUID()
-        const tabId = crypto.randomUUID()
-        const started = { ...run, drawerId, tabId, ownsDrawer: true }
-        activeProjectScriptRunRef.current = started
-        setActiveProjectScriptRun(started)
-        setTerminalSessions((current) => [...current, {
-          id: drawerId,
-          workspaceKey: workspaceViewKey,
-          cwd: activeCwd,
-          sessionPath: activeTerminalSessionPath,
-          initialCommand: {
-            id: tabId,
-            command,
-            label: t(kind === 'setup' ? 'app.projectScript.setupLabel' : 'app.projectScript.runLabel'),
-            onExit: (exitCode) => finishProjectScriptRun(started, exitCode === undefined ? { cancelled: true } : { exitCode }),
-          },
-        }])
-      }
-    } finally {
-      projectScriptStartingRef.current = false
-    }
-  }, [activeCwd, activeProject, activeTerminalSessionPath, bridge, finishProjectScriptRun, grantProject, patchProjectScripts, t, terminalSessions, workspaceViewKey])
-  const saveProjectScripts = useCallback(async (scripts: { setup: string; run: string }) => {
-    if (!bridge || !activeProject) throw new Error(t('app.projectScript.selectProject'))
-    const project = activeProject.inferred ? await grantProject(activeProject) : activeProject
-    const updated = await bridge.projects.updateScripts(project.id, scripts, project.harness)
-    patchProjectScripts(project.id, updated)
-  }, [activeProject, bridge, grantProject, patchProjectScripts, t])
-  const stopProjectScript = useCallback(() => {
-    const run = activeProjectScriptRunRef.current
-    if (!run) return
-    finishProjectScriptRun(run, { cancelled: true })
-    if (!run.drawerId || !run.tabId) return
-    const drawer = terminalDrawerRefs.current.get(run.drawerId)
-    if (drawer) drawer.stopCommand(run.tabId)
-    else setTerminalSessions((current) => current.filter((terminal) => terminal.id !== run.drawerId))
-  }, [finishProjectScriptRun])
-  useEffect(() => {
-    if (view === 'session') return
-    const run = activeProjectScriptRunRef.current
-    if (!run) return
-    finishProjectScriptRun(run, { cancelled: true })
-    if (!run.drawerId) return
-    const drawer = terminalDrawerRefs.current.get(run.drawerId)
-    if (!run.ownsDrawer && drawer && run.tabId) drawer.stopCommand(run.tabId)
-    if (run.ownsDrawer) setTerminalSessions((current) => current.filter((terminal) => terminal.id !== run.drawerId))
-  }, [finishProjectScriptRun, view])
-  useEffect(() => {
-    const run = activeProjectScriptRun
-    if (!run || run.tabId || !run.drawerId) return
-    const drawer = terminalDrawerRefs.current.get(run.drawerId)
-    if (!drawer) return
-    try {
-      const tabId = drawer.runCommand(run.command, t(run.kind === 'setup' ? 'app.projectScript.setupLabel' : 'app.projectScript.runLabel'), (exitCode) => finishProjectScriptRun(run, exitCode === undefined ? { cancelled: true } : { exitCode }))
-      const started = { ...run, tabId }
-      activeProjectScriptRunRef.current = started
-      setActiveProjectScriptRun(started)
-    } catch (error) {
-      finishProjectScriptRun(run, { cancelled: true })
-      reportError(error)
-    }
-  }, [activeProjectScriptRun, finishProjectScriptRun, reportError, t, terminalDrawerRevision])
-  useEffect(() => {
-    const scripts = activeProject?.scripts
-    if (!activeProject || !scripts || !setupNeedsRun(scripts) || activeProjectScriptRunRef.current) return
-    void startProjectScript('setup').catch((error: unknown) => {
-      if (!(error instanceof ProjectScriptBusyError)) reportError(error)
-    })
-  }, [activeProject?.id, activeProject?.scripts, activeProjectScriptRun, reportError, startProjectScript])
+  const scriptRuns = useProjectScriptRuns({ bridge, project: activeProject, cwd: activeCwd, sessionPath: activeTerminalSessionPath, workspaceKey: workspaceViewKey, view, terminals, grantProject, patchProjectScripts, notify: setToast, reportError, t })
+  const { activeRun: activeProjectScriptRun, startProjectScript, saveProjectScripts, stopProjectScript } = scriptRuns
   const sidebarActions = useSidebarActions({
     onSelectProject: selectProject,
     onSelectSession: selectSession,
@@ -666,9 +409,8 @@ export default function App() {
     'toggle-sidebar': () => toggleSidebar(),
     'toggle-terminal': () => { void toggleTerminal() },
     'open-settings': () => navigate('settings'),
-    'close-palette': () => setPaletteOpen(false),
     'close-settings': () => navigate('session'),
-  }, document, view === 'settings'))
+  }, document, view === 'settings', platform))
 
   useEffect(() => {
     window.addEventListener('keydown', onAppKeyDown)
@@ -701,43 +443,56 @@ export default function App() {
     if (next.flushAttemptFailed) return
     queuedFlushRef.current = true
     void sendPrompt(next.text, [], 'queue', next.id)
+      .catch(() => undefined)
       .finally(() => { queuedFlushRef.current = false })
   }, [bridge, busy, externalSessionRunning, queuedMessages, sendPrompt, submitting])
 
-  const page = view === 'projects' ? <ProjectsPage harness={activeHarness} projects={projects} sortMode={settingsState.settings.projectSortMode} onAdd={() => void addProject()} onOpen={selectProject} onRemove={(project) => void removeProject(project)} onTogglePin={(project) => void togglePinProject(project)} />
+  const openSessionReference = useStableCallback((sessionId: string, harness: HarnessId) => { const session = sessions.find((candidate) => candidate.id === sessionId && candidate.harness === harness && !candidate.archived && candidate.depth === 0); if (session) void selectSession(session); else setToast(t('error.referencedSessionUnavailable')) })
+
+  const previewSchedule = useStableCallback(async (timing: ScheduleTiming) => bridge ? bridge.schedules.preview(timing, 3) : { timing, occurrences: [] })
+  const handleScheduleFocus = useCallback((id: string) => setScheduleFocusId((current) => current === id ? null : current), [])
+  const mutateScheduleById = useStableCallback((id: string, action: 'pause' | 'resume' | 'delete' | 'runNow') => {
+    const api = bridge?.schedules
+    return mutateSchedule(() => {
+      if (!api) throw new Error(t('error.schedulesDesktopOnly'))
+      return api[action](id)
+    })
+  })
+
+  const page = useMemo(() => view === 'projects' ? <ProjectsPage harness={activeHarness} projects={projects} sortMode={settingsState.settings.projectSortMode} onAdd={() => void addProject()} onOpen={selectProject} onRemove={(project) => void removeProject(project)} onTogglePin={(project) => void togglePinProject(project)} />
     : view === 'activity' ? <ActivityPage sessions={sessions} projects={projects} clearedActivity={clearedActivity} onOpen={selectSession} onClear={clearActivity} />
-    : view === 'scheduled' ? <ScheduledPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} schedules={schedules} nativeHeartbeats={activeHarness === 'prime' ? heartbeats : []} projects={projects} sessions={sessions} models={provider.catalog?.models ?? EMPTY_MODELS} lastSelectedModel={provider.model} error={scheduleError} initialProjectId={activeProject?.id} initialSessionId={activeSession?.id} selectedScheduleId={scheduleFocusId} onCreate={createSchedule} onUpdate={updateSchedule} onPause={(id: string) => mutateSchedule(() => bridge!.schedules.pause(id))} onResume={(id: string) => mutateSchedule(() => bridge!.schedules.resume(id))} onDelete={(id: string) => mutateSchedule(() => bridge!.schedules.delete(id))} onRunNow={(id: string) => mutateSchedule(() => bridge!.schedules.runNow(id))} onPreview={async (timing: ScheduleTiming) => bridge ? bridge.schedules.preview(timing, 3) : { timing, occurrences: [] }} onArchiveSessions={(targets) => setSessionsArchived(targets, true)} onOpenSession={openScheduledSession} onManageHeartbeat={manageHeartbeat} />
+    : view === 'scheduled' ? <ScheduledPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} schedules={schedules} nativeHeartbeats={heartbeats} projects={projects} sessions={sessions} models={provider.catalog?.models ?? EMPTY_MODELS} lastSelectedModel={provider.model} error={scheduleError} initialProjectId={activeProject?.id} initialSessionId={activeSession?.id} selectedScheduleId={scheduleFocusId} onCreate={createSchedule} onUpdate={updateSchedule} onPause={(id: string) => mutateScheduleById(id, 'pause')} onResume={(id: string) => mutateScheduleById(id, 'resume')} onDelete={(id: string) => mutateScheduleById(id, 'delete')} onRunNow={(id: string) => mutateScheduleById(id, 'runNow')} onPreview={previewSchedule} onFocusHandled={handleScheduleFocus} onArchiveSessions={(targets) => setSessionsArchived(targets, true)} onOpenSession={openScheduledSession} onManageHeartbeat={manageHeartbeat} />
     : view === 'plugins' ? <PluginsPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} skills={pluginSkills.skills} warnings={pluginSkills.warnings} loading={pluginSkills.loading} activeProjectPath={activeProject?.primaryFolder} askUserTimeoutMs={settingsState.settings.askUserTimeoutMs} onSetAskUserTimeoutMs={(askUserTimeoutMs) => settingsState.updateSettings({ askUserTimeoutMs })} askUserEnabled={settingsState.settings.askUserEnabled} onSetAskUserEnabled={(enabled) => settingsState.updateSettings({ askUserEnabled: enabled })} browserEnabled={settingsState.settings.browserEnabled} onSetBrowserEnabled={(enabled) => settingsState.updateSettings({ browserEnabled: enabled })} computerUseEnabled={settingsState.settings.computerUseEnabled} onSetComputerUseEnabled={(enabled) => settingsState.updateSettings({ computerUseEnabled: enabled })} onOpenExternal={openExternal} onRefresh={pluginSkills.refresh} onInstall={installSkill} onInstallExtension={installExtension} onSetMcpSupport={setMcpSupport} onConnectMcp={connectMcp} onSetMcpEnabled={setMcpEnabled} onMutateCapability={mutateCapability} />
     : view === 'settings' ? <SettingsPage initialSection={settingsSectionRequest.section} initialSectionRequestId={settingsSectionRequest.id} settings={settingsState.settings} meta={meta} providerCatalog={provider.catalog} voice={bridge?.voice ?? null} pets={bridge?.pets ?? null} onClose={() => navigate('session')} onUpdate={settingsState.updateSettings} onRefreshHarnesses={refreshDetectedHarnesses} onRefreshProviders={() => provider.refresh(true)} onSaveProviderApiKey={provider.saveApiKey} onLogoutProvider={provider.logout} onSetProviderEnabled={provider.setEnabled} onSetAllProvidersEnabled={provider.setAllEnabled} onSetAllProvidersDisabled={provider.setAllDisabled} onSetModelEnabled={provider.setModelEnabled} onStartProviderOAuth={provider.startOAuth} archivedSessions={sessions.filter((session) => session.archived)} projects={projects} onRestoreSession={(session: SessionRecord) => setSessionArchived(session, false)} onResetBrowser={async () => {
         if (!bridge) throw new Error('Browser data can only be cleared in the desktop app.')
         if (!await bridge.settings.resetBrowserData()) { const error = new Error('GooeyPi could not clear all browser data. Close active downloads and try again.'); reportError(error); throw error }
-        setBrowserGeneration((value) => value + 1)
-      }} onOpenDocs={() => openExternal(HARNESS_PROVIDER_DOCS[activeHarness])} /> : null
+        browserPreview.reset()
+      }} onOpenDocs={() => openExternal(HARNESS_PROVIDER_DOCS[activeHarness])} /> : null, [view, activeHarness, projects, settingsState.settings, settingsState.updateSettings, addProject, selectProject, removeProject, togglePinProject, sessions, clearedActivity, selectSession, clearActivity, meta, schedules, heartbeats, provider.catalog, provider.model, scheduleError, activeProject?.id, activeProject?.primaryFolder, activeSession?.id, scheduleFocusId, createSchedule, updateSchedule, mutateScheduleById, bridge, setSessionsArchived, openScheduledSession, manageHeartbeat, pluginSkills.skills, pluginSkills.warnings, pluginSkills.loading, pluginSkills.refresh, openExternal, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability, settingsSectionRequest, navigate, refreshDetectedHarnesses, provider.refresh, provider.saveApiKey, provider.logout, provider.setEnabled, provider.setAllEnabled, provider.setAllDisabled, provider.setModelEnabled, provider.startOAuth, setSessionArchived, browserPreview.reset, reportError, previewSchedule, handleScheduleFocus])
 
   return <I18nProvider preference={settingsState.settings.locale}><div className="app-shell" aria-busy={!initialized} data-platform={platform} data-ready={initialized ? 'true' : 'false'}>
-    {sidebarVisible && initialized ? <Sidebar projects={projects} sessions={sessions} clearedAttention={clearedAttention} activeProjectId={activeProject?.id} activeSessionId={workspace.activeSessionId} activeView={view} activeHarness={activeHarness} harnesses={meta?.harnesses ?? null} updateState={appUpdates.state} onUpdateAction={appUpdates.act} onSelectHarness={selectHarness} projectSortMode={settingsState.settings.projectSortMode} {...sidebarActions} overlay={layout.compactLayout} platform={platform} /> : null}
+    {sidebarVisible && initialized ? <Sidebar projects={projects} sessions={sessions} childRoster={childHistory.roster} clearedAttention={clearedAttention} activeProjectId={activeProject?.id} activeSessionId={workspace.activeSessionId} activeView={view} activeHarness={activeHarness} harnesses={meta?.harnesses ?? null} updateState={appUpdates.state} onUpdateAction={appUpdates.act} onSelectHarness={selectHarness} projectSortMode={settingsState.settings.projectSortMode} {...sidebarActions} overlay={layout.compactLayout} platform={platform} /> : null}
     {sidebarVisible && initialized ? <button type="button" className="panel-scrim panel-scrim--sidebar" aria-label={t('app.scrim.closeSidebar')} onClick={toggleSidebar} /> : null}
     <div className="workbench" inert={layout.compactLayout && sidebarVisible ? true : undefined}>
       <TitleToolbar project={view === 'session' ? activeProject : undefined} gitBranch={git.branch} view={view} productName={HARNESS_PRODUCT_NAMES[activeHarness]} sidebarOpen={sidebarVisible} inspectorOpen={inspectorVisible} terminalOpen={terminalOpen} voiceOpen={voiceOrbOpen} activeProjectScriptKind={activeProjectScriptKind(activeProjectScriptRun, activeProject?.id)} onRunProjectScript={startProjectScript} onStopProjectScript={stopProjectScript} onSaveProjectScripts={saveProjectScripts} onToggleSidebar={toggleSidebar} onToggleInspector={toggleInspector} onToggleTerminal={toggleTerminal} onToggleVoice={toggleVoice} onOpenBrowser={openBrowser} platform={platform} />
-      <div className="workbench__content">{view === 'session' ? <div ref={layout.workspaceRowRef} className="session-workspace" style={{ '--inspector-width': `${layout.inspectorWidth}px`, '--terminal-height': `${layout.terminalHeight}px` } as CSSProperties}>
+      <div className="workbench__content"><SessionWorkspace layout={layout} childPane={view === 'session' ? childHistory.pane : null} hidden={view !== 'session'}>
         <div ref={layout.sessionWorkspaceRef} className="conversation-column">
-          <main className="conversation-pane">
-            <Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><Transcript key={workspace.viewKey} messages={workspace.messages} git={git} harness={activeHarness} loading={workspace.loadingSession} active={busy || activeSession?.status === 'running'} showReasoning={settingsState.settings.showReasoningSummaries} showTools={settingsState.settings.showToolCalls} onOpenChanges={openChanges} onSuggestion={(prompt) => { void sendPrompt(prompt).catch(() => undefined) }} suggestionsDisabled={!activeProject || workspace.loadingSession || submitting} showPinnedChanges={false} bottomDockHasChanges={Boolean(git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed)} queuedMessageCount={queuedMessages.length + harnessQueuedMessageCount} onOpenSessionReference={(sessionId, harness) => { const session = sessions.find((candidate) => candidate.id === sessionId && candidate.harness === harness && !candidate.archived && candidate.depth === 0); if (session) void selectSession(session); else setToast('That referenced session is archived or no longer available.') }} /></Suspense>
-            <div ref={composerDockRef} className="conversation-bottom-dock">
+          {view === 'session' ? <main className="conversation-pane">
+            <Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><Transcript key={workspace.viewKey} messages={workspace.messages} harness={activeHarness} loading={workspace.loadingSession} active={busy || activeSession?.status === 'running'} showReasoning={settingsState.settings.showReasoningSummaries} showTools={settingsState.settings.showToolCalls} onSuggestion={(prompt) => { void sendPrompt(prompt).catch(() => undefined) }} suggestionsDisabled={!activeProject || workspace.loadingSession || submitting} bottomDockHasChanges={Boolean(git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed)} queuedMessageCount={queuedMessages.length + harnessQueuedMessageCount} onOpenSessionReference={openSessionReference} /></Suspense>
+            <ConversationDock>
               {git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed ? <ChangesCard git={git} onOpenChanges={openChanges} onClose={() => setChangesCardDismissed(true)} /> : null}
-              <Composer key={workspaceViewKey} draftKey={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new`} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={Boolean(provider.selectedModel?.fastModeSupported) && harnessOffersFastMode(activeHarness, meta?.harnesses.prime.implementation)} fastAvailable={workspace.runtime?.fastModeAvailable !== false} checkoutCatalog={checkoutCatalog} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} checkoutsLoading={checkoutsLoading} onExecuteCheckout={bridge && activeProject && !activeProject.inferred && checkoutCatalog ? executeCheckout : undefined} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} executingModel={workspace.runtime?.executingModel} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
-            </div>
-          </main>
-          {terminalSessions.map((terminal) => <Suspense key={terminal.id} fallback={terminal.id === activeTerminalSession?.id ? <TerminalLoadingPanel /> : null}><TerminalDrawer ref={(handle) => { if (handle) terminalDrawerRefs.current.set(terminal.id, handle); else terminalDrawerRefs.current.delete(terminal.id) }} visible={terminal.id === activeTerminalSession?.id} cwd={terminal.cwd} sessionPath={terminal.sessionPath} shell={settingsState.settings.terminalShell} initialCommand={terminal.initialCommand} height={layout.terminalHeight} minHeight={TERMINAL_MIN} maxHeight={layout.terminalMax} defaultHeight={TERMINAL_DEFAULT} onHeightChange={layout.setTerminalHeight} onClose={() => closeTerminal(terminal.id)} onError={reportError} onInitialCommandConsumed={() => setTerminalSessions((current) => current.map((item) => item.id === terminal.id ? { ...item, initialCommand: undefined } : item))} onOpenLink={openTerminalLink} onReady={() => setTerminalDrawerRevision((revision) => revision + 1)} onSelectionChange={(selection) => { if (terminal.id === activeTerminalSession?.id) setTerminalSelection(selection) }} /></Suspense>)}
+              <Composer key={workspaceViewKey} draftKey={composerDraftScope(activeProject?.id, workspace.activeSessionId)} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={Boolean(provider.selectedModel?.fastModeSupported) && harnessOffersFastMode(activeHarness, meta?.harnesses.prime.implementation)} fastAvailable={workspace.runtime?.fastModeAvailable !== false} checkoutCatalog={checkoutCatalog} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} checkoutsLoading={checkoutsLoading} onExecuteCheckout={bridge && activeProject && !activeProject.inferred && checkoutCatalog ? executeCheckout : undefined} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} executingModel={workspace.runtime?.executingModel} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
+            </ConversationDock>
+          </main> : null}
+          <TerminalDrawerStack terminals={terminalSessions} activeId={activeTerminalSession?.id} visible={view === 'session'} drawerRefs={terminalDrawerRefs} shell={settingsState.settings.terminalShell} height={layout.terminalHeight} minHeight={TERMINAL_MIN} maxHeight={layout.terminalMax} defaultHeight={TERMINAL_DEFAULT} onHeightChange={layout.setTerminalHeight} onClose={closeTerminal} onError={reportError} onInitialCommandConsumed={terminals.consumeInitialCommand} onOpenLink={openTerminalLink} onReady={terminals.onReady} onSelectionChange={setTerminalSelection} />
         </div>
-          {inspectorVisible ? <ResizeHandle orientation="vertical" label={t('app.resize.inspector')} value={layout.inspectorWidth} min={INSPECTOR_MIN} max={layout.inspectorMax} defaultValue={INSPECTOR_DEFAULT} onChange={layout.setInspectorWidth} /> : null}
-          {inspectorVisible ? <Suspense fallback={<LoadingPanel label="app.loading.inspector" />}><Inspector key={`inspector-${browserGeneration}`} activeTab={settingsState.inspectorTab} onTabChange={settingsState.selectInspectorTab} onClose={toggleInspector} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} project={activeProject} cwd={activeCwd} runtime={workspace.runtime} messages={settingsState.inspectorTab === 'summary' ? workspace.messages : EMPTY_MESSAGES} git={git} automations={inspectorAutomations} heartbeats={inspectorHeartbeats} onOpenAutomation={openAutomation} browserHome={settingsState.settings.browserHome} browserNavigationRequest={browserNavigationRequest} onBrowserNavigationRequestHandled={handleBrowserNavigationRequest} browserAnnotations={browserAnnotations} agentBrowserTabs={activeAgentTabs} activeAgentTabId={activeAgentTabId} agentPreviewSelected={agentPreviewSelected} onSelectAgentTab={selectAgentTab} onCloseAgentTab={agentBrowser.close} onShowBrowserPreview={showBrowserPreview} onAgentSlotRect={setAgentSlotRect} agentSessionKey={activeRuntimeSessionFile ?? activeSessionFilePath} onPreviewContext={previewContext} previewPointerEvent={agentBrowser.pointerEvent?.tabId === 'preview' ? agentBrowser.pointerEvent : null} onNavigateAgentTab={navigateAgentTab} onRefreshGit={refreshGit} onOpenExternal={openExternal} onRevealPath={revealInFileManager} onGrantProject={grantActiveProject} overlay={layout.compactLayout} platform={platform} /></Suspense> : null}
-          {inspectorVisible ? <button type="button" className="panel-scrim panel-scrim--inspector" aria-label={t('app.scrim.closeInspector')} onClick={toggleInspector} /> : null}
-      </div> : <Suspense fallback={<LoadingPanel label={VIEW_LOADING_KEYS[view]} />}>{page}</Suspense>}</div>
+          {view === 'session' && inspectorVisible ? <ResizeHandle orientation="vertical" label={t('app.resize.inspector')} value={layout.inspectorWidth} min={INSPECTOR_MIN} max={layout.inspectorMax} defaultValue={INSPECTOR_DEFAULT} onChange={layout.setInspectorWidth} /> : null}
+          {view === 'session' && inspectorVisible ? <Suspense fallback={<LoadingPanel label="app.loading.inspector" />}><Inspector key={`inspector-${browserPreview.generation}`} activeTab={settingsState.inspectorTab} onTabChange={settingsState.selectInspectorTab} onClose={toggleInspector} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} project={activeProject} cwd={activeCwd} runtime={settingsState.inspectorTab === 'summary' ? workspace.runtime : undefined} messages={settingsState.inspectorTab === 'summary' ? workspace.messages : EMPTY_MESSAGES} git={git} automations={inspectorAutomations} heartbeats={inspectorHeartbeats} onOpenAutomation={openAutomation} previewLocation={browserPreview.location} browserHome={settingsState.settings.browserHome} browserNavigationRequest={browserNavigationRequest} onBrowserNavigationRequestHandled={handleBrowserNavigationRequest} browserAnnotations={browserAnnotations} agentBrowserTabs={activeAgentTabs} activeAgentTabId={activeAgentTabId} agentPreviewSelected={agentPreviewSelected} onSelectAgentTab={selectAgentTab} onCloseAgentTab={agentBrowser.close} onShowBrowserPreview={showBrowserPreview} onAgentSlotRect={setAgentSlotRect} agentSessionKey={activeRuntimeSessionFile ?? activeSessionFilePath} onPreviewContext={previewContext} previewPointerEvent={agentBrowser.pointerEvent?.tabId === PREVIEW_TAB_ID ? agentBrowser.pointerEvent : null} onNavigateAgentTab={navigateAgentTab} onRefreshGit={refreshGit} onOpenExternal={openExternal} onRevealPath={revealInFileManager} onGrantProject={grantActiveProject} overlay={layout.compactLayout} platform={platform} /></Suspense> : null}
+          {view === 'session' && inspectorVisible ? <button type="button" className="panel-scrim panel-scrim--inspector" aria-label={t('app.scrim.closeInspector')} onClick={toggleInspector} /> : null}
+      </SessionWorkspace>{view !== 'session' ? <Suspense fallback={<LoadingPanel label={VIEW_LOADING_KEYS[view]} />}>{page}</Suspense> : null}</div>
     </div>
     {voiceOrbOpen && bridge ? <Suspense fallback={null}><VoiceOrb voice={bridge.voice} harness={activeHarness} onClose={() => { setFocusPetVoiceControl(false); setVoiceOrbOpen(false); setRestorePetVoiceFocus(settingsState.settings.petEnabled) }} onTaskStarted={handleVoiceTaskStarted} pet={{ pets: bridge.pets, petId: settingsState.settings.petId, petSize: settingsState.settings.petSize, agentBusy: busy, reduceMotion: settingsState.settings.reduceMotion }} focusPetControl={focusPetVoiceControl} onPetControlFocused={() => setFocusPetVoiceControl(false)} /></Suspense> : null}
     {settingsState.settings.petEnabled && bridge && !voiceOrbOpen ? <Suspense fallback={null}><DesktopPet pets={bridge.pets} petId={settingsState.settings.petId} petSize={settingsState.settings.petSize} agentBusy={busy} voiceActive={false} reduceMotion={settingsState.settings.reduceMotion} focusVoiceControl={restorePetVoiceFocus} onVoiceControlFocused={() => setRestorePetVoiceFocus(false)} onDismiss={() => { setRestorePetVoiceFocus(false); void settingsState.updateSettings({ petEnabled: false }) }} onOpenVoice={() => { setRestorePetVoiceFocus(false); setFocusPetVoiceControl(true); setVoiceOrbOpen(true) }} /></Suspense> : null}
-    {paletteOpen ? <Suspense fallback={null}><CommandPalette open onClose={() => setPaletteOpen(false)} onNavigate={navigate} onNewSession={newSession} onToggleSidebar={toggleSidebar} onToggleTerminal={toggleTerminal} onOpenBrowser={openBrowser} platform={platform} /></Suspense> : null}
+    {paletteOpen ? <Suspense fallback={null}><CommandPalette onClose={() => setPaletteOpen(false)} onNavigate={navigate} onNewSession={newSession} onToggleSidebar={toggleSidebar} onToggleTerminal={toggleTerminal} onOpenBrowser={openBrowser} platform={platform} /></Suspense> : null}
     {extension.extensionUi ? <Suspense fallback={<LoadingPanel label="app.loading.request" />}><ExtensionUiModal request={extension.extensionUi.request} deadline={extension.extensionUi.deadline} onRespond={(response) => void extension.respondToExtensionUi(response)} platform={platform} /></Suspense> : null}
     {provider.authEvent ? <Suspense fallback={<LoadingPanel label="app.loading.providerLogin" />}><ProviderAuthModal event={provider.authEvent} onOpen={openExternal} onRespond={provider.respondOAuth} onCancel={provider.cancelOAuth} /></Suspense> : null}
     {meta && !detectedHarnesses.length && !noHarnessPromptDismissed ? (
@@ -746,7 +501,7 @@ export default function App() {
         onOpenHarnessSettings={() => {
           setNoHarnessPromptDismissed(true)
           setSettingsSectionRequest((current) => ({ section: 'agent', id: current.id + 1 }))
-          setView('settings')
+          navigate('settings')
         }}
       />
     ) : null}

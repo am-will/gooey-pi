@@ -1,16 +1,17 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
+  // electron-vite 5 externalizes main and preload dependencies by default
+  // (build.externalizeDeps), so no explicit plugin is needed.
   main: {
-    plugins: [externalizeDepsPlugin()],
     // Fully minify production code: Electron never consumes readable output,
     // and less source is faster for V8 to read, parse, and compile at startup.
-    build: { lib: { entry: 'electron/main/index.ts' }, minify: 'esbuild' },
+    build: { lib: { entry: { index: 'electron/main/index.ts', 'recurrence-worker': 'electron/main/schedules/recurrence-worker.ts' } }, minify: 'esbuild' },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       lib: { entry: 'electron/preload/index.ts', formats: ['cjs'] },
       rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.js' } },
@@ -19,7 +20,7 @@ export default defineConfig({
   renderer: {
     root: '.',
     plugins: [react()],
-    resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },
+    resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
     // Full minification, but function names survive so the React component
     // stacks ErrorBoundary logs stay readable; no sourcemap can restore those,
     // since React reads them from the function names at runtime. Costs ~4% of

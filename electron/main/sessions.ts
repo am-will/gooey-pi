@@ -1,19 +1,20 @@
+import { HARNESSES } from './harness'
 import { watch, type Dirent, type Stats } from 'node:fs'
-import { readdir, realpath } from 'node:fs/promises'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { HarnessId, PrimeImplementation, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { RUST_PRIME_AGENT_NAME } from '../../src/lib/prime-compat'
 import { queueDaemonFollowUp } from './agent-daemon'
-import { comparePaths, createAdmissionQueue, createSingleFlight, type AdmissionQueue } from './lib/async'
+import { comparePaths, createAdmissionQueue, createSingleFlight, mapLimit, type AdmissionQueue } from './lib/async'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
 import { SessionMetadataCatalog, type SessionCatalogIo, type SessionNameTimestamp } from './sessions/catalog'
 import { createSessionMetadataReader, type JsonRecord, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
 import { readTranscript } from './sessions/transcript'
 import { PrimeSessionArchive } from './sessions/prime-archive'
 import type { JsonStateStore } from './store'
-import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString } from './validation'
+import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString, stripAnsi } from './validation'
 
 interface RuntimeSessionState { isStreaming: boolean; isCompacting?: boolean }
 
@@ -31,6 +32,7 @@ const MAX_SESSION_FILES = 5_000
 const MAX_SESSION_WATCH_DIRECTORIES = 512
 const MAX_CONCURRENT_TRANSCRIPT_READS = 2
 const MAX_PENDING_TRANSCRIPT_READS = 32
+const MAX_CACHED_TRANSCRIPTS = 4
 
 type TranscriptReader = (filePath: string, isStreaming: boolean) => Promise<TranscriptMessage[]>
 
@@ -109,6 +111,7 @@ export class SessionService {
   private readonly catalog: SessionMetadataCatalog
   private readonly metadataReader: SessionMetadataReader
   private readonly transcriptReads = createSingleFlight<string, TranscriptMessage[]>()
+  private readonly transcriptCache = new Map<string, { key: string; value: TranscriptMessage[] }>()
   private readonly transcriptAdmission: AdmissionQueue
   private readonly transcriptReader: TranscriptReader
   private readonly isSessionPathAuthorized: SessionPathAuthorizer
@@ -144,7 +147,7 @@ export class SessionService {
       closedError: () => new Error('Too many transcript reads are pending'),
     })
     this.harness = options.harness ?? 'prime'
-    this.sessionRoot = options.sessionRoot ?? join(homedir(), '.prime', 'agent', 'sessions')
+    this.sessionRoot = options.sessionRoot ?? HARNESSES.prime.sessionRoot(homedir())
     this.recursiveWatch = options.recursiveWatch === true
     this.metadataReader = options.metadataReader ?? createSessionMetadataReader()
     this.transcriptReader = options.transcriptReader ?? readTranscript
@@ -211,8 +214,13 @@ export class SessionService {
     }
     // A caller reconciling a just-created session cannot rely on fs.watch:
     // recursive delivery varies by platform and an event may still be queued.
-    // Force advances the scan revision while retaining metadata-level caches.
-    if (force) this.catalog.invalidateLiveCatalog()
+    // Non-forced lists still enumerate/stat files and reuse unchanged metadata.
+    // Force also advances the scan revision and invalidates the live overlay.
+    if (force) {
+      this.catalog.invalidateLiveCatalog()
+      // A session created in a dormant bucket can enter the bounded watcher set.
+      if (this.recursiveWatch && this.sessionWatcher) this.refreshBucketWatchers(this.sessionWatcher)
+    }
     let sessions = await this.catalog.all()
     if (this.nativeArchive.enabled()) {
       if (force) this.nativeArchive.catalog.invalidateLiveCatalog()
@@ -224,19 +232,18 @@ export class SessionService {
     const archived = new Set(this.store.getArchivedSessions().map((path) => resolve(path)))
     // One runtime snapshot per list call; each session then resolves in O(1).
     const runtimeBySession = this.snapshotRuntimeSessions()
-    const records: SessionRecord[] = []
+    const decorated: { record: SessionRecord; sortKey: number }[] = []
     for (const original of sessions) {
-      const metadata = { ...original }
-      const isArchived = archived.has(resolve(metadata.filePath))
-      if ((isArchived && !includeArchived) || (project && resolve(metadata.projectPath) !== project)) continue
-      const runtime = runtimeBySession
-        ? runtimeBySession.get(resolve(metadata.filePath))
-        : this.runtimeForSession(metadata.filePath)
-      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting || metadata.hasRunningRlmChildren ? 'running' : 'idle'
-      const { sessionName: _sessionName, hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
-      records.push({ ...record, harness: this.harness, archived: isArchived })
+      const sessionKey = resolve(original.filePath)
+      const isArchived = archived.has(sessionKey)
+      if ((isArchived && !includeArchived) || (project && resolve(original.projectPath) !== project)) continue
+      const runtime = runtimeBySession ? runtimeBySession.get(sessionKey) : this.runtimeForSession(original.filePath)
+      const { hasRunningRlmChildren, ...rest } = original
+      const record: SessionRecord = { ...rest, harness: this.harness, archived: isArchived }
+      if (runtime) record.status = runtime.isStreaming || runtime.isCompacting || hasRunningRlmChildren ? 'running' : 'idle'
+      decorated.push({ record, sortKey: Date.parse(record.lastUserMessageAt ?? record.createdAt) })
     }
-    return records.sort((a, b) => Date.parse(b.lastUserMessageAt ?? b.createdAt) - Date.parse(a.lastUserMessageAt ?? a.createdAt) || comparePaths(a.filePath, b.filePath))
+    return decorated.sort((a, b) => b.sortKey - a.sortKey || comparePaths(a.record.filePath, b.record.filePath)).map(({ record }) => record)
   }
 
   private snapshotRuntimeSessions(): Map<string, RuntimeSessionState> | null {
@@ -250,19 +257,34 @@ export class SessionService {
     return bySession
   }
 
-  async projectPaths(): Promise<string[]> {
-    const sessions = await this.list()
-    return [...new Set(sessions.map((session) => session.projectPath).filter((path) => path.startsWith('/')))]
-  }
 
   async read(filePath: unknown): Promise<TranscriptMessage[]> {
     const requested = requireString(filePath, 'filePath', { min: 1, max: 4096 })
     const safePath = await this.requireSessionPath(requested)
-    // Coalesced callers share one immutable result; the IPC boundary clones it
+    // Coalesce only callers that saw the same file revision and runtime phase:
+    // a caller arriving after an append or after agent_end must not inherit an
+    // older read's bytes or streaming flag.
+    const info = await stat(safePath)
+    const runtime = this.runtimeForSession(safePath)
+    const streaming = runtime?.isStreaming === true || runtime?.isCompacting === true
+    const key = `${safePath}\0${info.dev}:${info.ino}\0${info.size}\0${info.mtimeMs}\0${info.ctimeMs}\0${streaming ? 1 : 0}`
+    // Coalesced and cached callers share one immutable result; the IPC boundary clones it
     // for the renderer, so a pre-IPC structuredClone would be a second copy.
-    return this.transcriptReads.run(safePath, () => this.transcriptAdmission.run(async () => {
-      const runtime = this.runtimeForSession(safePath)
-      return this.transcriptReader(safePath, runtime?.isStreaming === true || runtime?.isCompacting === true)
+    return this.transcriptReads.run(key, () => this.transcriptAdmission.run(async () => {
+      const cached = this.transcriptCache.get(safePath)
+      if (cached?.key === key) {
+        this.transcriptCache.delete(safePath)
+        this.transcriptCache.set(safePath, cached)
+        return cached.value
+      }
+      const value = await this.transcriptReader(safePath, streaming)
+      this.transcriptCache.delete(safePath)
+      this.transcriptCache.set(safePath, { key, value })
+      while (this.transcriptCache.size > MAX_CACHED_TRANSCRIPTS) {
+        const oldest = this.transcriptCache.keys().next().value
+        if (oldest !== undefined) this.transcriptCache.delete(oldest)
+      }
+      return value
     }))
   }
 
@@ -306,13 +328,20 @@ export class SessionService {
     if (safeTitle.startsWith('-') || /[\r\n]/.test(safeTitle)) throw new TypeError('title contains invalid characters')
     if (await this.renameRuntimeSession(safePath, safeTitle)) return true
     const primeAgentPath = resolveExecutable(this.primeAgentPath)
-    // OMP/pi services are constructed with a null CLI path (electron/main/index.ts).
+    // Harnesses without the Prime CLI use their own file-level rename hook.
     if (!primeAgentPath) return this.renameFile?.(safePath, safeTitle) ?? false
     const selector = this.primeImplementation() === 'rust'
       ? await this.residentWorkerSelector(safePath)
       : (await this.readMetadata(safePath)).id
-    const result = await runProcess(primeAgentPath, ['rename', selector, safeTitle, '--json'], { timeoutMs: 30_000 })
-    return result.code === 0
+    // File-derived identifiers must not be interpreted as CLI options.
+    const sessionId = requireId(selector, 'session id')
+    if (sessionId.startsWith('-')) throw new TypeError('session id is invalid')
+    const result = await runProcess(primeAgentPath, ['rename', sessionId, safeTitle, '--json'], { timeoutMs: 30_000 })
+    if (result.code === 0 && !result.timedOut && !result.outputExceeded) return true
+    if (result.timedOut) throw new Error('Prime Agent timed out while renaming this session')
+    if (result.outputExceeded) throw new Error('Prime Agent produced too much output while renaming this session')
+    const detail = stripAnsi(result.stderr || result.stdout).trim().slice(0, 500)
+    throw new Error(detail ? `Prime Agent could not rename this session: ${detail}` : `Prime Agent could not rename this session (exit ${result.code})`)
   }
 
   /**
@@ -342,9 +371,12 @@ export class SessionService {
   async requireSessionPath(value: unknown): Promise<string> {
     const requested = requireString(value, 'filePath', { min: 1, max: 4096 })
     const path = await realpath(requested)
-    if (await this.nativeArchive.authorizes(path)) return path
-    const root = await realpath(this.sessionRoot)
-    if (!this.isSessionPathAuthorized(root, path)) throw new TypeError('Session path is outside the Prime session directory')
+    if (!(await this.nativeArchive.authorizes(path))) {
+      const root = await realpath(this.sessionRoot)
+      if (!this.isSessionPathAuthorized(root, path)) throw new TypeError('Session path is outside the Prime session directory')
+    }
+    // A FIFO or device named *.jsonl would block the transcript reader's open().
+    if (!(await stat(path)).isFile()) throw new TypeError('Session path is not a regular file')
     return path
   }
 
@@ -433,12 +465,14 @@ export class SessionService {
     } catch { return }
     if (this.sessionWatcher !== rootWatcher || !this.changeListeners.size) return
 
-    const bucketNames = entries
+    const candidates = entries
       .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()
         && entry.name.length > 0 && entry.name.length <= 255 && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
-      .sort()
-      .slice(0, MAX_SESSION_WATCH_DIRECTORIES)
+    const bucketNames = candidates.length <= MAX_SESSION_WATCH_DIRECTORIES
+      ? candidates.sort()
+      : await this.mostRecentlyModifiedBuckets(root, candidates)
+    if (this.sessionWatcher !== rootWatcher || !this.changeListeners.size) return
     const wanted = new Set(bucketNames)
     for (const [name, watcher] of this.bucketWatchers) {
       if (wanted.has(name)) continue
@@ -466,6 +500,24 @@ export class SessionService {
         })
       } catch { /* The root watcher will report replacements and retry discovery. */ }
     }
+  }
+
+  /**
+   * More buckets exist than can be watched: prefer the most recently modified
+   * ones (creating or renaming a session file bumps its bucket's mtime), with a
+   * name tie-break so the selection is deterministic.
+   */
+  private async mostRecentlyModifiedBuckets(root: string, names: readonly string[]): Promise<string[]> {
+    const buckets = await mapLimit(names, 16, async (name) => {
+      try {
+        const info = await lstat(join(root, name))
+        return info.isDirectory() ? { name, mtimeMs: info.mtimeMs } : null
+      } catch { return null }
+    })
+    return buckets
+      .sort((left, right) => right.mtimeMs - left.mtimeMs || comparePaths(left.name, right.name))
+      .slice(0, MAX_SESSION_WATCH_DIRECTORIES)
+      .map((bucket) => bucket.name)
   }
 
   private closeBucketWatchers(): void {

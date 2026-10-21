@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -192,7 +193,7 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
       pinned: false, createdAt: '2025-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
       folderIdentities: { [canonicalProject]: identity(canonicalProject), [canonicalSecondary]: identity(canonicalSecondary) },
     }],
-    settings: { activeHarness: 'prime', browserHome: 'about:blank', telemetry: true, locale: 'en' },
+    settings: { activeHarness: 'prime', browserHome: 'about:blank', locale: 'en' },
     archivedSessions: [],
     dismissedProjectPaths: [],
   }))
@@ -757,10 +758,12 @@ test.describe('Prime Work desktop smoke', () => {
     const bridge = await page.evaluate(() => {
       const prime = (window as typeof window & { prime?: Record<string, unknown> }).prime
       const voice = prime?.voice
-      return { type: typeof prime, groups: prime ? Object.keys(prime).sort() : [], voiceMethods: voice && typeof voice === 'object' ? Object.keys(voice).sort() : [] }
+      const subagents = prime?.subagents
+      return { type: typeof prime, groups: prime ? Object.keys(prime).sort() : [], voiceMethods: voice && typeof voice === 'object' ? Object.keys(voice).sort() : [], subagentMethods: subagents && typeof subagents === 'object' ? Object.keys(subagents).sort() : [] }
     })
     expect(bridge.type).toBe('object')
-    expect(bridge.groups).toEqual(['agent', 'app', 'browser', 'git', 'heartbeats', 'pets', 'plugins', 'projects', 'providers', 'schedules', 'sessions', 'settings', 'terminal', 'updates', 'voice'])
+    expect(bridge.groups).toEqual(['agent', 'app', 'browser', 'git', 'heartbeats', 'pets', 'plugins', 'projects', 'providers', 'schedules', 'sessions', 'settings', 'subagents', 'terminal', 'updates', 'voice'])
+    expect(bridge.subagentMethods).toEqual(['history', 'list'])
     expect(bridge.voiceMethods).toContain('testSelfHosted')
     const updateMenu = await app!.evaluate(({ Menu }) => {
       const parents = Menu.getApplicationMenu()?.items ?? []
@@ -769,12 +772,12 @@ test.describe('Prime Work desktop smoke', () => {
     })
     expect(updateMenu.found).toBe(true)
     expect(updateMenu.parent).toBe(updateMenu.platform === 'darwin' ? 'GooeyPi' : 'Help')
-    await expect(page.evaluate(() => window.prime.updates.getState())).resolves.toMatchObject({ phase: 'unsupported' })
-    const credentialStatus = await page.evaluate(() => window.prime.voice.credentialStatus())
+    await expect(page.evaluate(() => window.prime!.updates.getState())).resolves.toMatchObject({ phase: 'unsupported' })
+    const credentialStatus = await page.evaluate(() => window.prime!.voice.credentialStatus())
     expect(typeof credentialStatus.storage.available).toBe('boolean')
     if (!credentialStatus.storage.available) expect(credentialStatus.storage.message).toMatch(/secure|credential|keyring|kwallet/i)
     const invalidSelfHostedTest = await page.evaluate(async () => {
-      try { await window.prime.voice.testSelfHosted({ url: '', model: '' }); return '' }
+      try { await window.prime!.voice.testSelfHosted({ url: '', model: '' }); return '' }
       catch (error) { return String(error) }
     })
     expect(invalidSelfHostedTest).toMatch(/too short|Invalid URL/)
@@ -809,12 +812,12 @@ test.describe('Prime Work desktop smoke', () => {
     await language.selectOption('ja')
     await expect(page.locator('html')).toHaveAttribute('lang', 'ja')
     await expect(page.getByRole('heading', { name: '外観', exact: true })).toBeVisible()
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).locale)).toBe('ja')
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).locale)).toBe('ja')
     await expect(language.locator('option[value="en"]')).toHaveText('English')
     await expect(language.locator('option[value="ja"]')).toHaveText('日本語')
     await language.selectOption('en')
     await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toBeVisible()
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).locale)).toBe('en')
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).locale)).toBe('en')
   })
 
   test('opens General settings when the main process requests Settings', async () => {
@@ -840,7 +843,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(branchMenu.getByRole('menuitemradio').filter({ hasText: 'feature/e2e' })).toBeVisible()
   })
 
-  test('returns from settings with its back button, New session, Escape, and Ctrl+W', async () => {
+  test('returns from settings with its back button, New session, Escape, and primary W', async () => {
     const openSettings = async () => {
       await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
       await expect(page.getByRole('heading', { name: 'General' })).toBeVisible()
@@ -859,7 +862,11 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('combobox', { name: 'Message Prime' })).toBeVisible()
 
     await openSettings()
-    await page.keyboard.press('Control+w')
+    if (process.platform === 'darwin') {
+      await page.keyboard.press('Control+w')
+      await expect(page.locator('.settings-page')).toBeVisible()
+    }
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+w' : 'Control+w')
     await expect(page.getByRole('combobox', { name: 'Message Prime' })).toBeVisible()
   })
 
@@ -1043,14 +1050,14 @@ test.describe('Prime Work desktop smoke', () => {
     await page.getByRole('menuitemradio', { name: /OMP Work/ }).click()
     await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
     await page.getByRole('button', { name: 'Providers', exact: true }).click()
-    const voiceModelsBefore = await page.evaluate(async () => JSON.parse((await window.prime.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
+    const voiceModelsBefore = await page.evaluate(async () => JSON.parse((await window.prime!.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
     expect(voiceModelsBefore.models.map((model) => model.name).sort()).toEqual(['Claude Fixture', 'GPT Fixture'])
     const anthropic = page.getByRole('checkbox', { name: 'Show anthropic provider' })
     await expect(anthropic).toBeChecked()
     await page.getByTitle('Hide provider in OMP').filter({ has: anthropic }).click()
     await expect(anthropic).not.toBeChecked()
     await expect.poll(() => JSON.parse(readFileSync(join(fixtureRoot, 'user-data', CURRENT_DESKTOP_STATE_FILENAME), 'utf8')).settings.ompDisabledProviders).toEqual(['anthropic'])
-    const voiceModelsAfter = await page.evaluate(async () => JSON.parse((await window.prime.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
+    const voiceModelsAfter = await page.evaluate(async () => JSON.parse((await window.prime!.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
     expect(voiceModelsAfter.models.map((model) => model.name)).toEqual(['GPT Fixture'])
 
     await page.locator('.session-row__title').filter({ hasText: 'OMP hermetic fixture' }).click()
@@ -1088,7 +1095,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(groups.nth(0)).toContainText('Claude Fixture')
     await expect(groups.nth(1)).toContainText('GPT Fixture')
 
-    const voiceModels = await page.evaluate(async () => JSON.parse((await window.prime.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
+    const voiceModels = await page.evaluate(async () => JSON.parse((await window.prime!.voice.executeTool({ name: 'list_models', arguments: {} }, 'omp')).output) as { models: Array<{ name: string }> })
     expect(voiceModels.models.map((model) => model.name)).toEqual(['Claude Fixture'])
     await page.locator('.session-row__title').filter({ hasText: 'OMP hermetic fixture' }).click()
     const modelPicker = page.locator('.model-picker')
@@ -1137,7 +1144,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByText('OMP is ready', { exact: true })).toBeVisible()
     await expect(page.getByText('Pi is ready', { exact: true })).toBeVisible()
 
-    const result = await page.evaluate(() => window.prime.app.refreshHarnesses())
+    const result = await page.evaluate(() => window.prime!.app.refreshHarnesses())
     expect(result.meta.harnesses.prime.path).toBeTruthy()
     expect(result.meta.harnesses.omp.path).toBeTruthy()
     expect(result.meta.harnesses.pi.path).toBeTruthy()
@@ -1345,12 +1352,12 @@ test.describe('Prime Work desktop smoke', () => {
   })
 
   test('enforces the live preload and IPC frame boundaries', async () => {
-    const initialMeta = await page.evaluate(() => window.prime.app.getMeta())
+    const initialMeta = await page.evaluate(() => window.prime!.app.getMeta())
     expect(initialMeta.version).toBeTruthy()
 
     await page.evaluate(() => { window.location.hash = 'cfr-11-safe-fragment' })
     await expect(page).toHaveURL(/#cfr-11-safe-fragment$/)
-    const fragmentMeta = await page.evaluate(() => window.prime.app.getMeta())
+    const fragmentMeta = await page.evaluate(() => window.prime!.app.getMeta())
     expect(fragmentMeta).toEqual(initialMeta)
 
     await page.evaluate(() => {
@@ -1879,7 +1886,7 @@ test.describe('Prime Work desktop smoke', () => {
   })
 
   test('round-trips a grouped Prime ask_user questionnaire', async () => {
-    await page.evaluate(() => window.prime.settings.update({ askUserEnabled: true }))
+    await page.evaluate(() => window.prime!.settings.update({ askUserEnabled: true }))
     const composer = page.getByRole('combobox', { name: 'Message Prime' })
     await composer.fill('Ask me two questions')
     await composer.press('Enter')
@@ -1943,7 +1950,7 @@ test.describe('Prime Work desktop smoke', () => {
   })
 
   test('injects ask_user into OMP and answers its grouped questionnaire in the app', async () => {
-    await page.evaluate(() => window.prime.settings.update({ askUserEnabled: true }))
+    await page.evaluate(() => window.prime!.settings.update({ askUserEnabled: true }))
     await page.getByRole('button', { name: 'Prime Work — switch harness' }).click()
     await page.getByRole('menuitemradio', { name: /OMP Work/ }).click()
     await page.locator('.session-row__title').filter({ hasText: 'OMP hermetic fixture' }).click()
@@ -1977,7 +1984,7 @@ test.describe('Prime Work desktop smoke', () => {
   })
 
   test('injects ask_user into Pi and answers its grouped questionnaire in the app', async () => {
-    await page.evaluate(() => window.prime.settings.update({ askUserEnabled: true }))
+    await page.evaluate(() => window.prime!.settings.update({ askUserEnabled: true }))
     await page.getByRole('button', { name: 'Prime Work — switch harness' }).click()
     await page.getByRole('menuitemradio', { name: /Pi Work/ }).click()
     await page.locator('.session-row__title').filter({ hasText: 'Pi hermetic fixture' }).click()
@@ -2032,7 +2039,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.locator('.toast')).toContainText(/shell is not executable/i)
     await expect(shell).toHaveValue(rejectedDraft)
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
-    await expect.poll(() => page.evaluate(() => window.prime.settings.get().then((settings) => settings.terminalShell))).toBe('/bin/zsh')
+    await expect.poll(() => page.evaluate(() => window.prime!.settings.get().then((settings) => settings.terminalShell))).toBe('/bin/zsh')
 
     await page.getByRole('button', { name: 'General', exact: true }).click()
     await page.getByRole('button', { name: 'Terminal', exact: true }).first().click()
@@ -2049,7 +2056,7 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(sidebarScrim).toBeVisible()
     await sidebarScrim.click({ position: { x: 400, y: 300 } })
     await expect(page.locator('.sidebar')).toHaveCount(0)
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).sidebarOpen)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).sidebarOpen)).toBe(false)
     // Panel reconciliation may restore a confirmed inspector preference after
     // the sidebar closes. Normalize either valid state before testing the toggle.
     await page.waitForTimeout(250)
@@ -2110,20 +2117,20 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.locator('.sidebar')).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Show sidebar/ })).toBeVisible()
     await expect(page.locator('.workbench')).not.toHaveAttribute('inert')
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).sidebarOpen)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).sidebarOpen)).toBe(false)
 
     await page.getByRole('button', { name: /Show sidebar/ }).click()
     await expect(page.locator('.sidebar')).toBeVisible()
     await page.locator('.sidebar').getByRole('button', { name: /Hide sidebar/ }).click()
     await expect(page.locator('.sidebar')).toHaveCount(0)
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).sidebarOpen)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).sidebarOpen)).toBe(false)
 
     await page.setViewportSize({ width: 721, height: 700 })
     await page.getByRole('button', { name: /Show sidebar/ }).click()
     await expect(page.locator('.sidebar')).toBeVisible()
     await page.setViewportSize({ width: 720, height: 700 })
     await expect(page.locator('.sidebar')).toHaveCount(0)
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).sidebarOpen)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).sidebarOpen)).toBe(false)
 
     const inspectorToggle = page.getByRole('button', { name: 'Toggle inspector' })
     await inspectorToggle.click()
@@ -2131,14 +2138,36 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.locator('.title-toolbar')).not.toHaveAttribute('inert')
     await inspectorToggle.click()
     await expect(page.locator('.inspector')).toHaveCount(0)
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).inspectorOpen)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).inspectorOpen)).toBe(false)
 
     await page.setViewportSize({ width: 721, height: 700 })
     await inspectorToggle.click()
     await expect(page.locator('.inspector')).toBeVisible()
     await page.setViewportSize({ width: 720, height: 700 })
     await expect(page.locator('.inspector')).toHaveCount(0)
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).inspectorOpen)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).inspectorOpen)).toBe(false)
+  })
+
+  test('restores the Preview URL after switching inspector tabs and full-page views', async () => {
+    const server = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>Preview retention fixture</title><p>Retained location</p>') })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Fixture server has no port')
+    const url = `http://127.0.0.1:${address.port}/nested?keep=1`
+    try {
+      await page.getByRole('tab', { name: 'Browser' }).click()
+      await page.getByRole('textbox', { name: 'Browser address', exact: true }).fill(url)
+      await page.getByRole('textbox', { name: 'Browser address', exact: true }).press('Enter')
+      const guest = page.locator('webview[partition="persist:prime-work-browser"]')
+      const guestUrl = () => guest.evaluate((node) => (node as HTMLElement & { getURL(): string }).getURL())
+      await expect.poll(guestUrl).toBe(url)
+      await page.getByRole('tab', { name: 'Files', exact: true }).click()
+      await page.getByRole('tab', { name: 'Browser', exact: true }).click()
+      await expect.poll(guestUrl).toBe(url)
+      await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+      await page.getByRole('button', { name: 'Back to session' }).click()
+      await expect.poll(guestUrl).toBe(url)
+    } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())) }
   })
 
   test('attaches an isolated browser guest without navigation errors', async () => {
@@ -2186,7 +2215,7 @@ test.describe('Prime Work desktop smoke', () => {
     await popupToggle.focus()
     await popupToggle.press('Space')
     await expect(popupToggle).not.toBeChecked()
-    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).showFileChangesPopup)).toBe(false)
+    await expect.poll(() => page.evaluate(async () => (await window.prime!.settings.get()).showFileChangesPopup)).toBe(false)
     await page.locator('.session-row-wrap').filter({ hasText: 'Hermetic desktop fixture' }).locator('.session-row').click()
     await expect(page.locator('.changes-card')).toHaveCount(0)
 
@@ -2291,12 +2320,43 @@ test.describe('Prime Work desktop smoke', () => {
     await page.locator('.terminal-drawer:not([hidden])').getByLabel('Close terminal', { exact: true }).click()
   })
 
+  test('opens a terminal for new chats when the terminal setting is enabled', async () => {
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click()
+    await page.getByText('Open terminal with new sessions', { exact: true }).click()
+    await expect(page.getByRole('checkbox', { name: /Open terminal with new sessions/ })).toBeChecked()
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await page.getByRole('button', { name: /^New session/ }).first().click()
+    await expect(page.locator('.terminal-drawer:not([hidden]) .terminal-live-dot.is-connected')).toBeVisible()
+  })
+
+  test('keeps the same PTY and panel sizes while visiting full-page views', async () => {
+    await page.getByLabel(/Toggle terminal/).click()
+    const drawer = page.locator('.terminal-drawer:not([hidden])')
+    await expect(drawer.locator('.terminal-live-dot.is-connected')).toBeVisible()
+    const input = drawer.locator('.terminal-surface:not([hidden]) .xterm-helper-textarea')
+    await input.click()
+    await page.keyboard.type('echo retained-pty-output')
+    await page.keyboard.press('Enter')
+    await expect(drawer.locator('.xterm-rows')).toContainText('retained-pty-output')
+    await drawer.locator('.xterm').evaluate((element) => { element.setAttribute('data-retained-pty', 'original') })
+    const sizes = await page.evaluate(() => ({ inspector: localStorage.getItem('prime-work.inspector-width'), terminal: localStorage.getItem('prime-work.terminal-height') }))
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await expect(page.locator('.session-workspace')).toHaveAttribute('hidden', '')
+    await expect(page.locator('.terminal-drawer')).toHaveAttribute('hidden', '')
+    await expect(page.locator('.xterm[data-retained-pty="original"]')).toHaveCount(1)
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await expect(drawer.locator('.xterm[data-retained-pty="original"]')).toBeVisible()
+    await expect(drawer.locator('.xterm-rows')).toContainText('retained-pty-output')
+    expect(await page.evaluate(() => ({ inspector: localStorage.getItem('prime-work.inspector-width'), terminal: localStorage.getItem('prime-work.terminal-height') }))).toEqual(sizes)
+  })
+
   test('opens independent terminal tabs inside the conversation column', async () => {
     const project = await page.evaluate(async () => {
-      const projects = await window.prime.projects.list()
+      const projects = await window.prime!.projects.list()
       const selected = projects[0]
       if (!selected) return null
-      return selected.inferred ? window.prime.projects.grantInferred(selected.primaryFolder) : selected
+      return selected.inferred ? window.prime!.projects.grantInferred(selected.primaryFolder) : selected
     })
     expect(project).not.toBeNull()
     await page.getByRole('tab', { name: 'Summary' }).click()
@@ -2434,7 +2494,7 @@ test.describe('Prime Work desktop smoke', () => {
         return originalBuildFromTemplate(template)
       }) as typeof Menu.buildFromTemplate
     })
-    await page.evaluate(() => window.prime.settings.update({ keepRunningInBackground: true }))
+    await page.evaluate(() => window.prime!.settings.update({ keepRunningInBackground: true }))
     await expect.poll(() => app!.evaluate(() => typeof (globalThis as { __trayOpen?: unknown }).__trayOpen)).toBe('function')
     await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible())).toBe(true)
 
@@ -2474,7 +2534,7 @@ test.describe('Prime Work desktop smoke', () => {
         return originalBuildFromTemplate(template)
       }) as typeof Menu.buildFromTemplate
     }, trayBuildsPath)
-    await page.evaluate(() => window.prime.settings.update({ keepRunningInBackground: true }))
+    await page.evaluate(() => window.prime!.settings.update({ keepRunningInBackground: true }))
     await expect.poll(() => existsSync(trayBuildsPath) ? readFileSync(trayBuildsPath, 'utf8').trim().split('\n').length : 0).toBe(1)
 
     const closed = app!.waitForEvent('close', { timeout: 45_000 })
@@ -2531,7 +2591,7 @@ test.describe('Prime Work desktop smoke', () => {
         return originalBuildFromTemplate(template)
       }) as typeof Menu.buildFromTemplate
     })
-    await page.evaluate(() => window.prime.settings.update({ keepRunningInBackground: true }))
+    await page.evaluate(() => window.prime!.settings.update({ keepRunningInBackground: true }))
     await expect.poll(() => app!.evaluate(() => typeof (globalThis as { __trayQuit?: unknown }).__trayQuit)).toBe('function')
 
     await page.locator('.session-row-wrap').filter({ hasText: 'Hermetic desktop fixture' }).locator('.session-row').click()

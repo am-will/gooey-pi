@@ -96,11 +96,20 @@ export function removeAnnotation(annotations: BrowserAnnotation[], id: string): 
   return annotations.filter((annotation) => annotation.id !== id)
 }
 
-/** After a full page navigation, annotations captured on other pages lose their live markers. Returning to a page revives its markers. */
+function pageIdentity(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (!/^#!?\//.test(parsed.hash)) parsed.hash = ''
+    return parsed.href
+  } catch { return url }
+}
+
+/** After any main-frame navigation, annotations captured on other pages lose their live markers. Returning to a page revives its markers. */
 export function reconcileAnnotationsForUrl(annotations: BrowserAnnotation[], currentUrl: string): BrowserAnnotation[] {
   let changed = false
+  const current = pageIdentity(currentUrl)
   const next = annotations.map((annotation) => {
-    const stale = annotation.pageUrl !== currentUrl
+    const stale = pageIdentity(annotation.pageUrl) !== current
     if (stale === annotation.stale) return annotation
     changed = true
     return { ...annotation, stale }

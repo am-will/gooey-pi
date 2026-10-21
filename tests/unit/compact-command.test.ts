@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { composePrompt, type ComposerPromptContext } from '../../src/lib/composer-prompt'
-import { parseCompactCommand } from '../../src/lib/slash-commands'
+import { parseCompactCommand } from '../../src/lib/prompt-commands'
 import type { BrowserAnnotation, SessionRecord } from '../../src/types/api'
 
 describe('parseCompactCommand', () => {

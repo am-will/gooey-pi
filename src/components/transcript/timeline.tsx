@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useMemo, useEffect, useState, type ReactNode } from 'react'
 import {
   Check,
   ChevronDown,
@@ -17,7 +17,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import type { MessagePart, PrimeCompactionReason, TranscriptMessage } from '@/types/api'
-import { writeClipboardText } from '@/lib/clipboard'
+import { useCopyFeedback } from '@/hooks/useCopyFeedback'
 import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { boundText } from '@/lib/render-bounds'
@@ -68,14 +68,20 @@ function serialize(value: unknown, pretty = false): string {
   try { return JSON.stringify(value, null, pretty ? 2 : undefined) } catch { return String(value) }
 }
 
+const TOOL_PREVIEW_LIMIT = 180
+const QUESTIONNAIRE_PREVIEW_LIMIT = 5
+
 function toolPreview(part: Extract<MessagePart, { type: 'toolCall' }>): string {
   const raw = part.args
   if (raw && typeof raw === 'object') {
     const args = raw as Record<string, unknown>
-    const preferred = args.question ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
-    if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), 180, '…')
+    const questions = Array.isArray(args.questions) ? args.questions.slice(0, QUESTIONNAIRE_PREVIEW_LIMIT).flatMap((question: unknown) =>
+      question && typeof question === 'object' && 'question' in question && typeof question.question === 'string' ? [question.question.slice(0, TOOL_PREVIEW_LIMIT + 1)] : [],
+    ) : []
+    const preferred = args.question ?? (questions.length ? questions.join(' · ') : undefined) ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
+    if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), TOOL_PREVIEW_LIMIT, '…')
   }
-  return boundText(serialize(raw).replace(/\s+/g, ' ').trim(), 180, '…')
+  return typeof raw === 'string' ? boundText(raw.replace(/\s+/g, ' ').trim(), TOOL_PREVIEW_LIMIT, '…') : ''
 }
 
 function ReasoningPart({ part, streaming = false }: { part: Extract<MessagePart, { type: 'thinking' }>; streaming?: boolean }) {
@@ -111,38 +117,23 @@ export function LiveElapsed({ since }: { since?: string | number }) {
   return <span className="live-elapsed" aria-hidden="true">{formatWorkedDuration(Math.max(0, now - startedAt))}</span>
 }
 
-function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall' }>; next?: MessagePart }) {
+const ToolPart = memo(function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall' }>; next?: MessagePart }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const resetCopiedTimerRef = useRef<number | null>(null)
+  const { copied, copy } = useCopyFeedback()
   const result = next?.type === 'toolResult' ? next : undefined
   const failed = result?.isError
   const finished = result && !result.streaming
   const kind = classifyTool(part.name)
-  const args = serialize(part.args, true)
-  const output = result?.text ?? ''
-  const visibleOutput = boundText(`${args}${args && output ? '\n\n' : ''}${output}`, 200_000, `\n\n${t('transcript.truncatedOutput')}`)
-  const canExpand = Boolean(visibleOutput)
+  const visibleOutput = useMemo(() => {
+    if (!open) return ''
+    const args = serialize(part.args, true)
+    const output = result?.text ?? ''
+    return boundText(`${args}${args && output ? '\n\n' : ''}${output}`, 200_000, `\n\n${t('transcript.truncatedOutput')}`)
+  }, [open, part.args, result?.text, t])
+  const canExpand = Boolean(result?.text) || (typeof part.args === 'string' ? Boolean(part.args) : part.args !== undefined)
   const state = failed ? 'error' : finished ? 'done' : kind === 'question' ? 'waiting' : 'running'
   const preview = toolPreview(part)
-  useEffect(
-    () => () => {
-      if (resetCopiedTimerRef.current !== null) window.clearTimeout(resetCopiedTimerRef.current)
-    },
-    [],
-  )
-
-  const copyContents = async () => {
-    try {
-      await writeClipboardText(visibleOutput)
-      setCopied(true)
-      if (resetCopiedTimerRef.current !== null) window.clearTimeout(resetCopiedTimerRef.current)
-      resetCopiedTimerRef.current = window.setTimeout(() => setCopied(false), 1_500)
-    } catch {
-      setCopied(false)
-    }
-  }
 
   return (
     <div className={`activity-line activity-line--tool activity-line--${kind} is-${state}`}>
@@ -156,7 +147,7 @@ function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall
       {open && visibleOutput ? (
         <div className="activity-tool__details">
           <div className="activity-tool__details-toolbar">
-            <button type="button" className="activity-tool__copy" aria-label={t('transcript.copyToolContents', { action: t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy') })} onClick={() => void copyContents()}>
+            <button type="button" className="activity-tool__copy" aria-label={t('transcript.copyToolContents', { action: t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy') })} onClick={() => void copy(visibleOutput)}>
               {copied ? <Check size={12} /> : <Copy size={12} />} {t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy')}
             </button>
           </div>
@@ -165,7 +156,7 @@ function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall
       ) : null}
     </div>
   )
-}
+})
 
 function StandaloneToolResult({ part }: { part: Extract<MessagePart, { type: 'toolResult' }> }) {
   return <div className={`activity-line activity-line--result ${part.isError ? 'is-error' : ''}`}><span className="activity-line__icon">{part.isError ? <CircleAlert size={13} /> : <Check size={13} />}</span><span>{boundText(part.text, 2_000, '…')}</span></div>
@@ -269,7 +260,7 @@ export function WorkTimeline({ parts, showReasoning, showTools, streaming = fals
     }
     if (part.type === 'toolResult') return showTools ? <StandaloneToolResult key={key} part={part} /> : null
     if (part.type === 'agentMessage') return <AgentActivityPart key={key} part={part} />
-    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(transcriptText(part, t), 40_000, '\n… [Note truncated in the desktop view.]')} /></div>
+    if (part.type === 'text') return <div className="activity-line activity-line--note" key={key}><MarkdownText text={boundText(transcriptText(part, t), 40_000, '\n… [Note truncated in the desktop view.]')} streaming={streaming} /></div>
     return null
   })}</div>
 }

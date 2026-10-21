@@ -40,6 +40,8 @@ Preconditions:
   role (e.g. `heading` name `Pets` exact) rather than any occurrence of the word.
 - `Escape` closes Settings via its focus trap. If a section has focus inside a
   text field, `Escape` still closes the page here, but verify the app shell is
-  visible again (`.app-shell[data-ready="true"]`) rather than assuming.
+  closed by waiting for `.settings-page` to be hidden. The ready app shell can
+  remain present while Settings is open, so shell readiness alone does not
+  prove that Settings closed.
 - Opening Settings from a fresh `HOME` still works; the `Harness` section will
   report no detected harness, which is expected verification state.

@@ -54,6 +54,38 @@ describe('composer worktree picker', () => {
     window.sessionStorage.clear()
   })
 
+  it('does not restore another session draft when switching composers', async () => {
+    act(() => root.render(<Composer key="one" {...props({ draftKey: 'project:one' })} />))
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, 'private first draft')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => root.render(<Composer key="two" {...props({ draftKey: 'project:two' })} />))
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('')
+    act(() => root.render(<Composer key="one" {...props({ draftKey: 'project:one' })} />))
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('private first draft')
+  })
+
+  it('does not steal focus after a pending send when the user moved elsewhere', async () => {
+    let complete!: () => void
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    act(() => root.render(<Composer {...props({ onSend })} />))
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, 'send me')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    input.focus()
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click())
+    const elsewhere = document.createElement('button')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    await act(async () => complete())
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+  })
+
   it('does not expose an automatic model choice before the catalog loads', () => {
     act(() => root.render(<Composer {...props()} />))
 
@@ -87,6 +119,25 @@ describe('composer worktree picker', () => {
 
     await act(async () => options[1].click())
     expect(onExecuteCheckout).toHaveBeenCalledWith({ strategy: 'worktree', operation: 'open', path: '/repo-feature' })
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  it('retains a failed branch name so creation can be retried', async () => {
+    const onExecuteCheckout = vi.fn().mockRejectedValueOnce(new Error('checkout failed')).mockResolvedValue(undefined)
+    act(() => root.render(<Composer {...props({ onExecuteCheckout })} />))
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Checkout: main"]')?.click())
+    const input = container.querySelector<HTMLInputElement>('[placeholder="New branch name"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'feature/retry')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const form = input.closest('form')!
+    await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(input.value).toBe('feature/retry')
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('checkout failed')
+    await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(onExecuteCheckout).toHaveBeenCalledTimes(2)
+    expect(onExecuteCheckout).toHaveBeenLastCalledWith({ strategy: 'worktree', operation: 'create', branch: 'feature/retry' })
     expect(container.querySelector('[role="menu"]')).toBeNull()
   })
 

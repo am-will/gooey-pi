@@ -50,16 +50,21 @@ function dispatchOnly(job: RecordValue): boolean {
   return /^github\.event_name\s*==\s*['"]workflow_dispatch['"]$/.test(condition)
 }
 
+function jobName(jobId: string, job: RecordValue): string {
+  return typeof job.name === 'string' ? job.name : jobId
+}
+
 function matrixContexts(jobId: string, job: RecordValue): string[] {
   const matrix = record(record(job.strategy).matrix)
   const include = matrix.include
-  if (!Array.isArray(include)) return [jobId]
+  const name = jobName(jobId, job)
+  if (!Array.isArray(include)) return [name]
 
   return include.map((entry) => {
     const values = Object.values(record(entry))
       .filter((value) => value !== '' && value !== null && value !== undefined)
       .map(String)
-    return values.length > 0 ? `${jobId} (${values.join(', ')})` : jobId
+    return values.length > 0 ? `${name} (${values.join(', ')})` : name
   })
 }
 
@@ -89,14 +94,14 @@ describe('validation guide structure', () => {
     }
   })
 
-  test('keeps CI and release job tables equal to their workflow job ids', () => {
+  test('keeps CI and release job tables equal to their reported workflow names', () => {
     const ciJobs = workflowJobs(resolve('.github/workflows/ci.yml'))
     const releaseJobs = workflowJobs(resolve('.github/workflows/release.yml'))
     const ciTable = firstTableRows(section(validation, 'Pull-request and branch CI')).map(([job]) => job.replaceAll('`', ''))
     const releaseTable = firstTableRows(section(validation, 'Public release validation')).map(([job]) => job.replaceAll('`', ''))
 
-    expect(new Set(ciTable)).toEqual(new Set(Object.keys(ciJobs)))
-    expect(new Set(releaseTable)).toEqual(new Set(Object.keys(releaseJobs)))
+    expect(new Set(ciTable)).toEqual(new Set(Object.entries(ciJobs).map(([id, job]) => jobName(id, record(job)))))
+    expect(new Set(releaseTable)).toEqual(new Set(Object.entries(releaseJobs).map(([id, job]) => jobName(id, record(job)))))
   })
 
   test('documents the scheduled audit workflow contract', () => {
@@ -125,10 +130,20 @@ describe('validation guide structure', () => {
     const documentedExclusions = [...(exclusion?.[1].matchAll(/`([^`]+)`/g) ?? [])].map((match) => match[1])
     const derivedExclusions = Object.entries(ciJobs)
       .filter(([, job]) => dispatchOnly(record(job)))
-      .map(([jobId]) => jobId)
+      .map(([jobId, job]) => jobName(jobId, record(job)))
 
     expect(new Set(documentedExclusions)).toEqual(new Set(derivedExclusions))
     expect(new Set(requiredChecks)).toEqual(new Set(requiredContexts(ciJobs)))
+  })
+
+  test('documents patch verification, fresh-build E2E and packaged renderer startup checks', () => {
+    const commands = section(validation, 'Local aggregate commands')
+    expect(commands).toContain('npm run vendor:verify-patches')
+    expect(packageManifest.scripts['release:verify:package']).toContain('npm run vendor:verify-patches')
+    expect(commands).toContain('npm run test:e2e:hermetic')
+    expect(commands).toContain('Run `npm run build` after source changes first')
+    expect(commands).toContain('scripts/release/smoke-packaged-app.mjs')
+    expect(section(validation, 'Pull-request and branch CI')).toContain('renderer startup marker')
   })
 
   test('does not hard-code a suite count', () => {

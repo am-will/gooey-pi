@@ -1,11 +1,13 @@
 import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import * as pty from 'node-pty'
 import type { TerminalActiveContext, TerminalDataEvent, TerminalExitEvent } from '../../src/types/api'
+import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
+import { TERMINAL_CONTEXT_MAX_CHARS } from '../../src/lib/terminal-context'
 import type { WorkspaceUseLease, WorkspaceUseOwner } from './repository-use-gate'
 import { killProcessTree, safeChildEnvironment } from './process-utils'
 import { canonicalSessionPath } from './session-paths'
@@ -24,16 +26,24 @@ interface OwnedTerminal {
   pendingOutput: string
   pendingOutputBytes: number
   flushTimer?: NodeJS.Timeout
+  resumeTimer?: NodeJS.Timeout
   terminating: boolean
   exited: boolean
   workspaceUse: WorkspaceUseLease
 }
 
+interface PendingTerminal {
+  ownerId: number
+  cwd: string
+  sessionPath?: string
+  cancelled: boolean
+}
+
 function systemShells(): Set<string> {
   if (process.platform === 'win32') {
     const shells = new Set<string>()
-    if (process.env.ComSpec && isAbsolute(process.env.ComSpec)) shells.add(process.env.ComSpec)
-    if (process.env.SystemRoot && isAbsolute(process.env.SystemRoot)) {
+    if (process.env.ComSpec && isAbsolutePathForPlatform(process.env.ComSpec, process.platform)) shells.add(process.env.ComSpec)
+    if (process.env.SystemRoot && isAbsolutePathForPlatform(process.env.SystemRoot, process.platform)) {
       shells.add(join(process.env.SystemRoot, 'System32', 'cmd.exe'))
       shells.add(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
     }
@@ -50,10 +60,12 @@ function systemShells(): Set<string> {
   return shells
 }
 
-const MAX_TERMINAL_OUTPUT_BYTES_PER_SECOND = 16 * 1024 * 1024
-const MAX_TOTAL_TERMINAL_OUTPUT_BYTES_PER_SECOND = 32 * 1024 * 1024
+// Keep pauses below node-pty’s 200 ms socket shutdown drain deadline.
+const OUTPUT_WINDOW_MS = 100
+const MAX_TERMINAL_OUTPUT_WINDOW_BYTES = 16 * 1024 * 1024 / 10
+const MAX_TOTAL_TERMINAL_OUTPUT_WINDOW_BYTES = 32 * 1024 * 1024 / 10
 const MAX_TERMINAL_IPC_CHUNK_BYTES = 1024 * 1024
-const MAX_TERMINAL_CONTEXT_CHARS = 48 * 1024
+const MAX_TERMINAL_INPUT_CHARS = 1024 * 1024
 
 const execFileAsync = promisify(execFile)
 
@@ -92,6 +104,8 @@ function terminalEnvironment(commandRunner: boolean): Record<string, string> {
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
   })).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+  if (process.env.NO_COLOR === undefined) delete env.NO_COLOR
+  else env.NO_COLOR = process.env.NO_COLOR
   // npm injects its configured prefix into apps launched through `npm run`.
   // Login-shell nvm refuses to initialize while that npm override is present.
   if (commandRunner) {
@@ -103,6 +117,8 @@ function terminalEnvironment(commandRunner: boolean): Record<string, string> {
 
 
 export class TerminalService {
+  private readonly pendingCreates = new Set<PendingTerminal>()
+  private closed = false
   private readonly terminals = new Map<string, OwnedTerminal>()
   private readonly activeBySession = new Map<string, string>()
   private readonly terminationPromises = new Map<OwnedTerminal, Promise<void>>()
@@ -119,7 +135,7 @@ export class TerminalService {
 
   validateShell(value: unknown): string {
     const requested = requireString(value, 'shell', { min: 1, max: 4096 })
-    if (!isAbsolute(requested)) throw new TypeError('shell must be an absolute path')
+    if (!isAbsolutePathForPlatform(requested, process.platform)) throw new TypeError('shell must be an absolute path')
     let canonical: string
     try {
       canonical = realpathSync(requested)
@@ -128,7 +144,7 @@ export class TerminalService {
     } catch { throw new TypeError('shell is not executable') }
     const allowedCanonical = new Set<string>()
     for (const shell of this.allowedShells) {
-      if (!shell || !isAbsolute(shell) || !existsSync(shell)) continue
+      if (!shell || !isAbsolutePathForPlatform(shell, process.platform) || !existsSync(shell)) continue
       try { allowedCanonical.add(realpathSync(shell)) } catch { /* ignore */ }
     }
     if (!allowedCanonical.has(canonical)) throw new TypeError(process.platform === 'win32' ? 'shell is not an approved Windows shell' : 'shell is not listed in /etc/shells')
@@ -138,48 +154,62 @@ export class TerminalService {
   async create(owner: WebContents, raw: unknown): Promise<{ terminalId: string; shell: string }> {
     const options = requireRecord(raw, 'terminal options')
     rejectUnknownKeys(options, ['cwd', 'sessionPath', 'shell', 'command', 'cols', 'rows'], 'terminal options')
-    const cwd = await this.authorizeCwd(requireString(options.cwd, 'cwd', { min: 1, max: 4096 }))
-    const sessionPath = options.sessionPath === undefined
-      ? undefined
-      : canonicalSessionPath(await this.authorizeSessionPath(requireString(options.sessionPath, 'sessionPath', { min: 1, max: 4096 })))
-    if (owner.isDestroyed()) throw new Error('Terminal owner was closed')
-    if (this.terminals.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
-    const shell = this.validateShell(options.shell ?? this.configuredShell())
-    const command = options.command === undefined
-      ? undefined
-      : requireString(options.command, 'terminal command', { min: 1, max: 64 * 1024 })
-    const cols = options.cols === undefined ? 100 : requireInteger(options.cols, 'cols', 2, 1_000)
-    const rows = options.rows === undefined ? 30 : requireInteger(options.rows, 'rows', 1, 1_000)
-    const env = terminalEnvironment(command !== undefined)
-    const terminalId = randomUUID()
-    const workspaceUse = await this.beginWorkspaceUse(cwd, { kind: 'terminal', terminalId })
-    let terminal: pty.IPty
+    if (this.closed) throw new Error('Terminal service is shutting down')
+    if (this.terminals.size + this.pendingCreates.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
+    const requestedCwd = requireString(options.cwd, 'cwd', { min: 1, max: 4096 })
+    const requestedSessionPath = options.sessionPath === undefined ? undefined : requireString(options.sessionPath, 'sessionPath', { min: 1, max: 4096 })
+    const pending: PendingTerminal = { ownerId: owner.id, cwd: canonicalSessionPath(requestedCwd), sessionPath: requestedSessionPath === undefined ? undefined : canonicalSessionPath(requestedSessionPath), cancelled: false }
+    this.pendingCreates.add(pending)
     try {
-      terminal = pty.spawn(shell, shellArguments(shell, command), { cwd, cols, rows, name: 'xterm-256color', env })
-    } catch (error) {
-      workspaceUse.release()
-      throw error
-    }
-    if (owner.isDestroyed()) { try { terminal.kill() } catch { /* owner closed during spawn */ }; workspaceUse.release(); throw new Error('Terminal owner was closed') }
-    const owned: OwnedTerminal = { terminal, owner, ownerId: owner.id, cwd, shell, sessionPath, outputWindowStartedAt: Date.now(), outputWindowBytes: 0, pendingOutput: '', pendingOutputBytes: 0, terminating: false, exited: false, workspaceUse }
-    this.terminals.set(terminalId, owned)
-    terminal.onData((data) => this.forwardOutput(terminalId, owned, data))
-    terminal.onExit(({ exitCode, signal }) => {
-      owned.exited = true
-      owned.workspaceUse.release()
-      this.terminals.delete(terminalId)
-      this.removeActive(terminalId, owned)
-      if (owned.flushTimer) clearTimeout(owned.flushTimer)
-      this.flushOutput(terminalId, owned)
-      if (!owner.isDestroyed()) { try { owner.send('terminal:exit', { terminalId, exitCode, signal } satisfies TerminalExitEvent) } catch { /* renderer exited */ } }
-    })
-    return { terminalId, shell }
+      const cwd = await this.authorizeCwd(requestedCwd)
+      pending.cwd = cwd
+      this.assertPendingCreate(owner, pending)
+      const sessionPath = requestedSessionPath === undefined
+        ? undefined
+        : canonicalSessionPath(await this.authorizeSessionPath(requestedSessionPath))
+      pending.sessionPath = sessionPath
+      this.assertPendingCreate(owner, pending)
+      if (this.terminals.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
+      const shell = this.validateShell(options.shell ?? this.configuredShell())
+      const command = options.command === undefined
+        ? undefined
+        : requireString(options.command, 'terminal command', { min: 1, max: 64 * 1024 })
+      const cols = options.cols === undefined ? 100 : requireInteger(options.cols, 'cols', 2, 1_000)
+      const rows = options.rows === undefined ? 30 : requireInteger(options.rows, 'rows', 1, 1_000)
+      const env = terminalEnvironment(command !== undefined)
+      const terminalId = randomUUID()
+      const workspaceUse = await this.beginWorkspaceUse(cwd, { kind: 'terminal', terminalId })
+      let terminal: pty.IPty
+      try {
+        this.assertPendingCreate(owner, pending)
+        if (this.terminals.size >= 8) throw new Error('GooeyPi supports at most eight concurrent terminals')
+        terminal = pty.spawn(shell, shellArguments(shell, command), { cwd, cols, rows, name: 'xterm-256color', env })
+      } catch (error) {
+        workspaceUse.release()
+        throw error
+      }
+      const owned: OwnedTerminal = { terminal, owner, ownerId: owner.id, cwd, shell, sessionPath, outputWindowStartedAt: Date.now(), outputWindowBytes: 0, pendingOutput: '', pendingOutputBytes: 0, terminating: false, exited: false, workspaceUse }
+      this.terminals.set(terminalId, owned)
+      terminal.onData((data) => this.forwardOutput(terminalId, owned, data))
+      terminal.onExit(({ exitCode, signal }) => {
+        owned.exited = true
+        owned.workspaceUse.release()
+        this.terminals.delete(terminalId)
+        this.removeActive(terminalId, owned)
+        if (owned.flushTimer) clearTimeout(owned.flushTimer)
+        if (owned.resumeTimer) { clearTimeout(owned.resumeTimer); owned.resumeTimer = undefined }
+        this.flushOutput(terminalId, owned)
+        if (!owner.isDestroyed()) { try { owner.send('terminal:exit', { terminalId, exitCode, signal } satisfies TerminalExitEvent) } catch { /* renderer exited */ } }
+      })
+      try { this.assertPendingCreate(owner, pending) } catch (error) { await this.terminate(terminalId, owned); throw error }
+      return { terminalId, shell }
+    } finally { this.pendingCreates.delete(pending) }
   }
 
   input(owner: WebContents, idValue: unknown, dataValue: unknown): void {
     const terminal = this.owned(owner, idValue)
-    const data = requireString(dataValue, 'terminal data', { max: 64 * 1024 })
-    terminal.terminal.write(data)
+    if (typeof dataValue !== 'string' || dataValue.length > MAX_TERMINAL_INPUT_CHARS) throw new TypeError('terminal data must be a string at most 1 MiB characters')
+    terminal.terminal.write(dataValue)
   }
 
   async bindSession(owner: WebContents, idValue: unknown, sessionPathValue: unknown): Promise<boolean> {
@@ -203,7 +233,7 @@ export class TerminalService {
     const context = requireRecord(raw, 'terminal context')
     rejectUnknownKeys(context, ['label', 'content', 'truncated'], 'terminal context')
     const label = requireString(context.label, 'terminal label', { min: 1, max: 128, trim: true })
-    const content = requireString(context.content, 'terminal content', { max: MAX_TERMINAL_CONTEXT_CHARS })
+    const content = requireString(context.content, 'terminal content', { max: TERMINAL_CONTEXT_MAX_CHARS })
     if (typeof context.truncated !== 'boolean') throw new TypeError('terminal context truncated must be a boolean')
     terminal.activeContext = { label, content, truncated: context.truncated }
     this.activeBySession.set(terminal.sessionPath, requireString(idValue, 'terminalId', { min: 1, max: 128 }))
@@ -233,10 +263,13 @@ export class TerminalService {
   }
 
   async killOwner(ownerId: number): Promise<void> {
+    this.cancelPendingCreates((pending) => pending.ownerId === ownerId)
     await Promise.all([...this.terminals].filter(([, terminal]) => terminal.ownerId === ownerId).map(([id, terminal]) => this.terminate(id, terminal)))
   }
 
   async killAll(): Promise<void> {
+    this.closed = true
+    this.cancelPendingCreates(() => true)
     const starting = [...this.terminals].map(([id, terminal]) => this.terminate(id, terminal))
     await Promise.all([...new Set([...this.terminationPromises.values(), ...starting])])
   }
@@ -244,25 +277,35 @@ export class TerminalService {
   /** Terminates every PTY and descendant process tree bound to one session. */
   async killForSession(sessionPathValue: unknown): Promise<void> {
     const sessionPath = canonicalSessionPath(requireString(sessionPathValue, 'sessionPath', { min: 1, max: 4096 }))
+    this.cancelPendingCreates((pending) => pending.sessionPath === sessionPath)
     const matches = [...this.terminals].filter(([, terminal]) => terminal.sessionPath === sessionPath)
     await Promise.all(matches.map(([id, terminal]) => this.terminate(id, terminal)))
   }
 
   async killForProjectRoots(roots: string[]): Promise<void> {
+    this.cancelPendingCreates((pending) => roots.some((root) => isPathWithin(root, pending.cwd)))
     const matches = [...this.terminals].filter(([, terminal]) => roots.some((root) => isPathWithin(root, terminal.cwd)))
     await Promise.all(matches.map(([id, terminal]) => this.terminate(id, terminal)))
+  }
+
+  private cancelPendingCreates(matches: (pending: PendingTerminal) => boolean): void {
+    for (const pending of this.pendingCreates) {
+      if (!matches(pending)) continue
+      pending.cancelled = true
+      this.pendingCreates.delete(pending)
+    }
   }
 
   private forwardOutput(id: string, owned: OwnedTerminal, data: string): void {
     if (owned.terminating || owned.owner.isDestroyed()) return
     const now = Date.now()
-    if (now - owned.outputWindowStartedAt >= 1_000) { owned.outputWindowStartedAt = now; owned.outputWindowBytes = 0 }
+    if (now - owned.outputWindowStartedAt >= OUTPUT_WINDOW_MS) { owned.outputWindowStartedAt = now; owned.outputWindowBytes = 0 }
     const bytes = Buffer.byteLength(data)
     owned.outputWindowBytes += bytes
-    if (now - this.totalOutputWindowStartedAt >= 1_000) { this.totalOutputWindowStartedAt = now; this.totalOutputWindowBytes = 0 }
+    if (now - this.totalOutputWindowStartedAt >= OUTPUT_WINDOW_MS) { this.totalOutputWindowStartedAt = now; this.totalOutputWindowBytes = 0 }
     this.totalOutputWindowBytes += bytes
-    if (bytes > MAX_TERMINAL_IPC_CHUNK_BYTES || owned.outputWindowBytes > MAX_TERMINAL_OUTPUT_BYTES_PER_SECOND || this.totalOutputWindowBytes > MAX_TOTAL_TERMINAL_OUTPUT_BYTES_PER_SECOND) {
-      owned.pendingOutput += '\r\n[GooeyPi stopped this terminal because output exceeded 16 MiB/s.]\r\n'
+    if (bytes > MAX_TERMINAL_IPC_CHUNK_BYTES) {
+      owned.pendingOutput += '\r\n[GooeyPi stopped this terminal because one output frame exceeded 1 MiB.]\r\n'
       owned.pendingOutputBytes = Buffer.byteLength(owned.pendingOutput)
       this.flushOutput(id, owned)
       void this.terminate(id, owned)
@@ -271,6 +314,20 @@ export class TerminalService {
     if (owned.pendingOutputBytes + bytes > MAX_TERMINAL_IPC_CHUNK_BYTES) this.flushOutput(id, owned)
     owned.pendingOutput += data; owned.pendingOutputBytes += bytes
     if (!owned.flushTimer) owned.flushTimer = setTimeout(() => { owned.flushTimer = undefined; this.flushOutput(id, owned) }, 16)
+    const terminalLimited = owned.outputWindowBytes >= MAX_TERMINAL_OUTPUT_WINDOW_BYTES
+    const totalLimited = this.totalOutputWindowBytes >= MAX_TOTAL_TERMINAL_OUTPUT_WINDOW_BYTES
+    if (!owned.resumeTimer && (terminalLimited || totalLimited)) {
+      try { owned.terminal.pause() } catch { return }
+      const resumeAt = Math.max(
+        terminalLimited ? owned.outputWindowStartedAt + OUTPUT_WINDOW_MS : now,
+        totalLimited ? this.totalOutputWindowStartedAt + OUTPUT_WINDOW_MS : now,
+      )
+      owned.resumeTimer = setTimeout(() => {
+        owned.resumeTimer = undefined
+        if (!owned.exited && !owned.terminating) { try { owned.terminal.resume() } catch { /* PTY exited */ } }
+      }, Math.max(1, Math.min(OUTPUT_WINDOW_MS, resumeAt - now)))
+      owned.resumeTimer.unref()
+    }
   }
 
   private flushOutput(id: string, owned: OwnedTerminal): void {
@@ -287,12 +344,17 @@ export class TerminalService {
     this.removeActive(id, owned)
     const operation = this.terminateProcess(id, owned)
     this.terminationPromises.set(owned, operation)
-    void operation.finally(() => { if (this.terminationPromises.get(owned) === operation) this.terminationPromises.delete(owned) })
+    const cleanup = () => { if (this.terminationPromises.get(owned) === operation) this.terminationPromises.delete(owned) }
+    void operation.then(cleanup, cleanup)
     return operation
   }
 
   private async terminateProcess(id: string, owned: OwnedTerminal): Promise<void> {
     if (owned.flushTimer) { clearTimeout(owned.flushTimer); owned.flushTimer = undefined }
+    if (owned.resumeTimer) {
+      clearTimeout(owned.resumeTimer); owned.resumeTimer = undefined
+      try { owned.terminal.resume() } catch { /* PTY exited */ }
+    }
     this.flushOutput(id, owned)
     if (owned.exited) return
     // Shell children can detach from the process group, so signal a snapshot of
@@ -322,6 +384,10 @@ export class TerminalService {
       descendants: remaining,
       signalDirect: (signal) => owned.terminal.kill(signal),
     })
+  }
+
+  private assertPendingCreate(owner: WebContents, pending: PendingTerminal): void {
+    if (owner.isDestroyed() || pending.cancelled || this.closed) throw new Error('Terminal owner was closed or creation was cancelled')
   }
 
   private owned(owner: WebContents, idValue: unknown): OwnedTerminal {

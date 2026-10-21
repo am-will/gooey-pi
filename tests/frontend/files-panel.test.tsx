@@ -687,3 +687,24 @@ describe('FilesPanel component', () => {
     expect(container.textContent).toContain('package.json')
   })
 })
+
+
+it('maps repository-relative status paths into a nested project folder', async () => {
+  const project = { ...sampleProject, primaryFolder: '/repo/packages/app', folders: ['/repo/packages/app'], path: '/repo/packages/app' }
+  const listFiles = vi.fn(async () => ({ entries: [{ path: 'package.json', type: 'file' }], skipped: 0, truncated: false }))
+  Object.defineProperty(window, 'prime', { configurable: true, value: { projects: { listFiles } } })
+  const git: GitStatus = { isRepo: true, root: '/repo', files: [{ path: 'packages/app/package.json', status: 'M', staged: false, additions: 1, deletions: 0 }, { path: 'package.json', status: 'A', staged: true, additions: 1, deletions: 0 }] }
+  await act(async () => root.render(<FilesPanel project={project} git={git} onReveal={() => undefined} />))
+  expect([...container.querySelectorAll('.file-tree__status')].map((item) => item.textContent)).toEqual(['M'])
+})
+
+
+it('does not claim a complete empty search result from a truncated listing', async () => {
+  const listFiles = vi.fn(async () => ({ entries: [], skipped: 0, truncated: true }))
+  Object.defineProperty(window, 'prime', { configurable: true, value: { projects: { listFiles } } })
+  await act(async () => root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={() => undefined} />))
+  await enter(container.querySelector('input')!, 'missing')
+  expect(container.textContent).toContain('some deeper paths are not shown or searchable')
+  expect(container.textContent).not.toContain('No files match')
+  expect(container.textContent).not.toContain('No files found')
+})

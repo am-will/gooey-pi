@@ -27,6 +27,7 @@ let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
@@ -65,6 +66,7 @@ async function waitFor<T>(read: () => T | null | undefined, timeout = 4_000): Pr
 }
 
 async function openPalette(): Promise<HTMLElement> {
+  await waitFor(() => container.querySelector('.app-shell[data-ready="true"]'))
   await act(async () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))
   })
@@ -88,7 +90,7 @@ const expectedOrder = [
   'Open Activity',
   'Open Scheduled',
   'Open Capabilities',
-  'Toggle browser',
+  'Open browser',
   'Toggle terminal',
   'Toggle sidebar',
   'Open Settings',

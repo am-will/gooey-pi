@@ -1,3 +1,4 @@
+import { scanAtMentions } from './at-mentions'
 import type { HarnessId, SessionRecord } from '@/types/api'
 
 export interface SessionMention {
@@ -5,6 +6,17 @@ export interface SessionMention {
   end: number
   text: string
   session: SessionRecord
+}
+
+export const mentionLabelKey = (label: string): string => label.trim().toLocaleLowerCase()
+
+export const MENTION_QUERY = /(?:^|\s)@([^@\n]*)$/
+
+/** Only text before the caret participates in the active autocomplete query. */
+export function activeMention(value: string, caret: number): { start: number; query: string } | null {
+  const before = value.slice(0, Math.max(0, Math.min(value.length, caret)))
+  const match = MENTION_QUERY.exec(before)
+  return match ? { start: before.length - match[1].length - 1, query: match[1] } : null
 }
 
 export const SESSION_ROUTING_BEGIN = '===== BEGIN GOOEYPI SESSION REFERENCES ====='
@@ -21,32 +33,16 @@ export interface RoutedSessionReference {
   harness: HarnessId
 }
 
-const boundaryBefore = (value: string | undefined): boolean => value === undefined || /[\s([{"'`]/.test(value)
-const boundaryAfter = (value: string | undefined): boolean => value === undefined || /[\s.,!?;:()[\]{}"'`]/.test(value)
-
 /** Resolves exact visible @title references to stable session UUIDs. */
 export function findSessionMentions(value: string, sessions: readonly SessionRecord[], preferredIds: ReadonlyMap<string, string> = new Map()): SessionMention[] {
   const candidates = [...sessions].filter((session) => session.title.trim()).sort((left, right) => {
     const lengthDifference = right.title.length - left.title.length
     if (lengthDifference) return lengthDifference
-    const key = left.title.trim().toLocaleLowerCase()
+    const key = mentionLabelKey(left.title)
     const preferred = preferredIds.get(key)
     return preferred === left.id ? -1 : preferred === right.id ? 1 : 0
   })
-  const lowerValue = value.toLocaleLowerCase()
-  const mentions: SessionMention[] = []
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== '@' || !boundaryBefore(value[index - 1])) continue
-    const session = candidates.find((candidate) => {
-      const token = `@${candidate.title.trim()}`.toLocaleLowerCase()
-      return lowerValue.startsWith(token, index) && boundaryAfter(value[index + token.length])
-    })
-    if (!session) continue
-    const end = index + session.title.trim().length + 1
-    mentions.push({ start: index, end, text: value.slice(index, end), session })
-    index = end - 1
-  }
-  return mentions
+  return scanAtMentions(value, candidates, (candidate) => candidate.title).map(({ candidate, ...mention }) => ({ ...mention, session: candidate }))
 }
 
 /** Adds immutable ids for the model while preserving the user's visible @title text. */

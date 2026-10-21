@@ -2,6 +2,11 @@ import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { parseExtensionUiRequest } from '@/lib/extension-ui'
 import type { SessionRecord, SessionStatus } from '@/types/api'
 
+export const CLEARED_ATTENTION_STORAGE_KEY = 'prime-work.cleared-session-attention'
+export const CLEARED_ACTIVITY_STORAGE_KEY = 'prime-work.cleared-activity'
+
+const LAUNCH_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+
 interface SessionLifecycleChange {
   status: SessionStatus
   markUnread?: boolean
@@ -67,8 +72,17 @@ export function sessionCompanionNotificationSignature(session: SessionRecord): s
   return session.unread ? `unread:${revision}` : undefined
 }
 
-export function signatureCleared(signature: string | undefined, clearedSignature: string | undefined, unread = false): boolean {
+export function signatureCleared(signature: string | undefined, clearedSignature: string | undefined, unread = false, updatedAt?: string): boolean {
   if (!signature || !clearedSignature) return false
+  const [core, launch, clearedUpdatedAt] = clearedSignature.split('@')
+  if (!launch && /^\d+$/.test(core.slice(core.indexOf(':') + 1))) return false
+  if (launch && launch !== LAUNCH_ID) {
+    const status = signature.slice(0, signature.indexOf(':'))
+    const clearedStatus = core.slice(0, core.indexOf(':'))
+    return Boolean(updatedAt && clearedUpdatedAt && Date.parse(updatedAt) <= Date.parse(clearedUpdatedAt)
+      && (status === clearedStatus || status === 'idle' || status === 'complete' && !unread))
+  }
+  clearedSignature = core
   if (signature === clearedSignature) return true
   const separator = signature.indexOf(':')
   const clearedSeparator = clearedSignature.indexOf(':')
@@ -77,15 +91,19 @@ export function signatureCleared(signature: string | undefined, clearedSignature
   return status === 'idle' || status === 'complete' && !unread
 }
 
-export function sessionShowsCompanionNotification(session: SessionRecord, clearedSignature?: string): boolean {
-  if (session.archived) return false
-  const signature = sessionCompanionNotificationSignature(session)
-  return Boolean(signature && !signatureCleared(signature, clearedSignature, session.unread))
-}
-
 export function activityNotificationSignature(session: SessionRecord): string | undefined {
   if (session.archived || session.status === 'running') return undefined
   return `${session.status}:${session.eventRevision ?? session.updatedAt}`
+}
+
+export function companionClearEntry(session: SessionRecord): string | undefined {
+  const signature = sessionCompanionNotificationSignature(session)
+  return signature ? `${signature}@${LAUNCH_ID}@${session.updatedAt}` : undefined
+}
+
+export function activityClearEntry(session: SessionRecord): string | undefined {
+  const signature = activityNotificationSignature(session)
+  return signature ? `${signature}@${LAUNCH_ID}@${session.updatedAt}` : undefined
 }
 
 function parseClearedSignatures(raw: string | null): Record<string, string> {
@@ -100,16 +118,21 @@ function parseClearedSignatures(raw: string | null): Record<string, string> {
   } catch { return {} }
 }
 
+function readStoredSignatures(key: string, supplied?: string | null): Record<string, string> {
+  try {
+    return parseClearedSignatures(supplied !== undefined ? supplied : typeof window === 'undefined' ? null : window.localStorage.getItem(key))
+  } catch { return {} }
+}
+
+/** Notification dismissal is best effort when browser storage is unavailable. */
+export function writeClearedSignatures(key: string, signatures: Record<string, string>): void {
+  try { window.localStorage.setItem(key, JSON.stringify(signatures)) } catch { /* State remains valid for this renderer lifetime. */ }
+}
+
 export function readClearedAttention(storedValue?: string | null): Record<string, string> {
-  const raw = storedValue !== undefined
-    ? storedValue
-    : typeof window === 'undefined' ? null : window.localStorage.getItem('prime-work.cleared-session-attention')
-  return parseClearedSignatures(raw)
+  return readStoredSignatures(CLEARED_ATTENTION_STORAGE_KEY, storedValue)
 }
 
 export function readClearedActivity(storedValue?: string | null): Record<string, string> {
-  const raw = storedValue !== undefined
-    ? storedValue
-    : typeof window === 'undefined' ? null : window.localStorage.getItem('prime-work.cleared-activity')
-  return parseClearedSignatures(raw)
+  return readStoredSignatures(CLEARED_ACTIVITY_STORAGE_KEY, storedValue)
 }
