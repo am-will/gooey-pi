@@ -82,14 +82,11 @@ const GLIDE_MAX_MS = 550
 const GLIDE_MIN_MS = 160
 const GLIDE_STEP_MS = 28
 
-export interface PageInfo {
+interface PageInfo {
   url: string
   title: string
   innerWidth: number
   innerHeight: number
-  scrollY: number
-  scrollHeight: number
-  readyState: string
 }
 
 export interface AgentBrowserServiceOptions {
@@ -583,7 +580,7 @@ export class AgentBrowserService {
         return this.describe(tab, guest)
       }
       const payload = await this.runPageScript(guest, scrollByScript(deltaX, deltaY), 'scroll')
-      return { ...await this.describe(tab, guest), ...payload }
+      return { ...payload, ...await this.describe(tab, guest) }
     })
   }
 
@@ -793,13 +790,10 @@ export class AgentBrowserService {
   private async pageInfo(guest: WebContents): Promise<PageInfo> {
     const payload = await this.runPageScript(guest, pageInfoScript(), 'page info')
     return {
-      url: typeof payload.url === 'string' ? payload.url : guest.getURL(),
-      title: typeof payload.title === 'string' ? payload.title : '',
-      innerWidth: Number.isSafeInteger(payload.innerWidth) ? payload.innerWidth as number : 0,
-      innerHeight: Number.isSafeInteger(payload.innerHeight) ? payload.innerHeight as number : 0,
-      scrollY: Number.isSafeInteger(payload.scrollY) ? payload.scrollY as number : 0,
-      scrollHeight: Number.isSafeInteger(payload.scrollHeight) ? payload.scrollHeight as number : 0,
-      readyState: typeof payload.readyState === 'string' ? payload.readyState : 'unknown',
+      url: guest.getURL().slice(0, 2000),
+      title: guest.getTitle().slice(0, 300),
+      innerWidth: typeof payload.innerWidth === 'number' && Number.isFinite(payload.innerWidth) ? Math.max(0, Math.min(20_000, Math.round(payload.innerWidth))) : 0,
+      innerHeight: typeof payload.innerHeight === 'number' && Number.isFinite(payload.innerHeight) ? Math.max(0, Math.min(20_000, Math.round(payload.innerHeight))) : 0,
     }
   }
 

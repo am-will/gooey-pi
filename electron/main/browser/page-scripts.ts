@@ -158,13 +158,8 @@ export function elementAtPointScript(x: number, y: number): string {
 
 export function pageInfoScript(): string {
   return `(() => JSON.stringify({
-    url: String(location.href).slice(0, 2000),
-    title: (document.title || '').replace(/\\s+/g, ' ').trim().slice(0, 300),
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
-    scrollY: Math.round(window.scrollY),
-    scrollHeight: (document.scrollingElement || document.documentElement || {}).scrollHeight || 0,
-    readyState: document.readyState,
   }))()`
 }
 
