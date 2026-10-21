@@ -1,3 +1,4 @@
+import { serviceStub } from '../helpers/ipc-harness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -49,9 +50,7 @@ process.exit(2)
   return new OmpModelCatalogService(executable)
 }
 
-function serviceStub(): Record<string, unknown> {
-  return new Proxy({}, { get: () => vi.fn(async () => undefined) })
-}
+
 
 interface Harness {
   invoke(channel: string, ...args: unknown[]): unknown
