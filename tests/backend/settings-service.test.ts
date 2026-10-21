@@ -209,6 +209,31 @@ describe('SettingsService.update', () => {
     expect(next.keepRunningInBackground).toBe(true)
   })
 
+  it('preserves unrelated settings after a refused login item', async () => {
+    const service = makeService(undefined, () => { throw new Error('login item refused') })
+    await expect(service.update({ launchAtLogin: true, keepRunningInBackground: true, locale: 'ja' })).rejects.toThrow('login item refused')
+    expect(service.get()).toMatchObject({ launchAtLogin: false, keepRunningInBackground: true, locale: 'ja' })
+  })
+
+  it('serializes lifecycle failures before accepting a newer login-item request', async () => {
+    let rejectFirst: (reason: Error) => void = () => undefined
+    let enteredFirst: () => void = () => undefined
+    const entered = new Promise<void>((resolve) => { enteredFirst = resolve })
+    const failed = new Promise<void>((_, reject) => { rejectFirst = reject })
+    const onDidUpdate = vi.fn().mockImplementationOnce(() => { enteredFirst(); return failed }).mockResolvedValue(undefined)
+    const service = makeService(undefined, onDidUpdate)
+    const first = service.update({ launchAtLogin: true })
+    const firstFailure = expect(first).rejects.toThrow('first login item refused')
+    await entered
+    const second = service.update({ launchAtLogin: true, theme: 'dark' })
+    expect(onDidUpdate).toHaveBeenCalledTimes(1)
+    rejectFirst(new Error('first login item refused'))
+    await firstFailure
+    await expect(second).resolves.toMatchObject({ launchAtLogin: true, theme: 'dark' })
+    expect(service.get()).toMatchObject({ launchAtLogin: true, theme: 'dark' })
+    expect(onDidUpdate).toHaveBeenCalledTimes(2)
+  })
+
   it('reverts the saved patch when a lifecycle integration rejects it', async () => {
     const onDidUpdate = vi.fn(() => { throw new Error('macOS needs your approval') })
     const service = makeService(undefined, onDidUpdate)

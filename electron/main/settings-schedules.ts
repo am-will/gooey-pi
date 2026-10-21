@@ -1,12 +1,13 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
 import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, type LocalePreference, type ProjectSortMode } from '../../src/types/api'
-import { isDeepStrictEqual } from 'node:util'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
+import { createKeyedMutex } from './lib/async'
 import type { JsonStateStore } from './store'
 import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
 export class SettingsService {
+  private readonly updates = createKeyedMutex<'settings'>()
   constructor(
     private readonly store: JsonStateStore,
     private readonly validateShell: (shell: unknown) => string,
@@ -150,25 +151,24 @@ export class SettingsService {
       if (raw[key] !== undefined) patch[key] = validators[key](raw[key])
     }
     for (const key of keys) applyField(key)
-    let previous: AppSettings | undefined
-    const next = await this.store.update((state) => {
-      previous = structuredClone(state.settings)
-      const next = { ...state.settings, ...patch }
-      Object.assign(state.settings, next)
-      return state.settings
-    })
-    try {
-      await this.onDidUpdate(previous!, next)
-    } catch (error) {
-      // Revert the saved patch so it matches what the renderer reverts to; keys a newer write changed are kept.
-      await this.store.update((state) => {
-        for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
-          if (isDeepStrictEqual(state.settings[key], next[key])) Object.assign(state.settings, { [key]: previous![key] })
-        }
+    return this.updates.run('settings', async () => {
+      let previous: AppSettings | undefined
+      const next = await this.store.update((state) => {
+        previous = structuredClone(state.settings)
+        Object.assign(state.settings, patch)
+        return state.settings
       })
-      throw error
-    }
-    return next
+      try {
+        await this.onDidUpdate(previous!, next)
+      } catch (error) {
+        // Tray and other settings have already applied; only the refused login-item change failed.
+        if (patch.launchAtLogin !== undefined && previous!.launchAtLogin !== next.launchAtLogin) {
+          await this.store.update((state) => { state.settings.launchAtLogin = previous!.launchAtLogin })
+        }
+        throw error
+      }
+      return next
+    })
   }
 
   private voiceModel(value: unknown, label: string): string {
