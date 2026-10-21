@@ -16,8 +16,7 @@ Pi's data roots. Discovery checks the configured path, `PI_BINARY`, inherited
 [`PI_RPC_ADAPTER`](../electron/main/agent-rpc/harness-adapter.ts) starts Pi in
 RPC mode. The runtime sets the child process working directory to the authorized
 project; Pi has no `--cwd` flag. Resume uses `--session` with the exact validated
-path. Model selection passes separate provider and model arguments. The adapter
-has no `spawnsInCwd` option.
+path. Model selection passes separate provider and model arguments.
 
 Pi uses JSONL requests and responses without OMP's ready-frame negotiation or
 chunk protocol. The shared runtime obtains state and session statistics and

@@ -29,8 +29,10 @@ When the user has the Browser panel's Preview open for this thread, `browser_tab
 2. Prefer `browser_read_page` refs for clicking and typing — they are exact. Refs go stale after any navigation; re-read the page first.
 3. Use `browser_screenshot` to verify visual state, before/after coordinate clicks, and whenever a page behaves unexpectedly. Screenshot pixels map 1:1 to click coordinates, and the blue circle marker shows your cursor's current position - compare it against your intended target to correct your aim.
 4. Every `browser_click` result reports the element actually hit under `clicked`; if it is not what you meant, re-read the page and adjust instead of repeating the same click.
-4. For forms: `browser_type` with `ref`, then `submit:true` or click the submit control.
-5. Only http(s) URLs work; downloads, popups, and permission prompts are blocked by the app.
+5. For forms: `browser_type` with `ref`, then `submit:true` or click the submit control.
+6. Only HTTP(S) URLs work. A browser click can start a download subject to the app's gesture, URL, and size checks. If save prompting is disabled, the file is saved
+   under a unique sanitized name in the OS Downloads folder, normally `~/Downloads`.
+   Popups and permission prompts remain blocked.
 
 ## Rules
 
