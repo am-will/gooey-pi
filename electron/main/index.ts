@@ -12,6 +12,7 @@ import { installApplicationMenu } from './application-menu'
 import { mainWindowBounds } from './window-bounds'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
+import { bindRendererNavigation } from './renderer-navigation'
 import { hardenRenderer, registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY_POLICY } from './renderer-security'
 import { installCrashGuards } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
@@ -297,15 +298,13 @@ async function createWindow(): Promise<BrowserWindow | null> {
     event.preventDefault()
     if (!window.isDestroyed()) window.close()
   })
-  renderer.on('did-finish-load', () => {
-    if (renderer.isDestroyed()) return
-    // A reload resets the zoom factor, so the persisted scale is re-applied
-    // on every load rather than only at window creation.
-    renderer.setZoomFactor(interfaceZoomFactor())
-    if (isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)) ipc?.authorize(renderer)
-  })
-  renderer.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
-    if (isMainFrame && !isTrustedRendererUrl(url, trustedRendererUrl)) ipc?.revoke(rendererId)
+  bindRendererNavigation(renderer, {
+    trustedUrl: () => trustedRendererUrl,
+    zoomFactor: interfaceZoomFactor,
+    authorize: (contents) => ipc?.authorize(contents),
+    revoke: (ownerId) => ipc?.revoke(ownerId),
+    killTerminals: async (ownerId) => { await terminals?.killOwner(ownerId) },
+    log: (message) => console.error(message),
   })
   renderer.on('render-process-gone', () => ipc?.revoke(rendererId))
   let rendererLoaded = false
