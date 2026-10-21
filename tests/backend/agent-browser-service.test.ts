@@ -179,6 +179,17 @@ describe('AgentBrowserService', () => {
     await expect(service.scroll('/sessions/a.jsonl', { tabId, direction: 'down' })).resolves.toMatchObject({ url: 'https://example.com/', scrollY: 25 })
   })
 
+  it('dispatches agent input without focusing the guest webContents', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    const focus = vi.spyOn(guest, 'focus')
+    await service.click('/sessions/a.jsonl', { tabId, x: 10, y: 10 })
+    await service.type('/sessions/a.jsonl', { tabId, text: 'hello' })
+    await service.pressKey('/sessions/a.jsonl', { tabId, key: 'Enter' })
+    expect(focus).not.toHaveBeenCalled()
+    expect(guest.insertedText).toEqual(['hello'])
+  })
+
   it('bounds oversized script responses before parsing them', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId } = await openAttached('/sessions/a.jsonl')
