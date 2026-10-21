@@ -10,7 +10,7 @@ const electron = vi.hoisted(() => ({
   },
   BrowserWindow: class {},
   dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
-  Menu: { buildFromTemplate: vi.fn((_template: Array<{ label: string; click(): void }>) => ({ popup: vi.fn() })) },
+  Menu: { buildFromTemplate: vi.fn((_template: MenuItemConstructorOptions[]) => ({ popup: vi.fn() })) },
   nativeImage: { createFromPath: vi.fn() },
   protocol: { registerSchemesAsPrivileged: vi.fn() },
   session: {},
@@ -25,7 +25,7 @@ import { hardenRenderer, resolveRendererAssetPath } from '../../electron/main/re
 import { activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/app-lifecycle'
 import { StateMigrationError, UnsupportedStateVersionError } from '../../electron/main/store'
 import type { RuntimeInfo } from '../../src/types/api'
-import type { BrowserWindow } from 'electron'
+import type { BrowserWindow, MenuItemConstructorOptions } from 'electron'
 
 type Handler = (...args: never[]) => void
 
@@ -187,6 +187,8 @@ function hardenedWindow(currentUrl = 'prime-work://app/index.html') {
     getURL: () => currentUrl,
     isDestroyed: vi.fn(() => false),
     copyImageAt: vi.fn(),
+    replaceMisspelling: vi.fn(),
+    session: { addWordToSpellCheckerDictionary: vi.fn() },
   }
   const window = { webContents, isDestroyed: vi.fn(() => false) }
   hardenRenderer(window as unknown as BrowserWindow, () => 'prime-work://app/index.html')
@@ -230,6 +232,22 @@ describe('renderer hardening', () => {
     }
   })
 
+  it('offers native text editing and spellcheck suggestions with current edit permissions', () => {
+    electron.Menu.buildFromTemplate.mockClear()
+    const { handler, webContents } = hardenedWindow()
+    handler('context-menu')(...[{}, { isEditable: true, misspelledWord: 'teh', dictionarySuggestions: ['the'], editFlags: { canUndo: false, canRedo: false, canCopy: false, canCut: false, canPaste: true } }] as never[])
+    const template = electron.Menu.buildFromTemplate.mock.calls[0]?.[0]
+    expect(template).toContainEqual({ role: 'paste', enabled: true })
+    expect(template).toContainEqual({ role: 'cut', enabled: false })
+    template?.find((item) => item.label === 'the')?.click?.(undefined as never, undefined as never, undefined as never)
+    expect(webContents.replaceMisspelling).toHaveBeenCalledWith('the')
+    template?.find((item) => item.label === 'Add to Dictionary')?.click?.(undefined as never, undefined as never, undefined as never)
+    expect(webContents.session.addWordToSpellCheckerDictionary).toHaveBeenCalledWith('teh')
+    webContents.isDestroyed.mockReturnValue(true)
+    template?.find((item) => item.label === 'the')?.click?.(undefined as never, undefined as never, undefined as never)
+    expect(webContents.replaceMisspelling).toHaveBeenCalledOnce()
+  })
+
   it('offers native image copying only for decoded images in the trusted renderer', () => {
     electron.Menu.buildFromTemplate.mockClear()
     const { handler, webContents } = hardenedWindow()
@@ -241,7 +259,7 @@ describe('renderer hardening', () => {
     expect(electron.Menu.buildFromTemplate).toHaveBeenCalledOnce()
     const template = electron.Menu.buildFromTemplate.mock.calls[0]?.[0]
     expect(template?.[0]?.label).toBe('Copy Image')
-    template?.[0]?.click()
+    template?.[0]?.click?.(undefined as never, undefined as never, undefined as never)
     expect(webContents.copyImageAt).toHaveBeenCalledWith(14, 27)
   })
 
