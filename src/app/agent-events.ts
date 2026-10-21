@@ -1,5 +1,6 @@
+import { parseContextUsage, parseSessionUsage } from '@/lib/usage'
 import type { PrimeEventBuffer } from '@/lib/events'
-import type { PrimeContextUsage, SessionUsage, SessionUsageTokens, TranscriptMessage } from '@/types/api'
+import type { PrimeContextUsage, SessionUsage, TranscriptMessage } from '@/types/api'
 
 export interface PendingAgentEvent {
   generation: number
@@ -31,32 +32,11 @@ export function eventType(event: Record<string, unknown>): string {
 }
 
 export function contextUsageFromEvent(event: Record<string, unknown>): PrimeContextUsage | null {
-  if (eventType(event) !== 'context_usage' || typeof event.contextUsage !== 'object' || event.contextUsage === null || Array.isArray(event.contextUsage)) return null
-  const raw = event.contextUsage as Record<string, unknown>
-  if (!Number.isSafeInteger(raw.contextWindow) || Number(raw.contextWindow) <= 0) return null
-  const tokens = raw.tokens === null ? null : Number.isSafeInteger(raw.tokens) && Number(raw.tokens) >= 0 ? Number(raw.tokens) : undefined
-  const percent = raw.percent === null ? null : typeof raw.percent === 'number' && Number.isFinite(raw.percent) && raw.percent >= 0 ? raw.percent : undefined
-  if (tokens === undefined || percent === undefined) return null
-  return { tokens, contextWindow: Number(raw.contextWindow), percent }
+  return eventType(event) === 'context_usage' ? parseContextUsage(event.contextUsage) : null
 }
 
-const SESSION_TOKEN_FIELDS: Array<keyof SessionUsageTokens> = ['input', 'output', 'cacheRead', 'cacheWrite', 'total']
-
 export function sessionUsageFromEvent(event: Record<string, unknown>): SessionUsage | null {
-  if (eventType(event) !== 'session_usage' || typeof event.sessionUsage !== 'object' || event.sessionUsage === null || Array.isArray(event.sessionUsage)) return null
-  const raw = event.sessionUsage as Record<string, unknown>
-  const cost = raw.cost === null ? null : typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? raw.cost : undefined
-  if (cost === undefined) return null
-  if (raw.tokens === undefined) return { cost }
-  if (typeof raw.tokens !== 'object' || raw.tokens === null || Array.isArray(raw.tokens)) return null
-  const rawTokens = raw.tokens as Record<string, unknown>
-  const tokens: Partial<SessionUsageTokens> = {}
-  for (const field of SESSION_TOKEN_FIELDS) {
-    const value = rawTokens[field]
-    if (!Number.isSafeInteger(value) || Number(value) < 0) return null
-    tokens[field] = Number(value)
-  }
-  return { cost, tokens: tokens as SessionUsageTokens }
+  return eventType(event) === 'session_usage' ? parseSessionUsage(event.sessionUsage) : null
 }
 
 export function needsTranscriptReconciliation(event: Record<string, unknown>): boolean {
