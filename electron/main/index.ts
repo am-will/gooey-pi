@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog, type ShutdownPrompt } from './app-lifecycle'
-import { boundedErrorMessage } from './validation'
+import { boundedErrorMessage, firstAccepted } from './validation'
 import { isAllowedBrowserUrl } from '../../src/lib/browser-url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
@@ -211,30 +211,12 @@ async function bootstrap(): Promise<void> {
   // Git and terminals are harness-agnostic: a cwd (or bound session) is valid
   // when any harness's own grants authorize it. Prime is consulted first so
   // Prime-only setups keep their exact behavior and error text.
-  const authorizeEitherCwd = async (cwd: string): Promise<string> => {
-    try { return await projects.authorizeCwd(cwd) } catch (error) {
-      for (const fallback of [ompProjects, piProjects]) {
-        try { return await fallback.authorizeCwd(cwd) } catch { /* try the next harness; the Prime error is rethrown */ }
-      }
-      throw error
-    }
-  }
-  const authorizeEitherReadOnlyCwd = async (cwd: string): Promise<string> => {
-    try { return await projects.authorizeReadOnlyCwd(cwd) } catch (error) {
-      for (const fallback of [ompProjects, piProjects]) {
-        try { return await fallback.authorizeReadOnlyCwd(cwd) } catch { /* try the next harness; the Prime error is rethrown */ }
-      }
-      throw error
-    }
-  }
-  const requireEitherSessionPath = async (path: string): Promise<string> => {
-    try { return await sessions.requireSessionPath(path) } catch (error) {
-      for (const fallback of [ompSessions, piSessions]) {
-        try { return await fallback.requireSessionPath(path) } catch { /* try the next harness; the Prime error is rethrown */ }
-      }
-      throw error
-    }
-  }
+  const authorizeEitherCwd = (cwd: string): Promise<string> =>
+    firstAccepted([projects, ompProjects, piProjects].map((project) => () => project.authorizeCwd(cwd)))
+  const authorizeEitherReadOnlyCwd = (cwd: string): Promise<string> =>
+    firstAccepted([projects, ompProjects, piProjects].map((project) => () => project.authorizeReadOnlyCwd(cwd)))
+  const requireEitherSessionPath = (path: string): Promise<string> =>
+    firstAccepted([sessions, ompSessions, piSessions].map((service) => () => service.requireSessionPath(path)))
   const git = new GitService(authorizeEitherCwd, authorizeEitherReadOnlyCwd)
   // This matches the renderer's startup query so both consumers share SessionService's coalesced catalog scan.
   const listCatalogSessions = (): ReturnType<SessionService['list']> => sessions.list(undefined, true)

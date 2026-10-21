@@ -1,5 +1,5 @@
 import { ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import type { ApplicationMenuName, AppMeta, HarnessId, SessionChangeEvent, ThemeMode } from '../../src/types/api'
+import { APPLICATION_MENU_NAMES, HARNESS_IDS, THEME_MODES, type ApplicationMenuName, type AppMeta, type HarnessId, type SessionChangeEvent, type ThemeMode } from '../../src/types/api'
 import type { AgentRpcManager } from './agent-rpc'
 import { assertRendererCommand } from './agent-rpc/command-schema'
 import type { GitService } from './git'
@@ -20,7 +20,7 @@ import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
 import { createKeyedMutex } from './lib/async'
-import { boundedErrorMessage, requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { boundedErrorMessage, firstAccepted, isOneOf, requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -62,12 +62,12 @@ interface HarnessServices {
 /** Strict enum gate for the untrusted optional harness argument; absence means 'prime'. */
 function requireHarness(value: unknown): HarnessId {
   if (value === undefined) return 'prime'
-  if (value === 'prime' || value === 'omp' || value === 'pi') return value
+  if (isOneOf(HARNESS_IDS, value)) return value
   throw new TypeError('Invalid harness')
 }
 
 function requireApplicationMenu(value: unknown): ApplicationMenuName {
-  if (value === 'file' || value === 'edit' || value === 'view' || value === 'window' || value === 'help') return value
+  if (isOneOf(APPLICATION_MENU_NAMES, value)) return value
   throw new TypeError('Invalid application menu')
 }
 
@@ -77,7 +77,7 @@ function requireMenuCoordinate(value: unknown): number {
 }
 
 function requireResolvedTheme(value: unknown): Exclude<ThemeMode, 'system'> {
-  if (value === 'light' || value === 'dark') return value
+  if (isOneOf(THEME_MODES, value) && value !== 'system') return value
   throw new TypeError('Invalid resolved theme')
 }
 
@@ -171,18 +171,12 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
    * substring checks). Paths no root accepts rethrow the Prime error, so
    * rejection shape and text are unchanged.
    */
-  const sessionsForPath = async (filePath: unknown): Promise<{ harness: HarnessId; service: SessionService }> => {
-    try {
-      await services.sessions.requireSessionPath(filePath)
-      return { harness: 'prime', service: services.sessions }
-    } catch (primeError) {
-      for (const harness of ['omp', 'pi'] as const) {
-        try { await sessionServices[harness].requireSessionPath(filePath) } catch { continue }
-        return { harness, service: sessionServices[harness] }
-      }
-      throw primeError
-    }
-  }
+  const sessionsForPath = (filePath: unknown): Promise<{ harness: HarnessId; service: SessionService }> =>
+    firstAccepted((['prime', 'omp', 'pi'] as const).map((harness) => async () => {
+      const service = sessionServices[harness]
+      await service.requireSessionPath(filePath)
+      return { harness, service }
+    }))
   /** OMP and pi credentials stay CLI-owned; desktop-only visibility is routed separately below. */
   const cliOwnedProviderAuth: Partial<Record<HarnessId, string>> = {
     omp: 'OMP provider authentication is managed by the omp CLI',
@@ -224,19 +218,15 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       () => services.pi.sessions.requireSessionPath(requested),
       () => services.pi.plugins.authorizeReveal(requested),
     ]
-    for (const authorize of authorizations) {
-      let authorized: string
-      try { authorized = await authorize() } catch { continue /* denial here defers to the next authorization domain */ }
-      try {
-        shell.showItemInFolder(authorized)
-        return true
-      } catch (error) {
-        console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
-        return false
-      }
+    let authorized: string
+    try { authorized = await firstAccepted(authorizations) } catch {
+      console.warn('Rejected app:reveal-path: no authorization domain covers the path')
+      return false
     }
-    console.warn('Rejected app:reveal-path: no authorization domain covers the path')
-    return false
+    try { shell.showItemInFolder(authorized); return true } catch (error) {
+      console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
+      return false
+    }
   })
   handle('updates:get-state', () => services.updates.getState())
   handle('updates:check', () => services.updates.check())
