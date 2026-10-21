@@ -6,7 +6,7 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { MarkdownText } from './MarkdownText'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { useI18n } from '@/lib/i18n'
-import { OmpMark, PiMark, PrimeMark } from './ui'
+import { HarnessMark } from './HarnessMark'
 import { ActivityMessage, AgentMessage, AssistantMessage, GoalMessage, SteerReadMarker, UserMessage } from './transcript/messages'
 import { useTranscriptScroll } from './transcript/scroll'
 import { LiveElapsed, ThinkingDots, WorkDisclosure } from './transcript/timeline'
@@ -56,18 +56,12 @@ interface TranscriptProps {
 }
 
 
-const ASSISTANT_MARKS = { omp: OmpMark, prime: PrimeMark, pi: PiMark } satisfies Record<HarnessId, unknown>
-function AssistantMark({ harness, size = 24 }: { harness: HarnessId; size?: number }) {
-  const Mark = ASSISTANT_MARKS[harness]
-  return <Mark size={size} />
-}
-
 function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: { message: TranscriptMessage; harness: HarnessId; showReasoning: boolean; showTools: boolean }) {
   const { t } = useI18n()
   const visibleActivity = message.parts.some((part) => part.type === 'thinking' && showReasoning || (part.type === 'toolCall' || part.type === 'toolResult') && showTools || part.type === 'agentMessage')
   return (
     <article className="message message--assistant">
-      <div className="assistant-mark"><AssistantMark harness={harness} /></div>
+      <div className="assistant-mark"><HarnessMark harness={harness} /></div>
       <div className="message__content">
         {visibleActivity
           ? <WorkDisclosure message={message} parts={message.parts} showReasoning={showReasoning} showTools={showTools} running />
@@ -101,7 +95,7 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
       <div className="transcript__inner">
         {loading ? <div className="transcript-loading"><LoaderCircle className="spin" size={16} /> {t('transcript.loadingSession')}</div> : null}
         {!loading && messages.length === 0 ? <div className="session-welcome">
-          <AssistantMark harness={harness} size={34} />
+          <HarnessMark harness={harness} size={34} />
           <h1>{t('transcript.welcome.title')}</h1>
           <p>{t('transcript.welcome.description', { harness: HARNESS_SHORT_NAMES[harness] })}</p>
           <div className="prompt-suggestions">
@@ -123,7 +117,7 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
             : <div className={`message message--${message.role}`}>{message.parts.map((part, partIndex) => part.type === 'text' ? <span key={partIndex}>{part.text}</span> : null)}</div>}
         </ErrorBoundary>)}
         {active && !activeAssistantId ? <article className="message message--assistant transcript-active-placeholder" aria-live="polite">
-          <div className="assistant-mark"><AssistantMark harness={harness} /></div><div className="streaming-state"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}</div>
+          <div className="assistant-mark"><HarnessMark harness={harness} /></div><div className="streaming-state"><ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}</div>
         </article> : null}
         <div />
       </div>

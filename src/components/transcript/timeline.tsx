@@ -1,4 +1,4 @@
-import { memo, useMemo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useMemo, useEffect, useState, type ReactNode } from 'react'
 import {
   Check,
   ChevronDown,
@@ -17,7 +17,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import type { MessagePart, PrimeCompactionReason, TranscriptMessage } from '@/types/api'
-import { writeClipboardText } from '@/lib/clipboard'
+import { useCopyFeedback } from '@/hooks/useCopyFeedback'
 import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { boundText } from '@/lib/render-bounds'
@@ -114,8 +114,7 @@ export function LiveElapsed({ since }: { since?: string | number }) {
 const ToolPart = memo(function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall' }>; next?: MessagePart }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const resetCopiedTimerRef = useRef<number | null>(null)
+  const { copied, copy } = useCopyFeedback()
   const result = next?.type === 'toolResult' ? next : undefined
   const failed = result?.isError
   const finished = result && !result.streaming
@@ -129,23 +128,6 @@ const ToolPart = memo(function ToolPart({ part, next }: { part: Extract<MessageP
   const canExpand = Boolean(result?.text) || (typeof part.args === 'string' ? Boolean(part.args) : part.args !== undefined)
   const state = failed ? 'error' : finished ? 'done' : kind === 'question' ? 'waiting' : 'running'
   const preview = toolPreview(part)
-  useEffect(
-    () => () => {
-      if (resetCopiedTimerRef.current !== null) window.clearTimeout(resetCopiedTimerRef.current)
-    },
-    [],
-  )
-
-  const copyContents = async () => {
-    try {
-      await writeClipboardText(visibleOutput)
-      setCopied(true)
-      if (resetCopiedTimerRef.current !== null) window.clearTimeout(resetCopiedTimerRef.current)
-      resetCopiedTimerRef.current = window.setTimeout(() => setCopied(false), 1_500)
-    } catch {
-      setCopied(false)
-    }
-  }
 
   return (
     <div className={`activity-line activity-line--tool activity-line--${kind} is-${state}`}>
@@ -159,7 +141,7 @@ const ToolPart = memo(function ToolPart({ part, next }: { part: Extract<MessageP
       {open && visibleOutput ? (
         <div className="activity-tool__details">
           <div className="activity-tool__details-toolbar">
-            <button type="button" className="activity-tool__copy" aria-label={t('transcript.copyToolContents', { action: t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy') })} onClick={() => void copyContents()}>
+            <button type="button" className="activity-tool__copy" aria-label={t('transcript.copyToolContents', { action: t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy') })} onClick={() => void copy(visibleOutput)}>
               {copied ? <Check size={12} /> : <Copy size={12} />} {t(copied ? 'transcript.copyAction.copied' : 'transcript.copyAction.copy')}
             </button>
           </div>
