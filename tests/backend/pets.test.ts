@@ -1,7 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFile } from 'node:fs/promises'
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, readFile: vi.fn(actual.readFile) }
+})
 import { PetService } from '../../electron/main/pets'
 
 const roots: string[] = []
@@ -57,4 +62,23 @@ describe('PetService', () => {
     const service = new PetService({ builtInRoot, codexRoot })
     expect((await service.list()).map((pet) => pet.id)).toEqual(['orb', 'gooey-pi', 'codex/target'])
   })
+})
+
+
+it('reads only WebP headers during listing and retains duplicate/symlink/size protections', async () => {
+  const root = makeRoot()
+  const builtInRoot = join(root, 'built-in')
+  const codexRoot = join(root, 'codex')
+  writePet(builtInRoot, 'gooey-pi')
+  writePet(codexRoot, 'duplicate-gooey', 'gooey-pi')
+  writePet(codexRoot, 'first', 'same-pet')
+  writePet(codexRoot, 'second', 'same-pet')
+  const invalid = writePet(codexRoot, 'invalid'); writeFileSync(join(invalid, 'spritesheet.webp'), 'not a WebP header')
+  const oversized = writePet(codexRoot, 'large'); truncateSync(join(oversized, 'spritesheet.webp'), 16 * 1024 * 1024 + 1)
+  const linked = writePet(codexRoot, 'linked'); rmSync(join(linked, 'spritesheet.webp')); symlinkSync(join(invalid, 'spritesheet.webp'), join(linked, 'spritesheet.webp'))
+  const service = new PetService({ builtInRoot, codexRoot })
+  vi.mocked(readFile).mockClear()
+  expect((await service.list()).map((pet) => pet.id)).toEqual(['orb', 'gooey-pi', 'codex/first'])
+  expect(vi.mocked(readFile).mock.calls.some(([path]) => String(path).endsWith('spritesheet.webp'))).toBe(false)
+  for (const id of ['codex/duplicate-gooey', 'codex/second', 'codex/invalid', 'codex/large', 'codex/linked']) await expect(service.sprite(id)).resolves.toBeNull()
 })

@@ -1,6 +1,7 @@
-import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
-import type { Dirent } from 'node:fs'
+import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
+import { constants, type Dirent } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
+import { ORB_PET } from '../../src/lib/pets'
 import type { PetDefinition } from '../../src/types/api'
 import { isRecord } from './validation'
 
@@ -37,6 +38,25 @@ async function boundedFile(path: string, maxBytes: number): Promise<Buffer | nul
   } catch { return null }
 }
 
+function isWebpHeader(bytes: Buffer): boolean {
+  return bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+}
+
+async function hasWebpSpritesheet(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path)
+    if (!info.isFile() || info.isSymbolicLink() || info.size < 12 || info.size > MAX_SPRITESHEET_BYTES) return false
+    const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const opened = await handle.stat()
+      if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size !== info.size) return false
+      const header = Buffer.alloc(12)
+      const { bytesRead } = await handle.read(header, 0, header.length, 0)
+      return bytesRead === 12 && isWebpHeader(header)
+    } finally { await handle.close() }
+  } catch { return false }
+}
+
 function boundedText(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null
   const normalized = value.trim()
@@ -54,8 +74,7 @@ async function readPackage(directory: string, selectionId: string, source: PetDe
   const description = boundedText(manifest.description, 240)
   if (!petId || !PET_ID.test(petId) || !displayName || !description || manifest.spritesheetPath !== 'spritesheet.webp') return null
   const spritesheet = join(directory, 'spritesheet.webp')
-  const header = await boundedFile(spritesheet, MAX_SPRITESHEET_BYTES)
-  if (!header || header.length < 12 || header.subarray(0, 4).toString('ascii') !== 'RIFF' || header.subarray(8, 12).toString('ascii') !== 'WEBP') return null
+  if (!await hasWebpSpritesheet(spritesheet)) return null
   return {
     definition: { id: selectionId, petId, displayName, description, source, kind: 'spritesheet' },
     directory,
@@ -96,15 +115,7 @@ export class PetService {
   }
 
   async list(): Promise<PetDefinition[]> {
-    const orb: PetDefinition = {
-      id: 'orb',
-      petId: 'orb',
-      displayName: 'Orb',
-      description: 'A fluid voice orb that shifts with GooeyPi activity.',
-      source: 'built-in',
-      kind: 'orb',
-    }
-    return [orb, ...(await this.packages()).map((item) => item.definition)]
+    return [ORB_PET, ...(await this.packages()).map((item) => item.definition)]
   }
 
   async sprite(selectionId: unknown): Promise<string | null> {
@@ -112,7 +123,7 @@ export class PetService {
     const candidate = (await this.packages()).find((item) => item.definition.id === selectionId)
     if (!candidate) return null
     const value = await boundedFile(candidate.spritesheet, MAX_SPRITESHEET_BYTES)
-    if (!value || value.length < 12 || value.subarray(0, 4).toString('ascii') !== 'RIFF' || value.subarray(8, 12).toString('ascii') !== 'WEBP') return null
+    if (!value || !isWebpHeader(value)) return null
     return `data:image/webp;base64,${value.toString('base64')}`
   }
 }
