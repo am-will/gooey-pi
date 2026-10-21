@@ -5,9 +5,7 @@ import { nextTranscriptId, withPartId } from './ids'
 import { fallbackModelFromRecord, fallbackNoticeText } from './model-fallback'
 import { agentMessagePart, record, resultText, string } from './parse'
 
-// This reducer runs while agent events stream in, outside React, so its
-// system-row copy is resolved on demand through the interface locale mirror.
-// English output is unchanged (the mirror defaults to `en`).
+// Structured notices keep canonical English fallback text for render-time translation.
 
 export interface PrimeEventReplayStats {
   messageScans: number
@@ -29,7 +27,6 @@ interface PartDraft {
   firstToolById: Map<string | undefined, PartNode>
 }
 
-/** Applies a frame batch with one transcript scan and one scan of each drafted part list. */
 /**
  * Tool events without a toolCallId must still pair their start/update/end
  * events onto one tool row instead of appending a phantom second row, so
@@ -60,6 +57,7 @@ export function createSteerPickupEvent(prompts: QueuedPrompt[]): Record<string, 
   return { type: 'gooeypi_steer_pickup', prompts, [LOCAL_STEER_PICKUP]: true }
 }
 
+/** Applies a frame batch with one transcript scan and one scan of each drafted part list. */
 export function replayPrimeEvents(
   messages: TranscriptMessage[],
   events: Record<string, unknown>[],
