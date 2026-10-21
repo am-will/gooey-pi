@@ -449,6 +449,9 @@ export async function validateGitBranch(cwd: string, branchValue: unknown): Prom
 export async function createGitWorktree(cwd: string, targetPath: string, branchValue: unknown): Promise<void> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
   const branch = await validateGitBranch(repositoryRoot, branchValue)
+  if (filterOverridesFromConfig(await repositoryConfig(repositoryRoot)).length) {
+    throw new Error('Git worktree creation is blocked because this repository configures clean/smudge filters. Use a trusted Git client with the required filter support.')
+  }
   const result = await runGit(repositoryRoot, ['worktree', 'add', '-b', branch, '--', resolve(targetPath)], { timeoutMs: 2 * 60_000, maxBytes: GIT_WORKTREE_OUTPUT_LIMIT })
   requireProcessSuccess('Git worktree creation', result)
 }
