@@ -162,8 +162,8 @@ export class AgentBrowserService {
         title: tab.title,
         attached: tab.webContentsId !== null,
         active: this.activeBySession.get(tab.sessionKey) === tab.tabId,
-        canGoBack: alive && guest.canGoBack(),
-        canGoForward: alive && guest.canGoForward(),
+        canGoBack: alive && guest.navigationHistory.canGoBack(),
+        canGoForward: alive && guest.navigationHistory.canGoForward(),
       }
     })
     return { tabs }
@@ -175,8 +175,8 @@ export class AgentBrowserService {
     const action = requireString(actionValue, 'action', { min: 1, max: 16, trim: true })
     const guest = tab.webContentsId === null ? undefined : this.options.getGuest(tab.webContentsId)
     if (!guest || guest.isDestroyed()) return false
-    if (action === 'back') { if (guest.canGoBack()) guest.goBack() }
-    else if (action === 'forward') { if (guest.canGoForward()) guest.goForward() }
+    if (action === 'back') { if (guest.navigationHistory.canGoBack()) guest.navigationHistory.goBack() }
+    else if (action === 'forward') { if (guest.navigationHistory.canGoForward()) guest.navigationHistory.goForward() }
     else if (action === 'reload') guest.reload()
     else if (action === 'url') {
       const url = requireString(urlValue, 'url', { min: 1, max: 2048, trim: true })
@@ -392,8 +392,8 @@ export class AgentBrowserService {
         await this.loadAndSettle(guest, url)
       } else {
         const action = requireString(params.action, 'action', { min: 1, max: 16, trim: true })
-        if (action === 'back') { if (!guest.canGoBack()) throw new Error('There is no page to go back to'); guest.goBack() }
-        else if (action === 'forward') { if (!guest.canGoForward()) throw new Error('There is no page to go forward to'); guest.goForward() }
+        if (action === 'back') { if (!guest.navigationHistory.canGoBack()) throw new Error('There is no page to go back to'); guest.navigationHistory.goBack() }
+        else if (action === 'forward') { if (!guest.navigationHistory.canGoForward()) throw new Error('There is no page to go forward to'); guest.navigationHistory.goForward() }
         else if (action === 'reload') guest.reload()
         else throw new TypeError('action must be back, forward, or reload')
         await this.waitForLoad(guest)
