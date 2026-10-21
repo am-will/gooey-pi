@@ -14,6 +14,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
   const { t } = useI18n()
   const [available, setAvailable] = useState<PetDefinition[]>(BUILT_IN_PETS)
   const [loading, setLoading] = useState(false)
+  const [spriteRevision, setSpriteRevision] = useState(0)
   // The key is stored instead of the message so the error follows the interface
   // language and the refresh callback stays independent of the translator.
   const [loadError, setLoadError] = useState<MessageKey | null>(null)
@@ -25,6 +26,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
     try {
       const items = await pets.list()
       setAvailable(items.length ? items : BUILT_IN_PETS)
+      setSpriteRevision((revision) => revision + 1)
     } catch {
       setLoadError('settings.pets.codex.loadError')
       setAvailable(BUILT_IN_PETS)
@@ -39,7 +41,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
     <>
       <header><h1>{t('settings.pets')}</h1><p>{t('settings.pets.description')}</p></header>
       <section className="pet-hero">
-        <div className="pet-hero__stage"><PetAvatar pet={selected} pets={pets} activity="speaking" size={Math.round(96 * settings.petSize / 100)} reduceMotion={settings.reduceMotion} /></div>
+        <div className="pet-hero__stage"><PetAvatar key={spriteRevision} pet={selected} pets={pets} activity="speaking" size={Math.round(96 * settings.petSize / 100)} reduceMotion={settings.reduceMotion} /></div>
         <div><span className="pet-kicker"><Sparkles size={12} /> {t('settings.pets.activeCompanion')}</span><h2>{petDisplayName(selected, t)}</h2><p>{selectedCopy ? t(selectedCopy.description) : selected.description}</p><small>{t('settings.pets.dragDescription')}</small></div>
       </section>
       <section className="settings-group">
