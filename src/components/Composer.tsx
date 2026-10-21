@@ -23,7 +23,7 @@ import type {
   VoiceTranscriptionProvider,
 } from '@/types/api'
 import { composePrompt } from '@/lib/composer-prompt'
-import { findSessionMentions } from '@/lib/session-mentions'
+import { activeMention, findSessionMentions } from '@/lib/session-mentions'
 import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
 import { useI18n, type MessageKey } from '@/lib/i18n'
@@ -174,6 +174,8 @@ export const Composer = memo(function Composer({
 }: ComposerProps) {
   const { t } = useI18n()
   const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
+  const [caret, setCaret] = useState<{ value: string; position: number } | null>(null)
+  const caretPos = caret?.value === value ? Math.min(caret.position, value.length) : value.length
   const [menu, setMenu] = useState<'add' | 'mention' | 'command' | null>(null)
   const [sessionReferenceIds, setSessionReferenceIds] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [activeSuggestion, setActiveSuggestion] = useState(0)
@@ -210,8 +212,8 @@ export const Composer = memo(function Composer({
   }, [draftKey, effort, fast, model, value])
 
   useEffect(() => {
-    const mentionMatch = /(?:^|\s)@([^@\n]*)$/.exec(value)
-    const mentionStart = mentionMatch ? value.length - mentionMatch[1].length - 1 : -1
+    const mentionMatch = activeMention(value, caretPos)
+    const mentionStart = mentionMatch?.start ?? -1
     const acceptedMention = acceptedMentionRef.current
     const suppressAcceptedMention = Boolean(
       mentionMatch
@@ -219,9 +221,9 @@ export const Composer = memo(function Composer({
       && mentionStart === acceptedMention.start
       && value.slice(acceptedMention.start, acceptedMention.start + acceptedMention.text.length) === acceptedMention.text,
     )
-    if (acceptedMention && !suppressAcceptedMention) acceptedMentionRef.current = null
+    if (acceptedMention && value.slice(acceptedMention.start, acceptedMention.start + acceptedMention.text.length) !== acceptedMention.text) acceptedMentionRef.current = null
     setMenu(value.startsWith('/') && !value.includes(' ') ? 'command' : mentionMatch && !suppressAcceptedMention ? 'mention' : null)
-  }, [value])
+  }, [caretPos, value])
   useEffect(() => {
     setSessionReferenceIds((current) => {
       if (!current.size) return current
@@ -361,6 +363,7 @@ export const Composer = memo(function Composer({
     const end = textarea.selectionEnd ?? textarea.value.length
     textarea.setRangeText(text, start, end, 'end')
     setValue(textarea.value)
+    setCaret({ value: textarea.value, position: textarea.selectionStart })
   }
   const insert = (text: string) => {
     const textarea = textareaRef.current
@@ -371,19 +374,19 @@ export const Composer = memo(function Composer({
   }
   const insertMention = (label: string, session?: SessionRecord) => {
     const textarea = textareaRef.current
-    const match = /(?:^|\s)@([^@\n]*)$/.exec(value)
+    const match = activeMention(value, caretPos)
     if (!match) { insert(`@${label} `); return }
-    const query = match[1]
-    const start = value.length - query.length
+    const start = match.start + 1
     const mentionStart = start - 1
     const acceptedText = `@${label} `
     if (textarea) {
-      textarea.setRangeText(`${label} `, start, value.length, 'end')
+      textarea.setRangeText(`${label} `, start, caretPos, 'end')
       acceptedMentionRef.current = { start: mentionStart, text: acceptedText }
       setValue(textarea.value)
+      setCaret({ value: textarea.value, position: textarea.selectionStart })
     } else {
       acceptedMentionRef.current = { start: mentionStart, text: acceptedText }
-      setValue(`${value.slice(0, start)}${label} `)
+      setValue(`${value.slice(0, start)}${label} ${value.slice(caretPos)}`)
     }
     if (session) {
       const key = session.title.trim().toLocaleLowerCase()
@@ -393,7 +396,7 @@ export const Composer = memo(function Composer({
     textarea?.focus()
   }
 
-  const mentionQuery = /(?:^|\s)@([^@\n]*)$/.exec(value)?.[1]?.toLocaleLowerCase().trim() ?? ''
+  const mentionQuery = activeMention(value, caretPos)?.query.toLocaleLowerCase().trim() ?? ''
 
   const suggestions =
     menu === 'command'
@@ -501,7 +504,8 @@ export const Composer = memo(function Composer({
             aria-expanded={Boolean(menu && suggestions.length)}
             aria-controls={menu ? menuId : undefined}
             aria-activedescendant={menu && suggestions.length ? `${menuId}-option-${activeSuggestion}` : undefined}
-            onChange={(event) => setValue(event.target.value)}
+            onChange={(event) => { setValue(event.target.value); setCaret({ value: event.target.value, position: event.target.selectionStart }) }}
+            onSelect={(event) => setCaret({ value: event.currentTarget.value, position: event.currentTarget.selectionStart })}
             onPaste={(event) => {
               const files = [...event.clipboardData.items]
                 .filter((item) => item.kind === 'file')

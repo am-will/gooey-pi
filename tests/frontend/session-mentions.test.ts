@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendSessionRouting, findSessionMentions, routedSessionReferences, splitSessionRouting } from '../../src/lib/session-mentions'
+import { activeMention, appendSessionRouting, findSessionMentions, routedSessionReferences, splitSessionRouting } from '../../src/lib/session-mentions'
 import type { SessionRecord } from '../../src/types/api'
 
 const session = (id: string, title: string): SessionRecord => ({
@@ -49,5 +49,14 @@ describe('session mentions', () => {
   it('ignores malformed or oversized model-facing reference lines', () => {
     expect(routedSessionReferences('- "@API owner": other session UUID unsafe.')).toEqual([])
     expect(routedSessionReferences(`- ${JSON.stringify(`@${'x'.repeat(201)}`)}: omp session UUID safe-id.`)).toEqual([])
+  })
+})
+
+describe('caret-aware mention queries', () => {
+  it('ignores text after the caret and supports earlier lines', () => {
+    expect(activeMention('hello @sess world', 11)).toEqual({ start: 6, query: 'sess' })
+    expect(activeMention('@sess\nnext line', 5)).toEqual({ start: 0, query: 'sess' })
+    expect(activeMention('email@example.com', 10)).toBeNull()
+    expect(activeMention('hello @sess world', 2)).toBeNull()
   })
 })

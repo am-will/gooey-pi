@@ -7,6 +7,15 @@ export interface SessionMention {
   session: SessionRecord
 }
 
+export const MENTION_QUERY = /(?:^|\s)@([^@\n]*)$/
+
+/** Only text before the caret participates in the active autocomplete query. */
+export function activeMention(value: string, caret: number): { start: number; query: string } | null {
+  const before = value.slice(0, Math.max(0, Math.min(value.length, caret)))
+  const match = MENTION_QUERY.exec(before)
+  return match ? { start: before.length - match[1].length - 1, query: match[1] } : null
+}
+
 export const SESSION_ROUTING_BEGIN = '===== BEGIN GOOEYPI SESSION REFERENCES ====='
 export const SESSION_ROUTING_END = '===== END GOOEYPI SESSION REFERENCES ====='
 
