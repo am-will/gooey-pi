@@ -33,7 +33,7 @@ import { SettingsService } from './settings'
 import { ScheduledRunExecutor } from './schedules/executor'
 import { HeartbeatService } from './schedules/heartbeats'
 import { AutomationService } from './schedules/service'
-import { AgentScheduleBridge } from './schedules/agent-bridge'
+import { AgentScheduleBridge, createScheduleScopeResolver } from './schedules/agent-bridge'
 import { mirrorBundledSkill } from './lib/bundled-skill-mirror'
 import { AgentBrowserBridge } from './browser/agent-bridge'
 import { AgentBrowserService } from './browser/agent-service'
@@ -836,52 +836,19 @@ async function bootstrap(): Promise<void> {
     service: schedules,
     harness: 'prime',
     skillPath: scheduleSkillPath,
-    resolveScope: async ({ cwd, sessionPath }) => {
-      const catalog = await projects.list()
-      const canonicalCwd = resolve(cwd)
-      const project = catalog.find((candidate) => !candidate.inferred && candidate.folders.some((folder) => {
-        const root = resolve(folder)
-        return canonicalCwd === root || canonicalCwd.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)
-      }))
-      if (!project) throw new Error('The agent is not running in an explicitly granted Prime Work project')
-      if (!sessionPath) return { projectId: project.id }
-      const scheduledSession = (await sessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath))
-      return { projectId: project.id, sessionId: scheduledSession?.id }
-    },
+    resolveScope: createScheduleScopeResolver({ harness: 'prime', projects: projects, sessions: sessions }),
   })
   const ompScheduleBridge = new AgentScheduleBridge({
     service: schedules,
     harness: 'omp',
     skillPath: scheduleSkillPath,
-    resolveScope: async ({ cwd, sessionPath }) => {
-      const catalog = await ompProjects.list()
-      const canonicalCwd = resolve(cwd)
-      const project = catalog.find((candidate) => !candidate.inferred && candidate.folders.some((folder) => {
-        const root = resolve(folder)
-        return canonicalCwd === root || canonicalCwd.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)
-      }))
-      if (!project) throw new Error('The agent is not running in an explicitly granted OMP Work project')
-      if (!sessionPath) return { projectId: project.id }
-      const scheduledSession = (await ompSessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath))
-      return { projectId: project.id, sessionId: scheduledSession?.id }
-    },
+    resolveScope: createScheduleScopeResolver({ harness: 'omp', projects: ompProjects, sessions: ompSessions }),
   })
   const piScheduleBridge = new AgentScheduleBridge({
     service: schedules,
     harness: 'pi',
     skillPath: scheduleSkillPath,
-    resolveScope: async ({ cwd, sessionPath }) => {
-      const catalog = await piProjects.list()
-      const canonicalCwd = resolve(cwd)
-      const project = catalog.find((candidate) => !candidate.inferred && candidate.folders.some((folder) => {
-        const root = resolve(folder)
-        return canonicalCwd === root || canonicalCwd.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)
-      }))
-      if (!project) throw new Error('The agent is not running in an explicitly granted Pi Work project')
-      if (!sessionPath) return { projectId: project.id }
-      const scheduledSession = (await piSessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath))
-      return { projectId: project.id, sessionId: scheduledSession?.id }
-    },
+    resolveScope: createScheduleScopeResolver({ harness: 'pi', projects: piProjects, sessions: piSessions }),
   })
   const browserService = new AgentBrowserService({
     getGuest: (webContentsId) => {
