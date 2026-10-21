@@ -1,9 +1,9 @@
+import { errorMessage } from '@/lib/errors'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { SettingsUpdate } from './contracts'
 import { useI18n } from '@/lib/i18n'
 import {
   createDraftState,
-  errorMessage,
   reduceDraftState,
   type DraftAction,
   type DraftState,
@@ -64,14 +64,14 @@ export function DraftSettingField({
     const id = ++nextCommitId.current
     dispatch({ type: 'commit', id, value })
     const operation = Promise.resolve().then(async () => onCommit(value))
-      .then((saved) => { dispatch(saved === false ? { type: 'reject', id, error: errorMessage(undefined) } : { type: 'resolve', id }) })
-      .catch((error: unknown) => { dispatch({ type: 'reject', id, error: errorMessage(error) }) })
+      .then((saved) => { dispatch(saved === false ? { type: 'reject', id, error: errorMessage(undefined, t('settings.draft.saveFailed')) } : { type: 'resolve', id }) })
+      .catch((error: unknown) => { dispatch({ type: 'reject', id, error: errorMessage(error, t('settings.draft.saveFailed')) }) })
       .finally(() => {
         if (inFlight.current === operation) inFlight.current = null
       })
     inFlight.current = operation
     return operation
-  }, [dispatch, normalize, onCommit, validate])
+  }, [dispatch, normalize, onCommit, t, validate])
 
   const onChange = (value: string) => {
     dispatch({ type: 'edit', value, error: validate(value) })

@@ -123,6 +123,3 @@ export function terminalShellValidation(value: string, platform: NodeJS.Platform
   return ''
 }
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : copy('settings.draft.saveFailed')
-}
