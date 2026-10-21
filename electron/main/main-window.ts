@@ -1,4 +1,10 @@
-import { BrowserWindow, Menu, nativeTheme, type BrowserWindowConstructorOptions, type Input, type WebContents } from 'electron'
+import { BrowserWindow, Menu, nativeTheme, screen, type Rectangle, type BrowserWindowConstructorOptions, type Input, type WebContents } from 'electron'
+import { mainWindowBounds } from './window-bounds'
+import { bindRendererNavigation } from './renderer-navigation'
+import { hardenRenderer } from './renderer-security'
+import type { IpcRegistration } from './ipc'
+import type { MacBackgroundController } from './background'
+import type { ShutdownPrompt } from './app-lifecycle'
 import type { ApplicationMenuName, ThemeMode } from '../../src/types/api'
 
 interface InitialRendererWindow {
@@ -86,3 +92,129 @@ export function setTitleBarTheme(sender: WebContents, theme: ResolvedTheme): boo
   return true
 }
 
+
+interface MainWindowContext {
+  readonly shuttingDown: boolean
+  readonly shutdownApproved: boolean
+  readonly confirmingShutdown: boolean
+  readonly keepHidden: boolean
+  readonly rendererUrl: string
+  readonly preloadPath: string
+  readonly theme: ThemeMode | undefined
+  readonly zoomFactor: number
+  readonly ipc: Pick<IpcRegistration, 'authorize' | 'revoke'> | null
+  readonly background: Pick<MacBackgroundController, 'isBackgrounded' | 'handleWindowClose'> | null
+  iconPath(): string
+  approveGuest(contents: WebContents): void
+  cancelDownloads(ownerId: number): void
+  killTerminals(ownerId: number): Promise<void>
+  shutdownPrompt(): ShutdownPrompt | null
+  requestShutdown(window: BrowserWindow, prompt: ShutdownPrompt): void
+  log(message: string): void
+  createWindow?(options: BrowserWindowConstructorOptions): BrowserWindow
+  workArea?(): Rectangle
+}
+
+/** Owns the one app window and its in-flight creation, independently of app bootstrap. */
+export class MainWindowController {
+  private window: BrowserWindow | null = null
+  private creation: Promise<BrowserWindow | null> | null = null
+
+  constructor(private readonly context: MainWindowContext) {}
+
+  get current(): BrowserWindow | null { return this.window }
+
+  private async create(): Promise<BrowserWindow | null> {
+    if (this.context.shuttingDown) return null
+    const bounds = mainWindowBounds(this.context.workArea?.() ?? screen.getPrimaryDisplay().workArea)
+    const createWindow = this.context.createWindow ?? ((options: BrowserWindowConstructorOptions) => new BrowserWindow(options))
+    const theme = resolvedWindowTheme(this.context.theme)
+    const window = createWindow({
+      ...bounds,
+      show: false,
+      backgroundColor: windowCanvasColor(theme),
+      icon: this.context.iconPath(),
+      ...mainWindowChromeOptions(process.platform, theme),
+      webPreferences: {
+        preload: this.context.preloadPath,
+        zoomFactor: this.context.zoomFactor,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webviewTag: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        spellcheck: true,
+      },
+    })
+    this.window = window
+    const renderer = window.webContents
+    const rendererId = renderer.id
+    hardenRenderer(window, () => this.context.rendererUrl, {
+      approveGuest: (contents) => this.context.approveGuest(contents),
+      cancelDownloads: (ownerId) => this.context.cancelDownloads(ownerId),
+    })
+    renderer.on('before-input-event', (event, input) => {
+      if (!isMacWindowCloseShortcut(input)) return
+      event.preventDefault()
+      if (!window.isDestroyed()) window.close()
+    })
+    bindRendererNavigation(renderer, {
+      trustedUrl: () => this.context.rendererUrl,
+      zoomFactor: () => this.context.zoomFactor,
+      authorize: (contents) => this.context.ipc?.authorize(contents),
+      revoke: (ownerId) => this.context.ipc?.revoke(ownerId),
+      killTerminals: async (ownerId) => { await this.context.killTerminals(ownerId) },
+      log: this.context.log,
+    })
+    renderer.on('render-process-gone', () => this.context.ipc?.revoke(rendererId))
+    let rendererLoaded = false
+    let readyToShow = false
+    window.once('ready-to-show', () => {
+      readyToShow = true
+      if (!this.context.keepHidden && !this.context.background?.isBackgrounded() && rendererLoaded && !this.context.shuttingDown && !window.isDestroyed() && this.window === window) window.show()
+    })
+    window.on('close', (event) => {
+      if (this.context.shuttingDown || this.context.shutdownApproved) return
+      if (this.context.background?.handleWindowClose(window)) {
+        event.preventDefault()
+        return
+      }
+      const prompt = this.context.shutdownPrompt()
+      if (!prompt) return
+      event.preventDefault()
+      if (!this.context.confirmingShutdown) this.context.requestShutdown(window, prompt)
+    })
+    window.on('closed', () => {
+      this.context.ipc?.revoke(rendererId)
+      if (this.window === window) this.window = null
+    })
+    try {
+      await loadInitialRenderer(window, this.context.rendererUrl)
+    } catch (error) {
+      this.context.ipc?.revoke(rendererId)
+      if (this.window === window) this.window = null
+      throw error
+    }
+    if (this.context.shuttingDown || window.isDestroyed() || this.window !== window) {
+      this.context.ipc?.revoke(rendererId)
+      if (!window.isDestroyed()) window.destroy()
+      if (this.window === window) this.window = null
+      return null
+    }
+    rendererLoaded = true
+    if (!this.context.keepHidden && !this.context.background?.isBackgrounded() && readyToShow) window.show()
+    return window
+  }
+
+  ensure(): Promise<BrowserWindow | null> {
+    if (this.context.shuttingDown) return Promise.resolve(null)
+    if (this.window && !this.window.isDestroyed()) return this.creation ?? Promise.resolve(this.window)
+    if (this.creation) return this.creation
+    const creation = this.create()
+    this.creation = creation
+    const clearCreation = () => { if (this.creation === creation) this.creation = null }
+    void creation.then(clearCreation, clearCreation)
+    return creation
+  }
+}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, protocol, safeStorage, screen, session, shell, webContents } from 'electron'
+import { app, BrowserWindow, dialog, protocol, safeStorage, session, shell, webContents } from 'electron'
 import { join, resolve } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -10,12 +10,10 @@ import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
-import { loadInitialRenderer, mainWindowChromeOptions, isMacWindowCloseShortcut, popupApplicationMenu, resolvedWindowTheme, setTitleBarTheme, windowCanvasColor } from './main-window'
-import { mainWindowBounds } from './window-bounds'
+import { MainWindowController, popupApplicationMenu, setTitleBarTheme } from './main-window'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
-import { bindRendererNavigation } from './renderer-navigation'
-import { hardenRenderer, registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY_POLICY } from './renderer-security'
+import { registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY_POLICY } from './renderer-security'
 import { installCrashGuards, writeCrashLog } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
@@ -55,7 +53,6 @@ import { createManualUpdateCheck, getAutoUpdater, UpdateService } from './update
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'prime-work', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 
-let mainWindow: BrowserWindow | null = null
 let ipc: IpcRegistration | null = null
 let agents: AgentRpcManager | null = null
 let ompAgents: AgentRpcManager | null = null
@@ -76,9 +73,28 @@ let shutdownApproved = false
 let confirmingShutdown = false
 let trustedRendererUrl = ''
 let packagedSmokeMarkerFile: string | null = null
-let windowCreation: Promise<BrowserWindow | null> | null = null
 let startInBackground = false
 const keepTestWindowsHidden = process.env.PRIME_WORK_E2E_HIDE_WINDOWS === '1'
+
+const windows = new MainWindowController({
+  get shuttingDown() { return shutdownStarted },
+  get shutdownApproved() { return shutdownApproved },
+  get confirmingShutdown() { return confirmingShutdown },
+  keepHidden: keepTestWindowsHidden,
+  get rendererUrl() { return trustedRendererUrl },
+  preloadPath: join(__dirname, '../preload/index.js'),
+  get theme() { return store?.getSettings().theme },
+  get zoomFactor() { return interfaceZoomFactor() },
+  get ipc() { return ipc },
+  get background() { return backgroundMode },
+  iconPath: appIconPath,
+  approveGuest: (contents) => agentBrowser?.approveGuest(contents),
+  cancelDownloads: (ownerId) => downloads?.cancelOwner(ownerId),
+  killTerminals: async (ownerId) => { await terminals?.killOwner(ownerId) },
+  shutdownPrompt: pendingShutdownPrompt,
+  requestShutdown,
+  log: (message) => console.error(message),
+})
 
 installCrashGuards({
   logPath: () => {
@@ -136,101 +152,8 @@ function applyInterfaceZoom(scale: number): void {
   }
 }
 
-async function createWindow(): Promise<BrowserWindow | null> {
-  if (shutdownStarted) return null
-  const bounds = mainWindowBounds(screen.getPrimaryDisplay().workArea)
-  const window = new BrowserWindow({
-    ...bounds,
-    show: false,
-    backgroundColor: windowCanvasColor(resolvedWindowTheme(store?.getSettings().theme)),
-    icon: appIconPath(),
-    ...mainWindowChromeOptions(process.platform, resolvedWindowTheme(store?.getSettings().theme)),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      zoomFactor: interfaceZoomFactor(),
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webviewTag: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      spellcheck: true,
-    },
-  })
-  mainWindow = window
-  const renderer = window.webContents
-  const rendererId = renderer.id
-  hardenRenderer(window, () => trustedRendererUrl, {
-    approveGuest: (contents) => agentBrowser?.approveGuest(contents),
-    cancelDownloads: (ownerId) => downloads?.cancelOwner(ownerId),
-  })
-  renderer.on('before-input-event', (event, input) => {
-    if (!isMacWindowCloseShortcut(input)) return
-    event.preventDefault()
-    if (!window.isDestroyed()) window.close()
-  })
-  bindRendererNavigation(renderer, {
-    trustedUrl: () => trustedRendererUrl,
-    zoomFactor: interfaceZoomFactor,
-    authorize: (contents) => ipc?.authorize(contents),
-    revoke: (ownerId) => ipc?.revoke(ownerId),
-    killTerminals: async (ownerId) => { await terminals?.killOwner(ownerId) },
-    log: (message) => console.error(message),
-  })
-  renderer.on('render-process-gone', () => ipc?.revoke(rendererId))
-  let rendererLoaded = false
-  let readyToShow = false
-  window.once('ready-to-show', () => {
-    readyToShow = true
-    if (!keepTestWindowsHidden && !backgroundMode?.isBackgrounded() && rendererLoaded && !shutdownStarted && !window.isDestroyed() && mainWindow === window) window.show()
-  })
-  window.on('close', (event) => {
-    if (shutdownStarted || shutdownApproved) return
-    if (backgroundMode?.handleWindowClose(window)) {
-      event.preventDefault()
-      return
-    }
-    const prompt = pendingShutdownPrompt()
-    if (!prompt) return
-    event.preventDefault()
-    if (!confirmingShutdown) requestShutdown(window, prompt)
-  })
-  window.on('closed', () => {
-    ipc?.revoke(rendererId)
-    if (mainWindow === window) mainWindow = null
-  })
-  try {
-    await loadInitialRenderer(window, trustedRendererUrl)
-  } catch (error) {
-    ipc?.revoke(rendererId)
-    if (mainWindow === window) mainWindow = null
-    throw error
-  }
-  if (shutdownStarted || window.isDestroyed() || mainWindow !== window) {
-    ipc?.revoke(rendererId)
-    if (!window.isDestroyed()) window.destroy()
-    if (mainWindow === window) mainWindow = null
-    return null
-  }
-  rendererLoaded = true
-  if (!keepTestWindowsHidden && !backgroundMode?.isBackgrounded() && readyToShow) window.show()
-  return window
-}
-
-function ensureWindow(): Promise<BrowserWindow | null> {
-  if (shutdownStarted) return Promise.resolve(null)
-  if (mainWindow && !mainWindow.isDestroyed()) return windowCreation ?? Promise.resolve(mainWindow)
-  if (windowCreation) return windowCreation
-  const creation = createWindow()
-  windowCreation = creation
-  const clearCreation = () => { if (windowCreation === creation) windowCreation = null }
-  void creation.then(clearCreation, clearCreation)
-  return creation
-}
-
-
 function requestWindow(reason: 'activation' | 'second instance' | 'menu bar' | 'settings', afterOpen?: (window: BrowserWindow) => void): void {
-  void ensureWindow().then((window) => {
+  void windows.ensure().then((window) => {
     if (!window || shutdownStarted || window.isDestroyed()) return
     if (!keepTestWindowsHidden) {
       if (window.isMinimized()) window.restore()
@@ -276,9 +199,9 @@ async function bootstrap(): Promise<void> {
   const ompSessions = new SessionService(stateStore, null, undefined, ompSessionServiceOptions())
   // Pi likewise has no live-CLI overlay; its catalog is JSONL-only.
   const piSessions = new SessionService(stateStore, null, undefined, piSessionServiceOptions())
-  const projects = new ProjectService(stateStore, () => mainWindow)
-  const ompProjects = new ProjectService(stateStore, () => mainWindow, 'omp')
-  const piProjects = new ProjectService(stateStore, () => mainWindow, 'pi')
+  const projects = new ProjectService(stateStore, () => windows.current)
+  const ompProjects = new ProjectService(stateStore, () => windows.current, 'omp')
+  const piProjects = new ProjectService(stateStore, () => windows.current, 'pi')
   const repositoryUseGate = new RepositoryUseGate()
   const checkouts: Record<HarnessId, CheckoutService> = {
     prime: new CheckoutService(() => stateStore.getSettings().checkoutStrategy, projects, repositoryUseGate),
@@ -658,7 +581,7 @@ async function bootstrap(): Promise<void> {
       confirmingShutdown = true
       try {
         const prompt = pendingShutdownPrompt()
-        const window = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null
+        const window = windows.current && !windows.current.isDestroyed() && windows.current.isVisible() ? windows.current : null
         if (prompt && !await confirmAppClose(window, prompt)) return false
         if (shutdownStarted) return false
         shutdownApproved = true
@@ -686,7 +609,7 @@ async function bootstrap(): Promise<void> {
   // Both managers share the one renderer forwarding path: envelopes carry the
   // runtimeId and RuntimeInfo carries the harness, so the renderer can route.
   const forwardAgentEvent = (envelope: PrimeEventEnvelope): void => {
-    const renderer = mainWindow?.webContents
+    const renderer = windows.current?.webContents
     if (!shutdownStarted && renderer && !renderer.isDestroyed()
       && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)
       && isTrustedRendererUrl(renderer.mainFrame.url, trustedRendererUrl)) {
@@ -697,7 +620,7 @@ async function bootstrap(): Promise<void> {
   ompManager.setEventSink(forwardAgentEvent)
   piManager.setEventSink(forwardAgentEvent)
   providers.setEventSink((event: ProviderAuthEvent) => {
-    const renderer = mainWindow?.webContents
+    const renderer = windows.current?.webContents
     if (!shutdownStarted && renderer && !renderer.isDestroyed()
       && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)
       && isTrustedRendererUrl(renderer.mainFrame.url, trustedRendererUrl)) {
@@ -705,7 +628,7 @@ async function bootstrap(): Promise<void> {
     }
   })
   updates.setEventSink((state: AppUpdateState) => {
-    const renderer = mainWindow?.webContents
+    const renderer = windows.current?.webContents
     if (!shutdownStarted && renderer && !renderer.isDestroyed()
       && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)
       && isTrustedRendererUrl(renderer.mainFrame.url, trustedRendererUrl)) {
@@ -716,7 +639,7 @@ async function bootstrap(): Promise<void> {
     appName: 'GooeyPi',
     updatesEnabled: updates.isEnabled(),
     closeWindow: () => {
-      const window = mainWindow
+      const window = windows.current
       if (!window || window.isDestroyed()) app.quit()
       else window.close()
     },
@@ -730,7 +653,7 @@ async function bootstrap(): Promise<void> {
     }),
   })
   backgroundMode.start()
-  const window = await ensureWindow()
+  const window = await windows.ensure()
   if (shutdownStarted) return
   if (packagedSmokeMarkerFile) {
     await runPackagedSmoke(window, packagedSmokeMarkerFile)
@@ -801,7 +724,7 @@ else void app.whenReady().then(async () => {
     if (!shutdownStarted) revealApplication('second instance')
   })
   app.on('activate', () => {
-    if (!shutdownStarted && (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible())) revealApplication('activation')
+    if (!shutdownStarted && (!windows.current || windows.current.isDestroyed() || !windows.current.isVisible())) revealApplication('activation')
   })
 }).catch((error: unknown) => {
   writeCrashLog(() => join(app.getPath('userData'), 'crash.log'), 'startup', error)
@@ -821,7 +744,7 @@ app.on('before-quit', (event) => {
     const prompt = pendingShutdownPrompt()
     if (prompt) {
       event.preventDefault()
-      if (!confirmingShutdown) requestShutdown(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null, prompt)
+      if (!confirmingShutdown) requestShutdown(windows.current && !windows.current.isDestroyed() && windows.current.isVisible() ? windows.current : null, prompt)
       return
     }
   }
