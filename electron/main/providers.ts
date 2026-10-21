@@ -80,6 +80,12 @@ function listableProviderIds(providerIds: Iterable<string>): string[] {
 
 type ProviderAuthStatus = ReturnType<ModelRegistry['getProviderAuthStatus']>
 
+interface ProviderContext {
+  primeCliCredentials: boolean
+  authStorage: AuthStorage
+  registry: ModelRegistry
+}
+
 function boundedInteger(value: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0
 }
@@ -130,8 +136,7 @@ export interface PrimeProviderServiceOptions {
    * Inference auth, as TypeScript Prime does at runtime. Rust Prime only
    * reads auth.json, so for it the CLI key would show models that fail to
    * start, and a logout would rewrite another tool's file. Defaults to
-   * whether the build is TypeScript when the service is built: the auth store
-   * reads this option once.
+   * whether the discovered build is TypeScript, including after a refresh.
    */
   primeCliCredentials?: boolean
   /** Probe limits for Rust Prime's model catalog. */
@@ -140,8 +145,7 @@ export interface PrimeProviderServiceOptions {
 }
 
 export class PrimeProviderService {
-  private readonly authStorage: AuthStorage
-  private readonly registry: ModelRegistry
+  private context: ProviderContext
   private readonly implementation: () => PrimeImplementation | undefined
   private readonly rustModels: RustPrimeModelCatalogService
   private cachedCatalog: PrimeModelCatalog | null = null
@@ -151,14 +155,33 @@ export class PrimeProviderService {
   private eventSink: (event: ProviderAuthEvent) => void = () => undefined
   private readonly openExternal: (url: string) => Promise<void>
 
-  constructor(options: PrimeProviderServiceOptions = {}) {
+  constructor(private readonly options: PrimeProviderServiceOptions = {}) {
     this.implementation = options.implementation ?? (() => undefined)
-    const primeCliCredentials = options.primeCliCredentials ?? this.implementation() !== 'rust'
-    this.authStorage = AuthStorage.create(options.authPath, { usePrimeCliConfig: options.authPath === undefined && primeCliCredentials })
-    this.registry = ModelRegistry.create(modelRegistryAuthStorage(this.authStorage), options.modelsPath)
+    this.context = this.createContext(this.usesPrimeCliCredentials())
     this.rustModels = new RustPrimeModelCatalogService(options.executable ?? null, (modelProviders) => this.rustProviderDescriptors(modelProviders), options.rustProbe)
     this.openExternal = options.openExternal ?? (async () => undefined)
   }
+
+  private usesPrimeCliCredentials(): boolean {
+    return this.options.authPath === undefined && (this.options.primeCliCredentials ?? this.implementation() !== 'rust')
+  }
+
+  private createContext(primeCliCredentials: boolean): ProviderContext {
+    const authStorage = AuthStorage.create(this.options.authPath, { usePrimeCliConfig: primeCliCredentials })
+    return { primeCliCredentials, authStorage, registry: ModelRegistry.create(modelRegistryAuthStorage(authStorage), this.options.modelsPath) }
+  }
+
+  private currentContext(): ProviderContext {
+    const primeCliCredentials = this.usesPrimeCliCredentials()
+    if (this.context.primeCliCredentials !== primeCliCredentials) {
+      this.context = this.createContext(primeCliCredentials)
+      this.invalidate()
+    }
+    return this.context
+  }
+
+  private get authStorage(): AuthStorage { return this.currentContext().authStorage }
+  private get registry(): ModelRegistry { return this.currentContext().registry }
 
   setEventSink(sink: (event: ProviderAuthEvent) => void): void { this.eventSink = sink }
 
@@ -176,6 +199,7 @@ export class PrimeProviderService {
   }
 
   async catalog(force = false, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelCatalog> {
+    this.currentContext()
     if (this.implementation() === 'rust') return this.rustCatalog(force, disabledProviders, disabledModels)
     if (!force && this.cachedCatalog && Date.now() - this.cachedAt < CATALOG_TTL_MS) {
       return withModelVisibility(this.cachedCatalog, disabledProviders, disabledModels)
@@ -183,26 +207,31 @@ export class PrimeProviderService {
     // Single-flight: concurrent callers share one refresh instead of racing
     // duplicate registry work; the in-flight promise is cleared in finally.
     if (!this.catalogRefresh) {
-      this.catalogRefresh = this.refreshCatalog().finally(() => { this.catalogRefresh = null })
+      const refresh = this.refreshCatalog().finally(() => {
+        if (this.catalogRefresh === refresh) this.catalogRefresh = null
+      })
+      this.catalogRefresh = refresh
     }
     return withModelVisibility(await this.catalogRefresh, disabledProviders, disabledModels)
   }
 
   private async refreshCatalog(): Promise<PrimeModelCatalog> {
-    const snapshot = await this.registry.refreshModelCatalog()
+    const context = this.currentContext()
+    const { registry } = context
+    const snapshot = await registry.refreshModelCatalog()
     let executableModels: Model<Api>[] = []
     let executableDiscoveryWarning: string | undefined
-    try { executableModels = await this.registry.getExecutableModels() }
+    try { executableModels = await registry.getExecutableModels() }
     catch { executableDiscoveryWarning = 'Executable model discovery failed; availability may be incomplete.' }
-    const oauthProviders = this.oauthProviderNames()
+    const oauthProviders = new Map(registry.authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]))
     const eligibleModels = snapshot.models.filter((model) => safeProviderId(model.provider) && safeModelId(model.id))
     const validProviderIds = listableProviderIds([...eligibleModels.map((model) => model.provider), ...oauthProviders.keys()])
-    const authStatuses = new Map(validProviderIds.map((id) => [id, this.registry.getProviderAuthStatus(id)]))
+    const authStatuses = new Map(validProviderIds.map((id) => [id, registry.getProviderAuthStatus(id)]))
     const configuredProviders = new Set([...authStatuses].filter(([, status]) => status.configured).map(([id]) => id))
     const { keys: available, fallbackProviders } = resolveAvailableModelKeys(eligibleModels, executableModels, configuredProviders)
     const relation = limitCatalogRelations(
       eligibleModels.map((model) => toModelDescriptor(model, available)),
-      validProviderIds.map((id) => this.providerDescriptor(id, authStatuses.get(id) ?? this.registry.getProviderAuthStatus(id), oauthProviders)),
+      validProviderIds.map((id) => this.providerDescriptor(id, authStatuses.get(id) ?? registry.getProviderAuthStatus(id), oauthProviders)),
     )
 
     const warnings = [
@@ -214,18 +243,21 @@ export class PrimeProviderService {
         ? 'ChatGPT subscription model discovery was unavailable or incomplete; GooeyPi is showing Prime Agent’s configured Codex catalogue.'
         : undefined,
       executableDiscoveryWarning,
-      this.registry.getError()?.slice(0, 4_000),
+      registry.getError()?.slice(0, 4_000),
     ].filter((warning): warning is string => Boolean(warning))
 
-    this.cachedCatalog = {
+    const catalog: PrimeModelCatalog = {
       primeVersion: VERSION,
       refreshedAt: new Date().toISOString(),
       models: relation.models,
       providers: relation.providers,
       warning: warnings.length ? warnings.join(' ') : undefined,
     }
-    this.cachedAt = Date.now()
-    return this.cachedCatalog
+    if (this.currentContext() === context) {
+      this.cachedCatalog = catalog
+      this.cachedAt = Date.now()
+    }
+    return catalog
   }
 
   /**
@@ -375,6 +407,7 @@ export class PrimeProviderService {
   invalidate(): void {
     this.cachedCatalog = null
     this.cachedAt = 0
+    this.catalogRefresh = null
     this.rustModels.invalidate()
   }
 
