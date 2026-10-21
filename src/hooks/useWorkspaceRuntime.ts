@@ -5,6 +5,7 @@ import {
   admitAgentEvent,
   authoritativeTranscriptReadIsCurrent,
   eventsForWorkspace,
+  eventType,
   isTranscriptTerminalEvent,
   needsTranscriptReconciliation,
   reconcileTranscriptMessages,
@@ -362,18 +363,24 @@ export function useWorkspaceRuntime({
     }
   }, [cancelScheduledFlush, flushAgentEvents, runOverflowReconciliation])
 
+  const supersedeTranscriptLoad = useCallback((generation: number) => {
+    const load = transcriptLoadRef.current
+    if (load?.generation !== generation) return
+    transcriptLoadRef.current = null
+    deferredReconciliationRef.current = null
+    setMessages((current) => load.eventBuffer.replay(current))
+  }, [])
+
   const reconcileTranscriptForEvent = useCallback((runtimeId: string, event: Record<string, unknown>) => {
     const selected = workspaceRef.current
-    const type = typeof event.type === 'string' ? event.type : ''
+    const type = eventType(event)
     // auto_retry_start also supersedes any in-flight reconciliation: the
     // agent_end that scheduled it did not actually end the turn, and the disk
     // read would replace the still-streaming transcript with finalized rows.
     if (type === 'agent_start' || type === 'turn_start' || type === 'compaction_start' || type === 'auto_retry_start') {
       const load = transcriptLoadRef.current
       if (load?.generation === selected.generation && !(load.initial && (type === 'agent_start' || type === 'turn_start'))) {
-        transcriptLoadRef.current = null
-        deferredReconciliationRef.current = null
-        setMessages((current) => load.eventBuffer.replay(current))
+        supersedeTranscriptLoad(selected.generation)
       }
     }
     if (promptAdmissionGenerationRef.current === selected.generation) {
@@ -404,25 +411,20 @@ export function useWorkspaceRuntime({
     }
     flushAgentEvents()
     startTranscriptRead(selected, true, runtimeId)
-  }, [flushAgentEvents, startTranscriptRead])
+  }, [flushAgentEvents, startTranscriptRead, supersedeTranscriptLoad])
 
   const prepareForPrompt = useCallback((generation: number): boolean => {
     if (workspaceRef.current.generation !== generation) return false
     promptAdmissionRevisionRef.current += 1
     promptAdmissionGenerationRef.current = generation
     reconciliationNeededRef.current = null
-    const load = transcriptLoadRef.current
     // Supersede every pending transcript load, not only reconciliations: a
     // background read resolving after the prompt would otherwise replace the
     // optimistic user message with older on-disk state. The reconciliation
     // read after the turn's terminal event restores disk authority.
-    if (load?.generation === generation) {
-      transcriptLoadRef.current = null
-      deferredReconciliationRef.current = null
-      setMessages((current) => load.eventBuffer.replay(current))
-    }
+    supersedeTranscriptLoad(generation)
     return true
-  }, [])
+  }, [supersedeTranscriptLoad])
 
   const queuePrompt = useCallback((text: string, intent: PromptDeliveryIntent, parts?: MessagePart[], timestamp = Date.now()): string => {
     const queued: QueuedPrompt = { id: nextQueuedPromptId(), text, intent, timestamp, ...(parts ? { parts } : {}) }
