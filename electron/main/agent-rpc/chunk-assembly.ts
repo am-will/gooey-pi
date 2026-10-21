@@ -45,6 +45,7 @@ export const DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING: RpcChunkAssemblyTiming = {
  * bounded by the shared read frame limit and small concurrency caps.
  */
 export class RpcChunkAssembler {
+  private readonly abandoned = new Set<string>()
   private readonly assemblies = new Map<string, ChunkAssembly>()
   private sweepTimer: RpcChunkAssemblyTimer | null = null
   private accepting = true
@@ -61,6 +62,7 @@ export class RpcChunkAssembler {
       this.failReassembly(undefined, 'chunked frame carried an invalid chunkId')
       return
     }
+    if (this.abandoned.has(chunkId)) return
     const index = frame.index
     const count = frame.count
     if (!Number.isSafeInteger(index) || Number(index) < 0
@@ -137,9 +139,18 @@ export class RpcChunkAssembler {
   private failReassembly(chunkId: string | undefined, error: string): void {
     if (chunkId !== undefined) {
       this.assemblies.delete(chunkId)
+      this.rememberAbandoned(chunkId)
       this.rescheduleSweep()
     }
     this.host.emit({ type: 'transport_limit', kind: 'chunk', error })
+  }
+
+  private rememberAbandoned(chunkId: string): void {
+    this.abandoned.add(chunkId)
+    while (this.abandoned.size > 16) {
+      const oldest = this.abandoned.values().next().value
+      if (oldest !== undefined) this.abandoned.delete(oldest)
+    }
   }
 
   /** Keeps one unref'd timer aimed at the earliest inactivity deadline across the bounded assembly map. */
@@ -164,6 +175,7 @@ export class RpcChunkAssembler {
     for (const [chunkId, assembly] of this.assemblies) {
       if (assembly.expiresAt > now) continue
       this.assemblies.delete(chunkId)
+      this.rememberAbandoned(chunkId)
       expiredAny = true
       if (chunkId === wantedChunkId) wantedExpired = true
       this.host.emit({
