@@ -189,4 +189,43 @@ describe('archived activity cleanup', () => {
     expect(resetBrowserView).toHaveBeenCalledOnce()
     expect(activateWorkspace).toHaveBeenCalledWith(project)
   })
+  it('archives a batch with one toast and preserves each successful write', async () => {
+    const second = { ...activeSession, id: 'second', filePath: '/sessions/second.jsonl' }
+    const failure = new Error('archive bridge offline')
+    const archive = vi.fn().mockResolvedValueOnce(true).mockRejectedValueOnce(failure)
+    const setToast = vi.fn()
+    const reportError = vi.fn()
+    let sessions = [activeSession, second]
+    const actions = createWorkspaceActions(() => ({
+      bridge: { sessions: { archive } }, settingsState: { settings: DEFAULT_SETTINGS },
+      workspace: { workspaceRef: { current: { session: undefined } } },
+      setSessions: (update: (items: SessionRecord[]) => SessionRecord[]) => { sessions = update(sessions) },
+      setToast, reportError, closeTerminalForSession: vi.fn(), clearSessionAttention: vi.fn(),
+    } as unknown as WorkspaceActionsDeps))
+    await expect(actions.setSessionsArchived(sessions, true)).rejects.toBe(failure)
+    expect(reportError).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(sessions.map((session) => Boolean(session.archived))).toEqual([true, false])
+    expect(setToast).not.toHaveBeenCalled()
+    archive.mockResolvedValue(true)
+    await actions.setSessionsArchived(sessions, true)
+    expect(sessions.every((session) => session.archived)).toBe(true)
+    expect(setToast).toHaveBeenCalledOnce()
+  })
+
+  it('reports rejected restores through the app error handler without a success toast', async () => {
+    const archive = vi.fn(async () => false)
+    const reportError = vi.fn()
+    const setSessions = vi.fn()
+    const setToast = vi.fn()
+    const actions = createWorkspaceActions(() => ({
+      bridge: { sessions: { archive } }, settingsState: { settings: DEFAULT_SETTINGS },
+      workspace: { workspaceRef: { current: { session: undefined } } },
+      setSessions, setToast, reportError,
+    } as unknown as WorkspaceActionsDeps))
+    await actions.setSessionArchived(archivedSession, false)
+    expect(reportError).toHaveBeenCalledOnce()
+    expect(setSessions).not.toHaveBeenCalled()
+    expect(setToast).not.toHaveBeenCalled()
+  })
+
 })

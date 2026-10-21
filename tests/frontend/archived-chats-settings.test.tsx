@@ -108,15 +108,6 @@ describe('archived chats settings', () => {
     expect(restoreButtons().every((button) => button.disabled)).toBe(false)
   })
 
-  it('reports a restore that the main process rejects', async () => {
-    const onRestore = vi.fn(async () => { throw new Error('archive bridge offline') })
-    await render({ archived: [older], onRestore })
-
-    await click(restoreButtons()[0]!)
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('archive bridge offline')
-    expect(restoreButtons()[0]?.disabled).toBe(false)
-  })
-
   it('explains the empty state when nothing has been archived', async () => {
     await render({ archived: [] })
     expect(container.querySelector('.settings-group h2')?.textContent).toBe('0 archived chats')

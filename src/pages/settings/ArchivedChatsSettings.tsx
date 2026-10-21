@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { errorMessage } from '@/lib/errors'
 import { formatRelative } from '@/lib/data'
 import { useI18n } from '@/lib/i18n'
 import { findProjectForSession } from '@/lib/workspace'
@@ -20,17 +19,13 @@ function projectLabel(session: SessionRecord, projects: ProjectRecord[]): string
 export function ArchivedChatsSettings({ archived, projects, onRestore }: ArchivedChatsSettingsProps) {
   const { t } = useI18n()
   const [pendingId, setPendingId] = useState<string | null>(null)
-  const [error, setError] = useState('')
   const sorted = [...archived].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
 
   const restore = async (session: SessionRecord) => {
     if (pendingId) return
     setPendingId(session.id)
-    setError('')
     try {
       await onRestore(session)
-    } catch (cause) {
-      setError(errorMessage(cause))
     } finally {
       setPendingId(null)
     }
@@ -56,7 +51,6 @@ export function ArchivedChatsSettings({ archived, projects, onRestore }: Archive
             >{pendingId === session.id ? t('archived.restoring') : t('archived.restore')}</button>
           </div>
         ))}
-        {error ? <p className="settings-error" role="alert">{error}</p> : null}
       </section>
     </>
   )

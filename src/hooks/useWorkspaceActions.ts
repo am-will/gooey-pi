@@ -211,24 +211,27 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       setSessions((items) => items.map((item) => item.id === session.id ? { ...item, title } : item)); setToast('Session renamed.')
     } catch (error) { reportError(error) }
   }
-  const setSessionArchived = async (session: SessionRecord, archived: boolean) => {
+  const setSessionsArchived = async (targets: SessionRecord[], archived: boolean) => {
     const { bridge, workspace, settingsState, setSessions, setToast, resetBrowserView, closeTerminalForSession, clearSessionAttention, reportError } = getDeps()
-    if (!bridge) return
+    if (!bridge || targets.length === 0) return
     try {
-      await bridge.sessions.archive(session.filePath, archived)
-      if (archived) {
-        clearSessionAttention(session)
-        closeTerminalForSession(session.filePath)
-      }
-      setSessions((items) => items.map((item) => item.id === session.id ? { ...item, archived, unread: archived ? false : item.unread } : item))
-      if (archived && workspace.workspaceRef.current.session?.id === session.id) {
-        resetBrowserView()
-        newSession()
+      for (const session of targets) {
+        if (!await bridge.sessions.archive(session.filePath, archived)) throw new Error(`${HARNESS_AGENT_NAMES[settingsState.settings.activeHarness]} could not update this session's archive state.`)
+        if (archived) {
+          clearSessionAttention(session)
+          closeTerminalForSession(session.filePath)
+        }
+        setSessions((items) => items.map((item) => item.id === session.id ? { ...item, archived, unread: archived ? false : item.unread } : item))
+        if (archived && workspace.workspaceRef.current.session?.id === session.id) {
+          resetBrowserView()
+          newSession()
+        }
       }
       const locale = resolveLocale(settingsState.settings.locale)
       setToast(archived ? translate(locale, 'archive.doneToast') : translate(locale, 'archive.restoredToast'))
-    } catch (error) { reportError(error) }
+    } catch (error) { reportError(error); throw error }
   }
+  const setSessionArchived = (session: SessionRecord, archived: boolean) => setSessionsArchived([session], archived).catch(() => undefined)
   const addProject = async () => {
     const { bridge, workspace, setProjects, setView, setToast, settingsState, reportError } = getDeps()
     if (!bridge) { setToast('Project picker is available in the desktop app.'); return }
@@ -675,7 +678,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
 
   return {
     grantProject, persistPanel, toggleSidebar, toggleInspector, toggleTerminal,
-    selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived,
+    selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived, setSessionsArchived,
     addProject, removeProject, togglePinProject, setProjectSortMode, sendPrompt, stopRuntime, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability,
     createSchedule, updateSchedule, mutateSchedule, manageHeartbeat, openScheduledSession,
     openBrowser, openChanges,
