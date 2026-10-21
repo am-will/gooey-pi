@@ -163,7 +163,11 @@ export function useWorkspaceRuntime({
       pendingQueuedPromptsRef.current = nextQueue
       setPendingQueuedPrompts(nextQueue)
     }
-    if (next?.sessionFile) runtimeSessionsRef.current.set(next.runtimeId, next.sessionFile)
+    if (next?.sessionFile) {
+      runtimeSessionsRef.current.set(next.runtimeId, next.sessionFile)
+      const selected = workspaceRef.current
+      if (!selected.sessionFile) workspaceRef.current = { ...selected, sessionFile: next.sessionFile }
+    }
     runtimeIdRef.current = next?.runtimeId ?? null
     runtimeOwnerRef.current = next ? { runtimeId: next.runtimeId, generation } : null
     setRuntime(next)

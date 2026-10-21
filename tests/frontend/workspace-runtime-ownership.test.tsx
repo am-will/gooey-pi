@@ -26,6 +26,16 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('records the started runtime session before its catalog record arrives', () => {
+    act(() => root.render(createElement(Probe)))
+    act(() => latest.attachRuntime(runtime, 0))
+    expect(latest.workspaceRef.current.sessionFile).toBe(session.filePath)
+    expect(latest.activeSessionId).toBeUndefined()
+    expect(latest.runtimeSessionsRef.current.get(runtime.runtimeId)).toBe(session.filePath)
+    act(() => latest.attachRuntime({ ...runtime, runtimeId: 'stale', sessionFile: '/wrong' }, -1))
+    expect(latest.workspaceRef.current.sessionFile).toBe(session.filePath)
+  })
+
   it('replaces an active inferred project without remounting its workspace or losing its queue', () => {
     act(() => root.render(createElement(Probe)))
     const replace = latest.replaceActiveProject
