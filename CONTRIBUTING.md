@@ -18,6 +18,22 @@ IPC, browser control, subprocess launch, or capability configuration. Check the
 changing protocol or session behavior. Shared runtime behavior belongs in the
 existing agent and session modules rather than a separate copy for each harness.
 
+State persistence lives in [`store.ts`](electron/main/store.ts) and its
+[focused modules](electron/main/store/). They validate and migrate the versioned
+user-data file and publish durable replacements. Session adapters under
+[`sessions/`](electron/main/sessions/) interpret harness-owned files separately.
+Bundled agent extensions live under [`assets/extensions/`](assets/extensions/);
+[`extension-manifest.ts`](electron/main/extension-manifest.ts) defines their
+injection contract.
+
+To add an IPC method, define its contract in `src/types/api/`, expose a fixed
+channel in `electron/preload/index.ts`, and register the validated handler in
+`electron/main/ipc.ts`. Add boundary tests and run the
+[channel parity test](tests/backend/ipc-channel-parity.test.ts) with the
+[preload contract suite](tests/backend/preload-contract.test.ts). For a new
+push event, use the trusted registration broadcast and a removable preload
+subscription.
+
 ## Development data
 
 `npm run dev` uses the normal Electron user-data directory and single-instance
