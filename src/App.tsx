@@ -409,7 +409,7 @@ export default function App() {
       if (removed && projectRun?.drawerId === removed.id) finishProjectScriptRun(projectRun, { cancelled: true })
       setTerminalSessions((current) => current.filter((terminal) => terminal.sessionPath !== sessionPath))
     },
-    clearSessionAttention, reportError,
+    sessionHasOpenExtensionUi: extension.hasOpenRequestForSession, clearSessionAttention, reportError,
   })
   const openTerminalLink = useCallback((url: string, external: boolean) => {
     if (external) {
