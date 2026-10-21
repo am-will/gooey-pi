@@ -182,6 +182,11 @@ describe('missed schedule occurrence counting', () => {
     expect(nextScheduleOccurrence({ ...oldMinutely, rrule: 'FREQ=DAILY' }, '2030-01-01T00:00:00Z')).toBe('2030-01-02T00:00:00.000Z')
   })
 
+  it('allows bounded lower-bound reporting for a long minutely missed gap', () => {
+    const minutely: ScheduleTiming = { ...hourly, rrule: 'FREQ=MINUTELY' }
+    expect(countMissedOccurrences(minutely, '2025-01-01T00:00:00Z', '2025-01-09T00:00:00Z', 10_000, { saturate: true })).toBe(10_000)
+  })
+
   it('fails closed when a caller-provided or global hard limit is exceeded', () => {
     const minutely: ScheduleTiming = { ...hourly, rrule: 'FREQ=MINUTELY' }
     expect(() => countMissedOccurrences(minutely, '2025-01-01T00:00:00Z', '2025-01-01T01:00:00Z', 10)).toThrow(/iteration limit/i)

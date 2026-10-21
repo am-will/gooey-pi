@@ -23,6 +23,7 @@ import {
 } from './recurrence'
 
 const MAX_CONCURRENT_RUNS = 2
+const MAX_REPORTED_MISSED_OCCURRENCES = 10_000
 const DUE_GRACE_MS = 60_000
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
 
@@ -400,7 +401,7 @@ export class AutomationService {
   private async skipMissed(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
     const scheduledFor = snapshot.nextRunAt
     if (!scheduledFor) return
-    const missed = countMissedOccurrences(snapshot.timing, new Date(scheduledFor), now, 10_000)
+    const missed = countMissedOccurrences(snapshot.timing, new Date(scheduledFor), now, MAX_REPORTED_MISSED_OCCURRENCES, { saturate: true })
     const run: ScheduleRunRecord = {
       id: randomUUID(), taskId: snapshot.id, taskRevision: snapshot.revision, trigger: 'scheduled',
       scheduledFor, queuedAt: now.toISOString(), finishedAt: now.toISOString(), status: 'skipped',

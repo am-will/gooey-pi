@@ -378,6 +378,7 @@ export function countMissedOccurrences(
   fromInclusive: Date | string,
   untilExclusive: Date | string,
   limit = MAX_MISSED_OCCURRENCES,
+  options: { saturate?: boolean } = {},
 ): number {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_MISSED_OCCURRENCES) {
     throw new TypeError(`limit must be an integer from 1 to ${MAX_MISSED_OCCURRENCES}`)
@@ -392,7 +393,10 @@ export function countMissedOccurrences(
   }
 
   const occurrences = expandRruleInstants(normalized, new Date(start.getTime() - 1), limit + 1, end)
-  if (occurrences.length > limit) throw new RangeError('missed occurrence count exceeded its iteration limit')
+  if (occurrences.length > limit) {
+    if (options.saturate) return limit
+    throw new RangeError('missed occurrence count exceeded its iteration limit')
+  }
   return occurrences.length
 }
 
