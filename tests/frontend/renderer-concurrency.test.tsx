@@ -835,6 +835,33 @@ describe('extension UI runtime ownership', () => {
     }
   })
 
+  it('uses the selected app questionnaire timeout and leaves Never questions open while visible', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const command = vi.fn().mockResolvedValue({})
+      const bridge = { agent: { command } } as unknown as PrimeWorkApi
+      let state!: ReturnType<typeof useExtensionUi>
+      function ExtensionProbe({ timeout }: { timeout: number }) {
+        state = useExtensionUi({ bridge, activeRuntimeId: 'runtime', askUserTimeoutMs: timeout, runtimeSessionsRef: { current: new Map() }, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+        return <Probe />
+      }
+      const question = (group: string) => ({ type: 'extension_ui_request', id: group, method: 'select', title: 'Question', options: [`__prime_ask_user__${group}:0:1`, 'A'] })
+      await act(async () => root.render(<ExtensionProbe timeout={300_000} />))
+      await act(async () => state.showExtensionUi('runtime', question('timed')))
+      await act(async () => { vi.advanceTimersByTime(299_999) })
+      expect(command).not.toHaveBeenCalled()
+      await act(async () => { vi.advanceTimersByTime(1) })
+      expect(command).toHaveBeenCalledWith('runtime', expect.objectContaining({ id: 'timed', cancelled: true }))
+      command.mockClear()
+      await act(async () => root.render(<ExtensionProbe timeout={0} />))
+      await act(async () => state.showExtensionUi('runtime', question('never')))
+      await act(async () => { vi.advanceTimersByTime(60 * 60_000) })
+      expect(command).not.toHaveBeenCalled()
+      expect(state.extensionUi?.deadline).toBeUndefined()
+      expect(state.extensionUi?.request.id).toBe('never')
+    } finally { vi.useRealTimers() }
+  })
+
   it('holds the Ask User countdown for a background questionnaire until its runtime is shown', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {

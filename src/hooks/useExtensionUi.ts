@@ -5,6 +5,7 @@ import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
 interface UseExtensionUiOptions {
   bridge: PrimeWorkApi | null
+  askUserTimeoutMs?: number
   activeRuntimeId?: string
   runtimeSessionsRef: React.RefObject<Map<string, string>>
   setSessions: React.Dispatch<React.SetStateAction<SessionRecord[]>>
@@ -41,6 +42,7 @@ function requestIds(pending: PendingExtensionUi): string[] {
 
 export function useExtensionUi({
   bridge,
+  askUserTimeoutMs = ASK_USER_TIMEOUT_MS,
   activeRuntimeId,
   runtimeSessionsRef,
   setSessions,
@@ -52,6 +54,8 @@ export function useExtensionUi({
   const pendingByRuntimeRef = useRef<Map<string, PendingExtensionUi>>(new Map())
   const timerByRuntimeRef = useRef<Map<string, number>>(new Map())
   const timedOutQuestionnairesRef = useRef<Set<string>>(new Set())
+  const askUserTimeoutRef = useRef(askUserTimeoutMs)
+  useLayoutEffect(() => { askUserTimeoutRef.current = askUserTimeoutMs })
   const activeRuntimeIdRef = useRef(activeRuntimeId)
   useLayoutEffect(() => { activeRuntimeIdRef.current = activeRuntimeId })
 
@@ -165,7 +169,7 @@ export function useExtensionUi({
       const timeout = 'timeout' in pending.request ? pending.request.timeout : undefined
       if (timeout !== undefined && pending.deadline === undefined) next = startTimer(pending, timeout)
     } else if (activeRuntimeIdRef.current === runtimeId && document.visibilityState !== 'hidden') {
-      if (pending.deadline === undefined) next = startTimer(pending, pending.ownedTimeout.remainingMs)
+      if (pending.deadline === undefined && pending.ownedTimeout.remainingMs > 0) next = startTimer(pending, pending.ownedTimeout.remainingMs)
     } else if (pending.deadline !== undefined) {
       window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
       timerByRuntimeRef.current.delete(runtimeId)
@@ -237,7 +241,7 @@ export function useExtensionUi({
         // Later questions of a group keep the timer the first one started.
         ...(sameQuestionnaire
           ? previous
-          : { runtimeId, ownedTimeout: request.timeout === undefined ? { remainingMs: ASK_USER_TIMEOUT_MS } : undefined }),
+          : { runtimeId, ownedTimeout: request.timeout === undefined ? { remainingMs: askUserTimeoutRef.current } : undefined }),
         request: {
           method: 'questionnaire',
           id: request.questionnaire.groupId,

@@ -516,6 +516,8 @@ export interface AppSettings {
   telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
+  /** Visible time allowed for app-owned questionnaires; 0 waits until answered. Harness deadlines are unchanged. */
+  askUserTimeoutMs: number
   /** Expose GooeyPi's thread-scoped in-app browser controls to new sessions. */
   browserEnabled: boolean
   /** Expose the separately installed TryCUA driver to new sessions through its official CLI. */

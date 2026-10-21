@@ -57,6 +57,8 @@ interface PluginsPageProps {
   loading: boolean
   activeProjectPath?: string
   onRefresh(): Promise<void>
+  askUserTimeoutMs?: number
+  onSetAskUserTimeoutMs?(ms: number): Promise<void>
   askUserEnabled: boolean
   onSetAskUserEnabled(enabled: boolean): Promise<void>
   browserEnabled: boolean
@@ -72,7 +74,7 @@ interface PluginsPageProps {
   onMutateCapability?(input: CapabilityMutationInput): Promise<{ ok: boolean; output: string }>
 }
 
-export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
+export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserTimeoutMs = 120_000, onSetAskUserTimeoutMs, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
   const [tab, setTab] = useState<DirectoryTab>('plugins')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -314,6 +316,12 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
         {harness === 'pi' && mcpSupportAlert ? <p className="page-inline-error" role="alert"><AlertTriangle size={13}/> {mcpSupportAlert}</p> : null}
         {harness === 'pi' && mcpSupportNotice ? <p className="connection-warning" role="status">{mcpSupportUpdating ? <RefreshCw className="spin" size={13}/> : <ShieldCheck size={13}/>} {mcpSupportNotice}</p> : null}
         {harness === 'pi' && !piMcpAdapterInstalled ? <p className="connection-warning"><ShieldCheck size={13}/> Pi core has no MCP client. Enable Pi MCP Adapter below before adding servers.</p> : null}
+        {onSetAskUserTimeoutMs ? <label className="settings-row">
+          <span><strong>Ask-user question timeout</strong><small>Visible time before an app questionnaire continues automatically. Harness deadlines still apply.</small></span>
+          <select value={askUserTimeoutMs} onChange={(event) => { void onSetAskUserTimeoutMs(Number(event.target.value)) }} aria-label="Ask-user question timeout">
+            <option value="0">Never</option><option value="60000">1 minute</option><option value="120000">2 minutes</option><option value="300000">5 minutes</option><option value="600000">10 minutes</option><option value="1800000">30 minutes</option>
+          </select>
+        </label> : null}
         {primeLimits ? <p className="connection-warning"><ShieldCheck size={13}/> {primeLimits}</p> : null}
         <p className="connection-warning"><ShieldCheck size={13}/> {NETWORK_MCP_UNAVAILABLE_DETAIL}</p>
         <div className="directory-heading"><h2>{filter === 'installed' ? 'Installed' : tab === 'plugins' ? 'Capabilities' : 'Skills'}</h2><span>{visible.length} shown</span></div>
