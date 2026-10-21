@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useStableCallback } from './useStableCallback'
 import {
   AGENT_EVENT_FLUSH_CHUNK,
   admitAgentEvent,
@@ -42,6 +43,7 @@ function queuedPromptOwner(
 }
 
 interface TranscriptLoad {
+  initial: boolean
   generation: number
   sessionFile: string
   eventBuffer: PrimeEventBuffer
@@ -68,8 +70,9 @@ export function useWorkspaceRuntime({
   initialSession,
   sessions,
   initialMessages,
-  reportError,
+  reportError: onError,
 }: UseWorkspaceRuntimeOptions) {
+  const reportError = useStableCallback(onError)
   const [messages, setMessages] = useState(initialMessages)
   const [pendingQueuedPrompts, setPendingQueuedPrompts] = useState<QueuedPrompt[]>([])
   const pendingQueuedPromptsRef = useRef<QueuedPrompt[]>([])
@@ -163,10 +166,35 @@ export function useWorkspaceRuntime({
       pendingQueuedPromptsRef.current = nextQueue
       setPendingQueuedPrompts(nextQueue)
     }
-    if (next?.sessionFile) runtimeSessionsRef.current.set(next.runtimeId, next.sessionFile)
+    if (next?.sessionFile) {
+      runtimeSessionsRef.current.set(next.runtimeId, next.sessionFile)
+      const selected = workspaceRef.current
+      if (!selected.sessionFile) workspaceRef.current = { ...selected, sessionFile: next.sessionFile }
+    }
     runtimeIdRef.current = next?.runtimeId ?? null
     runtimeOwnerRef.current = next ? { runtimeId: next.runtimeId, generation } : null
     setRuntime(next)
+  }, [])
+
+  const replaceActiveProject = useCallback((previousId: string, granted: ProjectRecord) => {
+    const selected = workspaceRef.current
+    if (selected.project?.id !== previousId || selected.project.harness !== granted.harness) return
+    workspaceRef.current = { ...selected, project: granted, cwd: workspaceCwd(granted, selected.session) }
+    setActiveProjectId(granted.id)
+    const owner = activeQueuedPromptOwnerRef.current
+    if (owner && owner === queuedPromptOwner(selected.project, undefined, undefined, selected.generation)) {
+      const nextOwner = queuedPromptOwner(granted, undefined, undefined, selected.generation)!
+      queuedPromptsByOwnerRef.current.delete(owner)
+      if (pendingQueuedPromptsRef.current.length) queuedPromptsByOwnerRef.current.set(nextOwner, pendingQueuedPromptsRef.current)
+      activeQueuedPromptOwnerRef.current = nextOwner
+    }
+  }, [])
+
+  const detachRuntime = useCallback((runtimeId: string) => {
+    runtimeSessionsRef.current.delete(runtimeId)
+    if (runtimeOwnerRef.current?.runtimeId === runtimeId) runtimeOwnerRef.current = null
+    if (runtimeIdRef.current === runtimeId) runtimeIdRef.current = null
+    setRuntime((current) => current?.runtimeId === runtimeId ? null : current)
   }, [])
 
   const activateWorkspace = useCallback((project?: ProjectRecord, session?: SessionRecord, nextRuntime?: RuntimeInfo) => {
@@ -193,7 +221,7 @@ export function useWorkspaceRuntime({
       sessionFile: session?.filePath,
     }
     transcriptLoadRef.current = bridge && session?.filePath
-      ? { generation, sessionFile: session.filePath, eventBuffer: createPrimeEventBuffer(), reconciliation: false, admissionRevision: 0 }
+      ? { initial: true, generation, sessionFile: session.filePath, eventBuffer: createPrimeEventBuffer(), reconciliation: false, admissionRevision: 0 }
       : null
     const queueOwner = queuedPromptOwner(project, session, nextRuntime, generation)
     const queuedPrompts = queueOwner ? queuedPromptsByOwnerRef.current.get(queueOwner) ?? [] : []
@@ -230,10 +258,12 @@ export function useWorkspaceRuntime({
     reconciliation: boolean,
     runtimeId?: string,
     admittedLoad?: TranscriptLoad,
+    initial = false,
   ) => {
     if (!bridge || !selected.sessionFile) return
     const previousLoad = transcriptLoadRef.current
     const pendingLoad = admittedLoad ?? {
+      initial,
       generation: selected.generation,
       sessionFile: selected.sessionFile,
       eventBuffer: previousLoad?.generation === selected.generation
@@ -345,7 +375,7 @@ export function useWorkspaceRuntime({
     // read would replace the still-streaming transcript with finalized rows.
     if (type === 'agent_start' || type === 'turn_start' || type === 'compaction_start' || type === 'auto_retry_start') {
       const load = transcriptLoadRef.current
-      if (load?.generation === selected.generation) {
+      if (load?.generation === selected.generation && !(load.initial && (type === 'agent_start' || type === 'turn_start'))) {
         transcriptLoadRef.current = null
         deferredReconciliationRef.current = null
         setMessages((current) => load.eventBuffer.replay(current))
@@ -460,19 +490,45 @@ export function useWorkspaceRuntime({
       : prompt)
   }, [updateQueuedPrompts])
   const clearQueuedPromptFlushFailures = useCallback(() => {
-    updateQueuedPrompts(({ flushAttemptFailed: _failed, ...prompt }) => prompt)
+    updateQueuedPrompts((prompt) => {
+      if (!prompt.flushAttemptFailed) return prompt
+      const { flushAttemptFailed: _failed, ...cleared } = prompt
+      return cleared
+    })
   }, [updateQueuedPrompts])
-  const clearQueuedPrompts = useCallback(() => {
-    const owner = activeQueuedPromptOwnerRef.current
-    if (owner) queuedPromptsByOwnerRef.current.delete(owner)
-    for (const prompt of pendingQueuedPromptsRef.current) observedSteerIdsRef.current.delete(prompt.id)
-    pendingQueuedPromptsRef.current = []
-    setPendingQueuedPrompts([])
+  const dropPendingSteers = useCallback((runtimeId?: string) => {
+    const sessionFile = runtimeId ? runtimeSessionsRef.current.get(runtimeId) : undefined
+    const owners = runtimeId ? [...queuedPromptsByOwnerRef.current.keys()].filter((owner) => (
+      sessionFile ? owner.endsWith(`:session:${sessionFile}`) : owner.endsWith(`:runtime:${runtimeId}`)
+    )) : [activeQueuedPromptOwnerRef.current]
+    if (runtimeId && runtimeIdRef.current === runtimeId) owners.push(activeQueuedPromptOwnerRef.current)
+    for (const owner of new Set(owners)) {
+      if (!owner) continue
+      const prompts = queuedPromptsByOwnerRef.current.get(owner) ?? []
+      const next = prompts.filter((prompt) => prompt.intent !== 'steer')
+      if (next.length === prompts.length) continue
+      for (const prompt of prompts) if (prompt.intent === 'steer') observedSteerIdsRef.current.delete(prompt.id)
+      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
+      else queuedPromptsByOwnerRef.current.delete(owner)
+      if (owner === activeQueuedPromptOwnerRef.current) {
+        pendingQueuedPromptsRef.current = next
+        setPendingQueuedPrompts(next)
+      }
+    }
   }, [])
   const acceptSteer = useCallback((id: string) => {
     const prompt = pendingQueuedPromptsRef.current.find((candidate) => candidate.id === id && candidate.intent === 'steer')
-    if (prompt) queueAgentEvent(createSteerAcceptedEvent(prompt))
-  }, [queueAgentEvent])
+    if (prompt) {
+      queueAgentEvent(createSteerAcceptedEvent(prompt))
+      return
+    }
+    for (const prompts of queuedPromptsByOwnerRef.current.values()) {
+      if (prompts.some((candidate) => candidate.id === id && candidate.intent === 'steer')) {
+        removeQueuedPrompt(id)
+        return
+      }
+    }
+  }, [queueAgentEvent, removeQueuedPrompt])
   const reconcileQueuedPrompts = useCallback((snapshot: SessionActionSnapshot) => {
     const localSteers = pendingQueuedPromptsRef.current.filter((prompt) => prompt.intent === 'steer')
     if (!localSteers.length) return
@@ -589,7 +645,7 @@ export function useWorkspaceRuntime({
     if (admittedLoad?.generation === workspaceGeneration && admittedLoad.sessionFile === activeSession.filePath) {
       if (!admittedLoad.reconciliation) startTranscriptRead(selected, false, undefined, admittedLoad)
     } else {
-      startTranscriptRead(selected, false)
+      startTranscriptRead(selected, false, undefined, undefined, workspaceChanged)
     }
   }, [activeSession?.filePath, bridge, externalSessionSyncRevision, externalSessionUpdatedAt, locallyOwnedActiveSession, startTranscriptRead, workspaceGeneration])
 
@@ -620,7 +676,7 @@ export function useWorkspaceRuntime({
     removeQueuedPrompt,
     markQueuedPromptFlushFailed,
     clearQueuedPromptFlushFailures,
-    clearQueuedPrompts,
+    dropPendingSteers,
     acceptSteer,
     reconcileQueuedPrompts,
     acknowledgeSteer,
@@ -636,7 +692,9 @@ export function useWorkspaceRuntime({
     runtimeOwnerRef,
     workspaceRef,
     activateWorkspace,
+    replaceActiveProject,
     attachRuntime,
+    detachRuntime,
     reconcileRuntime,
     prepareForPrompt,
     queueAgentEvent,
