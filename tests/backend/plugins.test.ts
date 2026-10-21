@@ -1330,6 +1330,27 @@ describe('PluginService MCP connections', () => {
     expect(existsSync(lock)).toBe(false)
   })
 
+  it('retains the original backup if a concurrent writer makes post-rename rollback unsafe', async () => {
+    const root = temp()
+    const settings = join(root, 'settings.json')
+    const original = '{"original":true}'
+    writeFileSync(settings, original)
+    let replaced = false
+    const update = updateMcpSettings({ path: settings, verify: async () => {
+      if (!replaced && JSON.parse(readFileSync(settings, 'utf8')).mcpServers?.test) {
+        replaced = true
+        renameSync(settings, `${settings}.moved`)
+        writeFileSync(settings, '{"concurrent":true}')
+        throw new Error('Directory identity changed after rename')
+      }
+    } }, { name: 'test', scope: 'user', type: 'stdio', command: 'node' }, undefined, { harness: 'omp' })
+    await expect(update).rejects.toThrow('original settings recovery copy:')
+    const backups = readdirSync(root).filter((name) => name.endsWith('.bak'))
+    expect(backups).toHaveLength(1)
+    expect(readFileSync(join(root, backups[0]), 'utf8')).toBe(original)
+    expect(readFileSync(settings, 'utf8')).toBe('{"concurrent":true}')
+  })
+
   it('detects and merges a non-cooperating writer update before rename', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')

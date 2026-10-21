@@ -286,13 +286,14 @@ async function writeSettingsAtomically(
         renamed = false
       } catch (rollbackError) {
         const message = error instanceof Error ? error.message : 'Agent settings update failed'
-        throw new AggregateError([error, rollbackError], `${message}; settings rollback could not be completed`)
+        const recovery = backupIdentity ? `; original settings recovery copy: ${backup}` : ''
+        throw new AggregateError([error, rollbackError], `${message}; settings rollback could not be completed${recovery}`)
       }
     }
     throw error
   } finally {
     if (!renamed && temporaryIdentity) await removeOwnedFile(temporary, temporaryIdentity).catch(() => false)
-    if (backupIdentity) await removeOwnedFile(backup, backupIdentity).catch(() => false)
+    if (!renamed && backupIdentity) await removeOwnedFile(backup, backupIdentity).catch(() => false)
   }
 }
 
