@@ -233,7 +233,7 @@ describe('AutomationService', () => {
       await service.runNow(second.id)
       await eventually(() => expect(started).toEqual([first.id, second.id]))
       await service.runNow(deleted.id)
-      await service.runNow(deleted.id)
+      await expect(service.runNow(deleted.id)).rejects.toThrow('already queued')
       expect(await service.delete(deleted.id)).toBe(true)
       await service.runNow(next.id)
 

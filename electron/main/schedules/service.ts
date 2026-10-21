@@ -453,6 +453,10 @@ export class AutomationService {
     await this.store.update((state) => {
       const current = state.schedules.find((candidate) => candidate.id === task.id)
       if (!current) throw new Error('Scheduled task was deleted before its run could start')
+      if (current.revision !== task.revision) throw new Error('Scheduled task changed before its run could start')
+      if (trigger === 'manual' && current.runs.some((candidate) => candidate.trigger === 'manual' && candidate.taskRevision === task.revision && candidate.status === 'queued')) {
+        throw new Error('A manual run is already queued for this scheduled task')
+      }
       this.pushRun(current, run)
     })
     this.queuePersistedRun(task, run)
