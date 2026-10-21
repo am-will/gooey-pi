@@ -20,14 +20,10 @@ function subscribeSignal(channel: string, callback: () => void): () => void {
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args).catch((error: unknown) => {
     if (!(error instanceof Error)) throw error
-    const match = /^Error invoking remote method '[^']+': ([A-Za-z_$][\w$]*): ([\s\S]*)$/.exec(error.message)
+    const match = /^Error invoking remote method '[^']+': (?:[A-Za-z_$][\w$]*): ([\s\S]*)$/.exec(error.message)
     if (!match) throw error
     console.error('Electron IPC invocation failed:', error)
-    const unwrapped = new Error(match[2])
-    Object.setPrototypeOf(unwrapped, Object.getPrototypeOf(error))
-    unwrapped.name = error.name
-    Object.defineProperty(unwrapped, 'cause', { value: error, configurable: true })
-    throw unwrapped
+    throw new Error(match[1])
   })
 }
 
@@ -83,12 +79,12 @@ const api: PrimeWorkApi = {
   },
   providers: {
     catalog: (force, harness) => invoke('providers:catalog', force, harness),
-    saveApiKey: (providerId, apiKey) => invoke('providers:save-api-key', providerId, apiKey),
-    logout: (providerId) => invoke('providers:logout', providerId),
+    saveApiKey: (providerId, apiKey, harness) => invoke('providers:save-api-key', providerId, apiKey, harness),
+    logout: (providerId, harness) => invoke('providers:logout', providerId, harness),
     setEnabled: (providerId, enabled, harness) => invoke('providers:set-enabled', providerId, enabled, harness),
     setDisabled: (providerIds, harness) => invoke('providers:set-disabled', providerIds, harness),
     setModelEnabled: (modelKey, enabled, harness) => invoke('providers:set-model-enabled', modelKey, enabled, harness),
-    startOAuth: (providerId) => invoke('providers:start-oauth', providerId),
+    startOAuth: (providerId, harness) => invoke('providers:start-oauth', providerId, harness),
     respondOAuth: (flowId, promptId, value) => invoke('providers:respond-oauth', flowId, promptId, value),
     cancelOAuth: (flowId) => invoke('providers:cancel-oauth', flowId),
     onAuthEvent: (callback) => subscribe<ProviderAuthEvent>('providers:auth-event', callback),
@@ -133,7 +129,6 @@ const api: PrimeWorkApi = {
     connectMcp: (input, harness) => invoke('plugins:connect-mcp', input, harness),
     setMcpEnabled: (input, harness) => invoke('plugins:set-mcp-enabled', input, harness),
     mutateCapability: (input, harness) => invoke('plugins:mutate-capability', input, harness),
-    refresh: (harness) => invoke('plugins:refresh', harness),
   },
   settings: {
     get: () => invoke('settings:get'),
@@ -157,7 +152,6 @@ const api: PrimeWorkApi = {
   },
   schedules: {
     list: (harness) => invoke('schedules:list', harness),
-    get: (id) => invoke('schedules:get', id),
     preview: (timing, count) => invoke('schedules:preview', timing, count),
     create: (input, harness) => invoke('schedules:create', input, harness),
     update: (id, patch) => invoke('schedules:update', id, patch),
