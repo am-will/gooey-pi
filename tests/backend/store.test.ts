@@ -925,6 +925,17 @@ describe('JsonStateStore', () => {
     expect(readFileSync(legacyPath, 'utf8')).toBe(legacyRaw)
   })
 
+  it('returns detached schedules and dismissed-path collections', async () => {
+    const store = new JsonStateStore(join(makeDirectory(), 'state.json'))
+    await store.update((state) => { state.dismissedProjectPaths.push('/project') })
+    const paths = store.getDismissedProjectPaths()
+    paths.push('/another')
+    const schedules = store.getSchedules()
+    schedules.length = 1
+    expect(store.getDismissedProjectPaths()).toEqual(['/project'])
+    expect(store.getSchedules()).toEqual([])
+  })
+
   it('keeps only bounded absolute runtime path overrides without changing the active harness', () => {
     const dir = makeDirectory()
     const path = join(dir, 'state.json')

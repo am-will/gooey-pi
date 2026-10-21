@@ -550,6 +550,11 @@ export class JsonStateStore {
     return [...this.state.dismissedProjectPaths]
   }
 
+  getSchedules(): AutomationScheduleRecord[] {
+    this.assertCompatible()
+    return structuredClone(this.state.schedules)
+  }
+
   getArchivedSessions(): string[] {
     this.assertCompatible()
     return [...this.state.archivedSessions]
