@@ -5,9 +5,11 @@
  */
 export const BROWSER_PARTITION = 'persist:prime-work-browser'
 
-export type ThemeMode = 'system' | 'light' | 'dark'
+export const THEME_MODES = ['system', 'light', 'dark'] as const
+export type ThemeMode = (typeof THEME_MODES)[number]
 export type WorkspaceView = 'session' | 'projects' | 'activity' | 'scheduled' | 'plugins' | 'settings'
-export type InspectorTab = 'summary' | 'changes' | 'browser' | 'files'
+export const INSPECTOR_TABS = ['summary', 'changes', 'browser', 'files'] as const
+export type InspectorTab = (typeof INSPECTOR_TABS)[number]
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'complete' | 'failed' | 'unknown'
 
 export const HARNESS_IDS = ['omp', 'prime', 'pi'] as const
@@ -445,7 +447,8 @@ export interface TerminalSelectionContext { tabId: string; label: string; text: 
 export interface TerminalPromptContext extends TerminalSelectionContext { cwd?: string }
 export interface TerminalActiveContext { label: string; content: string; truncated: boolean }
 
-export type MessageEnterAction = 'queue' | 'steer'
+export const MESSAGE_ENTER_ACTIONS = ['queue', 'steer'] as const
+export type MessageEnterAction = (typeof MESSAGE_ENTER_ACTIONS)[number]
 export type PromptDeliveryIntent = 'queue' | 'steer'
 
 export interface PetDefinition {

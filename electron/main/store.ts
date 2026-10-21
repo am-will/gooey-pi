@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type LocalePreference, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, HARNESS_IDS, OMP_APPROVAL_MODES, SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { renameWithWindowsRetry } from './lib/durable-write'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
@@ -111,7 +111,7 @@ function defaultState(): DesktopState {
 
 /** Versions 1 and 2 predate harness scoping, so only an absent value migrates to Prime. */
 function parseHarness(value: unknown, preHarnessState: boolean): HarnessId | null {
-  if (value === 'prime' || value === 'omp' || value === 'pi') return value
+  if (isOneOf(HARNESS_IDS, value)) return value
   return preHarnessState && value === undefined ? 'prime' : null
 }
 
@@ -180,8 +180,8 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
         pi: parseRuntimePath(value.runtimePaths.pi, defaults.runtimePaths.pi),
       }
     : defaults.runtimePaths
-  const activeHarness = value.activeHarness === 'prime' || value.activeHarness === 'omp' || value.activeHarness === 'pi'
-    ? value.activeHarness as HarnessId
+  const activeHarness = isOneOf(HARNESS_IDS, value.activeHarness)
+    ? value.activeHarness
     : legacyState ? 'prime' : defaults.activeHarness
   const parseLastSelectedModel = (model: unknown, fallback: string): string => (
     typeof model === 'string' && model.length <= 385 && (!model || /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(model))
@@ -196,31 +196,27 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
       }
     : defaults.lastSelectedModels
   return {
-    theme: value.theme === 'light' || value.theme === 'dark' || value.theme === 'system' ? value.theme : defaults.theme,
+    theme: isOneOf(THEME_MODES, value.theme) ? value.theme : defaults.theme,
     // Derived from the shared tuple so a locale the renderer can select is never
     // rewritten to the default when the state file is read back.
-    locale: LOCALE_PREFERENCES.includes(value.locale as LocalePreference) ? value.locale as LocalePreference : defaults.locale,
-    interfaceFontScale: INTERFACE_FONT_SCALES.includes(value.interfaceFontScale as AppSettings['interfaceFontScale'])
-      ? value.interfaceFontScale as AppSettings['interfaceFontScale']
-      : defaults.interfaceFontScale,
-    projectSortMode: PROJECT_SORT_MODES.includes(value.projectSortMode as AppSettings['projectSortMode'])
-      ? value.projectSortMode as AppSettings['projectSortMode']
-      : defaults.projectSortMode,
+    locale: isOneOf(LOCALE_PREFERENCES, value.locale) ? value.locale : defaults.locale,
+    interfaceFontScale: isOneOf(INTERFACE_FONT_SCALES, value.interfaceFontScale) ? value.interfaceFontScale : defaults.interfaceFontScale,
+    projectSortMode: isOneOf(PROJECT_SORT_MODES, value.projectSortMode) ? value.projectSortMode : defaults.projectSortMode,
     sidebarOpen: typeof value.sidebarOpen === 'boolean' ? value.sidebarOpen : defaults.sidebarOpen,
     inspectorOpen: typeof value.inspectorOpen === 'boolean' ? value.inspectorOpen : defaults.inspectorOpen,
     showFileChangesPopup: typeof value.showFileChangesPopup === 'boolean' ? value.showFileChangesPopup : defaults.showFileChangesPopup,
-    checkoutStrategy: value.checkoutStrategy === 'branch' || value.checkoutStrategy === 'worktree' ? value.checkoutStrategy : defaults.checkoutStrategy,
+    checkoutStrategy: isOneOf(CHECKOUT_STRATEGIES, value.checkoutStrategy) ? value.checkoutStrategy : defaults.checkoutStrategy,
     keepRunningInBackground: typeof value.keepRunningInBackground === 'boolean' ? value.keepRunningInBackground : defaults.keepRunningInBackground,
     launchAtLogin: typeof value.launchAtLogin === 'boolean' ? value.launchAtLogin : defaults.launchAtLogin,
     terminalOpen: typeof value.terminalOpen === 'boolean' ? value.terminalOpen : defaults.terminalOpen,
-    defaultInspectorTab: value.defaultInspectorTab === 'changes' || value.defaultInspectorTab === 'browser' || value.defaultInspectorTab === 'files' || value.defaultInspectorTab === 'summary' ? value.defaultInspectorTab : defaults.defaultInspectorTab,
+    defaultInspectorTab: isOneOf(INSPECTOR_TABS, value.defaultInspectorTab) ? value.defaultInspectorTab : defaults.defaultInspectorTab,
     browserHome: typeof value.browserHome === 'string' ? value.browserHome : defaults.browserHome,
     browserAskForDownloads: typeof value.browserAskForDownloads === 'boolean' ? value.browserAskForDownloads : defaults.browserAskForDownloads,
     terminalShell: typeof value.terminalShell === 'string' ? value.terminalShell : defaults.terminalShell,
     reduceMotion: typeof value.reduceMotion === 'boolean' ? value.reduceMotion : defaults.reduceMotion,
     showReasoningSummaries: typeof value.showReasoningSummaries === 'boolean' ? value.showReasoningSummaries : defaults.showReasoningSummaries,
     showToolCalls: typeof value.showToolCalls === 'boolean' ? value.showToolCalls : defaults.showToolCalls,
-    messageEnterAction: value.messageEnterAction === 'queue' || value.messageEnterAction === 'steer' ? value.messageEnterAction : defaults.messageEnterAction,
+    messageEnterAction: isOneOf(MESSAGE_ENTER_ACTIONS, value.messageEnterAction) ? value.messageEnterAction : defaults.messageEnterAction,
     runtimePaths,
     askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
     askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
@@ -234,7 +230,7 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     piDisabledModels: parseDisabledModels(value.piDisabledModels, defaults.piDisabledModels),
     lastSelectedModels,
     activeHarness,
-    ompApprovalMode: value.ompApprovalMode === 'inherit' || value.ompApprovalMode === 'always-ask' || value.ompApprovalMode === 'write' || value.ompApprovalMode === 'yolo' ? value.ompApprovalMode : defaults.ompApprovalMode,
+    ompApprovalMode: isOneOf(OMP_APPROVAL_MODES, value.ompApprovalMode) ? value.ompApprovalMode : defaults.ompApprovalMode,
     petEnabled: typeof value.petEnabled === 'boolean' ? value.petEnabled : defaults.petEnabled,
     petId: boundedString(value.petId, 128) && /^[a-z0-9][a-z0-9._/-]{0,127}$/i.test(value.petId) ? value.petId : defaults.petId,
     petSize: Number.isInteger(value.petSize) && (value.petSize as number) >= 50 && (value.petSize as number) <= 125 ? value.petSize as number : defaults.petSize,

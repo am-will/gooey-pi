@@ -1,10 +1,10 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
-import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, type LocalePreference, type ProjectSortMode } from '../../src/types/api'
+import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, OMP_APPROVAL_MODES, BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, } from '../../src/types/api'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { createKeyedMutex } from './lib/async'
 import type { JsonStateStore } from './store'
-import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
+import { isOneOf, isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
 export class SettingsService {
   private readonly updates = createKeyedMutex<'settings'>()
@@ -24,28 +24,28 @@ export class SettingsService {
     // never be silently rejected or silently dropped.
     const validators: { [K in keyof AppSettings]: (value: unknown) => AppSettings[K] } = {
       theme: (value) => {
-        if (value !== 'system' && value !== 'light' && value !== 'dark') throw new TypeError('Invalid theme')
+        if (!isOneOf(THEME_MODES, value)) throw new TypeError('Invalid theme')
         return value
       },
       locale: (value) => {
         // Derived from the same tuple the renderer's language picker is built
         // from: a locale the picker can offer can never be rejected here.
-        if (!LOCALE_PREFERENCES.includes(value as LocalePreference)) throw new TypeError('Invalid locale')
-        return value as LocalePreference
+        if (!isOneOf(LOCALE_PREFERENCES, value)) throw new TypeError('Invalid locale')
+        return value
       },
       interfaceFontScale: (value) => {
-        if (!INTERFACE_FONT_SCALES.includes(value as AppSettings['interfaceFontScale'])) throw new TypeError('Invalid interface font scale')
-        return value as AppSettings['interfaceFontScale']
+        if (!isOneOf(INTERFACE_FONT_SCALES, value)) throw new TypeError('Invalid interface font scale')
+        return value
       },
       projectSortMode: (value) => {
-        if (!PROJECT_SORT_MODES.includes(value as ProjectSortMode)) throw new TypeError('Invalid project sort mode')
-        return value as ProjectSortMode
+        if (!isOneOf(PROJECT_SORT_MODES, value)) throw new TypeError('Invalid project sort mode')
+        return value
       },
       sidebarOpen: (value) => requireBoolean(value, 'sidebarOpen'),
       inspectorOpen: (value) => requireBoolean(value, 'inspectorOpen'),
       showFileChangesPopup: (value) => requireBoolean(value, 'showFileChangesPopup'),
       checkoutStrategy: (value) => {
-        if (value !== 'worktree' && value !== 'branch') throw new TypeError('Invalid checkout strategy')
+        if (!isOneOf(CHECKOUT_STRATEGIES, value)) throw new TypeError('Invalid checkout strategy')
         return value
       },
       keepRunningInBackground: (value) => requireBoolean(value, 'keepRunningInBackground'),
@@ -60,11 +60,11 @@ export class SettingsService {
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),
       computerUseEnabled: (value) => requireBoolean(value, 'computerUseEnabled'),
       defaultInspectorTab: (value) => {
-        if (value !== 'summary' && value !== 'changes' && value !== 'browser' && value !== 'files') throw new TypeError('Invalid inspector tab')
+        if (!isOneOf(INSPECTOR_TABS, value)) throw new TypeError('Invalid inspector tab')
         return value
       },
       messageEnterAction: (value) => {
-        if (value !== 'queue' && value !== 'steer') throw new TypeError('Invalid message Enter action')
+        if (!isOneOf(MESSAGE_ENTER_ACTIONS, value)) throw new TypeError('Invalid message Enter action')
         return value
       },
       runtimePaths: (value) => {
@@ -81,11 +81,11 @@ export class SettingsService {
       browserHome: (value) => requireWebUrl(value),
       terminalShell: (value) => this.validateShell(value),
       activeHarness: (value) => {
-        if (value !== 'prime' && value !== 'omp' && value !== 'pi') throw new TypeError('Invalid harness')
+        if (!isOneOf(HARNESS_IDS, value)) throw new TypeError('Invalid harness')
         return value
       },
       ompApprovalMode: (value) => {
-        if (value !== 'inherit' && value !== 'always-ask' && value !== 'write' && value !== 'yolo') throw new TypeError('Invalid OMP approval mode')
+        if (!isOneOf(OMP_APPROVAL_MODES, value)) throw new TypeError('Invalid OMP approval mode')
         return value
       },
       petEnabled: (value) => requireBoolean(value, 'petEnabled'),

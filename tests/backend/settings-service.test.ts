@@ -1,3 +1,4 @@
+import { THEME_MODES, LOCALE_PREFERENCES, INTERFACE_FONT_SCALES, PROJECT_SORT_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, HARNESS_IDS, OMP_APPROVAL_MODES } from '../../src/types/api'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,6 +18,30 @@ function makeService(validateShell: (shell: unknown) => string = () => '/bin/zsh
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 describe('SettingsService.update', () => {
+  it('round-trips every accepted non-voice enum value through disk', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-settings-enums-'))
+    dirs.push(dir)
+    const path = join(dir, 'state.json')
+    const service = new SettingsService(new JsonStateStore(path), () => '/bin/zsh')
+    const fields = {
+      theme: THEME_MODES,
+      locale: LOCALE_PREFERENCES,
+      interfaceFontScale: INTERFACE_FONT_SCALES,
+      projectSortMode: PROJECT_SORT_MODES,
+      checkoutStrategy: CHECKOUT_STRATEGIES,
+      defaultInspectorTab: INSPECTOR_TABS,
+      messageEnterAction: MESSAGE_ENTER_ACTIONS,
+      activeHarness: HARNESS_IDS,
+      ompApprovalMode: OMP_APPROVAL_MODES
+    }
+    for (const [field, values] of Object.entries(fields)) {
+      for (const value of values) {
+        await service.update({ [field]: value })
+        expect(new JsonStateStore(path).getSettings()).toMatchObject({ [field]: value })
+      }
+    }
+  })
+
   it('applies every field of a full valid patch', async () => {
     const service = makeService()
     const next = await service.update({
