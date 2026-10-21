@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/errors'
 import { basename } from '@/lib/data'
 import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, Trash2, X } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
@@ -273,7 +274,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         offExit = undefined
         bufferedData.clear()
         bufferedExits.clear()
-        const message = error instanceof Error ? error.message : t('terminal.error.start')
+        const message = errorMessage(error, t('terminal.error.start'))
         terminal.writeln(`\x1b[31m${message}\x1b[0m`)
         onErrorRef.current?.(message)
         onExitRef.current?.()

@@ -137,6 +137,13 @@ describe('TerminalDrawer project command handle', () => {
     expect(container.querySelector('[role="tab"]')?.textContent).not.toContain('C:')
   })
 
+  it('shows a useful fallback when terminal creation rejects an empty Error', async () => {
+    create.mockRejectedValueOnce(new Error(''))
+    renderDrawer(createHandle())
+    await act(async () => { await Promise.resolve() })
+    expect(onError).toHaveBeenCalledWith('Unable to start terminal')
+  })
+
   it('reports terminal creation failures without fabricating an exit code', async () => {
     const handle = createHandle()
     renderDrawer(handle)
