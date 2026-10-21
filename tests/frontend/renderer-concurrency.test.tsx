@@ -1213,7 +1213,7 @@ describe('plugin request ownership', () => {
     await act(async () => { refresh = state.refresh(); await Promise.resolve() })
     await act(async () => { root.render(<PluginProbe scope="/project" generation={2} />) })
     await act(async () => { requests[2].resolve({ skills: [skill('stale-refresh')], warnings: [] }); await refresh })
-    expect(state.skills).toEqual([])
+    expect(state.skills.map(({ id }) => id)).toEqual(['project-one'])
     await act(async () => { requests[3].resolve({ skills: [skill('project-two')], warnings: [] }); await requests[3].promise })
     expect(state.skills.map(({ id }) => id)).toEqual(['project-two'])
     expect(reportError).not.toHaveBeenCalled()
