@@ -26,7 +26,9 @@
 .desktop-pet:not(.is-voice-active) .desktop-pet__voice-controls { margin-top: -5px; }
 .desktop-pet__voice-controls button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; color: var(--text-secondary); background: color-mix(in srgb, var(--surface-raised) 94%, transparent); box-shadow: 0 4px 12px color-mix(in srgb, #000 18%, transparent); backdrop-filter: blur(10px); }
 .desktop-pet__voice-controls button:hover, .desktop-pet__voice-controls button:focus-visible { color: var(--text); border-color: color-mix(in srgb, var(--prime) 52%, var(--border-strong)); background: var(--surface-hover); }
-.desktop-pet__voice-controls button[aria-label="Open realtime voice"] { color: var(--prime); }
+/* The pet's "open voice" button keeps the accent colour. It is selected by class
+   rather than by aria-label so the rule survives interface translation. */
+.desktop-pet__voice-controls button.desktop-pet__voice-open { color: var(--prime); }
 .desktop-pet__voice-error { width: min(210px, calc(100vw - 16px)); max-height: 72px; margin: 4px 0 0; padding: 6px 8px; overflow: auto; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 7px; color: var(--danger); background: var(--surface-raised); font-size: 9.5px; line-height: 1.35; }
 .desktop-pet > .voice-orb__receipt { width: min(210px, calc(100vw - 16px)); margin: 4px 0 0; }
 .desktop-pet[data-horizontal-edge="right"] .desktop-pet__voice-error, .desktop-pet[data-horizontal-edge="right"] > .voice-orb__receipt { align-self: flex-end; margin-right: 0; transform: none; }

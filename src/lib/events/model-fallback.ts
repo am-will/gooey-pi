@@ -31,6 +31,11 @@ export function fallbackModelFromRecord(value: unknown): FallbackModel | null {
   return { provider, id, label: provider ? `${provider}/${id}` : id, from }
 }
 
+const NOTICE_PREFIX = 'Switched to '
+const NOTICE_SUFFIX = ' due to a provider fallback'
+const NOTICE_ORIGINAL_PREFIX = ' (original: '
+
 export function fallbackNoticeText(label: string, from?: string): string {
-  return `Switched to ${label} due to a provider fallback${from ? ` (original: ${from})` : ''}`
+  return `${NOTICE_PREFIX}${label}${NOTICE_SUFFIX}${from ? `${NOTICE_ORIGINAL_PREFIX}${from})` : ''}`
 }
+

@@ -1,7 +1,7 @@
 import { Check, Laptop, Moon, Sun } from 'lucide-react'
 import type { KeyboardEvent } from 'react'
 import { useI18n, type MessageKey } from '@/lib/i18n'
-import type { InterfaceFontScale, LocalePreference, ThemeMode } from '@/types/api'
+import { LOCALE_PREFERENCES, type InterfaceFontScale, type LocalePreference, type ThemeMode } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 import { SettingsToggle } from './SettingsToggle'
 
@@ -17,11 +17,18 @@ const fontScales: Array<{ value: InterfaceFontScale; label: MessageKey }> = [
   { value: 115, label: 'appearance.text.larger' },
 ]
 
-const locales: Array<{ value: LocalePreference; label: MessageKey }> = [
-  { value: 'system', label: 'appearance.language.system' },
-  { value: 'en', label: 'appearance.language.english' },
-  { value: 'zh-CN', label: 'appearance.language.chinese' },
-]
+// Language names are endonyms: every option is written in its own language, so a
+// user who cannot read the current interface language can still find their own
+// and switch back. Only the system entry is translated, because it names a
+// behaviour rather than a language. Adding a locale to LOCALE_PREFERENCES is a
+// compile error until its endonym is listed here.
+type SwitchableLocale = Exclude<LocalePreference, 'system'>
+const localeEndonyms = {
+  en: 'English',
+  'zh-CN': '简体中文',
+  ja: '日本語',
+} as const satisfies Record<SwitchableLocale, string>
+const locales = LOCALE_PREFERENCES.filter((value): value is SwitchableLocale => value !== 'system')
 
 /** Arrow/Home/End movement inside a radio group selects as it moves. */
 function nextScaleIndex(key: string, current: number, count: number): number | null {
@@ -62,9 +69,10 @@ export function AppearanceSettings({ settings, onUpdate }: SettingsSectionProps)
       <section className="settings-group">
         <h2>{t('appearance.language.title')}</h2>
         <label className="settings-row">
-          <span><strong>{t('appearance.language.label')}</strong><small>{t('appearance.language.description')} {t('appearance.language.available', { count: locales.length - 1 })}</small></span>
+          <span><strong>{t('appearance.language.label')}</strong><small>{t('appearance.language.description')} {t('appearance.language.available', { count: locales.length })}</small></span>
           <select value={settings.locale} onChange={(event) => { void onUpdate({ locale: event.target.value as LocalePreference }) }}>
-            {locales.map((locale) => <option key={locale.value} value={locale.value}>{t(locale.label)}</option>)}
+            <option value="system">{t('appearance.language.system')}</option>
+            {locales.map((value) => <option key={value} value={value}>{localeEndonyms[value]}</option>)}
           </select>
         </label>
       </section>

@@ -28,11 +28,13 @@ import {
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
 import { PROJECT_SORT_MODES, type AppMeta, type AppUpdateState, type HarnessId, type ProjectRecord, type ProjectSortMode, type SessionRecord, type WorkspaceView } from '@/types/api'
+import { writeClipboardText } from '@/lib/clipboard'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_PRODUCT_NAMES, HARNESS_SELECTOR_ORDER, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { sortProjects } from '@/lib/project-order'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
+import { sessionTitleText } from '@/lib/session-title'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
 import { IconButton, Modal, OmpMark, PiMark, PrimeMark, useFocusTrap } from './ui'
 
@@ -67,9 +69,12 @@ export interface SidebarProps {
   platform?: NodeJS.Platform
 }
 
-const statusLabel: Record<SessionRecord['status'], string> = {
-  idle: 'Idle', running: 'Running', waiting: 'Waiting for input', complete: 'Finished', failed: 'Failed', unknown: 'Unknown',
-}
+const STATUS_LABEL_KEYS = {
+  idle: 'sidebar.status.idle', running: 'sidebar.status.running', waiting: 'sidebar.status.waiting', complete: 'sidebar.status.complete', failed: 'sidebar.status.failed', unknown: 'sidebar.status.unknown',
+} as const satisfies Record<SessionRecord['status'], MessageKey>
+
+/** Translator shape for module-level copy helpers that run per render. */
+type Translate = ReturnType<typeof useI18n>['t']
 
 export const SIDEBAR_SESSION_LIMIT = 7
 
@@ -113,10 +118,12 @@ export function boundedSidebarSessions(sessions: SessionRecord[]): SessionRecord
 
 
 function SessionStatusMark({ status, attention }: { status: SessionRecord['status']; attention: boolean }) {
-  const title = status === 'failed' && !attention ? 'Failed — notification cleared' : statusLabel[status]
-  if (status === 'running') return <span className="session-status-mark session-status-mark--running" title={statusLabel[status]}><LoaderCircle className="spin" size={13} /></span>
-  if (status === 'waiting') return <span className="session-status-mark session-status-mark--waiting" title={statusLabel[status]}><MessageCircleQuestion size={12} /></span>
-  if (status === 'complete') return <span className="session-status-mark session-status-mark--complete" title={statusLabel[status]}><CheckCircle2 size={12} /></span>
+  const { t } = useI18n()
+  const label = t(STATUS_LABEL_KEYS[status])
+  const title = status === 'failed' && !attention ? t('sidebar.status.failedCleared') : label
+  if (status === 'running') return <span className="session-status-mark session-status-mark--running" title={label}><LoaderCircle className="spin" size={13} /></span>
+  if (status === 'waiting') return <span className="session-status-mark session-status-mark--waiting" title={label}><MessageCircleQuestion size={12} /></span>
+  if (status === 'complete') return <span className="session-status-mark session-status-mark--complete" title={label}><CheckCircle2 size={12} /></span>
   return <span className={`session-status-mark session-status-mark--${status}`} title={title}><span /></span>
 }
 
@@ -127,68 +134,53 @@ function HarnessMark({ harness, size }: { harness: HarnessId; size: number }) {
   return <Mark size={size} />
 }
 
-function updateControlCopy(state: AppUpdateState): { label: string; title: string } {
+function updateControlCopy(state: AppUpdateState, t: Translate): { label: string; title: string } {
+  // `version` keeps its own leading space so both the "Download 1.2.3" and the
+  // bare "Download" forms stay byte-identical to the pre-i18n copy.
   const version = state.version ? ` ${state.version}` : ''
   switch (state.phase) {
-    case 'checking': return { label: 'Checking for updates', title: 'Checking GitHub Releases for a new GooeyPi version' }
-    case 'available': return { label: `Download${version}`, title: `Download and restart GooeyPi${version}` }
+    case 'checking': return { label: t('update.checking'), title: t('update.checkingTitle') }
+    case 'available': return { label: t('update.download', { version }), title: t('update.downloadTitle', { version }) }
     case 'downloading': return {
-      label: state.percent === undefined ? `Downloading${version}` : `Downloading${version} · ${state.percent}%`,
-      title: `Downloading GooeyPi${version}`,
+      label: state.percent === undefined ? t('update.downloading', { version }) : t('update.downloadingWithPercent', { version, percent: state.percent }),
+      title: t('update.downloadingTitle', { version }),
     }
-    case 'downloaded': return { label: `Restart for${version}`, title: `Restart GooeyPi and install version${version}` }
-    case 'not-available': return { label: 'GooeyPi is up to date', title: 'Check again for a new GooeyPi release' }
-    case 'error': return { label: version ? `Retry update${version}` : 'Retry update', title: state.message ?? 'Update failed — try checking again' }
-    case 'unsupported': return { label: 'Automatic updates', title: state.message ?? 'Automatic updates are available in installed builds' }
-    default: return { label: 'Release updates', title: 'Check for a new GooeyPi release' }
+    case 'downloaded': return { label: t('update.restart', { version }), title: t('update.restartTitle', { version }) }
+    case 'not-available': return { label: t('update.upToDate'), title: t('update.upToDateTitle') }
+    case 'error': return { label: version ? t('update.retryVersion', { version }) : t('update.retry'), title: state.message ?? t('update.failedTitle') }
+    case 'unsupported': return { label: t('update.automatic'), title: state.message ?? t('update.automaticTitle') }
+    default: return { label: t('update.release'), title: t('update.releaseTitle') }
   }
 }
 
 /** Announced without the percentage so progress ticks do not spam assistive tech. */
-function updateAnnouncement(state: AppUpdateState): string {
+function updateAnnouncement(state: AppUpdateState, t: Translate): string {
   const version = state.version ? ` ${state.version}` : ''
   switch (state.phase) {
-    case 'available': return `GooeyPi update${version} is available`
-    case 'downloading': return `Downloading GooeyPi update${version}`
-    case 'downloaded': return `GooeyPi update${version} is ready to install`
-    case 'error': return `GooeyPi update failed. ${state.message ?? 'Try again.'}`
+    case 'available': return t('update.announceAvailable', { version })
+    case 'downloading': return t('update.announceDownloading', { version })
+    case 'downloaded': return t('update.announceReady', { version })
+    case 'error': return t('update.announceFailed', { message: state.message ?? t('update.tryAgain') })
     default: return ''
   }
 }
 
-function updateConfirmCopy(state: AppUpdateState): { title: string; body: string } {
+function updateConfirmCopy(state: AppUpdateState, t: Translate): { title: string; body: string } {
   if (state.phase === 'downloaded') return {
-    title: 'Restart GooeyPi to install the update?',
-    body: 'GooeyPi will close and restart to finish installing the update.',
+    title: t('update.confirmRestartTitle'),
+    body: t('update.confirmRestartBody'),
   }
   return {
-    title: 'Download and Restart GooeyPi?',
-    body: 'GooeyPi will download the update, close, and restart when it is ready.',
+    title: t('update.confirmDownloadTitle'),
+    body: t('update.confirmDownloadBody'),
   }
-}
-
-async function copySessionUuid(id: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(id)
-      return
-    } catch {
-      // Fall back to the document copy command when clipboard permission is unavailable.
-    }
-  }
-  const input = document.createElement('textarea')
-  input.value = id
-  input.style.position = 'fixed'
-  input.style.opacity = '0'
-  document.body.append(input)
-  input.select()
-  const copied = document.execCommand('copy')
-  input.remove()
-  if (!copied) throw new Error('Copy is unavailable')
 }
 
 function SidebarView({ projects, sessions, activeProjectId, activeSessionId, activeView, activeHarness = 'omp', harnesses, clearedAttention = {}, updateState = { phase: 'unsupported' }, onUpdateAction, onSelectHarness, onSelectProject, onSelectSession, onNavigate, onNewSession, onAddProject, onRemoveProject, projectSortMode = 'recent', onSetProjectSortMode = () => undefined, onTogglePinProject = () => undefined, onClose, onOpenPalette, onRenameSession, onArchiveSession, overlay = false, platform = 'darwin' }: SidebarProps) {
   const { t } = useI18n()
+  // Session titles are record data; only the main-process placeholder is
+  // presented in the interface language (see `src/lib/session-title.ts`).
+  const displayTitle = (title: string): string => sessionTitleText(title, t)
   const [query, setQuery] = useState('')
   const [harnessMenuOpen, setHarnessMenuOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -219,8 +211,8 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
   const sidebarShortcut = shortcutLabel(platform, ['Primary', 'B'])
   const commandsShortcut = shortcutLabel(platform, ['Primary', 'K'])
   const settingsShortcut = shortcutLabel(platform, ['Primary', ','])
-  const updateCopy = updateControlCopy(updateState)
-  const updateConfirm = updateConfirmCopy(updateState)
+  const updateCopy = updateControlCopy(updateState, t)
+  const updateConfirm = updateConfirmCopy(updateState, t)
   const updateBusy = updateState.phase === 'checking' || updateState.phase === 'downloading'
   const updateIndeterminate = updateState.phase === 'downloading' && updateState.percent === undefined
   const updateVisible = updateState.phase === 'available' || updateState.phase === 'downloading' || updateState.phase === 'downloaded' || updateState.phase === 'error'
@@ -265,7 +257,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
   const visibleProjects = useMemo(() => sortProjects(projects.filter((project) => !normalized || project.name.toLowerCase().includes(normalized) || (sessionsByProject.get(project.id) ?? []).some((session) => `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized))), projectSortMode), [projects, sessionsByProject, normalized, projectSortMode])
 
   return (
-    <aside ref={sidebarRef} className="sidebar" aria-label="Project and session navigation" tabIndex={overlay ? -1 : undefined}>
+    <aside ref={sidebarRef} className="sidebar" aria-label={t('sidebar.navigationLabel')} tabIndex={overlay ? -1 : undefined}>
       <div className="sidebar__titlebar drag-region">
         <div className="traffic-light-clearance" aria-hidden="true" />
         <div className="sidebar__brand brand-switcher no-drag">
@@ -274,16 +266,16 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
             className="brand-switcher__trigger"
             aria-haspopup="menu"
             aria-expanded={harnessMenuOpen}
-            aria-label={`${HARNESS_PRODUCT_NAMES[activeHarness]} — switch harness`}
-            title={`${HARNESS_PRODUCT_NAMES[activeHarness]} — switch harness`}
+            aria-label={t('sidebar.harnessSwitcher', { name: HARNESS_PRODUCT_NAMES[activeHarness] })}
+            title={t('sidebar.harnessSwitcher', { name: HARNESS_PRODUCT_NAMES[activeHarness] })}
             onClick={() => setHarnessMenuOpen((open) => !open)}
           >
             <HarnessMark harness={activeHarness} size={24} />
-            <span className="brand-switcher__name"><strong>{HARNESS_SHORT_NAMES[activeHarness]}</strong><small>Work</small></span>
+            <span className="brand-switcher__name"><strong>{HARNESS_SHORT_NAMES[activeHarness]}</strong><small>{t('sidebar.work')}</small></span>
             <ChevronDown size={12} aria-hidden="true" />
           </button>
           {harnessMenuOpen ? (
-            <div className="brand-switcher__menu" role="menu" aria-label="Harness">
+            <div className="brand-switcher__menu" role="menu" aria-label={t('sidebar.harnessMenu')}>
               {HARNESS_SELECTOR_ORDER.filter((harness) => Boolean(harnesses?.[harness]?.path)).map((harness) => (
                   <button
                     type="button"
@@ -302,19 +294,19 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
           ) : null}
         </div>
         <div className="sidebar__title-actions no-drag">
-          <IconButton label={`New session (${newSessionShortcut})`} onClick={() => onNewSession()}><NotebookPen size={16} /></IconButton>
-          <IconButton label={`Hide sidebar (${sidebarShortcut})`} onClick={onClose}><PanelLeftClose size={16} /></IconButton>
+          <IconButton label={t('nav.newSessionShortcut', { shortcut: newSessionShortcut })} onClick={() => onNewSession()}><NotebookPen size={16} /></IconButton>
+          <IconButton label={t('nav.hideSidebarShortcut', { shortcut: sidebarShortcut })} onClick={onClose}><PanelLeftClose size={16} /></IconButton>
         </div>
       </div>
 
-      <nav className="sidebar__primary" aria-label="Primary">
-        <button type="button" title={`New session (${newSessionShortcut})`} onClick={() => onNewSession()}><NotebookPen size={15} /><span>New session</span><kbd>{newSessionShortcut}</kbd></button>
-        <button type="button" title="Search" onClick={() => { setSearchOpen((open) => !open); window.setTimeout(() => document.getElementById('session-search')?.focus(), 0) }} className={searchOpen ? 'is-active' : ''}><Search size={15} /><span>Search</span></button>
+      <nav className="sidebar__primary" aria-label={t('nav.primary')}>
+        <button type="button" title={t('nav.newSessionShortcut', { shortcut: newSessionShortcut })} onClick={() => onNewSession()}><NotebookPen size={15} /><span>{t('nav.newSession')}</span><kbd>{newSessionShortcut}</kbd></button>
+        <button type="button" title={t('common.search')} onClick={() => { setSearchOpen((open) => !open); window.setTimeout(() => document.getElementById('session-search')?.focus(), 0) }} className={searchOpen ? 'is-active' : ''}><Search size={15} /><span>{t('common.search')}</span></button>
         {searchOpen ? (
           <div className="sidebar-search">
             <Search size={13} />
-            <input id="session-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Projects, chats, branches" aria-label="Search projects and sessions" />
-            {query ? <button type="button" title="Clear search" aria-label="Clear search" onClick={() => setQuery('')}>×</button> : null}
+            <input id="session-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('sidebar.searchPlaceholder')} aria-label={t('sidebar.searchAria')} />
+            {query ? <button type="button" title={t('sidebar.clearSearch')} aria-label={t('sidebar.clearSearch')} onClick={() => setQuery('')}>×</button> : null}
           </div>
         ) : null}
         <button type="button" title={t('nav.projects')} className={activeView === 'projects' ? 'is-active' : ''} onClick={() => onNavigate('projects')}><Folder size={15} /><span>{t('nav.projects')}</span></button>
@@ -324,8 +316,8 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
       </nav>
 
       <div className="sidebar__scroll scroll-area">
-        <div className="sidebar__section-heading"><span>Projects</span><span className="sidebar__section-heading-actions"><IconButton size="small" label={t(allCollapsed ? 'projects.expandAll' : 'projects.collapseAll')} disabled={Boolean(normalized) || projects.length === 0} onClick={() => { setProjectMenu(null); setSessionMenu(null); setCollapsed(Object.fromEntries(projects.map((project) => [project.id, !allCollapsed]))) }}>{allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}</IconButton><IconButton size="small" className="sidebar__sort-toggle" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label={t('projects.sort')} onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label="Add project" onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label={t('projects.sort.menu')}>{PROJECT_SORT_MODES.map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{t(PROJECT_SORT_LABEL_KEYS[mode])}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
-        {visibleProjects.length === 0 ? <p className="sidebar__empty">No matching work</p> : null}
+        <div className="sidebar__section-heading"><span>{t('nav.projects')}</span><span className="sidebar__section-heading-actions"><IconButton size="small" label={t(allCollapsed ? 'projects.expandAll' : 'projects.collapseAll')} disabled={Boolean(normalized) || projects.length === 0} onClick={() => { setProjectMenu(null); setSessionMenu(null); setCollapsed(Object.fromEntries(projects.map((project) => [project.id, !allCollapsed]))) }}>{allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}</IconButton><IconButton size="small" className="sidebar__sort-toggle" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label={t('projects.sort')} onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label={t('nav.addProject')} onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label={t('projects.sort.menu')}>{PROJECT_SORT_MODES.map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{t(PROJECT_SORT_LABEL_KEYS[mode])}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
+        {visibleProjects.length === 0 ? <p className="sidebar__empty">{t('sidebar.noMatchingWork')}</p> : null}
         {visibleProjects.map((project) => {
           const projectSessions = (sessionsByProject.get(project.id) ?? []).filter((session) => !normalized || `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized) || project.name.toLowerCase().includes(normalized))
           const isCollapsed = !normalized && (collapsed[project.id] ?? false)
@@ -337,7 +329,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                 className={`project-row ${activeProjectId === project.id && activeView === 'session' ? 'is-selected' : ''}`}
                 onContextMenu={(event) => { event.preventDefault(); setProjectMenu(project.id) }}
               >
-                <button className="project-row__collapse" type="button" aria-expanded={!isCollapsed} disabled={Boolean(normalized)} aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${project.name}`} title={`${isCollapsed ? 'Expand' : 'Collapse'} ${project.name}`} onClick={() => { setProjectMenu(null); setCollapsed((value) => ({ ...value, [project.id]: !isCollapsed })) }}>
+                <button className="project-row__collapse" type="button" aria-expanded={!isCollapsed} disabled={Boolean(normalized)} aria-label={t(isCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { name: project.name })} title={t(isCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { name: project.name })} onClick={() => { setProjectMenu(null); setCollapsed((value) => ({ ...value, [project.id]: !isCollapsed })) }}>
                   {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 </button>
                 <button className="project-row__main" type="button" onClick={() => { setProjectMenu(null); onSelectProject(project) }} title={project.path}>
@@ -345,30 +337,30 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                   <span>{project.name}</span>
                   {project.pinned ? <Pin className="project-row__pin" size={11} fill="currentColor" /> : null}
                 </button>
-                <IconButton size="small" className="project-row__new-session row-action" label={`New session in ${project.name}`} onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={13} /></IconButton>
-                {running ? <span className="project-working" title="Agent working"><LoaderCircle className="spin" size={13} /></span> : null}
-                {projectMenu === project.id ? <div className="project-row__menu" role="menu" aria-label={`Project options for ${project.name}`}>{!project.inferred ? <button type="button" role="menuitem" onClick={() => { setProjectMenu(null); onTogglePinProject(project) }}><Pin size={12} /> {t(project.pinned ? 'projects.unpin' : 'projects.pin')}</button> : null}<button type="button" role="menuitem" onClick={() => { setProjectMenu(null); setRemoveTarget(project) }}><Trash2 size={12} /> Remove project</button></div> : null}
+                <IconButton size="small" className="project-row__new-session row-action" label={t('nav.newSessionIn', { name: project.name })} onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={13} /></IconButton>
+                {running ? <span className="project-working" title={t('sidebar.agentWorking')}><LoaderCircle className="spin" size={13} /></span> : null}
+                {projectMenu === project.id ? <div className="project-row__menu" role="menu" aria-label={t('sidebar.projectOptions', { name: project.name })}>{!project.inferred ? <button type="button" role="menuitem" onClick={() => { setProjectMenu(null); onTogglePinProject(project) }}><Pin size={12} /> {t(project.pinned ? 'projects.unpin' : 'projects.pin')}</button> : null}<button type="button" role="menuitem" onClick={() => { setProjectMenu(null); setRemoveTarget(project) }}><Trash2 size={12} /> {t('sidebar.removeProject')}</button></div> : null}
               </div>
               {!isCollapsed ? (
                 <div className="session-list">
                   {projectSessions.slice(0, sessionLimit).map((session) => (
                     <div key={session.id} className={`session-row-wrap session-row-wrap--${session.status} ${needsAttention(session) ? 'has-attention' : ''} ${activeSessionId === session.id && activeView === 'session' ? 'is-selected' : ''}`}>
-                      <button type="button" title={session.title} className="session-row" onClick={() => { setSessionMenu(null); onSelectSession(session) }} onContextMenu={(event) => { event.preventDefault(); openSessionMenu(session.id, event.currentTarget) }}>
+                      <button type="button" title={displayTitle(session.title)} className="session-row" onClick={() => { setSessionMenu(null); onSelectSession(session) }} onContextMenu={(event) => { event.preventDefault(); openSessionMenu(session.id, event.currentTarget) }}>
                         <SessionStatusMark status={session.status} attention={needsAttention(session)} />
-                        <span className="session-row__text"><span className="session-row__title">{session.title}</span><span className="session-row__meta">{session.status === 'running' ? 'Working' : session.status === 'waiting' ? 'Needs attention' : session.status === 'complete' ? 'Finished' : formatRelative(session.updatedAt)}</span></span>
+                        <span className="session-row__text"><span className="session-row__title">{displayTitle(session.title)}</span><span className="session-row__meta">{session.status === 'running' ? t('sidebar.sessionMeta.working') : session.status === 'waiting' ? t('sidebar.sessionMeta.attention') : session.status === 'complete' ? t('sidebar.status.complete') : formatRelative(session.updatedAt)}</span></span>
                       </button>
                       <IconButton
                         size="small"
                         className="session-row__archive"
-                        label={`Archive ${session.title}`}
+                        label={t('sidebar.archiveSession', { title: displayTitle(session.title) })}
                         onClick={() => { setSessionMenu(null); archiveSession(session) }}
                       ><Archive size={13}/></IconButton>
-                      <IconButton size="small" className="session-row__more" label={`Session options for ${session.title}`} onClick={(event) => openSessionMenu(session.id, event.currentTarget)}><MoreHorizontal size={13}/></IconButton>
-                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label="Session options"><button type="button" onClick={() => { void copySessionUuid(session.id); setSessionMenu(null) }}><Copy size={12}/> Copy session UUID</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> Rename</button></div> : null}
+                      <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={(event) => openSessionMenu(session.id, event.currentTarget)}><MoreHorizontal size={13}/></IconButton>
+                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
                     </div>
                   ))}
-                  {projectSessions.length > sessionLimit ? <button type="button" className="session-row session-row--empty" onClick={() => setSessionLimits((limits) => ({ ...limits, [project.id]: sessionLimit + SIDEBAR_SESSION_LIMIT }))}>+{projectSessions.length - sessionLimit} more sessions</button> : null}
-                  {sessionLimit > SIDEBAR_SESSION_LIMIT ? <button type="button" className="session-row session-row--empty" onClick={() => { setSessionMenu(null); setSessionLimits((limits) => ({ ...limits, [project.id]: SIDEBAR_SESSION_LIMIT })) }}>Show less</button> : null}
+                  {projectSessions.length > sessionLimit ? <button type="button" className="session-row session-row--empty" onClick={() => setSessionLimits((limits) => ({ ...limits, [project.id]: sessionLimit + SIDEBAR_SESSION_LIMIT }))}>{t('sidebar.moreSessions', { count: projectSessions.length - sessionLimit })}</button> : null}
+                  {sessionLimit > SIDEBAR_SESSION_LIMIT ? <button type="button" className="session-row session-row--empty" onClick={() => { setSessionMenu(null); setSessionLimits((limits) => ({ ...limits, [project.id]: SIDEBAR_SESSION_LIMIT })) }}>{t('sidebar.showLess')}</button> : null}
                   {projectSessions.length === 0 ? <button type="button" title={`New session in ${project.name}`} className="session-row session-row--empty" onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={12} /> New session</button> : null}
                 </div>
               ) : null}
@@ -378,10 +370,10 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
       </div>
 
       <div className="sidebar__footer">
-        <button type="button" title="Commands" onClick={onOpenPalette}><Search size={15} /><span>Commands</span><kbd>{commandsShortcut}</kbd></button>
+        <button type="button" title={t('nav.commands')} onClick={onOpenPalette}><Search size={15} /><span>{t('nav.commands')}</span><kbd>{commandsShortcut}</kbd></button>
         {updateVisible ? (
           <>
-            <span className="sr-only" role="status" aria-live="polite">{updateAnnouncement(updateState)}</span>
+            <span className="sr-only" role="status" aria-live="polite">{updateAnnouncement(updateState, t)}</span>
             <button
               type="button"
               className={`sidebar-update sidebar-update--${updateState.phase} ${updateIndeterminate ? 'sidebar-update--indeterminate' : ''}`}

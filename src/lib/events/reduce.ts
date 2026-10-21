@@ -1,9 +1,14 @@
+import { translate } from '@/lib/i18n'
 import type { MessagePart, QueuedPrompt, TranscriptMessage } from '@/types/api'
 import { isSystemReport } from '@/lib/system-rows'
 import { applyCompactionEvent, isCompactionEvent } from './compaction'
 import { nextTranscriptId, withPartId } from './ids'
 import { fallbackModelFromRecord, fallbackNoticeText } from './model-fallback'
 import { agentMessagePart, record, resultText, string } from './parse'
+
+// This reducer runs while agent events stream in, outside React, so its
+// system-row copy is resolved on demand through the interface locale mirror.
+// English output is unchanged (the mirror defaults to `en`).
 
 export interface PrimeEventReplayStats {
   messageScans: number
@@ -30,12 +35,19 @@ interface PartDraft {
  * Tool events without a toolCallId must still pair their start/update/end
  * events onto one tool row instead of appending a phantom second row, so
  * they share a stable name-derived fallback id.
+ *
+ * Identity must not follow the interface language: callers pass the harness's
+ * raw tool name, never the translated placeholder, because this id is the
+ * reconciliation key for the row (a translated id would split one tool call
+ * into two rows after a language switch).
  */
-function effectiveToolId(id: string | undefined, name: string): string {
-  return id ?? `tool-fallback:${name}`
+function effectiveToolId(id: string | undefined, name: string | undefined): string {
+  return id ?? `tool-fallback:${name ?? UNNAMED_TOOL}`
 }
 
-const EMPTY_TURN_FALLBACK = 'Completed without a text response.'
+/** Stable identity token for a tool call the harness never named; never translated. */
+const UNNAMED_TOOL = 'Tool'
+
 const LOCAL_STEER_PICKUP = Symbol('gooeypi-steer-pickup')
 const LOCAL_STEER_ACCEPTED = Symbol('gooeypi-steer-accepted')
 
@@ -164,7 +176,7 @@ export function replayPrimeEvents(
       message.completedAt = completedAt
       const parts = partDrafts.get(index)
       if (addFallback && (parts?.length ?? message.parts.length) === 0) {
-        appendNode(draftParts(index), withPartId({ type: 'text', text: EMPTY_TURN_FALLBACK }))
+        appendNode(draftParts(index), withPartId({ type: 'text', text: translate('en', 'transcript.emptyTurn'), notice: { kind: 'empty-turn' } }))
       }
     }
     streaming.clear()
@@ -173,7 +185,7 @@ export function replayPrimeEvents(
   const dropTailFallback = (index: number) => {
     const draft = draftParts(index)
     const tail = draft.tail
-    if (tail?.part.type !== 'text' || tail.part.text !== EMPTY_TURN_FALLBACK) return
+    if (tail?.part.type !== 'text' || (tail.part.notice?.kind !== 'empty-turn' && tail.part.text !== translate('en', 'transcript.emptyTurn'))) return
     draft.tail = tail.previous
     if (draft.tail) draft.tail.next = undefined
     else draft.head = undefined
@@ -243,7 +255,7 @@ export function replayPrimeEvents(
           role: 'system',
           kind: 'steer-read-marker',
           timestamp: Date.now(),
-          parts: [{ type: 'text', text: pickedUp.length === 1 ? 'Steer read here' : `${pickedUp.length} steers read here` }],
+          parts: [{ type: 'text', text: translate('en', 'transcript.steerReadMarker', { count: pickedUp.length }), notice: { kind: 'steer-read', count: pickedUp.length } }],
         })
       }
       continue
@@ -287,20 +299,23 @@ export function replayPrimeEvents(
         else appendNode(draft, withPartId({ type: partType, text }))
       } else if (deltaType === 'toolcall_end') {
         const tool = record(delta?.toolCall)
-        const name = string(tool?.name) ?? 'Tool'
-        upsertToolDraft(assistantIndex(), effectiveToolId(string(tool?.id), name), name, tool?.arguments ?? tool?.args)
+        const rawName = string(tool?.name)
+        const name = rawName ?? 'Tool'
+        upsertToolDraft(assistantIndex(), effectiveToolId(string(tool?.id), rawName), name, tool?.arguments ?? tool?.args)
       }
       continue
     }
     if (type === 'tool_execution_start') {
-      const name = string(raw.toolName) ?? 'Tool'
-      upsertToolDraft(assistantIndex(), effectiveToolId(string(raw.toolCallId), name), name, raw.args)
+      const rawName = string(raw.toolName)
+      const name = rawName ?? 'Tool'
+      upsertToolDraft(assistantIndex(), effectiveToolId(string(raw.toolCallId), rawName), name, raw.args)
       continue
     }
     if (type === 'tool_execution_update') {
       const index = assistantIndex()
-      const name = string(raw.toolName) ?? 'Tool'
-      const id = effectiveToolId(string(raw.toolCallId), name)
+      const rawName = string(raw.toolName)
+      const name = rawName ?? 'Tool'
+      const id = effectiveToolId(string(raw.toolCallId), rawName)
       upsertToolDraft(index, id, name, raw.args)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
@@ -309,8 +324,9 @@ export function replayPrimeEvents(
     }
     if (type === 'tool_execution_end') {
       const index = assistantIndex()
-      const name = string(raw.toolName) ?? 'Tool'
-      const id = effectiveToolId(string(raw.toolCallId), name)
+      const rawName = string(raw.toolName)
+      const name = rawName ?? 'Tool'
+      const id = effectiveToolId(string(raw.toolCallId), rawName)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
       const resultPart: MessagePart = { type: 'toolResult', name, text: resultText(raw.result), isError: raw.isError === true }
@@ -343,13 +359,17 @@ export function replayPrimeEvents(
     if (type === 'retry_fallback_applied' || type === 'model_change') {
       const fallback = fallbackModelFromRecord(raw)
       if (!fallback) continue
+      // Stored as the canonical English notice so the duplicate check below stays
+      // byte-stable and a language switch cannot turn one notice into two rows.
+      // The display layer localises it (`src/lib/transcript-notes.ts`) for live
+      // and replayed rows.
       const text = fallbackNoticeText(fallback.label, fallback.from)
       const last = next.at(-1)
       if (last?.kind === 'notice' && last.parts.length === 1 && last.parts[0]?.type === 'text' && last.parts[0].text === text) continue
       const timestamp = Date.now()
       finalizeStreaming(timestamp, false)
       copyTranscript()
-      next.push({ id: nextTranscriptId('fallback'), role: 'system', kind: 'notice', timestamp, parts: [withPartId({ type: 'text', text })] })
+      next.push({ id: nextTranscriptId('fallback'), role: 'system', kind: 'notice', timestamp, parts: [withPartId({ type: 'text', text, notice: { kind: 'provider-fallback', label: fallback.label, from: fallback.from } })] })
       continue
     }
     if (type === 'extension_error' || type === 'error' || type === 'transport_error') {

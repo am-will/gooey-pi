@@ -2,6 +2,7 @@ import { ChevronDown, X } from 'lucide-react'
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode, type RefObject, type SelectHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { GOOEYPI_MASCOT_SRC } from '@/lib/assets'
+import { useI18n } from '@/lib/i18n'
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   label: string
@@ -145,13 +146,14 @@ export function useAppShellOverlay(active: boolean): void {
 }
 
 export function Modal({ title, children, onClose, footer }: { title: string; children: ReactNode; onClose(): void; footer?: ReactNode }) {
+  const { t } = useI18n()
   const titleId = useId()
   const modalRef = useFocusTrap<HTMLElement>(true, onClose)
   useAppShellOverlay(true)
   return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
-        <div className="modal__header"><h2 id={titleId}>{title}</h2><IconButton label="Close" onClick={onClose}><X size={16} /></IconButton></div>
+        <div className="modal__header"><h2 id={titleId}>{title}</h2><IconButton label={t('common.close')} onClick={onClose}><X size={16} /></IconButton></div>
         <div className="modal__body">{children}</div>
         {footer ? <div className="modal__footer">{footer}</div> : null}
       </section>

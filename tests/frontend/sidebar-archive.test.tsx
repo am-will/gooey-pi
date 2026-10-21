@@ -2,9 +2,9 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from '../../src/components/Sidebar'
-import { I18nProvider } from '../../src/lib/i18n'
+import { I18nProvider, loadLocale } from '../../src/lib/i18n'
 import { sessionAttentionSignature } from '../../src/app/session-attention'
 import type { ProjectRecord, SessionRecord } from '../../src/types/api'
 
@@ -21,6 +21,8 @@ const session: SessionRecord = {
 
 let container: HTMLDivElement
 let root: Root
+
+beforeAll(async () => { await loadLocale('zh-CN') })
 
 beforeEach(() => {
   container = document.createElement('div')

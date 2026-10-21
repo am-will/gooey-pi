@@ -61,6 +61,9 @@ describe('JsonStateStore', () => {
     writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
     expect(new JsonStateStore(path).getSettings().locale).toBe('zh-CN')
 
+    writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings: { ...settings, locale: 'ja' }, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
+    expect(new JsonStateStore(path).getSettings().locale).toBe('ja')
+
     writeFileSync(path, JSON.stringify({ version: 4, projects: [], settings: { ...settings, locale: 'fr' }, archivedSessions: [], dismissedProjectPaths: [], schedules: [] }))
     expect(new JsonStateStore(path).getSettings().locale).toBe('system')
   })

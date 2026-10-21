@@ -82,6 +82,14 @@ describe('SettingsService.update', () => {
     expect(service.get()).toEqual(next)
   })
 
+  it('accepts and persists every supported locale preference', async () => {
+    const service = makeService()
+    for (const locale of ['system', 'en', 'zh-CN', 'ja'] as const) {
+      await expect(service.update({ locale })).resolves.toMatchObject({ locale })
+      expect(service.get().locale).toBe(locale)
+    }
+  })
+
   it('leaves unrelated settings untouched on a partial patch', async () => {
     const service = makeService()
     const before = service.get()

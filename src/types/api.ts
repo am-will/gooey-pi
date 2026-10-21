@@ -145,8 +145,13 @@ export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'reque
 export type PrimeCompactionStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type PrimeCompactionOutcome = 'failed' | 'cancelled' | 'skipped'
 
+export type TranscriptTextNotice =
+  | { kind: 'provider-fallback'; label: string; from?: string }
+  | { kind: 'empty-turn' }
+  | { kind: 'steer-read'; count: number }
+
 export type MessagePart =
-  | { type: 'text'; partId?: string; text: string }
+  | { type: 'text'; partId?: string; text: string; notice?: TranscriptTextNotice }
   | { type: 'thinking'; partId?: string; text: string }
   | { type: 'toolCall'; partId?: string; id?: string; name: string; args?: unknown }
   | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean; streaming?: boolean }
@@ -163,6 +168,8 @@ export type MessagePart =
       firstKeptEntryId?: string
       summary?: string
       error?: string
+      /** App-generated fallback, translated only when displayed. */
+      errorKind?: 'incomplete'
       customInstructions?: string
       willRetry?: boolean
     }
@@ -476,7 +483,7 @@ export interface SessionActionSnapshot {
 
 export const INTERFACE_FONT_SCALES = [105, 110, 115] as const
 export type InterfaceFontScale = typeof INTERFACE_FONT_SCALES[number]
-export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN'] as const
+export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN', 'ja'] as const
 export type LocalePreference = typeof LOCALE_PREFERENCES[number]
 export const PROJECT_SORT_MODES = ['recent', 'alphabetical'] as const
 export type ProjectSortMode = typeof PROJECT_SORT_MODES[number]

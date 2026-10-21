@@ -1,14 +1,16 @@
+import { useI18n } from '@/lib/i18n'
 import { Modal } from './ui'
 
 export function NoHarnessPrompt({ onClose, onOpenHarnessSettings }: { onClose(): void; onOpenHarnessSettings(): void }) {
+  const { t } = useI18n()
   return (
     <Modal
-      title="No Pi family harness detected"
+      title={t('noHarness.title')}
       onClose={onClose}
-      footer={<button type="button" className="button button--primary" onClick={onOpenHarnessSettings}>Take me there</button>}
+      footer={<button type="button" className="button button--primary" onClick={onOpenHarnessSettings}>{t('noHarness.takeMeThere')}</button>}
     >
-      <p>GooeyPi couldn’t find Pi, OMP, or Prime Agent. Install one to get started.</p>
-      <p>If you believe this is a mistake, or know where your Pi family harness is installed, configure its executable path in Harness settings. You can also refresh detection there after installing a harness.</p>
+      <p>{t('noHarness.body1')}</p>
+      <p>{t('noHarness.body2')}</p>
     </Modal>
   )
 }

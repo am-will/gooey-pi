@@ -802,6 +802,21 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(sidebar).toBeVisible()
   })
 
+  test('switches to lazy Japanese catalogs and back while preserving the preference', async () => {
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Appearance', exact: true }).click()
+    const language = page.locator('.settings-row select').filter({ has: page.locator('option[value="ja"]') })
+    await language.selectOption('ja')
+    await expect(page.locator('html')).toHaveAttribute('lang', 'ja')
+    await expect(page.getByRole('heading', { name: '外観', exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).locale)).toBe('ja')
+    await expect(language.locator('option[value="en"]')).toHaveText('English')
+    await expect(language.locator('option[value="ja"]')).toHaveText('日本語')
+    await language.selectOption('en')
+    await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).locale)).toBe('en')
+  })
+
   test('opens General settings when the main process requests Settings', async () => {
     await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
     await page.getByRole('button', { name: 'Appearance', exact: true }).click()
