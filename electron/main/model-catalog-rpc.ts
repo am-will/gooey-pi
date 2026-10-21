@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { StringDecoder } from 'node:string_decoder'
+import { StrictJsonlDecoder } from './jsonl'
 import { PRIME_THINKING_LEVELS, type PrimeModelDescriptor, type PrimeThinkingLevel } from '../../src/types/api'
 import { CliModelCatalogService, validateModelEntry, type ValidatedModelEntry } from './model-catalog-cli'
-import { killProcessTree, prepareExecutableSpawn, safeChildEnvironment, waitForProcessExit } from './process-utils'
+import { killProcessTree, prepareExecutableSpawn, spawnTrackedChild, safeChildEnvironment, waitForProcessExit } from './process-utils'
 
 const PROBE_REQUEST_ID = '1'
 const PROBE_COMMAND = 'get_available_models'
@@ -61,7 +60,7 @@ function runModelProbe(
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const invocation = prepareExecutableSpawn(executable, args, safeChildEnvironment(options.environment))
-    const child = spawn(invocation.file, invocation.args, {
+    const child = spawnTrackedChild(invocation.file, invocation.args, {
       cwd: tmpdir(),
       env: invocation.env,
       shell: false,
@@ -69,8 +68,6 @@ function runModelProbe(
       windowsHide: true,
       detached: process.platform !== 'win32',
     })
-    const decoder = new StringDecoder('utf8')
-    let pending = ''
     let capturedBytes = 0
     let settled = false
 
@@ -105,18 +102,14 @@ function runModelProbe(
       settle(() => reject(new Error(`${names.harnessLabel} model catalog output exceeded ${options.maxOutputBytes.toLocaleString()} bytes`)))
       return false
     }
-    const scan = (text: string): void => {
-      pending += text
-      const lines = pending.split('\n')
-      pending = lines.pop() ?? ''
-      for (const line of lines) {
-        const frame = parseProbeResponse(line)
-        if (frame) { settle(() => resolve(frame)); return }
-      }
-    }
-    child.stdout?.on('data', (chunk: Buffer) => {
+    const decoder = new StrictJsonlDecoder((line) => {
+      if (settled) return
+      const frame = parseProbeResponse(line)
+      if (frame) settle(() => resolve(frame))
+    }, options.maxOutputBytes)
+    child.stdout.on('data', (chunk: Buffer) => {
       if (settled || !countBytes(chunk)) return
-      scan(decoder.write(chunk))
+      try { decoder.push(chunk) } catch (error) { fail(error instanceof Error ? error : new Error(String(error))) }
     })
     // stderr is diagnostic noise and never parsed, but a runaway producer still
     // counts against the shared byte budget.
@@ -132,7 +125,7 @@ function runModelProbe(
     child.once('close', (code, signal) => {
       if (settled) return
       // A clean EOF may leave the response as a final unterminated line.
-      scan(`${decoder.end()}\n`)
+      try { decoder.end() } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); return }
       if (settled) return
       settle(() => reject(new Error(signal
         ? `${names.cliName} was terminated by ${signal} without answering the model catalog probe`

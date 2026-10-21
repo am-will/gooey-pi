@@ -4,16 +4,19 @@ import { lstat, mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { CapabilityMutationInput, HarnessId, McpConnectionInput, McpStateInput, ProcessOutcome } from '../../../src/types/api'
 import { isAppManageableLocalMcpKey, isNetworkMcpDefinition, MAX_MCP_DEFINITION_KEY_LENGTH, NETWORK_MCP_UNAVAILABLE_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '../../../src/lib/mcp-policy'
-import { isPathWithin, isRecord, requireString } from '../validation'
-import { errorCode, readAtMost } from './file-io'
+import { errorCode, isPathWithin, isRecord, requireString } from '../validation'
+import { isPackageDisabled, packageSource } from './package-entries'
+import { readAtMost } from './file-io'
 
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
 const SETTINGS_LOCK_ATTEMPTS = 40
 const SETTINGS_LOCK_RETRY_MS = 50
 const SETTINGS_LOCK_OWNER = 'owner.json'
 const SETTINGS_UPDATE_ATTEMPTS = 4
+const activeSettingsLockTokens = new Set<string>()
 
 interface SettingsLockOwner {
+  application?: 'gooeypi'
   version: 1
   pid: number
   token: string
@@ -27,19 +30,37 @@ export interface ProjectSettingsPath {
   verify(): Promise<void>
 }
 
+async function resolveSettingsTarget(target: string | ProjectSettingsPath): Promise<ProjectSettingsPath> {
+  if (typeof target !== 'string') return target
+  let observed: Stats
+  try { observed = await lstat(target) }
+  catch (error) {
+    if (errorCode(error) === 'ENOENT') return { path: target, verify: async () => undefined }
+    throw error
+  }
+  if (!observed.isSymbolicLink()) return { path: target, verify: async () => undefined }
+  const path = await realpath(target)
+  return { path, verify: async () => {
+    const current = await lstat(target)
+    if (!current.isSymbolicLink() || current.dev !== observed.dev || current.ino !== observed.ino || await realpath(target) !== path) {
+      throw new TypeError('Settings symlink changed during update')
+    }
+  } }
+}
+
 function parseSettingsLockOwner(value: unknown): SettingsLockOwner | null {
   if (!isRecord(value) || value.version !== 1) return null
   if (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0) return null
   if (typeof value.token !== 'string' || value.token.length < 1 || value.token.length > 200) return null
   if (typeof value.createdAt !== 'number' || !Number.isFinite(value.createdAt) || value.createdAt <= 0) return null
-  return { version: 1, pid: value.pid as number, token: value.token, createdAt: value.createdAt }
+  return { ...(value.application === 'gooeypi' ? { application: 'gooeypi' as const } : {}), version: 1, pid: value.pid as number, token: value.token, createdAt: value.createdAt }
 }
 
 function sameSettingsLockOwner(left: SettingsLockOwner | null, right: SettingsLockOwner): boolean {
-  return left?.version === right.version && left.pid === right.pid && left.token === right.token && left.createdAt === right.createdAt
+  return left?.version === right.version && left.application === right.application && left.pid === right.pid && left.token === right.token && left.createdAt === right.createdAt
 }
 
-async function readSettingsForUpdate(path: string, agentName = 'Prime Agent'): Promise<{ settings: Record<string, unknown>; fingerprint: string; source: string | null }> {
+async function readSettingsForUpdate(path: string, agentName = 'Agent'): Promise<{ settings: Record<string, unknown>; fingerprint: string; source: string | null }> {
   let content: string
   try {
     const value = await readAtMost(path, MAX_SETTINGS_BYTES)
@@ -48,7 +69,7 @@ async function readSettingsForUpdate(path: string, agentName = 'Prime Agent'): P
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return { settings: {}, fingerprint: 'missing', source: null }
     if (error instanceof TypeError && error.message.includes('maximum supported size')) throw error
-    throw new TypeError(`${agentName} settings are not valid JSON; fix them before connecting an MCP server`)
+    throw new Error(`${agentName} settings could not be read: ${error instanceof Error ? error.message : String(error)}`)
   }
   let value: unknown
   try { value = JSON.parse(content) } catch { throw new TypeError(`${agentName} settings are not valid JSON; fix them before connecting an MCP server`) }
@@ -59,7 +80,7 @@ async function readSettingsForUpdate(path: string, agentName = 'Prime Agent'): P
 export async function settingsFingerprint(path: string): Promise<string> {
   try {
     const value = await readAtMost(path, MAX_SETTINGS_BYTES)
-    if (value.truncated) throw new TypeError('Prime Agent settings exceed the maximum supported size')
+    if (value.truncated) throw new TypeError('Agent settings exceed the maximum supported size')
     return createHash('sha256').update(value.content).digest('hex')
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return 'missing'
@@ -93,22 +114,35 @@ async function createSettingsLock(lockPath: string): Promise<(() => Promise<void
     throw error
   }
 
-  const owner: SettingsLockOwner = { version: 1, pid: process.pid, token: randomUUID(), createdAt: Date.now() }
+  const directory = await lstat(lockPath)
+  const owner: SettingsLockOwner = { application: 'gooeypi', version: 1, pid: process.pid, token: randomUUID(), createdAt: Date.now() }
+  activeSettingsLockTokens.add(owner.token)
   try {
     await writeFile(join(lockPath, SETTINGS_LOCK_OWNER), `${JSON.stringify(owner)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
   } catch (error) {
-    await rm(lockPath, { recursive: true, force: true })
+    activeSettingsLockTokens.delete(owner.token)
+    const current = await readSettingsLockOwner(lockPath)
+    const observed = await lstat(lockPath).catch(() => undefined)
+    const ownDirectory = observed?.isDirectory() && !observed.isSymbolicLink() && observed.dev === directory.dev && observed.ino === directory.ino
+    if (ownDirectory && (sameSettingsLockOwner(current, owner) || current === null && errorCode(error) !== 'EEXIST')) await rm(lockPath, { recursive: true, force: true })
     throw error
   }
   return async () => {
-    const current = await readSettingsLockOwner(lockPath)
-    if (sameSettingsLockOwner(current, owner)) await rm(lockPath, { recursive: true, force: true })
+    try {
+      const current = await readSettingsLockOwner(lockPath)
+      if (sameSettingsLockOwner(current, owner)) await rm(lockPath, { recursive: true, force: true })
+    } finally { activeSettingsLockTokens.delete(owner.token) }
   }
+}
+
+function isAbandonedSettingsLock(owner: SettingsLockOwner): boolean {
+  // Native proper-lockfile directories have no GooeyPi owner record. Never infer abandonment from age or unknown ownership.
+  return isProcessProvablyDead(owner.pid) || owner.application === 'gooeypi' && owner.pid === process.pid && !activeSettingsLockTokens.has(owner.token)
 }
 
 async function recoverStaleSettingsLock(lockPath: string): Promise<(() => Promise<void>) | null> {
   const observed = await readSettingsLockOwner(lockPath)
-  if (!observed || !isProcessProvablyDead(observed.pid)) return null
+  if (!observed || !isAbandonedSettingsLock(observed)) return null
 
   // The recovery directory serializes competing reapers. The owner is checked
   // again after claiming it, so a replacement lock is never removed by token.
@@ -121,7 +155,7 @@ async function recoverStaleSettingsLock(lockPath: string): Promise<(() => Promis
   }
   try {
     const current = await readSettingsLockOwner(lockPath)
-    if (!sameSettingsLockOwner(current, observed) || !isProcessProvablyDead(observed.pid)) return null
+    if (!sameSettingsLockOwner(current, observed) || !isAbandonedSettingsLock(observed)) return null
     await rm(lockPath, { recursive: true, force: true })
     return await createSettingsLock(lockPath)
   } finally {
@@ -145,7 +179,7 @@ export async function acquireSettingsLock(settingsPath: string, verify?: () => P
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, SETTINGS_LOCK_RETRY_MS))
   }
-  throw new Error('Prime Agent settings are busy; try again')
+  throw new Error('Agent settings are busy; try again')
 }
 
 interface FileIdentity {
@@ -159,7 +193,7 @@ function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
 
 async function regularFileIdentity(path: string): Promise<FileIdentity> {
   const stat = await lstat(path, { bigint: true })
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new TypeError('Prime Agent settings staging file changed during update')
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new TypeError('Agent settings staging file changed during update')
   return { dev: stat.dev.toString(), ino: stat.ino.toString() }
 }
 
@@ -223,10 +257,10 @@ async function writeSettingsAtomically(
     if (await fingerprint(path) !== expectedFingerprint) return false
     await verify?.()
     if (!sameFileIdentity(await regularFileIdentity(temporary), temporaryIdentity)) {
-      throw new TypeError('Prime Agent settings staging file changed during update')
+      throw new TypeError('Agent settings staging file changed during update')
     }
     if (backupIdentity && !sameFileIdentity(await regularFileIdentity(backup), backupIdentity)) {
-      throw new TypeError('Prime Agent settings backup changed during update')
+      throw new TypeError('Agent settings backup changed during update')
     }
     // There is no renameat-style API in Node on macOS. Await the pin re-check
     // immediately before the rename, then prove which inode won.
@@ -237,11 +271,11 @@ async function writeSettingsAtomically(
     renameSync(temporary, path)
     renamed = true
     if (!sameFileIdentity(await regularFileIdentity(path), temporaryIdentity)) {
-      throw new TypeError('Prime Agent settings target changed during update')
+      throw new TypeError('Agent settings target changed during update')
     }
     await verify?.()
     if (backupIdentity && !await removeOwnedFile(backup, backupIdentity)) {
-      throw new TypeError('Prime Agent settings backup changed during update')
+      throw new TypeError('Agent settings backup changed during update')
     }
     backupIdentity = null
     return true
@@ -251,14 +285,15 @@ async function writeSettingsAtomically(
         await rollbackSettingsRename(path, temporary, temporaryIdentity, backup, backupIdentity)
         renamed = false
       } catch (rollbackError) {
-        const message = error instanceof Error ? error.message : 'Prime Agent settings update failed'
-        throw new AggregateError([error, rollbackError], `${message}; settings rollback could not be completed`)
+        const message = error instanceof Error ? error.message : 'Agent settings update failed'
+        const recovery = backupIdentity ? `; original settings recovery copy: ${backup}` : ''
+        throw new AggregateError([error, rollbackError], `${message}; settings rollback could not be completed${recovery}`)
       }
     }
     throw error
   } finally {
     if (!renamed && temporaryIdentity) await removeOwnedFile(temporary, temporaryIdentity).catch(() => false)
-    if (backupIdentity) await removeOwnedFile(backup, backupIdentity).catch(() => false)
+    if (!renamed && backupIdentity) await removeOwnedFile(backup, backupIdentity).catch(() => false)
   }
 }
 
@@ -300,7 +335,18 @@ export function validateMcpStateInput(value: unknown, harness: HarnessId = 'prim
   return { name, scope: value.scope, projectPath, enabled: value.enabled }
 }
 
-export function validateCapabilityMutation(value: unknown, harness: HarnessId = 'prime'): CapabilityMutationInput {
+type ValidatedCapabilityMutation = Omit<CapabilityMutationInput, 'kind' | 'source'> & (
+  | { kind: 'package'; source: string }
+  | { kind: 'mcp'; source?: string }
+)
+
+function capabilitySource(value: unknown, label: string): string {
+  const source = requireString(value, label, { min: 1, max: 2_048, trim: true })
+  if (source.startsWith('-') || /[\r\n\u2028\u2029]/.test(source)) throw new TypeError('Package source is invalid')
+  return source
+}
+
+export function validateCapabilityMutation(value: unknown, harness: HarnessId = 'prime'): ValidatedCapabilityMutation {
   if (!isRecord(value)) throw new TypeError('Capability mutation must be an object')
   if (value.kind !== 'package' && value.kind !== 'mcp') throw new TypeError('Capability kind is invalid')
   if (value.action !== 'enable' && value.action !== 'disable' && value.action !== 'remove') throw new TypeError('Capability action is invalid')
@@ -308,10 +354,6 @@ export function validateCapabilityMutation(value: unknown, harness: HarnessId = 
   const scope = value.scope
   if (scope !== 'user' && scope !== 'project') throw new TypeError('Capability scope must be user or project')
   const projectPath = scope === 'project' ? requireString(value.projectPath, 'projectPath', { min: 1, max: 4096 }) : undefined
-  const source = value.kind === 'package'
-    ? requireString(value.source, 'Package source', { min: 1, max: 2_048, trim: true })
-    : value.source === undefined ? undefined : requireString(value.source, 'Associated package source', { min: 1, max: 2_048, trim: true })
-  if (source && (source.startsWith('-') || /[\r\n\u2028\u2029]/.test(source))) throw new TypeError('Package source is invalid')
   let definitionKey: string | undefined
   if (value.kind === 'mcp' && value.action === 'remove' && value.definitionKey !== undefined) {
     if (typeof value.definitionKey !== 'string' || value.definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) {
@@ -321,11 +363,10 @@ export function validateCapabilityMutation(value: unknown, harness: HarnessId = 
   } else if (value.kind === 'mcp') {
     validateMcpStateInput({ name, scope, projectPath, enabled: value.action === 'enable' }, harness)
   }
-  return {
-    kind: value.kind, action: value.action, name,
-    ...(definitionKey !== undefined ? { definitionKey } : {}),
-    source, scope, projectPath,
-  }
+  const common: Omit<ValidatedCapabilityMutation, 'kind' | 'source'> = { action: value.action, name, ...(definitionKey !== undefined ? { definitionKey } : {}), scope, projectPath }
+  return value.kind === 'package'
+    ? { ...common, kind: 'package', source: capabilitySource(value.source, 'Package source') }
+    : { ...common, kind: 'mcp', source: value.source === undefined ? undefined : capabilitySource(value.source, 'Associated package source') }
 }
 
 export async function prepareProjectSettingsPath(
@@ -379,6 +420,33 @@ export async function prepareProjectSettingsPath(
   return { path: settingsPath, verify }
 }
 
+interface SettingsMutation {
+  changed: boolean
+  outcome: ProcessOutcome
+}
+
+async function mutateSettings(
+  target: string | ProjectSettingsPath,
+  fingerprint: FingerprintSettings,
+  agentName: string,
+  kind: 'MCP' | 'package',
+  mutate: (settings: Record<string, unknown>) => SettingsMutation,
+): Promise<ProcessOutcome> {
+  const { path, verify } = await resolveSettingsTarget(target)
+  const release = await acquireSettingsLock(path, verify)
+  try {
+    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
+      await verify()
+      const snapshot = await readSettingsForUpdate(path, agentName)
+      await verify()
+      const result = mutate(snapshot.settings)
+      if (!result.changed) return result.outcome
+      if (await writeSettingsAtomically(path, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) return result.outcome
+    }
+    throw new Error(`${agentName} settings changed repeatedly; no ${kind === 'MCP' ? 'MCP' : 'package'} configuration was overwritten`)
+  } finally { await release() }
+}
+
 export async function updateMcpSettings(
   target: string | ProjectSettingsPath,
   input: McpConnectionInput,
@@ -388,35 +456,16 @@ export async function updateMcpSettings(
   if (isNetworkMcpDefinition(input)) throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
   if (options.harness !== 'omp' && options.harness !== 'pi') throw new TypeError(PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL)
   if (input.type !== 'stdio') throw new TypeError(NETWORK_MCP_UNAVAILABLE_DETAIL)
-  const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
-  const verify = typeof target === 'string' ? undefined : target.verify
-  const release = await acquireSettingsLock(settingsPath, verify)
-  try {
-    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
-      await verify?.()
-      const snapshot = await readSettingsForUpdate(settingsPath, agentName)
-      await verify?.()
-      const settings = snapshot.settings
-      if (settings.mcpServers !== undefined && !isRecord(settings.mcpServers)) throw new TypeError(`${agentName} mcpServers setting must contain a JSON object`)
-      const currentServers = isRecord(settings.mcpServers) ? settings.mcpServers : {}
-      if (Object.hasOwn(currentServers, input.name)) {
-        return { ok: false, reason: 'blocked', output: `An MCP server named “${input.name}” already exists in this scope.` }
-      }
-      const includeType = options.includeType !== false
-      const config = { ...(includeType ? { type: 'stdio' } : {}), command: input.command, ...(input.args?.length ? { args: input.args } : {}), enabled: true }
-      settings.mcpServers = { ...currentServers, [input.name]: config }
-      if (options.schema && settings.$schema === undefined) settings.$schema = options.schema
-      if (await writeSettingsAtomically(settingsPath, settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
-        return { ok: true, output: options.successMessage ?? (agentName === 'OMP'
-          ? `Saved MCP server definition “${input.name}”. Start a new OMP session to load it.`
-          : `Saved MCP server definition “${input.name}”. Start a new ${agentName} session to load it.`) }
-      }
-    }
-    throw new Error(`${agentName} settings changed repeatedly; no MCP configuration was overwritten`)
-  } finally {
-    await release()
-  }
+  const agentName = options.agentName ?? 'Agent'
+  return mutateSettings(target, fingerprint, agentName, 'MCP', (settings) => {
+    if (settings.mcpServers !== undefined && !isRecord(settings.mcpServers)) throw new TypeError(`${agentName} mcpServers setting must contain a JSON object`)
+    const currentServers = isRecord(settings.mcpServers) ? settings.mcpServers : {}
+    if (Object.hasOwn(currentServers, input.name)) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `An MCP server named “${input.name}” already exists in this scope.` } }
+    const config = { ...(options.includeType !== false ? { type: 'stdio' } : {}), command: input.command, ...(input.args?.length ? { args: input.args } : {}), enabled: true }
+    settings.mcpServers = { ...currentServers, [input.name]: config }
+    if (options.schema && settings.$schema === undefined) settings.$schema = options.schema
+    return { changed: true, outcome: { ok: true, output: options.successMessage ?? `Saved MCP server definition “${input.name}”. Start a new ${agentName} session to load it.` } }
+  })
 }
 
 export async function updateMcpState(
@@ -425,36 +474,16 @@ export async function updateMcpState(
   fingerprint: FingerprintSettings = settingsFingerprint,
   options: { agentName?: string; harness?: HarnessId } = {},
 ): Promise<ProcessOutcome> {
-  if (options.harness !== 'omp' && options.harness !== 'pi') {
-    return { ok: false, reason: 'blocked', output: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
-  }
-  const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
-  const verify = typeof target === 'string' ? undefined : target.verify
-  const release = await acquireSettingsLock(settingsPath, verify)
-  try {
-    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
-      await verify?.()
-      const snapshot = await readSettingsForUpdate(settingsPath, agentName)
-      await verify?.()
-      const settings = snapshot.settings
-      if (!isRecord(settings.mcpServers)) return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
-      const current = settings.mcpServers[input.name]
-      if (!isRecord(current)) return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
-      if (isNetworkMcpDefinition(current)) return { ok: false, reason: 'blocked', output: NETWORK_MCP_UNAVAILABLE_DETAIL }
-      const currentlyEnabled = current.enabled !== false
-      if (currentlyEnabled === input.enabled) {
-        return { ok: true, output: `MCP server “${input.name}” is already ${input.enabled ? 'enabled' : 'disabled'}.` }
-      }
-      settings.mcpServers = { ...settings.mcpServers, [input.name]: { ...current, enabled: input.enabled } }
-      if (await writeSettingsAtomically(settingsPath, settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
-        return { ok: true, output: `${input.enabled ? 'Enabled' : 'Disabled'} MCP server “${input.name}”. Start a new ${agentName} session to apply the change.` }
-      }
-    }
-    throw new Error(`${agentName} settings changed repeatedly; no MCP configuration was overwritten`)
-  } finally {
-    await release()
-  }
+  if (options.harness !== 'omp' && options.harness !== 'pi') return { ok: false, reason: 'blocked', output: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
+  const agentName = options.agentName ?? 'Agent'
+  return mutateSettings(target, fingerprint, agentName, 'MCP', (settings) => {
+    const current = isRecord(settings.mcpServers) ? settings.mcpServers[input.name] : undefined
+    if (!isRecord(current)) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` } }
+    if (isNetworkMcpDefinition(current)) return { changed: false, outcome: { ok: false, reason: 'blocked', output: NETWORK_MCP_UNAVAILABLE_DETAIL } }
+    if ((current.enabled !== false) === input.enabled) return { changed: false, outcome: { ok: true, output: `MCP server “${input.name}” is already ${input.enabled ? 'enabled' : 'disabled'}.` } }
+    settings.mcpServers = { ...(isRecord(settings.mcpServers) ? settings.mcpServers : {}), [input.name]: { ...current, enabled: input.enabled } }
+    return { changed: true, outcome: { ok: true, output: `${input.enabled ? 'Enabled' : 'Disabled'} MCP server “${input.name}”. Start a new ${agentName} session to apply the change.` } }
+  })
 }
 
 export async function removeMcpDefinition(
@@ -463,75 +492,41 @@ export async function removeMcpDefinition(
   fingerprint: FingerprintSettings = settingsFingerprint,
   options: { agentName?: string } = {},
 ): Promise<ProcessOutcome> {
-  const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
   const definitionKey = input.definitionKey ?? input.name
-  if (definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) {
-    throw new TypeError('MCP definition key exceeds the supported removal limit')
-  }
-  const verify = typeof target === 'string' ? undefined : target.verify
-  const release = await acquireSettingsLock(settingsPath, verify)
-  try {
-    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
-      await verify?.()
-      const snapshot = await readSettingsForUpdate(settingsPath, agentName)
-      await verify?.()
-      if (!isRecord(snapshot.settings.mcpServers) || !Object.hasOwn(snapshot.settings.mcpServers, definitionKey)) {
-        return { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` }
-      }
-      const nextServers = { ...snapshot.settings.mcpServers }
-      delete nextServers[definitionKey]
-      snapshot.settings.mcpServers = nextServers
-      if (await writeSettingsAtomically(settingsPath, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
-        return { ok: true, output: `Removed MCP server “${input.name}”. Other server definitions were kept.` }
-      }
-    }
-    throw new Error(`${agentName} settings changed repeatedly; no MCP configuration was overwritten`)
-  } finally {
-    await release()
-  }
+  if (definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) throw new TypeError('MCP definition key exceeds the supported removal limit')
+  return mutateSettings(target, fingerprint, options.agentName ?? 'Agent', 'MCP', (settings) => {
+    if (!isRecord(settings.mcpServers) || !Object.hasOwn(settings.mcpServers, definitionKey)) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `MCP server “${input.name}” was not found in this scope.` } }
+    const nextServers = { ...settings.mcpServers }
+    delete nextServers[definitionKey]
+    settings.mcpServers = nextServers
+    return { changed: true, outcome: { ok: true, output: `Removed MCP server “${input.name}”. Other server definitions were kept.` } }
+  })
 }
 
 export async function updatePackageState(
   target: string | ProjectSettingsPath,
-  input: Pick<CapabilityMutationInput, 'source' | 'action'>,
+  input: { source: string; action: 'enable' | 'disable' },
   fingerprint: FingerprintSettings = settingsFingerprint,
   options: { agentName?: string } = {},
 ): Promise<ProcessOutcome> {
-  const source = input.source!
-  const agentName = options.agentName ?? 'Prime Agent'
-  const settingsPath = typeof target === 'string' ? target : target.path
-  const verify = typeof target === 'string' ? undefined : target.verify
-  const release = await acquireSettingsLock(settingsPath, verify)
-  try {
-    for (let attempt = 0; attempt < SETTINGS_UPDATE_ATTEMPTS; attempt += 1) {
-      const snapshot = await readSettingsForUpdate(settingsPath, agentName)
-      const packages = Array.isArray(snapshot.settings.packages) ? snapshot.settings.packages : []
-      const index = packages.findIndex((item) => item === source || (isRecord(item) && item.source === source))
-      if (index < 0) return { ok: false, reason: 'blocked', output: `Package “${source}” was not found in this scope.` }
-      const saved = isRecord(snapshot.settings.gooeypiDisabledPackages) ? { ...snapshot.settings.gooeypiDisabledPackages } : {}
-      const next = [...packages]
-      if (input.action === 'disable') {
-        if (saved[source] === undefined) saved[source] = next[index]
-        next[index] = { source, extensions: [], skills: [], prompts: [], themes: [] }
-      } else if (input.action === 'enable') {
-        if (saved[source] === undefined) return { ok: true, output: `Package “${source}” is already enabled.` }
-        next[index] = saved[source]
-        delete saved[source]
-      } else {
-        next.splice(index, 1)
-        delete saved[source]
-      }
-      snapshot.settings.packages = next
-      if (Object.keys(saved).length) snapshot.settings.gooeypiDisabledPackages = saved
-      else delete snapshot.settings.gooeypiDisabledPackages
-      if (await writeSettingsAtomically(settingsPath, snapshot.settings, snapshot.fingerprint, snapshot.source, fingerprint, verify)) {
-        const verb = input.action === 'enable' ? 'Enabled' : input.action === 'disable' ? 'Disabled' : 'Removed'
-        return { ok: true, output: `${verb} package “${source}”.` }
-      }
+  const source = input.source
+  return mutateSettings(target, fingerprint, options.agentName ?? 'Agent', 'package', (settings) => {
+    const packages = Array.isArray(settings.packages) ? settings.packages : []
+    const index = packages.findIndex((item) => packageSource(item) === source)
+    if (index < 0) return { changed: false, outcome: { ok: false, reason: 'blocked', output: `Package “${source}” was not found in this scope.` } }
+    const saved = isRecord(settings.gooeypiDisabledPackages) ? { ...settings.gooeypiDisabledPackages } : {}
+    const next = [...packages]
+    if (input.action === 'disable') {
+      if (saved[source] === undefined) saved[source] = next[index]
+      next[index] = { source, extensions: [], skills: [], prompts: [], themes: [] }
+    } else {
+      if (saved[source] === undefined && !isPackageDisabled(next[index])) return { changed: false, outcome: { ok: true, output: `Package “${source}” is already enabled.` } }
+      next[index] = saved[source] ?? source
+      delete saved[source]
     }
-    throw new Error(`${agentName} settings changed repeatedly; no package configuration was overwritten`)
-  } finally {
-    await release()
-  }
+    settings.packages = next
+    if (Object.keys(saved).length) settings.gooeypiDisabledPackages = saved
+    else delete settings.gooeypiDisabledPackages
+    return { changed: true, outcome: { ok: true, output: `${input.action === 'enable' ? 'Enabled' : 'Disabled'} package “${source}”.` } }
+  })
 }

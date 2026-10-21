@@ -1,13 +1,9 @@
+import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
-import { isRecord } from '../validation'
-
-export function errorCode(error: unknown): string {
-  return isRecord(error) && typeof error.code === 'string' ? error.code : ''
-}
-
 export async function readAtMost(path: string, max: number): Promise<{ content: string; truncated: boolean }> {
-  const file = await open(path, 'r')
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
   try {
+    if (!(await file.stat()).isFile()) throw new TypeError('Plugin configuration must be a regular file')
     const buffer = Buffer.alloc(max + 1)
     let offset = 0
     while (offset < buffer.length) {

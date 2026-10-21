@@ -7,14 +7,14 @@ import { HARNESSES } from './harness'
 import { createAdmissionQueue, createSingleFlight } from './lib/async'
 import { resolveExecutable, type ExecutableSource } from './process-utils'
 import { isRecord, requireString } from './validation'
-import { discoverPlugins } from './plugins/catalog'
+import { isPackageDisabled, packageSource } from './plugins/package-entries'
 import { readAtMost } from './plugins/file-io'
 import { acquireSettingsLock, prepareProjectSettingsPath, removeMcpDefinition, settingsFingerprint, updateMcpSettings, updateMcpState, updatePackageState, validateCapabilityMutation, validateMcpConnection, validateMcpStateInput } from './plugins/mcp'
 import type { ProjectSettingsPath } from './plugins/mcp'
 import { executeOmpPluginAction, executeOmpPluginInstall, executePackageInstall, executePackageRemove, executePiPluginInstall, executePiPluginRemove, validatePackageSource } from './plugins/package-execution'
 import { installOmpExtension, validateExtensionInstallInput } from './plugins/extension-installation'
 
-type PluginDiscovery = typeof discoverPlugins
+type PluginDiscovery = typeof import('./plugins/catalog').discoverPlugins
 
 interface PluginServiceOptions {
   harness?: HarnessId
@@ -94,9 +94,9 @@ export function beginPluginDiscoveryShutdown(): void {
 }
 
 export class PluginService {
-  private lastProjectPath: string | undefined
   private readonly knownPathsByOwner = new Map<string, Set<string>>()
   private settingsMutation = Promise.resolve()
+  private catalogRevision = 0
   private readonly discoveryInFlight = createSingleFlight<string, PluginCatalog>()
   private readonly agentDir: string
   private readonly discoverCatalog: PluginDiscovery
@@ -111,7 +111,7 @@ export class PluginService {
   ) {
     this.harness = options.harness ?? 'prime'
     this.agentDir = options.agentDir ?? HARNESSES[this.harness].agentDir(homedir())
-    this.discoverCatalog = options.discover ?? discoverPlugins
+    this.discoverCatalog = options.discover ?? (async (...args) => (await import('./plugins/catalog')).discoverPlugins(...args))
     const builtInSkills = options.builtInSkills
     this.builtInSkills = typeof builtInSkills === 'function'
       ? builtInSkills
@@ -120,7 +120,7 @@ export class PluginService {
   }
 
   private queueSettingsMutation(mutate: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> {
-    const operation = this.settingsMutation.then(mutate)
+    const operation = this.settingsMutation.then(mutate).finally(() => { this.catalogRevision += 1 })
     this.settingsMutation = operation.then(() => undefined, () => undefined)
     return operation
   }
@@ -133,14 +133,16 @@ export class PluginService {
 
   private listCanonical(safeProjectPath?: string): Promise<PluginCatalog> {
     const key = safeProjectPath ? `project:${safeProjectPath}` : 'user'
-    return this.discoveryInFlight.run(key, () => discoveryQueue.run(() => this.discover(safeProjectPath, key)))
+    const revision = this.catalogRevision
+    return this.discoveryInFlight.run(`${key}:${revision}`, () => discoveryQueue.run(() => this.discover(safeProjectPath, key, revision)))
   }
 
-  private async discover(safeProjectPath: string | undefined, ownerKey: string): Promise<PluginCatalog> {
-    if (safeProjectPath) this.lastProjectPath = safeProjectPath
-    const result = await this.discoverCatalog(this.agentDir, safeProjectPath, resolveExecutable(this.agentPath), this.harness)
-    const builtInSkills = await this.builtInSkills()
-    const piMcpState = this.harness === 'pi' ? await this.piMcpAdapterState() : undefined
+  private async discover(safeProjectPath: string | undefined, ownerKey: string, revision: number): Promise<PluginCatalog> {
+    const [result, builtInSkills, piMcpState] = await Promise.all([
+      Promise.resolve().then(() => this.discoverCatalog(this.agentDir, safeProjectPath, resolveExecutable(this.agentPath), this.harness)),
+      Promise.resolve().then(() => this.builtInSkills()),
+      Promise.resolve().then(() => this.harness === 'pi' ? this.piMcpAdapterState() : undefined),
+    ])
     const harnessCapabilities: SkillRecord[] = this.harness === 'pi' ? [{
       id: 'gooeypi-pi-mcp',
       name: 'Pi MCP Adapter',
@@ -166,6 +168,7 @@ export class PluginService {
       })
     const knownPaths = combined.flatMap((item) => item.path ? [item.path] : []).slice(0, MAX_KNOWN_PATHS_PER_OWNER)
     // Delete-then-set keeps insertion order as LRU order for owner eviction.
+    if (revision !== this.catalogRevision) return { skills: combined, warnings: result.warnings }
     this.knownPathsByOwner.delete(ownerKey)
     this.knownPathsByOwner.set(ownerKey, new Set(knownPaths))
     while (this.knownPathsByOwner.size > MAX_KNOWN_PATH_OWNERS) {
@@ -219,12 +222,15 @@ export class PluginService {
   }
 
   async installExtension(inputValue: unknown): Promise<ProcessOutcome> {
-    const input = validateExtensionInstallInput(inputValue)
+    const requested = validateExtensionInstallInput(inputValue)
+    const input = requested.scope === 'project' ? { ...requested, projectPath: await this.authorizeProject(requested.projectPath) } : requested
     const safeProjectPath = input.scope === 'project'
-      ? await this.authorizeProject(input.projectPath!)
+      ? input.projectPath
       : undefined
-    if (safeProjectPath) this.lastProjectPath = safeProjectPath
-    if (this.harness === 'omp') return await installOmpExtension(input, this.agentDir, safeProjectPath)
+    if (this.harness === 'omp') {
+      try { return await installOmpExtension(input, this.agentDir) }
+      finally { this.catalogRevision += 1 }
+    }
 
     const agentPath = resolveExecutable(this.agentPath)
     if (!agentPath) return { ok: false, reason: 'blocked', output: `${HARNESSES[this.harness].agentName} executable was not found` }
@@ -284,41 +290,31 @@ export class PluginService {
     let settingsTarget: string | ProjectSettingsPath
     if (input.scope === 'project') {
       const projectPath = await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
-      this.lastProjectPath = projectPath
       settingsTarget = await prepareProjectSettingsPath(projectPath, {
-        segments: [this.harness === 'omp' ? '.omp' : '.pi'], filename: 'mcp.json',
+        segments: HARNESSES[this.harness].projectAgentSegments, filename: 'mcp.json',
       })
     } else {
       settingsTarget = join(this.agentDir, 'mcp.json')
     }
 
     const options = this.harness === 'omp' ? {
-      agentName: 'OMP',
+      agentName: HARNESSES[this.harness].agentName,
       harness: this.harness,
       schema: 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json',
     } : {
-      agentName: 'Pi',
+      agentName: HARNESSES[this.harness].agentName,
       harness: this.harness,
       includeType: false,
       successMessage: `Saved MCP server definition “${input.name}”. Start a new Pi session to load it through pi-mcp-adapter.`,
     }
-    const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
-    const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
-    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
-      const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
-      try {
-        const piAdmissionFailure = await this.piMcpAdmissionFailure()
-        if (piAdmissionFailure) return piAdmissionFailure
-        return await updateMcpSettings(
+    return this.lockedMcpConfigMutation(settingsTarget, async () => {
+      return updateMcpSettings(
           settingsTarget,
           input,
           (path) => this.settingsFingerprint(path),
           options,
         )
-      } finally {
-        await releaseSettings()
-      }
-    }))
+    })
   }
 
   async setMcpEnabled(inputValue: unknown): Promise<ProcessOutcome> {
@@ -329,31 +325,21 @@ export class PluginService {
     let settingsTarget: string | ProjectSettingsPath
     if (input.scope === 'project') {
       const projectPath = await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
-      this.lastProjectPath = projectPath
       settingsTarget = await prepareProjectSettingsPath(projectPath, {
-        segments: [this.harness === 'omp' ? '.omp' : '.pi'], filename: 'mcp.json',
+        segments: HARNESSES[this.harness].projectAgentSegments, filename: 'mcp.json',
       })
     } else {
       settingsTarget = join(this.agentDir, 'mcp.json')
     }
     const agentName = HARNESSES[this.harness].agentName
-    const settingsPath = typeof settingsTarget === 'string' ? settingsTarget : settingsTarget.path
-    const verify = typeof settingsTarget === 'string' ? undefined : settingsTarget.verify
-    return await this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
-      const releaseSettings = await acquireSettingsLock(`${settingsPath}.gooeypi`, verify)
-      try {
-        const piAdmissionFailure = await this.piMcpAdmissionFailure()
-        if (piAdmissionFailure) return piAdmissionFailure
-        return await updateMcpState(
+    return this.lockedMcpConfigMutation(settingsTarget, async () => {
+      return updateMcpState(
           settingsTarget,
           input,
           (path) => this.settingsFingerprint(path),
           { agentName, harness: this.harness },
         )
-      } finally {
-        await releaseSettings()
-      }
-    }))
+    })
   }
 
   async mutateCapability(inputValue: unknown): Promise<ProcessOutcome> {
@@ -368,7 +354,6 @@ export class PluginService {
     const safeProjectPath = input.scope === 'project'
       ? await this.authorizeProject(requireString(input.projectPath, 'projectPath', { min: 1, max: 4096 }))
       : undefined
-    if (safeProjectPath) this.lastProjectPath = safeProjectPath
     const projectSettings = safeProjectPath
       ? await prepareProjectSettingsPath(safeProjectPath, this.harness === 'prime'
           ? undefined
@@ -391,14 +376,14 @@ export class PluginService {
         if (this.harness === 'omp') {
           const agentPath = resolveExecutable(this.agentPath)
           if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
-          return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source!, input.scope === 'project')
+          return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source, safeProjectPath)
         }
-        if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, input, (path) => this.settingsFingerprint(path), { agentName })
+        if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, { source: input.source, action: input.action }, (path) => this.settingsFingerprint(path), { agentName })
         const agentPath = resolveExecutable(this.agentPath)
         if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
         return this.harness === 'pi'
-          ? await executePiPluginRemove(agentPath, input.source!, safeProjectPath)
-          : await executePackageRemove(agentPath, input.source!, safeProjectPath)
+          ? await executePiPluginRemove(agentPath, input.source, safeProjectPath)
+          : await executePackageRemove(agentPath, input.source, safeProjectPath)
       } finally {
         await releaseSettings()
       }
@@ -411,6 +396,18 @@ export class PluginService {
     ))
   }
 
+  private lockedMcpConfigMutation(target: string | ProjectSettingsPath, mutate: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> {
+    const path = typeof target === 'string' ? target : target.path
+    const verify = typeof target === 'string' ? undefined : target.verify
+    return this.queueSettingsMutation(() => this.withPiMcpAdmission(async () => {
+      const release = await acquireSettingsLock(`${path}.gooeypi`, verify)
+      try {
+        const admissionFailure = await this.piMcpAdmissionFailure()
+        return admissionFailure ?? await mutate()
+      } finally { await release() }
+    }))
+  }
+
   /** Pi core has no MCP. Do not write adapter configuration until its package is actually installed. */
   private async piMcpAdapterState(): Promise<PiMcpAdapterState | undefined> {
     try {
@@ -419,10 +416,9 @@ export class PluginService {
       const value = JSON.parse(content) as unknown
       if (!isRecord(value) || !Array.isArray(value.packages)) return undefined
       for (const raw of value.packages) {
-        const source = typeof raw === 'string' ? raw : isRecord(raw) && typeof raw.source === 'string' ? raw.source : ''
+        const source = packageSource(raw) ?? ''
         if (!isOfficialPiMcpAdapterSource(source)) continue
-        const enabled = typeof raw === 'string' || !['extensions', 'skills', 'prompts', 'themes']
-          .every((key) => Array.isArray(raw[key]) && raw[key].length === 0)
+        const enabled = !isPackageDisabled(raw)
         return { source, enabled }
       }
       return undefined
@@ -442,23 +438,6 @@ export class PluginService {
     if (this.harness !== 'pi') return await operation()
     const release = await acquireSettingsLock(join(this.agentDir, PI_MCP_ADMISSION_LOCK))
     try { return await operation() } finally { await release() }
-  }
-
-  refresh(): Promise<PluginCatalog> {
-    const projectPath = this.lastProjectPath
-    if (!projectPath) return this.listCanonical()
-    // Re-authorize on every refresh: the remembered project may have been
-    // removed (or replaced) since the scope was last used.
-    return this.authorizeProject(projectPath).then(
-      (safeProjectPath) => this.listCanonical(safeProjectPath),
-      (error) => {
-        // Surface the failure once, then forget the stale scope so later
-        // refreshes fall back to the user catalog.
-        if (this.lastProjectPath === projectPath) this.lastProjectPath = undefined
-        this.knownPathsByOwner.delete(`project:${projectPath}`)
-        throw error
-      },
-    )
   }
 
   /** Revokes a removed project's revealable paths. */

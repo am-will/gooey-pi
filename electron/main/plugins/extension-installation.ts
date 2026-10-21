@@ -1,18 +1,17 @@
 import { lstatSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, extname, isAbsolute, join } from 'node:path'
 import type { ProcessOutcome } from '../../../src/types/api'
-import { isRecord, requireString } from '../validation'
-import { errorCode, readAtMost } from './file-io'
+import { errorCode, isRecord, requireString } from '../validation'
+import { readAtMost } from './file-io'
 import { prepareProjectSettingsPath } from './mcp'
 
 const EXTENSION_SUFFIXES = new Set(['.ts', '.js', '.mjs', '.cjs'])
 const MAX_EXTENSION_BYTES = 4 * 1024 * 1024
 
-export interface ValidatedExtensionInstallInput {
-  source: string
-  scope: 'user' | 'project'
-  projectPath?: string
-}
+export type ValidatedExtensionInstallInput = { source: string } & (
+  | { scope: 'user' }
+  | { scope: 'project'; projectPath: string }
+)
 
 export function validateExtensionInstallInput(value: unknown): ValidatedExtensionInstallInput {
   if (!isRecord(value)) throw new TypeError('Extension installation must contain an object')
@@ -25,10 +24,9 @@ export function validateExtensionInstallInput(value: unknown): ValidatedExtensio
   if (!EXTENSION_SUFFIXES.has(extname(source).toLowerCase())) throw new TypeError('Extension source must be a .ts, .js, .mjs, or .cjs file')
   if (stat.size > MAX_EXTENSION_BYTES) throw new TypeError(`Extension source must not exceed ${MAX_EXTENSION_BYTES} bytes`)
   if (value.scope !== 'user' && value.scope !== 'project') throw new TypeError('Extension scope must be user or project')
-  const projectPath = value.scope === 'project'
-    ? requireString(value.projectPath, 'projectPath', { min: 1, max: 4_096 })
-    : undefined
-  return { source, scope: value.scope, projectPath }
+  return value.scope === 'project'
+    ? { source, scope: 'project', projectPath: requireString(value.projectPath, 'projectPath', { min: 1, max: 4_096 }) }
+    : { source, scope: 'user' }
 }
 
 function sameFile(path: string, dev: bigint, ino: bigint): boolean {
@@ -41,13 +39,12 @@ function sameFile(path: string, dev: bigint, ino: bigint): boolean {
 export async function installOmpExtension(
   input: ValidatedExtensionInstallInput,
   agentDir: string,
-  safeProjectPath?: string,
 ): Promise<ProcessOutcome> {
   const { content, truncated } = await readAtMost(input.source, MAX_EXTENSION_BYTES)
   if (truncated) throw new TypeError(`Extension source must not exceed ${MAX_EXTENSION_BYTES} bytes`)
   const name = basename(input.source)
   const target = input.scope === 'project'
-    ? await prepareProjectSettingsPath(safeProjectPath!, { segments: ['.omp', 'extensions'], filename: name })
+    ? await prepareProjectSettingsPath(input.projectPath, { segments: ['.omp', 'extensions'], filename: name })
     : (() => {
         const directory = join(agentDir, 'extensions')
         mkdirSync(directory, { recursive: true, mode: 0o700 })

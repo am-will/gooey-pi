@@ -461,4 +461,14 @@ setTimeout(() => {
     expect(catalog.models.some((model) => model.provider === 'overflow-299')).toBe(false)
     await expect(service.requireAvailableModel('overflow-299/model')).rejects.toThrow(/not found/)
   })
+  it('decodes split UTF-8 and an unterminated final response without losing model text', async () => {
+    const models = [{ provider: 'test', id: 'test-model', name: '日本語 model', api: 'openai-completions', reasoning: false, input: ['text'], contextWindow: 1000, maxTokens: 100 }]
+    const frame = JSON.stringify({ type: 'response', id: '1', command: 'get_available_models', success: true, data: { models } })
+    const executable = fakePi(`const bytes = Buffer.from(${JSON.stringify(frame)}); let index = 0; const timer = setInterval(() => { if (index === bytes.length) { clearInterval(timer); process.exit(0) } else process.stdout.write(bytes.subarray(index, ++index)) }, 1)`)
+    expect((await new PiModelCatalogService(executable).catalog()).models[0].name).toBe('日本語 model')
+  })
+
+
+
+
 })

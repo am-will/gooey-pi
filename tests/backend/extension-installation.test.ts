@@ -81,7 +81,7 @@ describe('installOmpExtension', () => {
     const project = join(root, 'project')
     mkdirSync(project)
     const source = writeExtension(root)
-    const outcome = await installOmpExtension({ source, scope: 'project', projectPath: project }, join(root, 'agent'), realpathSync(project))
+    const outcome = await installOmpExtension({ source, scope: 'project', projectPath: realpathSync(project) }, join(root, 'agent'))
     expect(outcome.ok).toBe(true)
     expect(readFileSync(join(project, '.omp', 'extensions', 'clock.ts'), 'utf8')).toContain('export default')
   })

@@ -1,5 +1,5 @@
 import { PRIME_THINKING_LEVELS, type PrimeModelDescriptor, type PrimeThinkingLevel } from '../../src/types/api'
-import { CliModelCatalogService, validateModelEntry, type CliModelCatalogOptions } from './model-catalog-cli'
+import { CliModelCatalogService, validateModelEntry } from './model-catalog-cli'
 import { runProcess, safeChildEnvironment } from './process-utils'
 
 export { MAX_CATALOG_PROVIDERS } from './model-catalog-cli'
@@ -19,8 +19,6 @@ function toThinkingLevels(reasoning: boolean, thinking: unknown): PrimeThinkingL
   const reported = new Set(Array.isArray(thinking) ? thinking.filter((level): level is string => typeof level === 'string') : [])
   return PRIME_THINKING_LEVELS.filter((level) => level === 'off' || reported.has(level))
 }
-
-export type OmpModelCatalogOptions = CliModelCatalogOptions
 
 /**
  * Model catalog service for the OMP harness, backed by the `omp models --json`
