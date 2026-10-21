@@ -15,12 +15,8 @@ import type {
 } from '../../../src/types/api'
 import { MAX_SCHEDULED_TASKS, type JsonStateStore } from '../store'
 import { rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
-import {
-  countMissedOccurrences,
-  nextScheduleOccurrence,
-  previewScheduleOccurrences,
-  validateScheduleTiming,
-} from './recurrence'
+import { validateScheduleTiming } from './recurrence'
+import { BoundedRecurrenceEvaluator, type ScheduleRecurrence } from './recurrence-evaluator'
 
 const MAX_CONCURRENT_RUNS = 2
 const MAX_REPORTED_MISSED_OCCURRENCES = 10_000
@@ -40,6 +36,7 @@ export interface AutomationServiceOptions {
   validatePrompt?(prompt: string, harness: HarnessId): void
   run(task: AutomationScheduleRecord): Promise<ScheduleRunResult>
   now?: () => Date
+  recurrence?: () => ScheduleRecurrence
 }
 
 function titleFromPrompt(prompt: string): string {
@@ -115,6 +112,7 @@ function cloneTask(task: AutomationScheduleRecord): AutomationScheduleRecord { r
 export class AutomationService {
   private readonly listeners = new Set<(event: ScheduleChangeEvent) => void>()
   private readonly now: () => Date
+  private recurrence: ScheduleRecurrence
   private timer: NodeJS.Timeout | null = null
   private closed = false
   private activeRuns = 0
@@ -123,9 +121,11 @@ export class AutomationService {
 
   constructor(private readonly store: JsonStateStore, private readonly options: AutomationServiceOptions) {
     this.now = options.now ?? (() => new Date())
+    this.recurrence = options.recurrence?.() ?? new BoundedRecurrenceEvaluator()
   }
 
   async start(): Promise<void> {
+    if (this.closed) this.recurrence = this.options.recurrence?.() ?? new BoundedRecurrenceEvaluator()
     this.closed = false
     await this.reconcileInterruptedRuns()
     await this.blockInvalidActivePrompts()
@@ -175,6 +175,7 @@ export class AutomationService {
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.pending.splice(0)
+    await this.recurrence.close()
     if (this.activeRuns === 0) return
     await new Promise<void>((resolveStop) => this.stopWaiters.add(resolveStop))
   }
@@ -202,12 +203,12 @@ export class AutomationService {
     return cloneTask(task)
   }
 
-  preview(timingValue: unknown, countValue: unknown = 3): SchedulePreview {
+  async preview(timingValue: unknown, countValue: unknown = 3): Promise<SchedulePreview> {
     const count = Number(countValue)
     if (!Number.isSafeInteger(count) || count < 1 || count > 10) throw new TypeError('Preview count must be between 1 and 10')
     const now = this.now()
     const timing = parseTiming(timingValue, now)
-    return { timing, occurrences: previewScheduleOccurrences(timing, count, now) }
+    return { timing, occurrences: await this.recurrence.preview(timing, count, now) }
   }
 
   async create(inputValue: unknown, createdBy: 'user' | 'agent' = 'user', harness: HarnessId = 'prime'): Promise<AutomationScheduleRecord> {
@@ -215,7 +216,7 @@ export class AutomationService {
     const input = parseInput(inputValue, now)
     this.options.validatePrompt?.(input.prompt, harness)
     await Promise.all([this.options.validateTarget(input.target, harness), this.options.validateExecution(input.execution, harness)])
-    const nextRunAt = nextScheduleOccurrence(input.timing, new Date(now.getTime() - 1))
+    const nextRunAt = await this.recurrence.next(input.timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new TypeError('Schedule has no future occurrence')
     const task: AutomationScheduleRecord = {
       schemaVersion: 1,
@@ -255,7 +256,7 @@ export class AutomationService {
     this.options.validatePrompt?.(prompt, current.harness)
     await Promise.all([this.options.validateTarget(target, current.harness), this.options.validateExecution(execution, current.harness)])
     const timing = patch.timing ?? current.timing
-    const nextRunAt = nextScheduleOccurrence(timing, new Date(now.getTime() - 1))
+    const nextRunAt = await this.recurrence.next(timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new TypeError('Schedule has no future occurrence')
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
@@ -290,12 +291,13 @@ export class AutomationService {
     const current = this.get(id)
     this.options.validatePrompt?.(current.prompt, current.harness)
     await Promise.all([this.options.validateTarget(current.target, current.harness), this.options.validateExecution(current.execution, current.harness)])
-    const nextRunAt = nextScheduleOccurrence(current.timing, new Date(now.getTime() - 1))
+    const nextRunAt = await this.recurrence.next(current.timing, new Date(now.getTime() - 1))
     if (!nextRunAt) throw new Error('This schedule has no future occurrence')
     let updated!: AutomationScheduleRecord
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === id)
       if (!task) throw new Error('Scheduled task was not found')
+      if (task.revision !== current.revision) throw new Error('Scheduled task changed; reload it before resuming')
       task.status = 'active'
       task.blockedReason = undefined
       task.nextRunAt = nextRunAt
@@ -401,7 +403,8 @@ export class AutomationService {
   private async skipMissed(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
     const scheduledFor = snapshot.nextRunAt
     if (!scheduledFor) return
-    const missed = countMissedOccurrences(snapshot.timing, new Date(scheduledFor), now, MAX_REPORTED_MISSED_OCCURRENCES, { saturate: true })
+    const missed = await this.recurrence.countMissed(snapshot.timing, new Date(scheduledFor), now, MAX_REPORTED_MISSED_OCCURRENCES)
+    const next = await this.recurrence.next(snapshot.timing, now)
     const run: ScheduleRunRecord = {
       id: randomUUID(), taskId: snapshot.id, taskRevision: snapshot.revision, trigger: 'scheduled',
       scheduledFor, queuedAt: now.toISOString(), finishedAt: now.toISOString(), status: 'skipped',
@@ -409,9 +412,8 @@ export class AutomationService {
     }
     await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)
-      if (task?.status !== 'active' || task.nextRunAt !== scheduledFor) return
+      if (task?.status !== 'active' || task.revision !== snapshot.revision || task.nextRunAt !== scheduledFor) return
       this.pushRun(task, run)
-      const next = nextScheduleOccurrence(task.timing, now)
       if (next) task.nextRunAt = next
       else { task.nextRunAt = undefined; task.status = 'completed' }
       task.updatedAt = now.toISOString()
@@ -422,7 +424,7 @@ export class AutomationService {
   private async claimAndEnqueue(snapshot: AutomationScheduleRecord, now: Date): Promise<void> {
     const scheduledFor = snapshot.nextRunAt
     if (!scheduledFor) return
-    const next = nextScheduleOccurrence(snapshot.timing, new Date(Date.parse(scheduledFor) + 1))
+    const next = await this.recurrence.next(snapshot.timing, new Date(Date.parse(scheduledFor) + 1))
     const run = this.createRun(snapshot, 'scheduled', scheduledFor)
     const claimed = await this.store.update((state) => {
       const task = state.schedules.find((candidate) => candidate.id === snapshot.id)

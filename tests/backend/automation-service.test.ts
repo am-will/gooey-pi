@@ -1,11 +1,18 @@
+import { BoundedRecurrenceEvaluator } from '../../electron/main/schedules/recurrence-evaluator'
+import { recurrenceWorkerFixture } from '../helpers/recurrence-worker'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { assertNoMcpAuthenticationCommand, NETWORK_MCP_AUTH_UNAVAILABLE } from '../../src/lib/mcp-policy'
 import type { ScheduleExecution, ScheduleTarget } from '../../src/types/api'
 import { AutomationService } from '../../electron/main/schedules/service'
 import { JsonStateStore } from '../../electron/main/store'
+
+let workerFixture: Awaited<ReturnType<typeof recurrenceWorkerFixture>>
+beforeAll(async () => { workerFixture = await recurrenceWorkerFixture() })
+afterAll(async () => { await workerFixture.dispose() })
+function recurrence(): BoundedRecurrenceEvaluator { return new BoundedRecurrenceEvaluator({ workerUrl: workerFixture.url }) }
 
 const dirs: string[] = []
 function store(): JsonStateStore {
@@ -28,6 +35,17 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe('AutomationService', () => {
+  it('uses isolated recurrence evaluation for public previews', async () => {
+    const service = new AutomationService(store(), {
+      recurrence, validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => ({}), now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    try {
+      await expect(service.preview({ kind: 'rrule', dtstartLocal: '2030-01-01T09:00:00', timeZone: 'UTC', rrule: 'FREQ=DAILY' }, 2)).resolves.toMatchObject({ occurrences: ['2030-01-01T09:00:00.000Z', '2030-01-02T09:00:00.000Z'] })
+      await expect(service.preview({ kind: 'rrule', dtstartLocal: '2030-01-01T09:00:00', timeZone: 'UTC', rrule: 'FREQ=MINUTELY;BYMONTH=2;BYMONTHDAY=30' }, 1)).rejects.toThrow('time budget')
+    } finally { await service.stop() }
+  })
+
   it('creates, updates, pauses, resumes, and deletes versioned tasks', async () => {
     let now = new Date('2030-01-01T00:00:00Z')
     const service = new AutomationService(store(), {
@@ -350,6 +368,7 @@ describe('AutomationService', () => {
     let now = new Date('2030-01-01T00:00:00Z')
     const run = vi.fn(async () => ({}))
     const service = new AutomationService(stateStore, {
+      recurrence,
       validateTarget: async () => undefined,
       validateExecution: async () => undefined,
       run,
