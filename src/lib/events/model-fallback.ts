@@ -31,6 +31,35 @@ export function fallbackModelFromRecord(value: unknown): FallbackModel | null {
   return { provider, id, label: provider ? `${provider}/${id}` : id, from }
 }
 
+const NOTICE_PREFIX = 'Switched to '
+const NOTICE_SUFFIX = ' due to a provider fallback'
+const NOTICE_ORIGINAL_PREFIX = ' (original: '
+
 export function fallbackNoticeText(label: string, from?: string): string {
-  return `Switched to ${label} due to a provider fallback${from ? ` (original: ${from})` : ''}`
+  return `${NOTICE_PREFIX}${label}${NOTICE_SUFFIX}${from ? `${NOTICE_ORIGINAL_PREFIX}${from})` : ''}`
+}
+
+/**
+ * Recovers the notice arguments from the canonical English text.
+ *
+ * The desktop process composes these rows while reading a session log
+ * (`electron/main/sessions/bucketed.ts`), so the renderer receives data rather
+ * than a key and cannot re-derive it. `src/lib/transcript-notes.ts` maps the
+ * recognised text back onto the `transcript.fallbackSwitched*` catalog entries
+ * for display; anything else returns null, so harness or user text is never
+ * rewritten. The template constants above stay the single source for both
+ * directions.
+ */
+export function fallbackNoticeFromText(text: string): { label: string; from?: string } | null {
+  if (!text.startsWith(NOTICE_PREFIX)) return null
+  const rest = text.slice(NOTICE_PREFIX.length)
+  const originalIndex = rest.indexOf(NOTICE_ORIGINAL_PREFIX)
+  const body = originalIndex === -1 ? rest : rest.slice(0, originalIndex)
+  if (!body.endsWith(NOTICE_SUFFIX)) return null
+  const label = body.slice(0, -NOTICE_SUFFIX.length)
+  if (!label) return null
+  if (originalIndex === -1) return { label }
+  const original = rest.slice(originalIndex + NOTICE_ORIGINAL_PREFIX.length)
+  if (!original.endsWith(')') || original.length < 2) return null
+  return { label, from: original.slice(0, -1) }
 }

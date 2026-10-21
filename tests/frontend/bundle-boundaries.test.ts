@@ -8,7 +8,9 @@ describe('renderer bundle boundaries', () => {
   it('keeps Transcript and its Markdown graph out of the initial App module graph', () => {
     expect(appSource).toContain("const Transcript = lazy(() => import('@/components/Transcript')")
     expect(appSource).not.toContain("import { Transcript } from '@/components/Transcript'")
-    expect(appSource).toContain('<Suspense fallback={<LoadingPanel label="conversation" />}><Transcript')
+    // The fallback label is an i18n key, so the assertion pins the key rather
+    // than a literal: what matters is that the Suspense boundary stays in place.
+    expect(appSource).toContain('<Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><Transcript')
   })
 
   it('continues to lazy-load the terminal dependency graph', () => {

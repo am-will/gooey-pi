@@ -1,3 +1,4 @@
+import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type {
   AppSettings,
   GitStatus,
@@ -198,8 +199,12 @@ export function formatRelative(value?: string | number): string {
   const timestamp = typeof value === 'number' ? value : new Date(value).getTime()
   const seconds = Math.round((timestamp - Date.now()) / 1000)
   const abs = Math.abs(seconds)
-  if (abs < 60) return 'now'
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+  // This helper runs outside React, so it follows the interface locale mirrored
+  // by the i18n provider instead of the OS locale. English output is unchanged:
+  // the "now" branch previously returned the literal that the catalog holds.
+  const locale = formattingLocaleTag()
+  if (abs < 60) return translate(locale, 'time.now')
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
   if (abs < 3600) return formatter.format(Math.round(seconds / 60), 'minute')
   if (abs < 86400) return formatter.format(Math.round(seconds / 3600), 'hour')
   if (abs < 604800) return formatter.format(Math.round(seconds / 86400), 'day')

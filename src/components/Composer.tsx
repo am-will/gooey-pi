@@ -26,6 +26,7 @@ import { composePrompt } from '@/lib/composer-prompt'
 import { findSessionMentions } from '@/lib/session-mentions'
 import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
 import { useDictation } from '@/hooks/useDictation'
@@ -95,26 +96,28 @@ interface ComposerProps {
   draftKey?: string
 }
 
-const commands = [
-  { command: '/review', detail: 'Review current changes' },
-  { command: '/plan', detail: 'Create an implementation plan' },
-  { command: '/compact', detail: 'Compact session context' },
-  { command: '/status', detail: 'Show runtime status' },
+// Slash-command and reasoning copy is display text only: these tables hold
+// MessageKeys so translation happens inside the component at render time.
+const commands: ReadonlyArray<{ command: string; detail: MessageKey }> = [
+  { command: '/review', detail: 'composer.command.review' },
+  { command: '/plan', detail: 'composer.command.plan' },
+  { command: '/compact', detail: 'composer.command.compact' },
+  { command: '/status', detail: 'composer.command.status' },
 ]
 
-const primeCommands = [
+const primeCommands: ReadonlyArray<{ command: string; detail: MessageKey }> = [
   ...commands,
-  { command: '/mcp', detail: 'View MCP integrations and local servers' },
+  { command: '/mcp', detail: 'composer.command.mcp' },
 ]
 
-const reasoningLabels: Record<PrimeThinkingLevel, string> = {
-  off: 'Off',
-  minimal: 'Minimal',
-  low: 'Low',
-  medium: 'Standard',
-  high: 'High',
-  xhigh: 'Extra high',
-  max: 'Max',
+const reasoningLabels: Record<PrimeThinkingLevel, MessageKey> = {
+  off: 'composer.effort.off',
+  minimal: 'composer.effort.minimal',
+  low: 'composer.effort.low',
+  medium: 'composer.effort.medium',
+  high: 'composer.effort.high',
+  xhigh: 'composer.effort.xhigh',
+  max: 'composer.effort.max',
 }
 
 const MAX_IMAGE_PROMPT_BYTES = 2 * 1024 * 1024
@@ -169,6 +172,7 @@ export const Composer = memo(function Composer({
   onClearTerminalSelection = noop,
   draftKey,
 }: ComposerProps) {
+  const { t } = useI18n()
   const [value, setValue] = useState(() => (draftKey ? readComposerDraft(draftKey)?.text : undefined) ?? takeComposerDraft())
   const [menu, setMenu] = useState<'add' | 'mention' | 'command' | null>(null)
   const [sessionReferenceIds, setSessionReferenceIds] = useState<ReadonlyMap<string, string>>(() => new Map())
@@ -275,23 +279,27 @@ export const Composer = memo(function Composer({
     const currentTerminalContext = terminalSelection?.text ? getTerminalContext?.() : undefined
     const hasTerminalSelection = Boolean(currentTerminalContext?.text)
     const draftValue = valueOverride ?? value
+    // These bracket labels become the message payload sent to the harness, not
+    // UI chrome, so they stay English and outside the i18n catalog.
     const prompt = draftValue.trim() || (currentImages.length > 0
       ? (currentImages.length === 1 ? '[Attached image]' : '[Attached images]')
       : currentUnsupportedFiles.length > 0 ? (currentUnsupportedFiles.length === 1 ? '[Attached file]' : '[Attached files]')
         : currentAnnotations.length > 0 ? '[Page annotations]' : '[Terminal selection]')
     if ((!draftValue.trim() && currentImages.length === 0 && currentUnsupportedFiles.length === 0 && currentAnnotations.length === 0 && !hasTerminalSelection) || loading || disabled || (intent !== 'steer' && !busy && (submitting || submittingRef.current))) return
     if (imageAttachments.hasPending()) {
-      setAttachmentError('Wait for the file to finish processing before sending.')
+      setAttachmentError(t('composer.error.waitForProcessing'))
       return
     }
     if (currentUnsupportedFiles.length > 0) {
       const first = currentUnsupportedFiles[0]
       const remainder = currentUnsupportedFiles.length - 1
-      setAttachmentError(`${first.name}${remainder ? ` and ${remainder} more file${remainder === 1 ? '' : 's'}` : ''} cannot be sent to this model or agent. Remove ${remainder ? 'them' : 'it'} before sending.`)
+      setAttachmentError(remainder
+        ? t('composer.error.unsupportedMore', { name: first.name, count: remainder })
+        : t('composer.error.unsupportedSingle', { name: first.name }))
       return
     }
     if (currentImages.length > 0 && !imageInputSupported) {
-      setAttachmentError('This model does not accept images. Remove the attachment or choose a vision model.')
+      setAttachmentError(t('composer.error.imagesUnsupported'))
       return
     }
     const submittedImages = currentImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
@@ -300,7 +308,7 @@ export const Composer = memo(function Composer({
     const promptWithContext = composed.prompt
     const frame = `${JSON.stringify({ type: intent === 'steer' ? 'steer' : 'follow_up', message: promptWithContext, ...(submittedImages.length ? { images: submittedImages } : {}), id: '00000000-0000-0000-0000-000000000000' })}\n`
     if (new TextEncoder().encode(frame).byteLength > MAX_IMAGE_PROMPT_BYTES) {
-      setAttachmentError('This message and its attachments are too large to send. Shorten the message or remove an attachment.')
+      setAttachmentError(t('composer.error.tooLarge'))
       return
     }
     submittingRef.current = true
@@ -320,12 +328,14 @@ export const Composer = memo(function Composer({
         setValue((current) => current || submittedValue)
         const restoration = imageAttachments.restoreWithinLimits(submittedComposerImages)
         if (restoration.omitted > 0) {
-          const restoredImages = restoration.restored > 0 ? ` along with ${restoration.restored} submitted image${restoration.restored === 1 ? '' : 's'}` : ''
-          setAttachmentError(`Message was not sent. Your draft was restored${restoredImages}, but ${restoration.omitted} submitted image${restoration.omitted === 1 ? '' : 's'} could not be restored because the attachment limits are full.`)
+          // `restored` is a pre-translated clause so English keeps its exact
+          // wording while Japanese can place it as a parenthetical.
+          const restored = restoration.restored > 0 ? t('composer.error.restoredImages', { count: restoration.restored }) : ''
+          setAttachmentError(t('composer.error.restoreOmitted', { count: restoration.omitted, restored }))
         } else if (submittedComposerImages.length > 0) {
-          setAttachmentError('Message was not sent. Your draft and images were restored.')
+          setAttachmentError(t('composer.error.restoreDraftAndImages'))
         } else {
-          setAttachmentError('Message was not sent. Your draft was restored.')
+          setAttachmentError(t('composer.error.restoreDraft'))
         }
       } else if (draftKey) {
         // The user switched away mid-send; the next composer for this draft restores it.
@@ -392,7 +402,7 @@ export const Composer = memo(function Composer({
           .map((item) => ({
             key: item.command,
             label: item.command,
-            detail: item.detail,
+            detail: t(item.detail),
             icon: <Command size={14} />,
             choose: () => {
               setValue(`${item.command} `)
@@ -405,7 +415,7 @@ export const Composer = memo(function Composer({
             ...sessions.filter((session) => session.title.toLocaleLowerCase().includes(mentionQuery)).slice(0, 6).map((session) => ({
               key: `session:${session.harness}:${session.id}`,
               label: `@${session.title}`,
-              detail: `${session.harness.toUpperCase()} session · ${session.status}`,
+              detail: t('composer.suggestion.session', { harness: session.harness.toUpperCase(), status: session.status }),
               icon: <MessageCirclePlus size={14} />,
               choose: () => insertMention(session.title, session),
             })),
@@ -419,8 +429,8 @@ export const Composer = memo(function Composer({
           ].slice(0, 8)
         : menu === 'add'
           ? [
-              { key: 'files', label: 'Add files', detail: 'Attach images, audio, video, or other files', icon: <Paperclip size={14} />, choose: () => { setMenu(null); fileInputRef.current?.click() } },
-              { key: 'mention', label: 'Mention a session or skill', detail: 'Reference sidebar work or an enabled capability', icon: <AtSign size={14} />, choose: () => insert('@') },
+              { key: 'files', label: t('composer.add.files'), detail: t('composer.add.filesDetail'), icon: <Paperclip size={14} />, choose: () => { setMenu(null); fileInputRef.current?.click() } },
+              { key: 'mention', label: t('composer.add.mention'), detail: t('composer.add.mentionDetail'), icon: <AtSign size={14} />, choose: () => insert('@') },
             ]
           : []
 
@@ -444,9 +454,9 @@ export const Composer = memo(function Composer({
   return (
     <div className="composer-wrap">
       {queuedMessages.length || harnessQueuedMessageCount ? (
-        <section className="composer-queue" aria-label="Queued messages" aria-live="polite">
+        <section className="composer-queue" aria-label={t('composer.queue.label')} aria-live="polite">
           <div className="composer-queue__header">
-            <span><Clock3 size={13} />Queued messages</span>
+            <span><Clock3 size={13} />{t('composer.queue.label')}</span>
             <strong>{queuedMessages.length + harnessQueuedMessageCount}</strong>
           </div>
           <div className="composer-queue__list">
@@ -454,15 +464,15 @@ export const Composer = memo(function Composer({
               <div className="composer-queue__item" key={queued.id}>
                 <span className="composer-queue__text">{queued.text}</span>
                 <span className="composer-queue__actions">
-                  <button type="button" className="composer-queue__action" aria-label={`Send queued message immediately: ${queued.text}`} title="Send queued message immediately" onClick={() => { void sendQueuedMessageImmediately(queued) }}><ArrowUp size={13} /></button>
-                  <button type="button" className="composer-queue__action" aria-label={`Edit queued message: ${queued.text}`} title="Edit queued message" onClick={() => { onEditQueuedMessage?.(queued); setValue(queued.text); requestAnimationFrame(() => textareaRef.current?.focus()) }}><Edit3 size={13} /></button>
-                  <button type="button" className="composer-queue__action composer-queue__action--delete" aria-label={`Delete queued message: ${queued.text}`} title="Delete queued message" onClick={() => onDeleteQueuedMessage?.(queued)}><Trash2 size={13} /></button>
+                  <button type="button" className="composer-queue__action" aria-label={t('composer.queue.sendNowDetail', { text: queued.text })} title={t('composer.queue.sendNow')} onClick={() => { void sendQueuedMessageImmediately(queued) }}><ArrowUp size={13} /></button>
+                  <button type="button" className="composer-queue__action" aria-label={t('composer.queue.editDetail', { text: queued.text })} title={t('composer.queue.edit')} onClick={() => { onEditQueuedMessage?.(queued); setValue(queued.text); requestAnimationFrame(() => textareaRef.current?.focus()) }}><Edit3 size={13} /></button>
+                  <button type="button" className="composer-queue__action composer-queue__action--delete" aria-label={t('composer.queue.deleteDetail', { text: queued.text })} title={t('composer.queue.delete')} onClick={() => onDeleteQueuedMessage?.(queued)}><Trash2 size={13} /></button>
                 </span>
               </div>
             ))}
             {harnessQueuedMessageCount ? (
               <div className="composer-queue__item composer-queue__item--harness">
-                <span className="composer-queue__text">{agentName} is holding {harnessQueuedMessageCount} {harnessQueuedMessageCount === 1 ? 'message' : 'messages'} for the next turn.</span>
+                <span className="composer-queue__text">{t('composer.queue.harnessHolding', { agent: agentName, count: harnessQueuedMessageCount })}</span>
               </div>
             ) : null}
           </div>
@@ -472,15 +482,15 @@ export const Composer = memo(function Composer({
         className={`composer ${busy || submitting ? 'composer--busy' : ''} ${imageAttachments.dragging ? 'composer--image-dragging' : ''}`}
         {...imageAttachments.dragHandlers}
       >
-        {imageAttachments.dragging ? <div className="composer-drop-feedback" aria-hidden="true"><Paperclip size={18} />Drop files to attach</div> : null}
+        {imageAttachments.dragging ? <div className="composer-drop-feedback" aria-hidden="true"><Paperclip size={18} />{t('composer.drop')}</div> : null}
         <div className="composer-input">
           <textarea
             ref={textareaRef}
             value={value}
             disabled={disabled || loading}
             rows={2}
-            placeholder={disabled ? 'Add a project to begin' : loading ? 'Loading session…' : submitting ? `Starting ${shortName}…` : `Ask ${shortName} anything, @ for sessions and skills, / for commands`}
-            aria-label={`Message ${shortName}`}
+            placeholder={disabled ? t('composer.placeholder.noProject') : loading ? t('composer.placeholder.loading') : submitting ? t('composer.placeholder.starting', { name: shortName }) : t('composer.placeholder.ask', { name: shortName })}
+            aria-label={t('composer.input.aria', { name: shortName })}
             role="combobox"
             aria-autocomplete="list"
             aria-expanded={Boolean(menu && suggestions.length)}
@@ -535,7 +545,7 @@ export const Composer = memo(function Composer({
           />
         </div>
         {menu && suggestions.length ? (
-          <div ref={menuRef} id={menuId} className="composer-menu" role="listbox" aria-label={menu === 'command' ? 'Commands' : menu === 'mention' ? 'Sessions and skills' : 'Add context'}>
+          <div ref={menuRef} id={menuId} className="composer-menu" role="listbox" aria-label={menu === 'command' ? t('composer.menu.commands') : menu === 'mention' ? t('composer.menu.mentions') : t('composer.addContext')}>
             {suggestions.map((suggestion, index) => (
               <button
                 id={`${menuId}-option-${index}`}
@@ -558,7 +568,7 @@ export const Composer = memo(function Composer({
           </div>
         ) : null}
         {annotationsOpen && annotations.length ? (
-          <div className="composer-annotations" role="region" aria-label="Page annotation details">
+          <div className="composer-annotations" role="region" aria-label={t('composer.annotations.region')}>
             {annotations.map((annotation, index) => {
               return (
                 <div className="composer-annotation" key={annotation.id}>
@@ -567,9 +577,9 @@ export const Composer = memo(function Composer({
                   </span>
                   <div className="composer-annotation__body">
                     <p>{annotation.comment}</p>
-                    {annotation.stale ? <small>page changed since capture</small> : null}
+                    {annotation.stale ? <small>{t('composer.annotations.stale')}</small> : null}
                   </div>
-                  <button type="button" aria-label={`Remove annotation ${index + 1}`} onClick={() => onRemoveAnnotation(annotation.id)}>
+                  <button type="button" aria-label={t('composer.annotations.remove', { index: index + 1 })} onClick={() => onRemoveAnnotation(annotation.id)}>
                     <X size={12} />
                   </button>
                 </div>
@@ -578,24 +588,24 @@ export const Composer = memo(function Composer({
           </div>
         ) : null}
         {terminalSelectionOpen && terminalSelection?.text ? (
-          <div className="composer-terminal-selection" role="region" aria-label="Selected terminal text">
+          <div className="composer-terminal-selection" role="region" aria-label={t('composer.terminal.region')}>
             <div>
               <SquareTerminal size={14} aria-hidden="true" />
               <strong>{terminalSelection.label}</strong>
-              {terminalSelection.truncated ? <small>start truncated</small> : null}
+              {terminalSelection.truncated ? <small>{t('composer.terminal.truncated')}</small> : null}
             </div>
             <pre>{terminalSelection.text}</pre>
           </div>
         ) : null}
         {images.length || unsupportedFiles.length || annotations.length || terminalSelection?.text ? (
-          <div className="composer-attachments" aria-label="Attachments">
+          <div className="composer-attachments" aria-label={t('composer.attachments.label')}>
             {annotations.length ? (
-              <div className="composer-attachment composer-attachment--annotations" title={`${annotations.length} page annotation${annotations.length === 1 ? '' : 's'}`}>
+              <div className="composer-attachment composer-attachment--annotations" title={t('composer.annotations.title', { count: annotations.length })}>
                 <button
                   type="button"
                   className="composer-attachment__expand"
                   aria-expanded={annotationsOpen}
-                  aria-label={`Inspect ${annotations.length} page annotation${annotations.length === 1 ? '' : 's'}`}
+                  aria-label={t('composer.annotations.inspect', { count: annotations.length })}
                   onClick={() => setAnnotationsOpen((open) => !open)}
                 >
                   <MessageCirclePlus size={13} />
@@ -605,7 +615,7 @@ export const Composer = memo(function Composer({
                 <button
                   type="button"
                   className="composer-attachment__clear"
-                  aria-label="Remove page annotations"
+                  aria-label={t('composer.annotations.clear')}
                   onClick={() => {
                     setAnnotationsOpen(false)
                     onClearAnnotations()
@@ -616,19 +626,19 @@ export const Composer = memo(function Composer({
               </div>
             ) : null}
             {terminalSelection?.text ? (
-              <div className="composer-attachment composer-attachment--terminal has-selection" title={`Selected text from ${terminalSelection.label}`}>
+              <div className="composer-attachment composer-attachment--terminal has-selection" title={t('composer.terminal.title', { source: terminalSelection.label })}>
                 <button
                   type="button"
                   className="composer-attachment__expand"
                   aria-expanded={terminalSelectionOpen}
-                  aria-label={`Inspect selected text from ${terminalSelection.label}`}
+                  aria-label={t('composer.terminal.inspect', { source: terminalSelection.label })}
                   onClick={() => setTerminalSelectionOpen((open) => !open)}
                 >
                   <SquareTerminal size={13} />
                   <span>{terminalSelection.label}</span>
-                  <small>selected</small><ChevronDown size={11} className={terminalSelectionOpen ? 'is-open' : ''} />
+                  <small>{t('composer.terminal.selected')}</small><ChevronDown size={11} className={terminalSelectionOpen ? 'is-open' : ''} />
                 </button>
-                <button type="button" className="composer-attachment__clear" aria-label="Clear terminal selection" onClick={onClearTerminalSelection}><X size={12} /></button>
+                <button type="button" className="composer-attachment__clear" aria-label={t('composer.terminal.clear')} onClick={onClearTerminalSelection}><X size={12} /></button>
               </div>
             ) : null}
             {images.map((image) => (
@@ -640,7 +650,7 @@ export const Composer = memo(function Composer({
                 </span>
                 <button
                   type="button"
-                  aria-label={`Remove ${image.name}`}
+                  aria-label={t('composer.attachment.remove', { name: image.name })}
                   onClick={() => imageAttachments.remove(image.id)}
                 >
                   <X size={12} />
@@ -655,7 +665,7 @@ export const Composer = memo(function Composer({
                 </span>
                 <button
                   type="button"
-                  aria-label={`Remove ${file.name}`}
+                  aria-label={t('composer.attachment.remove', { name: file.name })}
                   onClick={() => imageAttachments.remove(file.id)}
                 >
                   <X size={12} />
@@ -670,12 +680,12 @@ export const Composer = memo(function Composer({
           </p>
         ) : null}
         <p id={imageStatusId} className="sr-only" role="status" aria-live="polite">
-          {imageAttachments.dragging ? 'Drop files to attach.' : processingImages ? 'Adding files.' : images.length + unsupportedFiles.length ? `${images.length + unsupportedFiles.length} file${images.length + unsupportedFiles.length === 1 ? '' : 's'} attached.` : ''}
+          {imageAttachments.dragging ? t('composer.status.drop') : processingImages ? t('composer.status.adding') : images.length + unsupportedFiles.length ? t('composer.status.filesAttached', { count: images.length + unsupportedFiles.length }) : ''}
         </p>
         <div className="composer__footer">
           <div className="composer__controls">
             <IconButton
-              label="Add context"
+              label={t('composer.addContext')}
               data-composer-menu-trigger
               aria-expanded={menu === 'add'}
               aria-controls={menu === 'add' ? menuId : undefined}
@@ -692,7 +702,7 @@ export const Composer = memo(function Composer({
               type="file"
               multiple
               tabIndex={-1}
-              aria-label="Choose files to attach"
+              aria-label={t('composer.chooseFiles')}
               aria-describedby={imageStatusId}
               disabled={disabled || loading || submitting}
               onChange={(event) => {
@@ -703,10 +713,10 @@ export const Composer = memo(function Composer({
             />
             <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} />
             <ExecutingModelChip executingModel={executingModel} />
-            <SelectControl label="Reasoning effort" compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
+            <SelectControl label={t('composer.effort.label')} compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (
                 <option key={level} value={level}>
-                  {reasoningLabels[level]}
+                  {t(reasoningLabels[level])}
                 </option>
               ))}
             </SelectControl>
@@ -716,20 +726,20 @@ export const Composer = memo(function Composer({
                 className={`fast-mode-toggle ${fast ? 'is-active' : ''}`}
                 aria-pressed={fast}
                 disabled={!fastAvailable}
-                title={fastAvailable ? `Use ${agentName} priority service tier` : `The installed ${agentName} RPC runtime does not expose fast mode`}
+                title={fastAvailable ? t('composer.fast.tooltipAvailable', { name: agentName }) : t('composer.fast.tooltipUnavailable', { name: agentName })}
                 onClick={() => onFastChange(!fast)}
               >
-                <Zap size={12} fill={fast ? 'currentColor' : 'none'} /> <span className="fast-mode-toggle__label">Fast</span>
+                <Zap size={12} fill={fast ? 'currentColor' : 'none'} /> <span className="fast-mode-toggle__label">{t('composer.fast.label')}</span>
               </button>
             ) : null}
             <CheckoutPicker catalog={checkoutCatalog} fallbackLabel={checkoutLabel} loading={checkoutsLoading} onExecute={onExecuteCheckout} />
           </div>
           <div className="composer__actions">
-            {dictation.state === 'connecting' || dictation.state === 'recording' ? <button type="button" className="context-usage-dial context-usage-dial--cancel" aria-label="Cancel dictation" title="Cancel dictation" onClick={dictation.cancel}><X size={14} /></button> : <span
+            {dictation.state === 'connecting' || dictation.state === 'recording' ? <button type="button" className="context-usage-dial context-usage-dial--cancel" aria-label={t('dictation.cancel')} title={t('dictation.cancel')} onClick={dictation.cancel}><X size={14} /></button> : <span
               className={`context-usage-dial ${contextPercent === null ? 'is-unavailable' : contextPercent >= 95 ? 'is-critical' : contextPercent >= 80 ? 'is-warning' : ''}`}
               role="meter"
               tabIndex={0}
-              aria-label="Context usage"
+              aria-label={t('composer.context.usage')}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={contextPercent === null ? undefined : Math.round(contextPercent)}
@@ -743,23 +753,23 @@ export const Composer = memo(function Composer({
             <button
               type="button"
               className={`dictation-button ${dictation.state === 'recording' ? 'is-recording' : ''}`}
-              aria-label={dictation.state === 'recording' ? 'Stop and transcribe dictation' : dictation.state === 'connecting' ? 'Connecting microphone' : dictation.state === 'transcribing' ? 'Transcribing dictation' : 'Start dictation'}
+              aria-label={dictation.state === 'recording' ? t('dictation.action.stop') : dictation.state === 'connecting' ? t('dictation.action.connecting') : dictation.state === 'transcribing' ? t('dictation.action.transcribing') : t('dictation.action.start')}
               disabled={!voice || loading || disabled || submitting || dictation.state === 'connecting' || dictation.state === 'transcribing'}
               onClick={() => { if (dictation.state === 'recording') void finishDictation(false); else void dictation.start() }}
             >
               {dictation.state === 'recording' ? <Square size={10} fill="currentColor" /> : dictation.state === 'connecting' || dictation.state === 'transcribing' ? <LoaderCircle className="is-spinning" size={15} /> : <Mic size={15} />}
             </button>
             {dictation.state === 'recording' ? (
-              <button type="button" className="send-button" aria-label="Transcribe and send message" onClick={() => void finishDictation(true)}><ArrowUp size={17} /></button>
+              <button type="button" className="send-button" aria-label={t('composer.send.transcribe')} onClick={() => void finishDictation(true)}><ArrowUp size={17} /></button>
             ) : busy ? (
-              <button type="button" className="send-button send-button--stop" aria-label={`Stop ${shortName}`} onClick={() => void onStop()}>
+              <button type="button" className="send-button send-button--stop" aria-label={t('composer.stop', { name: shortName })} onClick={() => void onStop()}>
                 <Square size={10} fill="currentColor" aria-hidden="true" />
               </button>
             ) : (
               <button
                 type="button"
                 className="send-button"
-                aria-label="Send message"
+                aria-label={t('composer.send')}
                 disabled={(!value.trim() && images.length === 0 && unsupportedFiles.length === 0 && annotations.length === 0 && !terminalSelection?.text) || processingImages || submitting || loading || disabled}
                 onClick={() => void submit()}
               >
@@ -769,7 +779,7 @@ export const Composer = memo(function Composer({
           </div>
         </div>
       </div>
-      <p className="composer-note">{shortName} can make mistakes. Review commands and changes before committing.</p>
+      <p className="composer-note">{t('composer.note', { name: shortName })}</p>
     </div>
   )
 })

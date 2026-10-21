@@ -1,6 +1,7 @@
 import { ArrowDownToLine, File, FileCode2, GitBranch, LoaderCircle, RefreshCw, Sparkles, Undo2 } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { GitStatus } from '@/types/api'
 import { boundLines } from '@/lib/render-bounds'
 import { EmptyState, IconButton, Modal, Segmented } from '../ui'
@@ -8,6 +9,26 @@ import { EmptyState, IconButton, Modal, Segmented } from '../ui'
 const MAX_RENDERED_DIFF_CHARACTERS = 2 * 1024 * 1024
 const MAX_RENDERED_DIFF_LINES = 4_000
 
+/** The Segmented scope values are also the keys for its labels and for the per-scope empty state. */
+const DIFF_SCOPE_LABEL_KEYS = { unstaged: 'inspector.changes.unstaged', staged: 'inspector.changes.staged' } as const satisfies Record<'unstaged' | 'staged', MessageKey>
+const DIFF_SCOPE_EMPTY_KEYS = { unstaged: 'inspector.changes.emptyUnstaged', staged: 'inspector.changes.emptyStaged' } as const satisfies Record<'unstaged' | 'staged', MessageKey>
+const MUTATE_ERROR_KEYS = { stage: 'inspector.changes.error.stage', unstage: 'inspector.changes.error.unstage', restore: 'inspector.changes.error.restore' } as const satisfies Record<'stage' | 'unstage' | 'restore', MessageKey>
+
+/**
+ * Renders a translated template with its single `{name}` token wrapped in <code>,
+ * so branch names and file paths keep the monospace styling they had before the
+ * surrounding sentence moved into the catalog. Called without values on purpose:
+ * the token must survive translate() to be replaced by the element here.
+ */
+function renderWithCode(template: string, name: string, value: string) {
+  const [before, after = ''] = template.split(`{${name}}`)
+  return <>{before}<code>{value}</code>{after}</>
+}
+
+// Commit messages stay English on purpose: this text is prefilled into the
+// commit input, and a shared repository's history is conventionally written in
+// English even when the interface is not. Localising it would also require a
+// separate wording per language for the file-count and conjunction cases.
 function generateCommitSummary(files: GitStatus['files']): string {
   const staged = files.filter((file) => file.staged)
   if (!staged.length) return ''
@@ -19,12 +40,14 @@ function generateCommitSummary(files: GitStatus['files']): string {
 }
 
 const DiffView = memo(function DiffView({ text }: { text: string }) {
-  if (!text) return <div className="diff-placeholder"><FileCode2 size={22} /><span>Select a changed file to inspect its diff.</span></div>
+  const { t } = useI18n()
+  if (!text) return <div className="diff-placeholder"><FileCode2 size={22} /><span>{t('inspector.changes.selectFile')}</span></div>
   const { lines, truncated } = boundLines(text, MAX_RENDERED_DIFF_CHARACTERS, MAX_RENDERED_DIFF_LINES)
-  return <pre className="diff-view">{lines.map((line, index) => <span key={index} className={line.startsWith('+') && !line.startsWith('+++') ? 'diff-line diff-line--add' : line.startsWith('-') && !line.startsWith('---') ? 'diff-line diff-line--remove' : line.startsWith('@@') ? 'diff-line diff-line--hunk' : 'diff-line'}><i>{index + 1}</i><code>{line || ' '}</code></span>)}{truncated ? <span className="diff-line diff-line--truncated"><i>…</i><code>Diff truncated in the desktop view. Open the file or use Git for the complete diff.</code></span> : null}</pre>
+  return <pre className="diff-view">{lines.map((line, index) => <span key={index} className={line.startsWith('+') && !line.startsWith('+++') ? 'diff-line diff-line--add' : line.startsWith('-') && !line.startsWith('---') ? 'diff-line diff-line--remove' : line.startsWith('@@') ? 'diff-line diff-line--hunk' : 'diff-line'}><i>{index + 1}</i><code>{line || ' '}</code></span>)}{truncated ? <span className="diff-line diff-line--truncated"><i>…</i><code>{t('inspector.changes.truncated')}</code></span> : null}</pre>
 })
 
 export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRefreshGit }: { cwd?: string; git: GitStatus; readOnly?: boolean; onGrantProject?(): Promise<void> | void; onRefreshGit(): Promise<void> | void }) {
+  const { t } = useI18n()
   const [scope, setScope] = useState<'unstaged' | 'staged'>('unstaged')
   const [selectedPath, setSelectedPath] = useState<string | undefined>(git.files[0]?.path)
   const [diff, setDiff] = useState('')
@@ -55,7 +78,7 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
     }
     let cancelled = false
     setLoading(true)
-    window.prime.git.diff(cwd, activeSelectedPath, scope === 'staged').then((value) => { if (!cancelled) setDiff(value.text) }).catch(() => { if (!cancelled) setDiff('Unable to load this diff.') }).finally(() => { if (!cancelled) setLoading(false) })
+    window.prime.git.diff(cwd, activeSelectedPath, scope === 'staged').then((value) => { if (!cancelled) setDiff(value.text) }).catch(() => { if (!cancelled) setDiff(t('inspector.changes.loadFailed')) }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [cwd, activeSelectedPath, scope])
 
@@ -68,7 +91,7 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
         : kind === 'unstage'
           ? await window.prime.git.unstage(cwd, paths)
           : await window.prime.git.restore(cwd, paths)
-      if (!ok) throw new Error(`Git could not ${kind} the selected ${paths.length === 1 ? 'file' : 'files'}.`)
+      if (!ok) throw new Error(t(MUTATE_ERROR_KEYS[kind], { count: paths.length }))
       await onRefreshGit()
       return true
     } catch (error) {
@@ -87,41 +110,41 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
     setActionError('')
     try {
       const result = await window.prime.git.commit(cwd, commitMessage.trim())
-      if (!result.ok) throw new Error(result.output || 'Git could not create the commit.')
+      if (!result.ok) throw new Error(result.output || t('inspector.changes.commitFailed'))
       setCommitOpen(false); setCommitMessage(''); await onRefreshGit()
     } catch (error) { setActionError(errorMessage(error)) }
   }
 
-  if (!git.isRepo) return <EmptyState icon={<GitBranch size={24} />} title="No Git repository">Open a project backed by Git to review, stage, and commit changes.</EmptyState>
+  if (!git.isRepo) return <EmptyState icon={<GitBranch size={24} />} title={t('inspector.changes.noRepo.title')}>{t('inspector.changes.noRepo.body')}</EmptyState>
   if (git.error) {
     return <EmptyState
       icon={<GitBranch size={24} />}
-      title="Git status unavailable"
-      action={<button type="button" className="button" onClick={() => void onRefreshGit()}><RefreshCw size={13} /> Try again</button>}
+      title={t('inspector.changes.noStatus.title')}
+      action={<button type="button" className="button" onClick={() => void onRefreshGit()}><RefreshCw size={13} /> {t('common.tryAgain')}</button>}
     >{git.error}</EmptyState>
   }
   return (
     <div className="changes-panel">
       <div className="changes-toolbar">
-        <div><strong><GitBranch size={13} /> {git.branch ?? 'Repository'}</strong>{git.ahead ? <small>{git.ahead} ahead</small> : null}</div>
-        <IconButton label="Refresh changes" onClick={() => void onRefreshGit()}><RefreshCw size={14} /></IconButton>
+        <div><strong><GitBranch size={13} /> {git.branch ?? t('inspector.changes.repository')}</strong>{git.ahead ? <small>{t('inspector.changes.ahead', { count: git.ahead })}</small> : null}</div>
+        <IconButton label={t('inspector.changes.refresh')} onClick={() => void onRefreshGit()}><RefreshCw size={14} /></IconButton>
       </div>
-      {readOnly ? <div className="changes-read-only" role="note"><span>This project is read-only because it was discovered from session history.</span>{onGrantProject ? <button type="button" className="button button--compact" onClick={() => void onGrantProject()}>Add project</button> : null}</div> : null}
-      <div className="changes-scopes"><Segmented value={scope} label="Diff scope" options={[{ value: 'unstaged', label: 'Unstaged' }, { value: 'staged', label: 'Staged' }]} onChange={(value) => { setActionError(''); setScope(value as 'unstaged' | 'staged') }} /><button type="button" className="button button--compact" disabled={readOnly || !git.files.some((file) => file.staged)} onClick={() => setCommitOpen(true)}>Commit</button></div>
+      {readOnly ? <div className="changes-read-only" role="note"><span>{t('inspector.changes.readOnly')}</span>{onGrantProject ? <button type="button" className="button button--compact" onClick={() => void onGrantProject()}>{t('inspector.changes.addProject')}</button> : null}</div> : null}
+      <div className="changes-scopes"><Segmented value={scope} label={t('inspector.changes.diffScope')} options={[{ value: 'unstaged', label: t(DIFF_SCOPE_LABEL_KEYS.unstaged) }, { value: 'staged', label: t(DIFF_SCOPE_LABEL_KEYS.staged) }]} onChange={(value) => { setActionError(''); setScope(value as 'unstaged' | 'staged') }} /><button type="button" className="button button--compact" disabled={readOnly || !git.files.some((file) => file.staged)} onClick={() => setCommitOpen(true)}>{t('inspector.changes.commit')}</button></div>
       {actionError ? <p className="changes-error" role="alert">{actionError}</p> : null}
       <div className="changes-body">
         <div className="file-changes scroll-area">
-          <div className="file-changes__header"><span>{visibleFiles.length} changed {visibleFiles.length === 1 ? 'file' : 'files'}</span>{visibleFiles.length ? <button type="button" disabled={readOnly} onClick={() => void mutate(scope === 'staged' ? 'unstage' : 'stage', visibleFiles.map((file) => file.path))}>{scope === 'staged' ? 'Unstage all' : 'Stage all'}</button> : null}</div>
+          <div className="file-changes__header"><span>{t('inspector.changes.changedFiles', { count: visibleFiles.length })}</span>{visibleFiles.length ? <button type="button" disabled={readOnly} onClick={() => void mutate(scope === 'staged' ? 'unstage' : 'stage', visibleFiles.map((file) => file.path))}>{scope === 'staged' ? t('inspector.changes.unstageAll') : t('inspector.changes.stageAll')}</button> : null}</div>
           {visibleFiles.map((file) => <button type="button" key={file.path} className={selectedPath === file.path ? 'is-selected' : ''} onClick={() => setSelectedPath(file.path)}><File size={13} /><span title={file.path}>{file.path}</span><small className="additions">+{file.additions}</small><small className="deletions">−{file.deletions}</small><span className="file-status">{file.status}</span></button>)}
-          {visibleFiles.length === 0 ? <p className="file-changes__empty">No {scope} changes.</p> : null}
+          {visibleFiles.length === 0 ? <p className="file-changes__empty">{t(DIFF_SCOPE_EMPTY_KEYS[scope])}</p> : null}
         </div>
         <div className="diff-pane scroll-area">
-          {selectedPath ? <div className="diff-header"><div><FileCode2 size={13} /><span>{selectedPath}</span></div><div>{scope === 'unstaged' ? <button type="button" disabled={readOnly} onClick={() => void mutate('stage', [selectedPath])}><ArrowDownToLine size={12} /> Stage</button> : <button type="button" disabled={readOnly} onClick={() => void mutate('unstage', [selectedPath])}><Undo2 size={12} /> Unstage</button>}<button type="button" className="danger-action" disabled={readOnly} onClick={() => setConfirmUndo(selectedPath)}><Undo2 size={12} /> Undo changes</button></div></div> : null}
-          {loading ? <div className="diff-loading"><LoaderCircle className="spin" size={15} /> Loading diff…</div> : <DiffView text={diff} />}
+          {selectedPath ? <div className="diff-header"><div><FileCode2 size={13} /><span>{selectedPath}</span></div><div>{scope === 'unstaged' ? <button type="button" disabled={readOnly} onClick={() => void mutate('stage', [selectedPath])}><ArrowDownToLine size={12} /> {t('inspector.changes.stage')}</button> : <button type="button" disabled={readOnly} onClick={() => void mutate('unstage', [selectedPath])}><Undo2 size={12} /> {t('inspector.changes.unstage')}</button>}<button type="button" className="danger-action" disabled={readOnly} onClick={() => setConfirmUndo(selectedPath)}><Undo2 size={12} /> {t('inspector.changes.undoChanges')}</button></div></div> : null}
+          {loading ? <div className="diff-loading"><LoaderCircle className="spin" size={15} /> {t('inspector.changes.loadingDiff')}</div> : <DiffView text={diff} />}
         </div>
       </div>
-      {commitOpen ? <Modal title="Commit staged changes" onClose={() => setCommitOpen(false)} footer={<><button className="button" type="button" onClick={() => setCommitOpen(false)}>Cancel</button><button className="button button--primary" type="button" disabled={readOnly || !commitMessage.trim()} onClick={() => void commit()}>Commit changes</button></>}><label className="field"><span>Commit message</span><div className="commit-message-input"><input autoFocus value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder="Describe this change" /><button type="button" className="button button--compact" onClick={fillCommitSummary} title="Generate a summary from staged files"><Sparkles size={13} /> Generate summary</button></div></label><p className="muted-copy">This will commit all staged files on <code>{git.branch}</code>.</p></Modal> : null}
-      {confirmUndo ? <Modal title="Undo file changes?" onClose={() => setConfirmUndo(null)} footer={<><button className="button" type="button" onClick={() => setConfirmUndo(null)}>Cancel</button><button className="button button--danger" type="button" disabled={readOnly} onClick={() => { const path = confirmUndo; void mutate('restore', [path]).then((ok) => { if (ok) setConfirmUndo(null) }) }}>Undo changes</button></>}><p>This discards the staged and unstaged changes to <code>{confirmUndo}</code> and restores the file to its last commit. A new untracked file will be deleted.</p></Modal> : null}
+      {commitOpen ? <Modal title={t('inspector.changes.commitModal.title')} onClose={() => setCommitOpen(false)} footer={<><button className="button" type="button" onClick={() => setCommitOpen(false)}>{t('common.cancel')}</button><button className="button button--primary" type="button" disabled={readOnly || !commitMessage.trim()} onClick={() => void commit()}>{t('inspector.changes.commitAction')}</button></>}><label className="field"><span>{t('inspector.changes.commitMessage')}</span><div className="commit-message-input"><input autoFocus value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder={t('inspector.changes.commitPlaceholder')} /><button type="button" className="button button--compact" onClick={fillCommitSummary} title={t('inspector.changes.generateSummaryTitle')}><Sparkles size={13} /> {t('inspector.changes.generateSummary')}</button></div></label><p className="muted-copy">{renderWithCode(t('inspector.changes.commitNote'), 'branch', git.branch ?? '')}</p></Modal> : null}
+      {confirmUndo ? <Modal title={t('inspector.changes.undoModal.title')} onClose={() => setConfirmUndo(null)} footer={<><button className="button" type="button" onClick={() => setConfirmUndo(null)}>{t('common.cancel')}</button><button className="button button--danger" type="button" disabled={readOnly} onClick={() => { const path = confirmUndo; void mutate('restore', [path]).then((ok) => { if (ok) setConfirmUndo(null) }) }}>{t('inspector.changes.undoChanges')}</button></>}><p>{renderWithCode(t('inspector.changes.undoBody'), 'path', confirmUndo)}</p></Modal> : null}
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { Check, ChevronDown, FolderGit2 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { CheckoutAction, CheckoutCatalog } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
 
 interface CheckoutPickerProps {
   catalog?: CheckoutCatalog
@@ -9,15 +10,18 @@ interface CheckoutPickerProps {
   onExecute?(action: CheckoutAction): Promise<void> | void
 }
 
-function checkoutLabel(catalog: CheckoutCatalog | undefined, fallback: string | undefined): string {
-  if (!catalog) return fallback ?? 'Checkout'
-  if (catalog.strategy === 'branch') return catalog.activeName || fallback || 'Checkout'
+// Not a component, so the translate function is threaded in rather than read
+// from a hook; `fallbackText` is the localised "Checkout" placeholder label.
+function checkoutLabel(catalog: CheckoutCatalog | undefined, fallback: string | undefined, fallbackText: string): string {
+  if (!catalog) return fallback ?? fallbackText
+  if (catalog.strategy === 'branch') return catalog.activeName || fallback || fallbackText
   const active = catalog.checkouts.find((worktree) => worktree.path === catalog.activePath)
     ?? catalog.checkouts.find((worktree) => worktree.current)
-  return active?.branch ?? active?.name ?? fallback ?? 'Checkout'
+  return active?.branch ?? active?.name ?? fallback ?? fallbackText
 }
 
 export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExecute }: CheckoutPickerProps) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [branch, setBranch] = useState('')
@@ -49,7 +53,7 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
       await onExecute(action)
       setOpen(false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not change checkout')
+      setError(cause instanceof Error ? cause.message : t('checkout.error'))
     }
   }
 
@@ -66,13 +70,14 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
   }
 
   const enabled = Boolean(onExecute && catalog && (catalog.checkouts.length > 0 || strategy === 'branch'))
-  const label = checkoutLabel(catalog, fallbackLabel)
+  const label = checkoutLabel(catalog, fallbackLabel, t('checkout.fallback'))
+  const strategyName = t(strategy === 'worktree' ? 'checkout.strategyWorktree' : 'checkout.strategyBranch')
   return (
     <div className="worktree-picker" ref={rootRef}>
       <button
         type="button"
         className="permissions-chip worktree-picker__trigger"
-        aria-label={`Checkout: ${label}`}
+        aria-label={t('checkout.aria', { branch: label })}
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         disabled={!enabled}
@@ -83,10 +88,10 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
         <ChevronDown className="worktree-picker__chevron" size={11} />
       </button>
       {open && catalog ? (
-        <div className="worktree-picker__menu" id={menuId} role="menu" aria-label={strategy === 'worktree' ? 'Git worktrees' : 'Git branches'}>
-          <div className="worktree-picker__heading">Checkouts</div>
+        <div className="worktree-picker__menu" id={menuId} role="menu" aria-label={strategy === 'worktree' ? t('checkout.menuWorktrees') : t('checkout.menuBranches')}>
+          <div className="worktree-picker__heading">{t('checkout.heading')}</div>
           <div className="worktree-picker__options">
-            {loading ? <span className="worktree-picker__empty">Loading…</span> : catalog.checkouts.length === 0 ? <span className="worktree-picker__empty">No checkouts found</span> : catalog.strategy === 'worktree'
+            {loading ? <span className="worktree-picker__empty">{t('common.loading')}</span> : catalog.checkouts.length === 0 ? <span className="worktree-picker__empty">{t('checkout.empty')}</span> : catalog.strategy === 'worktree'
               ? catalog.checkouts.map((worktree) => {
                   const selected = worktree.path === catalog.activePath
                   return (
@@ -99,15 +104,15 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
               : catalog.checkouts.map((localBranch) => (
                   <button type="button" role="menuitemradio" aria-checked={localBranch.current} className={`worktree-picker__option ${localBranch.current ? 'is-active' : ''}`} key={localBranch.name} onClick={() => { if (localBranch.current) setOpen(false); else void execute({ strategy: 'branch', operation: 'switch', branch: localBranch.name }) }}>
                     <span className="worktree-picker__check">{localBranch.current ? <Check size={13} /> : null}</span>
-                    <span className="worktree-picker__option-copy"><strong>{localBranch.name}</strong><span>{localBranch.current ? 'Current branch' : 'Local branch'}</span></span>
+                    <span className="worktree-picker__option-copy"><strong>{localBranch.name}</strong><span>{localBranch.current ? t('checkout.currentBranch') : t('checkout.localBranch')}</span></span>
                   </button>
                 ))}
           </div>
           <form className="worktree-picker__create" onSubmit={(event) => { event.preventDefault(); void create() }}>
-            <label htmlFor={`${menuId}-branch`}>Create {strategy}</label>
+            <label htmlFor={`${menuId}-branch`}>{t('checkout.create', { strategy: strategyName })}</label>
             <div>
-              <input id={`${menuId}-branch`} value={branch} placeholder="New branch name" onChange={(event) => { setBranch(event.target.value); setError('') }} />
-              <button type="submit" disabled={!branch.trim() || creating}>{creating ? 'Creating…' : 'Create'}</button>
+              <input id={`${menuId}-branch`} value={branch} placeholder={t('checkout.newBranchPlaceholder')} onChange={(event) => { setBranch(event.target.value); setError('') }} />
+              <button type="submit" disabled={!branch.trim() || creating}>{creating ? t('checkout.creating') : t('checkout.createAction')}</button>
             </div>
             {error ? <span role="alert">{error}</span> : null}
           </form>

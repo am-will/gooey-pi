@@ -2,26 +2,29 @@ import { AlertTriangle, ArrowLeft, BookOpen, Check, ChevronRight, FileCode2, Fil
 import { useMemo, useState } from 'react'
 import type { CapabilityMutationInput, ExtensionInstallInput, HarnessId, McpConnectionInput, McpStateInput, PluginWarning, PrimeImplementation, SkillRecord } from '@/types/api'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
-import { NETWORK_MCP_UNAVAILABLE_DETAIL } from '@/lib/mcp-policy'
+import { LOCAL_MCP_STATE_UNAVAILABLE_DETAIL, NETWORK_MCP_AUTH_UNAVAILABLE, NETWORK_MCP_UNAVAILABLE_DETAIL, PI_MCP_ADAPTER_REQUIRED_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '@/lib/mcp-policy'
 import { primeCapabilityAvailable, primeUnavailableCapabilitiesNotice, RUST_PRIME_EXTENSIONS_DETAIL } from '@/lib/prime-compat'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import { EmptyState, Modal } from '@/components/ui'
 
-const MCP_STDIO_HELP: Record<HarnessId, string> = {
-  omp: 'OMP starts this stdio MCP server directly in each new session.',
-  prime: 'Prime Agent MCP setup is managed outside GooeyPi.',
-  pi: 'Pi starts this stdio MCP server through the pi-mcp-adapter extension (pi install npm:pi-mcp-adapter) in each new session.',
+const MCP_STDIO_HELP_KEYS: Record<HarnessId, MessageKey> = {
+  omp: 'plugins.mcpStdioHelp.omp',
+  prime: 'plugins.mcpStdioHelp.prime',
+  pi: 'plugins.mcpStdioHelp.pi',
 }
 
 type DirectoryTab = 'plugins' | 'skills'
 type AddKind = 'mcp' | 'bundle' | 'extension'
 type McpScope = 'user' | 'project'
 
-const PACKAGE_LABELS: Record<HarnessId, string> = { prime: 'Prime package', omp: 'OMP plugin', pi: 'Pi package' }
-const PACKAGE_HELP: Record<HarnessId, string> = {
-  prime: 'Install a Prime package containing extensions, skills, prompts, or themes with Prime Agent’s package manager.',
-  omp: 'Install an OMP plugin bundle with OMP’s native plugin manager. Marketplace targets use name@marketplace.',
-  pi: 'Install a Pi package containing extensions, skills, prompts, or themes with Pi’s package manager.',
+const PACKAGE_LABEL_KEYS: Record<HarnessId, MessageKey> = { prime: 'plugins.packageLabel.prime', omp: 'plugins.packageLabel.omp', pi: 'plugins.packageLabel.pi' }
+const PACKAGE_HELP_KEYS: Record<HarnessId, MessageKey> = {
+  prime: 'plugins.packageHelp.prime',
+  omp: 'plugins.packageHelp.omp',
+  pi: 'plugins.packageHelp.pi',
 }
+/** English lowercases the harness noun in the add-modal heading, so each harness needs its own key. */
+const ADD_BUNDLE_TITLE_KEYS: Record<HarnessId, MessageKey> = { prime: 'plugins.add.title.primePackage', omp: 'plugins.add.title.ompPlugin', pi: 'plugins.add.title.piPackage' }
 const GITHUB_ISSUES_URL = 'https://github.com/am-will/gooey-pi/issues/new'
 
 /**
@@ -31,6 +34,23 @@ const GITHUB_ISSUES_URL = 'https://github.com/am-will/gooey-pi/issues/new'
  */
 function unavailableDetail(skill: SkillRecord): string | undefined {
   return skill.availability?.available === false && skill.id !== 'gooeypi-computer-use' ? skill.availability.detail : undefined
+}
+
+const AVAILABILITY_DETAIL_KEYS: Record<string, MessageKey> = {
+  [NETWORK_MCP_UNAVAILABLE_DETAIL]: 'plugins.warning.networkMcpUnavailable',
+  [NETWORK_MCP_AUTH_UNAVAILABLE]: 'plugins.warning.networkMcpAuth',
+  [PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL]: 'plugins.warning.primeMcpManagement',
+  [PI_MCP_ADAPTER_REQUIRED_DETAIL]: 'plugins.warning.piMcpAdapterRequired',
+  [LOCAL_MCP_STATE_UNAVAILABLE_DETAIL]: 'plugins.warning.localMcpState',
+}
+
+// The directory row shows the stored location verbatim, so these English entries
+// mirror the enum; the filter above labels the same values in its own words.
+const LOCATION_KEYS: Record<SkillRecord['location'], MessageKey> = {
+  bundled: 'plugins.location.bundled',
+  user: 'plugins.location.user',
+  project: 'plugins.location.project',
+  system: 'plugins.location.system',
 }
 
 function capabilityDetailId(skill: SkillRecord): string {
@@ -73,6 +93,16 @@ interface PluginsPageProps {
 }
 
 export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
+  const { t } = useI18n()
+  // Main-process output is either one of the fixed availability details or raw
+  // command output; only the former is translated.
+  const describeDetail = (detail: string): string => {
+    const key = AVAILABILITY_DETAIL_KEYS[detail]
+    return key ? t(key) : detail
+  }
+  // `onMutateCapability` is optional in tests and reduced wiring, so the fallback
+  // is built here instead of as a default parameter where `t` is not yet bound.
+  const mutateCapability = onMutateCapability ?? (async () => ({ ok: false, output: t('plugins.mutationUnavailable') }))
   const [tab, setTab] = useState<DirectoryTab>('plugins')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -169,7 +199,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
   const setComputerUse = async (skill: SkillRecord, enabled: boolean) => {
     if (computerUseUpdating) return
     if (enabled && skill.availability?.available === false) {
-      setComputerUseAlert(skill.availability.detail)
+      setComputerUseAlert(describeDetail(skill.availability.detail))
       if (skill.availability.actionUrl) onOpenExternal(skill.availability.actionUrl)
       return
     }
@@ -186,15 +216,15 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
     if (mcpSupportUpdating) return
     setMcpSupportUpdating(true)
     setMcpSupportAlert('')
-    setMcpSupportNotice(enabling ? 'Installing Pi MCP Adapter…' : 'Disabling Pi MCP Adapter…')
+    setMcpSupportNotice(enabling ? t('plugins.mcp.adapterInstalling') : t('plugins.mcp.adapterDisabling'))
     try {
       const response = await onSetMcpSupport(enabling)
       if (!response.ok) {
         const busy = /lock file is already being held|settings are busy/i.test(response.output)
-        setMcpSupportAlert(busy ? 'Pi settings are busy. Close any other Pi package operation and try again.' : response.output)
+        setMcpSupportAlert(busy ? t('plugins.mcp.settingsBusy') : describeDetail(response.output))
         setMcpSupportNotice('')
       } else {
-        setMcpSupportNotice(enabling ? 'Pi MCP Adapter installed.' : 'Pi MCP Adapter disabled.')
+        setMcpSupportNotice(enabling ? t('plugins.mcp.adapterInstalled') : t('plugins.mcp.adapterDisabled'))
       }
     } finally {
       setMcpSupportUpdating(false)
@@ -207,11 +237,11 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
     setCapabilityAlert('')
     try {
       if (skill.id.startsWith('prime-mcp-')) {
-        const response = await onMutateCapability({ kind: 'mcp', action: enabled ? 'enable' : 'disable', name: mcpServerName(skill), scope: 'user' })
-        if (!response.ok) setCapabilityAlert(response.output)
+        const response = await mutateCapability({ kind: 'mcp', action: enabled ? 'enable' : 'disable', name: mcpServerName(skill), scope: 'user' })
+        if (!response.ok) setCapabilityAlert(describeDetail(response.output))
       } else {
         const response = await onSetMcpEnabled({ name: skill.name, scope: skill.location === 'project' ? 'project' : 'user', projectPath: skill.location === 'project' ? activeProjectPath : undefined, enabled })
-        if (!response.ok) setCapabilityAlert(response.output)
+        if (!response.ok) setCapabilityAlert(describeDetail(response.output))
       }
     } finally {
       setCapabilityUpdating('')
@@ -230,7 +260,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
     setCapabilityUpdating(skill.id)
     setCapabilityAlert('')
     try {
-      const response = await onMutateCapability({
+      const response = await mutateCapability({
         kind: skill.kind === 'mcp' ? 'mcp' : 'package',
         action,
         name: skill.kind === 'mcp' ? mcpServerName(skill) : skill.name,
@@ -239,7 +269,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
         scope: skill.location === 'project' ? 'project' : 'user',
         projectPath: skill.location === 'project' ? activeProjectPath : undefined,
       })
-      if (!response.ok) setCapabilityAlert(response.output)
+      if (!response.ok) setCapabilityAlert(describeDetail(response.output))
     } finally {
       setCapabilityUpdating('')
     }
@@ -262,11 +292,11 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
       return <span className="plugin-toggle" role="img" aria-label={label} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
     }
     if (harness === 'pi' && skill.kind === 'mcp' && !piMcpAdapterInstalled) {
-      return <span className="plugin-toggle" role="img" aria-label={`Pi MCP Adapter required for ${skill.name}`} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
+      return <span className="plugin-toggle" role="img" aria-label={t('plugins.aria.adapterRequired', { name: skill.name })} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
     }
     const isBrowser = skill.id === 'prime-work-browser' || skill.id === 'omp-work-browser'
     const actionable = skill.id === 'gooeypi-ask-user' || isBrowser || skill.id === 'gooeypi-computer-use' || skill.id === 'gooeypi-pi-mcp' || skill.kind === 'mcp' || skill.kind === 'package'
-    if (!actionable) return <span className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={`${skill.enabled ? 'Enabled' : 'Unavailable'} ${skill.name}`}>{skill.enabled ? <Check size={14}/> : <Plus size={14}/>}</span>
+    if (!actionable) return <span className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={skill.enabled ? t('plugins.aria.enabled', { name: skill.name }) : t('plugins.aria.unavailable', { name: skill.name })}>{skill.enabled ? <Check size={14}/> : <Plus size={14}/>}</span>
     const updating = skill.id === 'gooeypi-ask-user' ? askUserUpdating
       : isBrowser ? browserUpdating
         : skill.id === 'gooeypi-computer-use' ? computerUseUpdating
@@ -280,33 +310,33 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
       if (skill.kind === 'package') return mutate(skill, 'enable')
       return setMcp(skill, true)
     }
-    return <button type="button" className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} aria-pressed={skill.enabled} disabled={updating} title={skill.availability?.detail} onClick={() => { if (skill.enabled) setConfirmDisable(skill); else void enable() }}>{updating ? <RefreshCw className="spin" size={14}/> : skill.enabled ? <><Check className="plugin-toggle__check" size={14}/><X className="plugin-toggle__disable" size={14}/></> : <Plus className="plugin-toggle__plus" size={14}/>}</button>
+    return <button type="button" className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={skill.enabled ? t('plugins.aria.disable', { name: skill.name }) : t('plugins.aria.enable', { name: skill.name })} aria-pressed={skill.enabled} disabled={updating} title={skill.availability?.detail ? describeDetail(skill.availability.detail) : undefined} onClick={() => { if (skill.enabled) setConfirmDisable(skill); else void enable() }}>{updating ? <RefreshCw className="spin" size={14}/> : skill.enabled ? <><Check className="plugin-toggle__check" size={14}/><X className="plugin-toggle__disable" size={14}/></> : <Plus className="plugin-toggle__plus" size={14}/>}</button>
   }
 
   return (
     <div className="page plugin-page scroll-area">
       <div className="page-container plugin-container">
         <header className="plugin-header">
-          <div><span className="eyebrow">{HARNESS_SHORT_NAMES[harness]} capabilities</span><h1>Extend {HARNESS_SHORT_NAMES[harness]}</h1><p>Manage packages, extensions, MCP servers, and reusable skills for this harness.</p></div>
+          <div><span className="eyebrow">{t('plugins.header.eyebrow', { name: HARNESS_SHORT_NAMES[harness] })}</span><h1>{t('plugins.header.title', { name: HARNESS_SHORT_NAMES[harness] })}</h1><p>{t('plugins.header.description')}</p></div>
           <div>
-            <button type="button" className="button" onClick={() => void onRefresh()}><RefreshCw className={loading ? 'spin' : ''} size={13}/> Refresh</button>
-            <button type="button" className="button" onClick={() => setFilter('installed')}><Settings2 size={13}/> Manage</button>
-            <button type="button" className="button button--primary" onClick={openAdd}><Plus size={14}/> Add</button>
+            <button type="button" className="button" onClick={() => void onRefresh()}><RefreshCw className={loading ? 'spin' : ''} size={13}/> {t('common.refresh')}</button>
+            <button type="button" className="button" onClick={() => setFilter('installed')}><Settings2 size={13}/> {t('plugins.header.manage')}</button>
+            <button type="button" className="button button--primary" onClick={openAdd}><Plus size={14}/> {t('common.add')}</button>
           </div>
         </header>
         <div className="directory-tabs">
-          <button type="button" className={tab === 'plugins' ? 'is-active' : ''} onClick={() => setTab('plugins')}>Capabilities</button>
-          <button type="button" className={tab === 'skills' ? 'is-active' : ''} onClick={() => setTab('skills')}>Skills</button>
+          <button type="button" className={tab === 'plugins' ? 'is-active' : ''} onClick={() => setTab('plugins')}>{t('nav.capabilities')}</button>
+          <button type="button" className={tab === 'skills' ? 'is-active' : ''} onClick={() => setTab('skills')}>{t('plugins.tab.skills')}</button>
         </div>
         <div className="directory-tools">
-          <label className="page-search"><Search size={14}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab === 'plugins' ? 'capabilities' : 'skills'}`}/></label>
-          <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Directory filter">
-            <option value="all">All sources</option><option value="installed">Installed</option><option value="bundled">Bundled</option><option value="user">Personal</option><option value="project">Project</option><option value="system">System</option>
+          <label className="page-search"><Search size={14}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === 'plugins' ? t('plugins.search.capabilities') : t('plugins.search.skills')}/></label>
+          <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label={t('plugins.filter.aria')}>
+            <option value="all">{t('plugins.filter.all')}</option><option value="installed">{t('plugins.filter.installed')}</option><option value="bundled">{t('plugins.filter.bundled')}</option><option value="user">{t('plugins.filter.personal')}</option><option value="project">{t('plugins.filter.project')}</option><option value="system">{t('plugins.filter.system')}</option>
           </select>
         </div>
         {warnings.map((warning) => (
           <p key={`${warning.scope}:${warning.path}`} className="page-inline-error" role="alert">
-            <AlertTriangle size={13} /> {warning.scope === 'project' ? 'Project' : 'Personal'} {warning.message} ({warning.path})
+            <AlertTriangle size={13} /> {warning.scope === 'project' ? t('plugins.filter.project') : t('plugins.filter.personal')} {warning.message} ({warning.path})
           </p>
         ))}
         {capabilityAlert ? <p className="page-inline-error" role="alert"><AlertTriangle size={13}/> {capabilityAlert}</p> : null}
@@ -322,66 +352,66 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
             const statusDetail = capabilityStatusDetail(skill)
             return <article key={skill.id}>
               <span className={`directory-icon directory-icon--${skill.kind}`}><SkillIcon skill={skill}/></span>
-              <div><div><h3>{skill.name}</h3><span>{skill.location}</span></div><p id={statusDetail ? capabilityDetailId(skill) : undefined}>{skill.description}{statusDetail ? ` ${statusDetail}` : ''}</p></div>
+              <div><div><h3>{skill.name}</h3><span>{t(LOCATION_KEYS[skill.location])}</span></div><p id={statusDetail ? capabilityDetailId(skill) : undefined}>{skill.description}{statusDetail ? ` ${describeDetail(statusDetail)}` : ''}</p></div>
               <div className="capability-actions">
-                {skill.kind === 'package' || skill.kind === 'mcp' && skill.location !== 'bundled' && skill.location !== 'system' && skill.definitionRemovalAvailable !== false ? <button type="button" className="plugin-remove" aria-label={`Remove ${skill.name}`} disabled={capabilityUpdating === skill.id} onClick={() => setConfirmRemove(skill)}><Trash2 size={13}/></button> : null}
+                {skill.kind === 'package' || skill.kind === 'mcp' && skill.location !== 'bundled' && skill.location !== 'system' && skill.definitionRemovalAvailable !== false ? <button type="button" className="plugin-remove" aria-label={t('plugins.aria.remove', { name: skill.name })} disabled={capabilityUpdating === skill.id} onClick={() => setConfirmRemove(skill)}><Trash2 size={13}/></button> : null}
                 {capabilityControl(skill)}
               </div>
             </article>
           })}</div>
-        ) : <EmptyState icon={<Sparkles size={23}/>} title="Nothing here yet">Try another filter or add a capability package supported by {HARNESS_SHORT_NAMES[harness]}.</EmptyState>}
+        ) : <EmptyState icon={<Sparkles size={23}/>} title={t('plugins.empty.title')}>{t('plugins.empty.description', { name: HARNESS_SHORT_NAMES[harness] })}</EmptyState>}
 
-        {confirmDisable ? <Modal title={`Disable ${confirmDisable.name}?`} onClose={() => setConfirmDisable(null)} footer={<><button type="button" className="button" onClick={() => setConfirmDisable(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => void disableCapability(confirmDisable)}>Yes, disable</button></>}><p className="modal-intro">Are you sure? New sessions will no longer receive this capability until you enable it again. Installed files, server settings, and saved authorization are kept.</p></Modal> : null}
-        {confirmRemove ? <Modal title={`Remove ${confirmRemove.name}?`} onClose={() => setConfirmRemove(null)} footer={<><button type="button" className="button" onClick={() => setConfirmRemove(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => void removeCapability(confirmRemove)}>Yes, remove completely</button></>}><p className="modal-intro">Are you sure? This removes {confirmRemove.kind === 'mcp' ? harness === 'prime' ? 'only the server definition. Prime authorization is unchanged and must be managed directly in Prime Agent.' : 'only the server definition; harness-owned authorization is not changed.' : 'the package registration and harness-managed files.'} Other packages and MCP entries will be kept.</p></Modal> : null}
+        {confirmDisable ? <Modal title={t('plugins.confirm.disable.title', { name: confirmDisable.name })} onClose={() => setConfirmDisable(null)} footer={<><button type="button" className="button" onClick={() => setConfirmDisable(null)}>{t('common.cancel')}</button><button type="button" className="button button--danger" onClick={() => void disableCapability(confirmDisable)}>{t('plugins.confirm.disable.action')}</button></>}><p className="modal-intro">{t('plugins.confirm.disable.body')}</p></Modal> : null}
+        {confirmRemove ? <Modal title={t('plugins.confirm.remove.title', { name: confirmRemove.name })} onClose={() => setConfirmRemove(null)} footer={<><button type="button" className="button" onClick={() => setConfirmRemove(null)}>{t('common.cancel')}</button><button type="button" className="button button--danger" onClick={() => void removeCapability(confirmRemove)}>{t('plugins.confirm.remove.action')}</button></>}><p className="modal-intro">{t('plugins.confirm.remove.body', { detail: confirmRemove.kind === 'mcp' ? harness === 'prime' ? t('plugins.confirm.remove.detail.primeMcp') : t('plugins.confirm.remove.detail.mcp') : t('plugins.confirm.remove.detail.package') })}</p></Modal> : null}
 
         {addOpen ? (
           <Modal
-            title={addKind ? `Add ${addKind === 'mcp' ? 'MCP server' : addKind === 'extension' ? 'extension' : PACKAGE_LABELS[harness].toLowerCase()}` : `Add a ${HARNESS_SHORT_NAMES[harness]} capability`}
+            title={addKind ? addKind === 'mcp' ? t('plugins.add.title.mcp') : addKind === 'extension' ? t('plugins.add.title.extension') : t(ADD_BUNDLE_TITLE_KEYS[harness]) : t('plugins.add.title.root', { name: HARNESS_SHORT_NAMES[harness] })}
             onClose={() => setAddOpen(false)}
             footer={addKind
-              ? <><button type="button" className="button" onClick={() => selectAddKind(null)}><ArrowLeft size={13}/> Back</button><button type="button" className="button button--primary" disabled={!canAdd || adding} onClick={() => void add()}>{adding ? (addKind === 'mcp' ? 'Saving…' : 'Installing…') : (addKind === 'mcp' ? 'Save local server' : addKind === 'extension' ? 'Install extension' : `Install ${harness === 'omp' ? 'plugin' : 'package'}`)}</button></>
-              : <button type="button" className="button" onClick={() => setAddOpen(false)}>Cancel</button>}
+              ? <><button type="button" className="button" onClick={() => selectAddKind(null)}><ArrowLeft size={13}/> {t('common.back')}</button><button type="button" className="button button--primary" disabled={!canAdd || adding} onClick={() => void add()}>{adding ? (addKind === 'mcp' ? t('plugins.add.saving') : t('plugins.add.installing')) : (addKind === 'mcp' ? t('plugins.add.saveServer') : addKind === 'extension' ? t('plugins.add.installExtension') : harness === 'omp' ? t('plugins.add.installPlugin') : t('plugins.add.installPackage'))}</button></>
+              : <button type="button" className="button" onClick={() => setAddOpen(false)}>{t('common.cancel')}</button>}
           >
             {addKind === null ? (
               <div className="capability-choice-list">
                 <button type="button" disabled={harness === 'prime' || harness === 'pi' && !piMcpAdapterInstalled} onClick={() => selectAddKind('mcp')}>
-                  <span><Globe2 size={17}/></span><span><strong>Add MCP</strong><small>{harness === 'prime' ? 'Prime MCP setup is managed outside GooeyPi' : harness === 'pi' && !piMcpAdapterInstalled ? 'Enable Pi MCP Adapter first' : 'Add a local stdio server; network servers stay externally managed'}</small></span><ChevronRight size={15}/>
+                  <span><Globe2 size={17}/></span><span><strong>{t('plugins.add.card.mcp.title')}</strong><small>{harness === 'prime' ? t('plugins.add.card.mcp.prime') : harness === 'pi' && !piMcpAdapterInstalled ? t('plugins.add.card.mcp.adapterFirst') : t('plugins.add.card.mcp.default')}</small></span><ChevronRight size={15}/>
                 </button>
                 <button type="button" onClick={() => selectAddKind('bundle')}>
-                  <span><Package size={17}/></span><span><strong>Add {harness === 'omp' ? 'Plugin' : 'Package'}</strong><small>{PACKAGE_HELP[harness]}</small></span><ChevronRight size={15}/>
+                  <span><Package size={17}/></span><span><strong>{harness === 'omp' ? t('plugins.add.card.bundle.plugin') : t('plugins.add.card.bundle.package')}</strong><small>{t(PACKAGE_HELP_KEYS[harness])}</small></span><ChevronRight size={15}/>
                 </button>
                 <button type="button" disabled={!extensionsOffered} onClick={() => selectAddKind('extension')}>
                   <span><FileCode2 size={17}/></span><span><strong>Add Extension</strong><small>{extensionsOffered ? `Install one local JavaScript or TypeScript extension module for ${HARNESS_SHORT_NAMES[harness]}.` : RUST_PRIME_EXTENSIONS_DETAIL}</small></span><ChevronRight size={15}/>
                 </button>
-                <p className="capability-compatibility-note"><AlertTriangle size={13}/><span>Not every third-party package, plugin, or extension will work in GooeyPi. If something fails, <button type="button" onClick={() => onOpenExternal(GITHUB_ISSUES_URL)}>create a GitHub issue</button>.</span></p>
+                <p className="capability-compatibility-note"><AlertTriangle size={13}/><span>{t('plugins.add.compatibility.note')} <button type="button" onClick={() => onOpenExternal(GITHUB_ISSUES_URL)}>{t('plugins.add.compatibility.link')}</button>{t('plugins.add.compatibility.period')}</span></p>
               </div>
             ) : addKind === 'bundle' ? (
               <div className="add-tool-form">
-                <p className="modal-intro">{PACKAGE_HELP[harness]} This installs executable code; it does not connect to an arbitrary MCP endpoint.</p>
-                <label className="field"><span>{PACKAGE_LABELS[harness]} source</span><input autoFocus value={source} onChange={(event) => setSource(event.target.value)} placeholder={harness === 'omp' ? 'plugin-name@marketplace' : 'npm:@scope/package'}/></label>
-                <small className="field-help">{harness === 'omp' ? <>Examples: <code>name@marketplace</code>, a Git URL, or an absolute local folder path.</> : <>Examples: a Git URL, <code>npm:@scope/package</code>, or an absolute local folder path.</>}</small>
+                <p className="modal-intro">{t('plugins.add.bundle.intro', { help: t(PACKAGE_HELP_KEYS[harness]) })}</p>
+                <label className="field"><span>{t('plugins.form.sourceLabel', { package: t(PACKAGE_LABEL_KEYS[harness]) })}</span><input autoFocus value={source} onChange={(event) => setSource(event.target.value)} placeholder={harness === 'omp' ? 'plugin-name@marketplace' : 'npm:@scope/package'}/></label>
+                <small className="field-help">{harness === 'omp' ? <>{t('plugins.form.bundleHelp.ompPrefix')} <code>name@marketplace</code>{t('plugins.form.bundleHelp.ompSuffix')}</> : <>{t('plugins.form.bundleHelp.defaultPrefix')} <code>npm:@scope/package</code>{t('plugins.form.bundleHelp.defaultSuffix')}</>}</small>
               </div>
             ) : addKind === 'extension' ? (
               <div className="add-tool-form">
                 <p className="modal-intro">{harness === 'omp'
-                  ? 'OMP installs standalone modules into its native extensions directory. Use Add Plugin instead when the source is a bundle with a package.json manifest.'
-                  : `${HARNESS_SHORT_NAMES[harness]} records a standalone local extension file through its native package manager. The original file remains the source of truth.`}</p>
-                <label className="field"><span>Extension file</span><input autoFocus value={source} onChange={(event) => setSource(event.target.value)} placeholder="/absolute/path/to/my-extension.ts"/></label>
-                <small className="field-help">Choose an absolute local <code>.ts</code>, <code>.js</code>, <code>.mjs</code>, or <code>.cjs</code> file. Extensions run with your user permissions.</small>
-                <label className="field"><span>Available in</span><select value={mcpScope} onChange={(event) => setMcpScope(event.target.value as McpScope)}><option value="user">All projects (personal)</option><option value="project" disabled={!activeProjectPath}>Current project</option></select></label>
-                <p className="connection-warning"><ShieldCheck size={13}/> Extension APIs differ between harnesses. GooeyPi installs the file correctly, but CLI-specific UI may not render in the desktop app.</p>
+                  ? t('plugins.add.extension.intro.omp')
+                  : t('plugins.add.extension.intro', { name: HARNESS_SHORT_NAMES[harness] })}</p>
+                <label className="field"><span>{t('plugins.form.extensionFile')}</span><input autoFocus value={source} onChange={(event) => setSource(event.target.value)} placeholder="/absolute/path/to/my-extension.ts"/></label>
+                <small className="field-help">{t('plugins.form.extensionHelp.prefix')} <code>.ts</code>{t('plugins.form.listSeparator')}<code>.js</code>{t('plugins.form.listSeparator')}<code>.mjs</code>{t('plugins.form.listOrSeparator')}<code>.cjs</code>{t('plugins.form.extensionHelp.suffix')}</small>
+                <label className="field"><span>{t('plugins.form.availableIn')}</span><select value={mcpScope} onChange={(event) => setMcpScope(event.target.value as McpScope)}><option value="user">{t('plugins.form.scope.allProjects')}</option><option value="project" disabled={!activeProjectPath}>{t('plugins.form.scope.currentProject')}</option></select></label>
+                <p className="connection-warning"><ShieldCheck size={13}/> {t('plugins.add.extension.warning')}</p>
               </div>
             ) : (
               <div className="add-tool-form">
                 <p className="modal-intro">{harness === 'omp'
-                  ? 'Add a local stdio server to OMP’s native MCP configuration. HTTP/SSE servers and OAuth are managed directly in OMP, outside GooeyPi.'
-                  : 'Add a local stdio server to pi-mcp-adapter’s configuration. HTTP/SSE servers and OAuth are managed outside GooeyPi.'}</p>
-                <label className="field"><span>Server name</span><input autoFocus value={mcpName} onChange={(event) => setMcpName(event.target.value)} placeholder="my-local-tools"/></label>
-                <p className="field-help">{MCP_STDIO_HELP[harness]}</p>
-                <label className="field"><span>Executable</span><input value={mcpCommand} onChange={(event) => setMcpCommand(event.target.value)} placeholder="npx"/></label>
-                <label className="field"><span>Arguments <small>(one per line)</small></span><textarea value={mcpArgs} onChange={(event) => setMcpArgs(event.target.value)} rows={3} placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/path/to/project'}/></label>
-                <label className="field"><span>Available in</span><select value={mcpScope} onChange={(event) => setMcpScope(event.target.value as McpScope)}><option value="user">All projects (personal)</option><option value="project" disabled={!activeProjectPath}>Current project</option></select></label>
-                <p className="connection-warning"><ShieldCheck size={13}/> Only connect servers you trust. MCP tools can read data or run actions with your user permissions.</p>
+                  ? t('plugins.add.mcp.intro.omp')
+                  : t('plugins.add.mcp.intro')}</p>
+                <label className="field"><span>{t('plugins.form.serverName')}</span><input autoFocus value={mcpName} onChange={(event) => setMcpName(event.target.value)} placeholder="my-local-tools"/></label>
+                <p className="field-help">{t(MCP_STDIO_HELP_KEYS[harness])}</p>
+                <label className="field"><span>{t('plugins.form.executable')}</span><input value={mcpCommand} onChange={(event) => setMcpCommand(event.target.value)} placeholder="npx"/></label>
+                <label className="field"><span>{t('plugins.form.arguments')} <small>{t('plugins.form.argumentsHint')}</small></span><textarea value={mcpArgs} onChange={(event) => setMcpArgs(event.target.value)} rows={3} placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/path/to/project'}/></label>
+                <label className="field"><span>{t('plugins.form.availableIn')}</span><select value={mcpScope} onChange={(event) => setMcpScope(event.target.value as McpScope)}><option value="user">{t('plugins.form.scope.allProjects')}</option><option value="project" disabled={!activeProjectPath}>{t('plugins.form.scope.currentProject')}</option></select></label>
+                <p className="connection-warning"><ShieldCheck size={13}/> {t('plugins.add.mcp.warning')}</p>
               </div>
             )}
             {result ? <pre className="install-output" role="status">{result}</pre> : null}

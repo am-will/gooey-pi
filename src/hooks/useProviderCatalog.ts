@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { formattingLocaleTag, translate, type MessageKey } from '@/lib/i18n'
 import type { HarnessId, PrimeModelCatalog, PrimeModelDescriptor, PrimeThinkingLevel, PrimeWorkApi, ProviderAuthEvent, RuntimeInfo, SessionRecord } from '@/types/api'
 
 type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
+
+/**
+ * The App shell calls this hook above the `I18nProvider` it renders, so
+ * `useI18n()` there would only ever return the English default. These messages
+ * are thrown on demand and surface in Provider Settings' inline error, so the
+ * app-wide locale mirror is read when the error is created.
+ */
+function providerError(key: MessageKey): string {
+  return translate(formattingLocaleTag(), key)
+}
 
 /** Stable fallback identities so consumers can memoize on prop equality. */
 const DEFAULT_REASONING_LEVELS: PrimeThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -288,17 +299,17 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   // Credentials remain Prime-only, while desktop-owned provider visibility is
   // stored independently for each harness.
   const saveApiKey = useCallback(async (providerId: string, apiKey: string) => {
-    if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.providersDesktopOnly'))
     setCatalogFor('prime', await bridge.providers.saveApiKey(providerId, apiKey))
   }, [bridge, setCatalogFor])
 
   const logout = useCallback(async (providerId: string) => {
-    if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.providersDesktopOnly'))
     setCatalogFor('prime', await bridge.providers.logout(providerId))
   }, [bridge, setCatalogFor])
 
   const setEnabled = useCallback(async (providerId: string, enabled: boolean) => {
-    if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.providersDesktopOnly'))
     const next = await bridge.providers.setEnabled(providerId, enabled, harness)
     setCatalogFor(harness, next)
     const disabledProviders = next.providers.filter((provider) => !provider.enabled).map((provider) => provider.id)
@@ -312,14 +323,14 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   }, [bridge, catalog?.models, fallbackModel, harness, rememberSelection, setCatalogFor, updateFast, updateModel])
 
   const setAllEnabled = useCallback(async () => {
-    if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.providersDesktopOnly'))
     setCatalogFor(harness, await bridge.providers.setDisabled([], harness))
   }, [bridge, harness, setCatalogFor])
 
   const setAllDisabled = useCallback(async () => {
-    if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.providersDesktopOnly'))
     const providerIds = catalog?.providers.map((provider) => provider.id).sort() ?? []
-    if (!providerIds.length) throw new Error('Provider catalogue is not loaded.')
+    if (!providerIds.length) throw new Error(providerError('error.providerCatalogNotLoaded'))
     setCatalogFor(harness, await bridge.providers.setDisabled(providerIds, harness))
     const selectedProvider = catalog?.models.find((candidate) => candidate.key === modelRef.current)?.provider
     if (selectedProvider && providerIds.includes(selectedProvider)) {
@@ -329,7 +340,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   }, [bridge, catalog?.models, catalog?.providers, harness, setCatalogFor, updateFast, updateModel])
 
   const setModelEnabled = useCallback(async (modelKey: string, enabled: boolean) => {
-    if (!bridge) throw new Error('Models can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.modelsDesktopOnly'))
     const next = await bridge.providers.setModelEnabled(modelKey, enabled, harness)
     setCatalogFor(harness, next)
     if (!enabled && modelRef.current === modelKey) {
@@ -341,7 +352,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   }, [bridge, fallbackModel, harness, rememberSelection, setCatalogFor, updateFast, updateModel])
 
   const startOAuth = useCallback(async (providerId: string) => {
-    if (!bridge) throw new Error('Providers can only be configured in the desktop app.')
+    if (!bridge) throw new Error(providerError('error.providersDesktopOnly'))
     await bridge.providers.startOAuth(providerId)
   }, [bridge])
 

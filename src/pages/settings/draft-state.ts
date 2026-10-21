@@ -1,3 +1,11 @@
+import { formattingLocaleTag, translate, type MessageKey } from '@/lib/i18n'
+
+// This reducer and its validators run outside React, so they resolve their copy
+// through the interface locale mirrored by the i18n provider. Callers keep
+// receiving plain strings, which lets server error text and these messages share
+// the same `DraftState.error` field. English output is unchanged.
+const copy = (key: MessageKey): string => translate(formattingLocaleTag(), key)
+
 export interface DraftCommit {
   id: number
   value: string
@@ -53,7 +61,7 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
           baseline: action.value,
           dirty: state.value !== action.value,
           settlement: null,
-          error: 'The setting could not be saved.',
+          error: copy('settings.draft.saveFailed'),
         }
       }
       if (!state.dirty) return { ...state, value: action.value, source: action.value, baseline: action.value, settlement: null }
@@ -90,7 +98,7 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
           dirty: state.value !== submitted.baseline,
           pending: null,
           settlement: null,
-          error: state.revision === submitted.revision ? 'The setting could not be saved.' : '',
+          error: state.revision === submitted.revision ? copy('settings.draft.saveFailed') : '',
         }
       }
       const committed = state.source !== submitted.baseline ? state.source : submitted.value
@@ -131,16 +139,16 @@ export function reduceDraftState(state: DraftState, action: DraftAction): DraftS
 }
 
 export function browserHomeValidation(value: string): string {
-  if (value.trim().length === 0) return 'Enter a home page URL.'
-  if (value.trim().length > 8192) return 'The home page URL is too long.'
+  if (value.trim().length === 0) return copy('settings.draft.homeRequired')
+  if (value.trim().length > 8192) return copy('settings.draft.homeTooLong')
   let parsed: URL
   try {
     parsed = new URL(value.trim())
   } catch {
-    return 'Enter a complete http:// or https:// URL.'
+    return copy('settings.draft.homeInvalid')
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'Use an http:// or https:// URL.'
-  if (parsed.username || parsed.password) return 'URLs containing credentials are not allowed.'
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return copy('settings.draft.homeProtocol')
+  if (parsed.username || parsed.password) return copy('settings.draft.homeCredentials')
   return ''
 }
 
@@ -149,13 +157,13 @@ export function normalizeBrowserHome(value: string): string {
 }
 
 export function terminalShellValidation(value: string): string {
-  if (value.length === 0) return 'Enter a shell executable path.'
-  if (value.includes('\0')) return 'The shell path cannot contain a NUL character.'
-  if (value.length > 4096) return 'The shell path is too long.'
-  if (!value.startsWith('/')) return 'Enter an absolute shell path beginning with /.'
+  if (value.length === 0) return copy('settings.draft.shellRequired')
+  if (value.includes('\0')) return copy('settings.draft.shellNul')
+  if (value.length > 4096) return copy('settings.draft.shellTooLong')
+  if (!value.startsWith('/')) return copy('settings.draft.shellAbsolute')
   return ''
 }
 
 export function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : 'The setting could not be saved.'
+  return error instanceof Error && error.message ? error.message : copy('settings.draft.saveFailed')
 }

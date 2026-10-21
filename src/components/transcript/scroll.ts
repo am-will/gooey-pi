@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptMessage } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
 import { newestWindow } from '@/lib/render-bounds'
 
 /** `shortName` names the active harness in screen-reader announcements ("OMP is working."). */

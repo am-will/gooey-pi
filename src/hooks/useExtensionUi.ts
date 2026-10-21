@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ExtensionUiResponse } from '@/components/ExtensionUiModal'
 import { ASK_USER_TIMEOUT_MS, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest } from '@/lib/extension-ui'
+import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
 interface UseExtensionUiOptions {
@@ -241,7 +242,9 @@ export function useExtensionUi({
         request: {
           method: 'questionnaire',
           id: request.questionnaire.groupId,
-          title: `Answer ${total} question${total === 1 ? '' : 's'}`,
+          // The App shell owns this hook (above `I18nProvider`), so the dialog
+          // title is worded from the app-wide locale mirror at request time.
+          title: translate(formattingLocaleTag(), 'extensionUi.answerTitle', { count: total }),
           questions,
           total,
           complete: questions.length >= total,

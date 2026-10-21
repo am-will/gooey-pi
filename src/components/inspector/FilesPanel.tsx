@@ -18,6 +18,7 @@ import {
   type ProjectFileEntry,
   type ProjectRecord,
 } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
 import { EmptyState, IconButton } from '../ui'
 
 export interface FileTreeNode {
@@ -228,6 +229,7 @@ export function FilesPanel({
   git: GitStatus
   onReveal(path: string): void
 }) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [treeRoots, setTreeRoots] = useState<FileTreeNode[]>([])
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
@@ -312,8 +314,8 @@ export function FilesPanel({
 
   if (!project) {
     return (
-      <EmptyState icon={<Folder size={24} />} title="No project files">
-        Choose a local project to inspect files.
+      <EmptyState icon={<Folder size={24} />} title={t('inspector.files.empty.title')}>
+        {t('inspector.files.empty.body')}
       </EmptyState>
     )
   }
@@ -325,20 +327,20 @@ export function FilesPanel({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter project paths"
+          placeholder={t('inspector.files.filterPlaceholder')}
         />
         {!isSearching && allDirIds.size > 0 ? (
           expandedIds.size > 0 ? (
-            <IconButton size="small" label="Collapse all folders" onClick={collapseAll}>
+            <IconButton size="small" label={t('inspector.files.collapseAll')} onClick={collapseAll}>
               <Folder size={13} />
             </IconButton>
           ) : (
-            <IconButton size="small" label="Expand all folders" onClick={expandAll}>
+            <IconButton size="small" label={t('inspector.files.expandAll')} onClick={expandAll}>
               <FolderOpen size={13} />
             </IconButton>
           )
         ) : null}
-        <IconButton size="small" label="Refresh project files" onClick={() => void load()}>
+        <IconButton size="small" label={t('inspector.files.refresh')} onClick={() => void load()}>
           <RefreshCw className={loading ? 'spin' : ''} size={13} />
         </IconButton>
       </div>
@@ -353,17 +355,16 @@ export function FilesPanel({
           <Folder size={14} />
           <strong>
             {project.folders.length > 1
-              ? `${project.folders.length} project folders`
+              ? t('inspector.files.folderCount', { count: project.folders.length })
               : basename(project.primaryFolder)}
           </strong>
         </button>
 
-        {loading ? <p>Loading project files…</p> : null}
-        {error ? <p>Unable to list project files: {error}</p> : null}
+        {loading ? <p>{t('inspector.files.loading')}</p> : null}
+        {error ? <p>{t('inspector.files.loadFailed', { error })}</p> : null}
         {!loading && !error && skipped > 0 ? (
           <p className="file-tree__skipped">
-            {skipped} {skipped === 1 ? 'folder' : 'folders'} could not be read and{' '}
-            {skipped === 1 ? 'was' : 'were'} skipped.
+            {t('inspector.files.skipped', { count: skipped })}
           </p>
         ) : null}
         {!loading && !error && truncated ? (
@@ -467,15 +468,15 @@ export function FilesPanel({
               setVisibleLimit((limit) => Math.min(visibleNodes.length, limit + 1_000))
             }
           >
-            Show {Math.min(1_000, visibleNodes.length - displayedNodes.length)} more paths
+            {t('inspector.files.showMore', { count: Math.min(1_000, visibleNodes.length - displayedNodes.length) })}
           </button>
         ) : null}
 
         {!loading && !error && treeRoots.length > 0 && visibleNodes.length === 0 ? (
-          <p>{query.trim() ? `No files match “${query}”.` : 'No project files found.'}</p>
+          <p>{query.trim() ? t('inspector.files.noMatch', { query }) : t('inspector.files.none')}</p>
         ) : null}
 
-        {!loading && !error && treeRoots.length === 0 ? <p>No project files found.</p> : null}
+        {!loading && !error && treeRoots.length === 0 ? <p>{t('inspector.files.none')}</p> : null}
       </div>
     </div>
   )

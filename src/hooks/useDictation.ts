@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrimeWorkApi, VoiceTranscriptionProvider } from '@/types/api'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 
 export type DictationState = 'idle' | 'connecting' | 'recording' | 'transcribing'
 
@@ -68,16 +69,19 @@ function encodeWav(chunks: Float32Array[], frames: number, sampleRate: number): 
   return new Uint8Array(buffer)
 }
 
-function waitForChannel(channel: RTCDataChannel): Promise<void> {
+// The realtime handshake has no render scope of its own, so it receives `t` as
+// a parameter rather than calling useI18n() outside a component/hook body.
+function waitForChannel(channel: RTCDataChannel, t: (key: MessageKey, values?: Record<string, string | number>) => string): Promise<void> {
   if (channel.readyState === 'open') return Promise.resolve()
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('Realtime transcription did not connect.')), 15_000)
+    const timer = window.setTimeout(() => reject(new Error(t('dictation.error.connectTimeout'))), 15_000)
     channel.addEventListener('open', () => { window.clearTimeout(timer); resolve() }, { once: true })
-    channel.addEventListener('error', () => { window.clearTimeout(timer); reject(new Error('Realtime transcription connection failed.')) }, { once: true })
+    channel.addEventListener('error', () => { window.clearTimeout(timer); reject(new Error(t('dictation.error.connectFailed'))) }, { once: true })
   })
 }
 
 export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, provider: VoiceTranscriptionProvider, onError: (message: string) => void) {
+  const { t } = useI18n()
   const [state, setState] = useState<DictationState>('idle')
   const captureRef = useRef<Capture | null>(null)
   const generationRef = useRef(0)
@@ -86,10 +90,10 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
     generationRef.current += 1
     const capture = captureRef.current
     captureRef.current = null
-    if (capture?.kind === 'live') capture.failed?.(new Error('Dictation cancelled.'))
+    if (capture?.kind === 'live') capture.failed?.(new Error(t('dictation.cancelled')))
     closeCapture(capture)
     setState('idle')
-  }, [])
+  }, [t])
 
   useEffect(() => cancel, [cancel])
 
@@ -115,13 +119,13 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
           const message = payload as Record<string, unknown>
           if (message.type === 'conversation.item.input_audio_transcription.delta' && typeof message.delta === 'string') capture.transcript += message.delta
           if (message.type === 'conversation.item.input_audio_transcription.completed') capture.completed?.(typeof message.transcript === 'string' ? message.transcript : capture.transcript)
-          if (message.type === 'error') capture.failed?.(new Error('Realtime transcription failed.'))
+          if (message.type === 'error') capture.failed?.(new Error(t('dictation.error.realtimeFailed')))
         })
         const offer = await peer.createOffer()
         await peer.setLocalDescription(offer)
         const answer = await voice.createRealtimeCall({ mode: 'transcription', sdp: offer.sdp ?? '' })
         await peer.setRemoteDescription({ type: 'answer', sdp: answer })
-        await waitForChannel(channel)
+        await waitForChannel(channel, t)
       } else {
         const context = new AudioContext()
         await context.resume()
@@ -144,10 +148,10 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
       if (stream && !captureRef.current) stopTracks(stream)
       if (generation === generationRef.current) {
         closeCapture(captureRef.current); captureRef.current = null; setState('idle')
-        onError(error instanceof Error ? error.message : 'Could not start microphone capture.')
+        onError(error instanceof Error ? error.message : t('dictation.error.microphone'))
       }
     }
-  }, [onError, provider, state, voice])
+  }, [onError, provider, state, t, voice])
 
   const finish = useCallback(async (): Promise<string> => {
     const capture = captureRef.current
@@ -156,27 +160,27 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
     try {
       if (capture.kind === 'live') {
         const result = new Promise<string>((resolve, reject) => {
-          const timer = window.setTimeout(() => reject(new Error('Realtime transcription timed out.')), 20_000)
+          const timer = window.setTimeout(() => reject(new Error(t('dictation.error.timeout'))), 20_000)
           capture.completed = (text) => { window.clearTimeout(timer); resolve(text) }
           capture.failed = (error) => { window.clearTimeout(timer); reject(error) }
         })
         capture.channel.send(JSON.stringify({ type: 'input_audio_buffer.commit' }))
         return (await result).trim()
       }
-      if (capture.overflowed) throw new Error('Dictation is limited to four minutes per recording.')
+      if (capture.overflowed) throw new Error(t('dictation.error.tooLong'))
       if (capture.frames === 0) return ''
-      if (provider === 'openai-live') throw new Error('The transcription provider changed while recording.')
+      if (provider === 'openai-live') throw new Error(t('dictation.error.providerChanged'))
       const audio = encodeWav(capture.chunks, capture.frames, capture.sampleRate)
       return (await voice.transcribe({ provider, audio })).trim()
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Could not transcribe the recording.')
+      onError(error instanceof Error ? error.message : t('dictation.error.transcribe'))
       return ''
     } finally {
       captureRef.current = null
       closeCapture(capture)
       setState('idle')
     }
-  }, [onError, provider, state, voice])
+  }, [onError, provider, state, t, voice])
 
   return { state, start, finish, cancel }
 }

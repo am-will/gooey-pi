@@ -475,7 +475,7 @@ export interface SessionActionSnapshot {
 
 export const INTERFACE_FONT_SCALES = [105, 110, 115] as const
 export type InterfaceFontScale = typeof INTERFACE_FONT_SCALES[number]
-export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN'] as const
+export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN', 'ja'] as const
 export type LocalePreference = typeof LOCALE_PREFERENCES[number]
 export const PROJECT_SORT_MODES = ['recent', 'alphabetical'] as const
 export type ProjectSortMode = typeof PROJECT_SORT_MODES[number]

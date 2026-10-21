@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useI18n } from '@/lib/i18n'
 import {
   createDraftState,
   errorMessage,
@@ -28,6 +29,7 @@ export function DraftSettingField({
   onCommit,
   className,
 }: DraftSettingFieldProps) {
+  const { t } = useI18n()
   const [state, setState] = useState<DraftState>(() => createDraftState(committedValue))
   const stateRef = useRef(state)
   const nextCommitId = useRef(0)
@@ -99,7 +101,7 @@ export function DraftSettingField({
         disabled={!state.dirty || Boolean(state.error) || Boolean(state.pending)}
         onClick={() => { void commit() }}
       >
-        {state.pending ? 'Saving…' : 'Save'}
+        {state.pending ? t('settings.field.saving') : t('common.save')}
       </button>
     </div>
   )

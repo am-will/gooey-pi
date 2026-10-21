@@ -1,8 +1,13 @@
+import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type { ProjectScripts } from '@/types/api'
 
 export class ProjectScriptBusyError extends Error {
   constructor() {
-    super('Another project script is already starting or running.')
+    // The message reaches the user twice over: `ProjectRunControl` prints it in
+    // its inline error, and the App shell reports it as a toast. A plain module
+    // cannot read the React context, so the app-wide locale mirror supplies the
+    // language at the moment the error is constructed.
+    super(translate(formattingLocaleTag(), 'error.projectScriptBusy'))
     this.name = 'ProjectScriptBusyError'
   }
 }
