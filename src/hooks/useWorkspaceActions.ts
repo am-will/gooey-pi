@@ -1,3 +1,4 @@
+import { compactText } from '@/lib/text'
 import { useRef, useState } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { requestFailureMessage } from '@/app/workspace'
@@ -79,8 +80,7 @@ export async function indexStartedSession({ bridge, harness, sessionFile, setSes
 }
 
 export function sessionTitleFromPrompt(prompt: string): string {
-  const oneLine = prompt.replace(/\s+/g, ' ').trim()
-  return oneLine.length > 100 ? `${oneLine.slice(0, 99)}…` : oneLine
+  return compactText(prompt, 100)
 }
 
 interface StartedSessionTitleInput extends StartedSessionIndexInput {
