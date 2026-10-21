@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import type { AutomationScheduleRecord, PrimeModelDescriptor, ProjectRecord } from '../../src/types/api'
+import type { AutomationScheduleRecord, PrimeModelDescriptor, ProjectRecord, ScheduleTiming } from '../../src/types/api'
 import { ScheduledPage } from '../../src/pages/ScheduledPage'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -61,3 +61,20 @@ it('consumes a focus request once so catalog refresh cannot reopen it after Back
   expect(onFocusHandled).toHaveBeenCalledTimes(1)
 })
 
+
+it('does not postpone preview when the parent supplies fresh callback identities', async () => {
+  vi.useFakeTimers()
+  try {
+    const initial = vi.fn(async (timing: ScheduleTiming) => ({ timing, occurrences: [] }))
+    const latest = vi.fn(async (timing: ScheduleTiming) => ({ timing, occurrences: [] }))
+    const props = renderPage({ onPreview: initial })
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('New schedule'))!.click())
+    for (let tick = 0; tick < 3; tick++) {
+      await act(async () => vi.advanceTimersByTimeAsync(100))
+      renderPage({ ...props, onPreview: (timing) => latest(timing) })
+    }
+    await act(async () => vi.advanceTimersByTimeAsync(50))
+    expect(initial).not.toHaveBeenCalled()
+    expect(latest).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})

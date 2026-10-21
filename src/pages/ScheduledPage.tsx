@@ -200,6 +200,7 @@ export function ScheduledPage({
   onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat, onArchiveSessions,
 }: ScheduledPageProps) {
   const { t } = useI18n()
+  const previewTiming = useStableCallback(onPreview)
   const focusHandled = useStableCallback((id: string) => onFocusHandled?.(id))
   const appliedFocusRef = useRef<string | null>(null)
   const [filter, setFilter] = useState<ScheduleFilter>('active')
@@ -257,7 +258,7 @@ export function ScheduledPage({
     const request = ++previewRequest.current
     setPreviewing(true); setPreviewError('')
     const timer = window.setTimeout(() => {
-      void onPreview(currentTiming).then((result) => {
+      void previewTiming(currentTiming).then((result) => {
         if (previewRequest.current === request) { setPreview(result); setPreviewing(false) }
       }).catch((reason) => {
         if (previewRequest.current === request) { setPreview(null); setPreviewError(errorMessage(reason)); setPreviewing(false) }
@@ -269,7 +270,7 @@ export function ScheduledPage({
       previewRequest.current += 1
       window.clearTimeout(timer)
     }
-  }, [currentTiming, editor, onPreview])
+  }, [currentTiming, editor, previewTiming])
 
   const openCreate = () => {
     const next = defaultForm(projects, sessions, models, lastSelectedModel, initialProjectId, initialSessionId)
