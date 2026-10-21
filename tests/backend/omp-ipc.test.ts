@@ -59,7 +59,7 @@ interface Harness {
 }
 
 function buildServices() {
-  const settingsState = { disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
+  const settingsState = { ompApprovalMode: 'inherit', disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
   const catalog = (from: string, disabled: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()) => {
     const models = [
       { key: 'anthropic/claude', provider: 'anthropic', id: 'claude' },
@@ -110,6 +110,7 @@ function buildServices() {
       start: vi.fn(async (options: unknown) => ({ started: 'prime', options })),
       command: vi.fn(async () => ({ ok: 'prime' })),
       stop: vi.fn(async () => true),
+      requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
       list: vi.fn(() => [{ runtimeId: 'prime-runtime', harness: 'prime' }]),
     },
     terminals: { ...serviceStub(), killForSession: vi.fn(async () => undefined) },
@@ -118,7 +119,7 @@ function buildServices() {
     providers: { ...serviceStub(), catalog: vi.fn(async (_force, disabled, disabledModels) => catalog('prime', disabled, disabledModels)), saveApiKey: vi.fn(async () => undefined) },
     settings: {
       ...serviceStub(),
-      get: vi.fn(() => settingsState),
+      get: vi.fn(() => ({ ...settingsState })),
       update: vi.fn(async (patch: Partial<typeof settingsState>) => { Object.assign(settingsState, patch); return settingsState }),
     },
     heartbeats: serviceStub(),
@@ -143,6 +144,7 @@ function buildServices() {
         start: vi.fn(async (options: unknown) => ({ started: 'omp', options })),
         command: vi.fn(async () => ({ ok: 'omp' })),
         stop: vi.fn(async () => true),
+        requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
         list: vi.fn(() => [{ runtimeId: 'omp-runtime', harness: 'omp' }]),
       },
       catalog: {
@@ -168,6 +170,7 @@ function buildServices() {
         start: vi.fn(async (options: unknown) => ({ started: 'pi', options })),
         command: vi.fn(async () => ({ ok: 'pi' })),
         stop: vi.fn(async () => true),
+        requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
         list: vi.fn(() => [{ runtimeId: 'pi-runtime', harness: 'pi' }]),
       },
       catalog: {
@@ -203,6 +206,21 @@ describe('harness-aware IPC routing', () => {
   afterEach(() => {
     harness.registration.dispose()
     for (const directory of fixtureDirs.splice(0)) rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('retires OMP runtime environments after approval mode changes', async () => {
+    await harness.invoke('settings:update', { ompApprovalMode: 'always-ask' })
+    expect(harness.services.omp.agents.requestRuntimeEnvironmentRefresh).toHaveBeenCalledOnce()
+    expect(harness.services.agents.requestRuntimeEnvironmentRefresh).not.toHaveBeenCalled()
+    expect(harness.services.pi.agents.requestRuntimeEnvironmentRefresh).not.toHaveBeenCalled()
+  })
+
+  it('requires an explicit boolean before archiving a session', async () => {
+    for (const value of [undefined, null, 'true', 1]) {
+      await expect(harness.invoke('sessions:archive', OMP_SESSION, value)).rejects.toThrow(/boolean/)
+    }
+    expect(harness.services.omp.sessions.archive).not.toHaveBeenCalled()
+    expect(harness.services.browser.closeForSession).not.toHaveBeenCalled()
   })
 
   it('exposes harness refresh through the fixed authorized app channel', async () => {
