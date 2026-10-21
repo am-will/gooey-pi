@@ -182,7 +182,7 @@ export function useWorkspaceRuntime({
     workspaceRef.current = { ...selected, project: granted, cwd: workspaceCwd(granted, selected.session) }
     setActiveProjectId(granted.id)
     const owner = activeQueuedPromptOwnerRef.current
-    if (owner === queuedPromptOwner(selected.project, undefined, undefined, selected.generation)) {
+    if (owner && owner === queuedPromptOwner(selected.project, undefined, undefined, selected.generation)) {
       const nextOwner = queuedPromptOwner(granted, undefined, undefined, selected.generation)!
       queuedPromptsByOwnerRef.current.delete(owner)
       if (pendingQueuedPromptsRef.current.length) queuedPromptsByOwnerRef.current.set(nextOwner, pendingQueuedPromptsRef.current)
