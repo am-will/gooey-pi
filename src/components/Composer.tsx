@@ -1,8 +1,9 @@
+import { ComposerAttachments } from './composer/ComposerAttachments'
 import { useComposerSuggestions } from '@/hooks/useComposerSuggestions'
 import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
-import { ArrowUp, ChevronDown, Clock3, Edit3, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
+import { ArrowUp, Clock3, Edit3, Gauge, LoaderCircle, Mic, Paperclip, Plus, Square, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
@@ -147,8 +148,6 @@ export const Composer = memo(function Composer({
   const agentName = HARNESS_AGENT_NAMES[harness]
   const shortName = HARNESS_SHORT_NAMES[harness]
   const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
-  const [annotationsOpen, setAnnotationsOpen] = useState(false)
-  const [terminalSelectionOpen, setTerminalSelectionOpen] = useState(false)
   const imageAttachments = useComposerImages({ shortName })
   const { images, imagesRef, unsupportedFiles, unsupportedFilesRef, error: attachmentError, setError: setAttachmentError, processing: processingImages } = imageAttachments
   const dictation = useDictation(voice, transcriptionProvider, setAttachmentError)
@@ -184,12 +183,7 @@ export const Composer = memo(function Composer({
       mountedRef.current = false
     }
   }, [])
-  useEffect(() => {
-    if (annotations.length === 0) setAnnotationsOpen(false)
-  }, [annotations.length])
-  useEffect(() => {
-    if (!terminalSelection?.text) setTerminalSelectionOpen(false)
-  }, [terminalSelection?.text])
+
 
 
 
@@ -408,113 +402,7 @@ export const Composer = memo(function Composer({
             ))}
           </div>
         ) : null}
-        {annotationsOpen && annotations.length ? (
-          <div className="composer-annotations" role="region" aria-label={t('composer.annotations.region')}>
-            {annotations.map((annotation, index) => {
-              return (
-                <div className="composer-annotation" key={annotation.id}>
-                  <span className="composer-annotation__badge" aria-hidden="true">
-                    {index + 1}
-                  </span>
-                  <div className="composer-annotation__body">
-                    <p>{annotation.comment}</p>
-                    {annotation.stale ? <small>{t('composer.annotations.stale')}</small> : null}
-                  </div>
-                  <button type="button" aria-label={t('composer.annotations.remove', { index: index + 1 })} onClick={() => onRemoveAnnotation(annotation.id)}>
-                    <X size={12} />
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        ) : null}
-        {terminalSelectionOpen && terminalSelection?.text ? (
-          <div className="composer-terminal-selection" role="region" aria-label={t('composer.terminal.region')}>
-            <div>
-              <SquareTerminal size={14} aria-hidden="true" />
-              <strong>{terminalSelection.label}</strong>
-              {terminalSelection.truncated ? <small>{t('composer.terminal.truncated')}</small> : null}
-            </div>
-            <pre>{terminalSelection.text}</pre>
-          </div>
-        ) : null}
-        {images.length || unsupportedFiles.length || annotations.length || terminalSelection?.text ? (
-          <div className="composer-attachments" aria-label={t('composer.attachments.label')}>
-            {annotations.length ? (
-              <div className="composer-attachment composer-attachment--annotations" title={t('composer.annotations.title', { count: annotations.length })}>
-                <button
-                  type="button"
-                  className="composer-attachment__expand"
-                  aria-expanded={annotationsOpen}
-                  aria-label={t('composer.annotations.inspect', { count: annotations.length })}
-                  onClick={() => setAnnotationsOpen((open) => !open)}
-                >
-                  <MessageCirclePlus size={13} />
-                  <span>{annotations.length}</span>
-                  <ChevronDown size={11} className={annotationsOpen ? 'is-open' : ''} />
-                </button>
-                <button
-                  type="button"
-                  className="composer-attachment__clear"
-                  aria-label={t('composer.annotations.clear')}
-                  onClick={() => {
-                    setAnnotationsOpen(false)
-                    onClearAnnotations()
-                  }}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ) : null}
-            {terminalSelection?.text ? (
-              <div className="composer-attachment composer-attachment--terminal has-selection" title={t('composer.terminal.title', { source: terminalSelection.label })}>
-                <button
-                  type="button"
-                  className="composer-attachment__expand"
-                  aria-expanded={terminalSelectionOpen}
-                  aria-label={t('composer.terminal.inspect', { source: terminalSelection.label })}
-                  onClick={() => setTerminalSelectionOpen((open) => !open)}
-                >
-                  <SquareTerminal size={13} />
-                  <span>{terminalSelection.label}</span>
-                  <small>{t('composer.terminal.selected')}</small><ChevronDown size={11} className={terminalSelectionOpen ? 'is-open' : ''} />
-                </button>
-                <button type="button" className="composer-attachment__clear" aria-label={t('composer.terminal.clear')} onClick={onClearTerminalSelection}><X size={12} /></button>
-              </div>
-            ) : null}
-            {images.map((image) => (
-              <div className="composer-attachment" key={image.id}>
-                <img src={`data:${image.mimeType};base64,${image.data}`} alt="" />
-                <span>
-                  <ImageIcon size={12} />
-                  {image.name}
-                </span>
-                <button
-                  type="button"
-                  aria-label={t('composer.attachment.remove', { name: image.name })}
-                  onClick={() => imageAttachments.remove(image.id)}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-            {unsupportedFiles.map((file) => (
-              <div className="composer-attachment" key={file.id}>
-                <span>
-                  <Paperclip size={12} />
-                  {file.name}
-                </span>
-                <button
-                  type="button"
-                  aria-label={t('composer.attachment.remove', { name: file.name })}
-                  onClick={() => imageAttachments.remove(file.id)}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        <ComposerAttachments annotations={annotations} terminalSelection={terminalSelection} images={images} unsupportedFiles={unsupportedFiles} onRemoveAnnotation={onRemoveAnnotation} onClearAnnotations={onClearAnnotations} onClearTerminalSelection={onClearTerminalSelection} onRemoveFile={imageAttachments.remove} />
         {attachmentError ? (
           <p className="composer-attachment-error" role="alert">
             {attachmentError}
