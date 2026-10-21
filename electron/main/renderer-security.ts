@@ -122,4 +122,3 @@ export function hardenRenderer(window: BrowserWindow, trustedUrl: () => string, 
     if (!isTrustedRendererUrl(event.url, trustedUrl())) event.preventDefault()
   })
 }
-

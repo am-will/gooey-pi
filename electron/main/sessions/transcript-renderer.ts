@@ -383,4 +383,3 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
   else if (failedTurn) transcript.push(failedTurn)
   return boundedTranscript(transcript)
 }
-

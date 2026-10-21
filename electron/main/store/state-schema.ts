@@ -241,4 +241,3 @@ export function parseState(value: unknown, statePath: string): { sourceVersion: 
   capUnboundedCollections(state)
   return { sourceVersion: version, state }
 }
-

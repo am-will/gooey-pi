@@ -140,4 +140,3 @@ export const SAMPLE_SCHEDULES: AutomationScheduleRecord[] = [
     createdAt: new Date(Date.now() - 7 * 864e5).toISOString(), updatedAt: new Date().toISOString(), nextRunAt: new Date(Date.now() + 16 * 3600e3).toISOString(), runs: [],
   },
 ]
-

@@ -73,4 +73,3 @@ export async function absorbLinkedWorktreeProjects(store: JsonStateStore, harnes
     if (absorbed.size) state.projects = state.projects.filter((project) => !absorbed.has(project.id))
   })
 }
-

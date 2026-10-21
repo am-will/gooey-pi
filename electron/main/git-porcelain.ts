@@ -129,5 +129,3 @@ export function changedPathStatesFromStatus(output: string): Map<string, Changed
   }
   return states
 }
-
-

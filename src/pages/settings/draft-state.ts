@@ -122,4 +122,3 @@ export function terminalShellValidation(value: string, platform: NodeJS.Platform
   if (!isAbsolutePathForPlatform(value, platform)) return copy('settings.draft.shellAbsolute')
   return ''
 }
-

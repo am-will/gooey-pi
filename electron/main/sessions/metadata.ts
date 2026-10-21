@@ -422,4 +422,3 @@ const primeMetadataParser: MetadataLineParser<MetadataAccumulator> = {
 export function createSessionMetadataReader(io: SessionMetadataReaderIo = nodeMetadataReaderIo): SessionMetadataReader {
   return createIncrementalMetadataReader(primeMetadataParser, io)
 }
-

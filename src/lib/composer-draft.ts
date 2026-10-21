@@ -80,4 +80,3 @@ export function clearComposerDraft(scope: string): void {
     window.sessionStorage.removeItem(composerDraftStorageKey(scope))
   } catch { /* storage unavailable */ }
 }
-

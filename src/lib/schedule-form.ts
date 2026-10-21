@@ -167,4 +167,3 @@ export function targetFromForm(form: ScheduleForm): ScheduleTarget {
 export function executionFromForm(form: ScheduleForm): ScheduleExecution {
   return { model: form.model, thinking: form.thinking, speed: form.fast ? 'fast' : 'normal' }
 }
-
