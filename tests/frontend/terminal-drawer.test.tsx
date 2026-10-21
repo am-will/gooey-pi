@@ -129,6 +129,14 @@ describe('TerminalDrawer project command handle', () => {
     expect(container.querySelector('[role="tab"]')?.textContent).not.toContain('terminal 1')
   })
 
+  it('renders Windows shell basenames without leaking the full path into labels', async () => {
+    create.mockResolvedValueOnce({ terminalId: 'windows', shell: 'C:\\shell\\pwsh.exe' })
+    renderDrawer(createHandle())
+    await act(async () => { await Promise.resolve() })
+    expect(container.querySelector('[role="tab"]')?.textContent).toContain('pwsh.exe 1')
+    expect(container.querySelector('[role="tab"]')?.textContent).not.toContain('C:')
+  })
+
   it('reports terminal creation failures without fabricating an exit code', async () => {
     const handle = createHandle()
     renderDrawer(handle)

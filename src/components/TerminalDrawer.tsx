@@ -1,3 +1,4 @@
+import { basename } from '@/lib/data'
 import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, Trash2, X } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Terminal, type ITheme } from '@xterm/xterm'
@@ -214,7 +215,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     const bufferedData = new Map<string, string>()
     const bufferedExits = new Map<string, number>()
     let exitAnnounced = false
-    let resolvedShellName = shell?.split('/').at(-1) ?? 'terminal'
+    let resolvedShellName = shell ? basename(shell) : 'terminal'
     const announceExit = (exitCode: number) => {
       if (exitAnnounced) return
       exitAnnounced = true
@@ -251,7 +252,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       window.prime.terminal.create({ cwd, shell, command, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
         if (cancelled) { void window.prime.terminal.kill(terminalId); return }
         terminalIdRef.current = terminalId
-        resolvedShellName = actualShell.split('/').at(-1) ?? actualShell
+        resolvedShellName = basename(actualShell)
         onStateChangeRef.current({ shellName: resolvedShellName, connected: true })
         const initialOutput = bufferedData.get(terminalId)
         const bindCurrentSession = async () => {
@@ -314,7 +315,7 @@ function createTab(number: number, shell?: string, command?: string, label?: str
   return {
     id,
     number,
-    shellName: shell?.split('/').at(-1) ?? 'zsh',
+    shellName: shell ? basename(shell) : 'zsh',
     connected: false,
     command,
     label,
@@ -428,7 +429,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
           <IconButton label={t('terminal.new')} size="small" disabled={tabs.length >= MAX_TERMINAL_TABS} onClick={addTerminal}><Plus size={14}/></IconButton>
         </div>
         <div className="terminal-actions">
-          <span className="terminal-cwd" title={cwd}>{cwd?.split('/').at(-1) ?? t('terminal.noProject')}</span>
+          <span className="terminal-cwd" title={cwd}>{cwd ? basename(cwd) : t('terminal.noProject')}</span>
           <IconButton label={t('terminal.clear')} onClick={() => viewRefs.current.get(activeTabId)?.clear()}><Trash2 size={13}/></IconButton>
           <IconButton label={maximized ? t('terminal.restore') : t('terminal.maximize')} onClick={() => setMaximized((value) => !value)}>{maximized ? <Minimize2 size={13}/> : <Maximize2 size={13}/>}</IconButton>
           <IconButton label={t('terminal.close')} onClick={onClose}><X size={14}/></IconButton>
