@@ -79,6 +79,28 @@ describe('GitService', () => {
     expect(existsSync(marker)).toBe(false)
   })
 
+  it.each(['direct', 'conditional include'])('refuses worktree creation before running %s smudge filters', async (configuration) => {
+    const cwd = repository('gooeypi-worktree-filter-')
+    const target = `${cwd}-feature`; dirs.push(target)
+    const marker = join(cwd, 'filter-ran')
+    const filter = join(cwd, 'filter.sh')
+    writeFileSync(filter, `#!/bin/sh\nprintf ran >> ${JSON.stringify(marker)}\ncat\n`)
+    chmodSync(filter, 0o755)
+    writeFileSync(join(cwd, '.gitattributes'), 'file.txt filter=hostile\n')
+    git(cwd, 'add', '.gitattributes', 'filter.sh')
+    git(cwd, 'commit', '-qm', 'add inactive filter fixture')
+    if (configuration === 'direct') git(cwd, 'config', 'filter.hostile.smudge', filter)
+    else {
+      const included = join(cwd, 'filter-config')
+      writeFileSync(included, `[filter "hostile"]\n smudge = ${JSON.stringify(filter)}\n`)
+      git(cwd, 'config', `includeIf.gitdir:${realpathSync(cwd).replaceAll('\\', '/')}/.git.path`, included)
+    }
+
+    await expect(createGitWorktree(cwd, target, 'feature/filtered')).rejects.toThrow(/clean\/smudge filters/i)
+    expect(existsSync(marker)).toBe(false)
+    expect(existsSync(target)).toBe(false)
+  })
+
   it('reports, diffs, stages, unstages, restores, and commits through argv-only commands', async () => {
     const cwd = repository()
     const service = new GitService(async () => cwd)
