@@ -190,6 +190,13 @@ export function useWorkspaceRuntime({
     }
   }, [])
 
+  const detachRuntime = useCallback((runtimeId: string) => {
+    runtimeSessionsRef.current.delete(runtimeId)
+    if (runtimeOwnerRef.current?.runtimeId === runtimeId) runtimeOwnerRef.current = null
+    if (runtimeIdRef.current === runtimeId) runtimeIdRef.current = null
+    setRuntime((current) => current?.runtimeId === runtimeId ? null : current)
+  }, [])
+
   const activateWorkspace = useCallback((project?: ProjectRecord, session?: SessionRecord, nextRuntime?: RuntimeInfo) => {
     pendingAgentEventsRef.current = []
     promptAdmissionRevisionRef.current = 0
@@ -683,6 +690,7 @@ export function useWorkspaceRuntime({
     activateWorkspace,
     replaceActiveProject,
     attachRuntime,
+    detachRuntime,
     reconcileRuntime,
     prepareForPrompt,
     queueAgentEvent,

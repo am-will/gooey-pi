@@ -26,6 +26,28 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('detaches a background runtime without clearing the active runtime owner', () => {
+    const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
+    act(() => root.render(createElement(Probe, { initialSession: session, sessions: [session, other] })))
+    const detach = latest.detachRuntime
+    act(() => {
+      latest.attachRuntime(runtime, 0)
+      latest.activateWorkspace(project, other, { ...runtime, runtimeId: 'b', sessionFile: other.filePath })
+      latest.detachRuntime('a')
+    })
+    expect(latest.runtime?.runtimeId).toBe('b')
+    expect(latest.runtimeIdRef.current).toBe('b')
+    expect(latest.runtimeOwnerRef.current?.runtimeId).toBe('b')
+    expect(latest.runtimeSessionsRef.current.has('a')).toBe(false)
+    expect(latest.detachRuntime).toBe(detach)
+    act(() => latest.detachRuntime('b'))
+    expect(latest.runtime).toBeNull()
+    expect(latest.runtimeIdRef.current).toBeNull()
+    expect(latest.runtimeOwnerRef.current).toBeNull()
+    expect(latest.runtimeSessionsRef.current.has('b')).toBe(false)
+    expect(latest.workspaceRef.current.sessionFile).toBe(other.filePath)
+  })
+
   it('settles a delayed background steer acceptance without adding another thread’s history', () => {
     const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
     let id!: string
