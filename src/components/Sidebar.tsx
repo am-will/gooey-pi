@@ -28,7 +28,9 @@ import {
 } from 'lucide-react'
 import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PROJECT_SORT_MODES, type AppMeta, type AppUpdateState, type HarnessId, type ProjectRecord, type ProjectSortMode, type SessionRecord, type WorkspaceView } from '@/types/api'
-import { writeClipboardText } from '@/lib/clipboard'
+import { useCopyFeedback } from '@/hooks/useCopyFeedback'
+import { useToast } from '@/hooks/useToast'
+import { errorMessage } from '@/lib/errors'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_PRODUCT_NAMES, HARNESS_SELECTOR_ORDER, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { sortProjects } from '@/lib/project-order'
@@ -179,6 +181,8 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
   // presented in the interface language (see `src/lib/session-title.ts`).
   const displayTitle = (title: string): string => sessionTitleText(title, t)
   const [query, setQuery] = useState('')
+  const { toast: copyError, setToast: setCopyError } = useToast()
+  const { copied, copy } = useCopyFeedback(undefined, (error) => setCopyError(errorMessage(error)))
   const [harnessMenuOpen, setHarnessMenuOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [sessionLimits, setSessionLimits] = useState<Record<string, number>>({})
@@ -333,7 +337,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
                         onClick={() => { setSessionMenu(null); archiveSession(session) }}
                       ><Archive size={13}/></IconButton>
                       <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={(event) => openSessionMenu(session.id, event.currentTarget)}><MoreHorizontal size={13}/></IconButton>
-                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
+                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { setCopyError(null); void copy(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
                     </div>{childRoster?.parentFile === session.filePath ? <ChildSessionRows roster={childRoster} /> : null}</Fragment>
                   ))}
                   {projectSessions.length > sessionLimit ? <button type="button" className="session-row session-row--empty" onClick={() => setSessionLimits((limits) => ({ ...limits, [project.id]: sessionLimit + SIDEBAR_SESSION_LIMIT }))}>{t('sidebar.moreSessions', { count: projectSessions.length - sessionLimit })}</button> : null}
@@ -366,6 +370,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
         ) : null}
         <button type="button" title={t('nav.settings')} className={activeView === 'settings' ? 'is-active' : ''} onClick={() => onNavigate('settings')}><Settings size={15} /><span>{t('nav.settings')}</span><kbd>{settingsShortcut}</kbd></button>
       </div>
+      {copyError || copied ? <div className="toast" role="status">{copyError ?? t('transcript.copyAction.copied')}</div> : null}
       {renameTarget ? <Modal title="Rename session" onClose={() => setRenameTarget(null)} footer={<><button type="button" className="button" onClick={() => setRenameTarget(null)}>Cancel</button><button type="button" className="button button--primary" disabled={!renameValue.trim()} onClick={() => { const target = renameTarget; const title = renameValue.trim(); setRenameTarget(null); void onRenameSession(target, title) }}>Rename</button></>}><label className="field"><span>Session name</span><input autoFocus value={renameValue} maxLength={200} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && renameValue.trim()) { event.preventDefault(); const target = renameTarget; const title = renameValue.trim(); setRenameTarget(null); void onRenameSession(target, title) } }}/></label></Modal> : null}
       {removeTarget ? <Modal title="Remove project" onClose={() => setRemoveTarget(null)} footer={<><button type="button" className="button" onClick={() => setRemoveTarget(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => { const target = removeTarget; setRemoveTarget(null); onRemoveProject(target) }}>Remove</button></>}><p>Remove “{removeTarget.name}” from {HARNESS_PRODUCT_NAMES[activeHarness]}? The folder and saved sessions will not be deleted.</p></Modal> : null}
       {archiveRunningTarget ? <Modal title={t('archive.running.title')} onClose={() => setArchiveRunningTarget(null)} footer={<><button type="button" className="button" onClick={() => setArchiveRunningTarget(null)}>{t('common.cancel')}</button><button type="button" className="button button--danger" onClick={() => { const target = archiveRunningTarget; setArchiveRunningTarget(null); void onArchiveSession(target) }}>{t('archive.running.confirm')}</button></>}><p>{t('archive.running.body', { title: archiveRunningTarget.title })}</p></Modal> : null}

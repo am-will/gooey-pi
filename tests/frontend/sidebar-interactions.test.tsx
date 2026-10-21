@@ -5,6 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Sidebar, areSidebarPropsEqual, type SidebarProps } from '../../src/components/Sidebar'
 import type { ProjectRecord, SessionRecord } from '../../src/types/api'
 
+const clipboard = vi.hoisted(() => ({ writeClipboardText: vi.fn<(text: string) => Promise<void>>() }))
+vi.mock('@/lib/clipboard', () => clipboard)
+
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const project: ProjectRecord = { id: 'p', harness: 'omp', name: 'Project', path: '/project', folders: ['/project'], primaryFolder: '/project', pinned: false, createdAt: '2026-01-01', lastOpenedAt: '2026-01-01', sessionCount: 1 }
 const session: SessionRecord = { id: 'session-id', harness: 'omp', projectPath: '/project', filePath: '/sessions/session.jsonl', title: 'Saved session', createdAt: '2026-01-01', updatedAt: '2026-01-01', status: 'idle', depth: 0 }
@@ -14,7 +17,7 @@ function props(): SidebarProps {
 }
 let host: HTMLDivElement
 let root: Root
-beforeEach(() => { host = document.createElement('div'); document.body.append(host); root = createRoot(host) })
+beforeEach(() => { clipboard.writeClipboardText.mockReset().mockResolvedValue(undefined); host = document.createElement('div'); document.body.append(host); root = createRoot(host) })
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks() })
 async function click(selector: string) {
   const element = host.querySelector(selector)
@@ -56,4 +59,14 @@ it('keeps menu interaction inside the layer and dismisses outside or on Escape',
   await click('.session-row__more')
   await act(async () => { document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
   expect(host.querySelector('.session-row__menu')).toBeNull()
+})
+
+it.each([false, true])('handles session UUID copy with visible feedback (fails=%s)', async (fails) => {
+  if (fails) clipboard.writeClipboardText.mockRejectedValueOnce(new Error('Clipboard blocked'))
+  await act(async () => { root.render(<Sidebar {...props()} />) })
+  await click('.session-row__more')
+  await click('.session-row__menu button')
+  expect(clipboard.writeClipboardText).toHaveBeenCalledExactlyOnceWith(session.id)
+  expect(host.querySelector('.session-row__menu')).toBeNull()
+  expect(host.querySelector('[role="status"]')?.textContent).toBe(fails ? 'Clipboard blocked' : 'Copied')
 })
