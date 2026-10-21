@@ -90,12 +90,6 @@ export function signatureCleared(signature: string | undefined, clearedSignature
   return status === 'idle' || status === 'complete' && !unread
 }
 
-export function sessionShowsCompanionNotification(session: SessionRecord, clearedSignature?: string): boolean {
-  if (session.archived) return false
-  const signature = sessionCompanionNotificationSignature(session)
-  return Boolean(signature && !signatureCleared(signature, clearedSignature, session.unread, session.updatedAt))
-}
-
 export function activityNotificationSignature(session: SessionRecord): string | undefined {
   if (session.archived || session.status === 'running') return undefined
   return `${session.status}:${session.eventRevision ?? session.updatedAt}`
