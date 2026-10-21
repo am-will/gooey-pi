@@ -77,10 +77,14 @@ body.is-resizing-horizontal, body.is-resizing-horizontal * { cursor: row-resize 
 .button--danger { color: #fff; background: var(--danger); border-color: var(--danger); }
 .button--danger:hover { background: var(--danger); filter: brightness(.94); }
 
-.prime-mark { display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 26%; color: white; background: #0b0f14; box-shadow: 0 1px 2px rgba(0,0,0,.16), inset 0 0 0 1px rgba(255,255,255,.025); }
-.prime-mark svg { width: 92%; height: 92%; display: block; pointer-events: none; }
-.omp-mark { display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 26%; color: #fafafa; background: #0d0d0d; box-shadow: 0 1px 2px rgba(0,0,0,.16), inset 0 0 0 1px rgba(255,255,255,.025); }
-.omp-mark svg { width: 78%; height: 78%; display: block; pointer-events: none; }
-.pi-mark { display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 26%; color: #fafafa; background: #0d0d0d; box-shadow: 0 1px 2px rgba(0,0,0,.16), inset 0 0 0 1px rgba(255,255,255,.025); }
-.pi-mark svg { width: 78%; height: 78%; display: block; pointer-events: none; }
+.prime-mark, .omp-mark, .pi-mark { display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 26%; box-shadow: 0 1px 2px rgba(0,0,0,.16), inset 0 0 0 1px rgba(255,255,255,.025); }
+.prime-mark { color: white; background: #0b0f14; }
+.prime-mark svg, .omp-mark svg, .pi-mark svg { display: block; pointer-events: none; }
+.prime-mark svg { width: 92%; height: 92%; }
+.omp-mark, .pi-mark { color: #fafafa; background: #0d0d0d; }
+
+.omp-mark svg, .pi-mark svg { width: 78%; height: 78%; }
+
+
+
 .lucide { stroke-width: 1.7; }

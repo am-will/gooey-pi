@@ -45,9 +45,10 @@
 .changes-read-only span { min-width: 0; }
 .commit-message-input { display: flex; align-items: center; gap: 7px; }
 .commit-message-input input { flex: 1; }
-.changes-error { margin: 8px 10px 0; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); border-radius: 7px; color: var(--danger); background: var(--danger-soft); font-size: 12px; }
-.settings-error { margin: 12px 0 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); border-radius: 7px; color: var(--danger); background: var(--danger-soft); font-size: 12px; }
-.page-inline-error { margin: 10px 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); border-radius: 7px; color: var(--danger); background: var(--danger-soft); font-size: 12px; }
+.changes-error, .settings-error, .page-inline-error { border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); border-radius: 7px; color: var(--danger); background: var(--danger-soft); font-size: 12px; }
+.changes-error { margin: 8px 10px 0; padding: 7px 9px; }
+.settings-error { margin: 12px 0 0; padding: 8px 10px; }
+.page-inline-error { margin: 10px 0; padding: 8px 10px; }
 .page-show-more { min-height: 32px; display: block; margin: 12px auto; padding: 0 12px; border: 1px solid var(--border); border-radius: 7px; color: var(--text-secondary); background: var(--surface-raised); }
 .page-show-more:hover { color: var(--text); background: var(--surface-hover); }
 
