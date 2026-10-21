@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from '@/types/agent-command'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ExtensionUiResponse } from '@/components/ExtensionUiModal'
 import { ASK_USER_TIMEOUT_MS, extensionUiDialogId, questionnaireContents, parseExtensionUiCancel, parseExtensionUiRequest, type ExtensionUiRequest, type QuestionnaireSelectRequest } from '@/lib/extension-ui'
@@ -81,7 +82,7 @@ export function useExtensionUi({
         type: 'extension_ui_response',
         id,
         cancelled: true,
-      }).catch(() => undefined)
+      } satisfies AgentRpcCommand).catch(() => undefined)
     }
   }, [bridge])
 
@@ -117,17 +118,18 @@ export function useExtensionUi({
         const results = await Promise.allSettled(requests.map((request) => bridge.agent.command(pending.runtimeId, {
           type: 'extension_ui_response', id: request.id,
           ...('values' in response ? { value: response.values[request.id] ?? '' } : { cancelled: true }),
-        })))
+        } satisfies AgentRpcCommand)))
         const failed = results.flatMap((result, index) => result.status === 'rejected' ? [{ id: requests[index].id, error: result.reason }] : [])
-        await Promise.allSettled(failed.map(({ id }) => bridge.agent.command(pending.runtimeId, { type: 'extension_ui_response', id, cancelled: true })))
+        await Promise.allSettled(failed.map(({ id }) => bridge.agent.command(pending.runtimeId, { type: 'extension_ui_response', id, cancelled: true } satisfies AgentRpcCommand)))
         if (failed.length) throw failed[0].error
         return
       }
+      if ('values' in response) { cancelPending(pending); return }
       await bridge.agent.command(pending.runtimeId, {
         type: 'extension_ui_response',
         id: pending.request.id,
         ...response,
-      })
+      } satisfies AgentRpcCommand)
     } catch (error) {
       setRuntime((current) => current?.runtimeId === pending.runtimeId ? { ...current, isStreaming: false } : current)
       if (activeRuntimeIdRef.current === pending.runtimeId) reportError(error)
@@ -214,7 +216,7 @@ export function useExtensionUi({
     if (!bridge) return
     if (!request) {
       const id = extensionUiDialogId(rawEvent)
-      if (id) void bridge.agent.command(runtimeId, { type: 'extension_ui_response', id, cancelled: true }).catch(() => undefined)
+      if (id) void bridge.agent.command(runtimeId, { type: 'extension_ui_response', id, cancelled: true } satisfies AgentRpcCommand).catch(() => undefined)
       return
     }
 
@@ -228,7 +230,7 @@ export function useExtensionUi({
           type: 'extension_ui_response',
           id: request.id,
           cancelled: true,
-        }).catch(() => undefined)
+        } satisfies AgentRpcCommand).catch(() => undefined)
         return
       }
       const previous = pendingByRuntimeRef.current.get(runtimeId)

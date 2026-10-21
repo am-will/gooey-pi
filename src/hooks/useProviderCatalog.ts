@@ -1,3 +1,4 @@
+import type { AgentRpcCommand } from '@/types/agent-command'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { isUsableModel, preferredModel } from '@/lib/models'
 import { formattingLocaleTag, translate } from '@/lib/i18n'
@@ -253,8 +254,8 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     queueRuntimeMutation(
       runtime.runtimeId,
       async () => {
-        await bridge.agent.command(runtime.runtimeId, { type: 'set_model', provider: nextModel.provider, modelId: nextModel.id })
-        await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort })
+        await bridge.agent.command(runtime.runtimeId, { type: 'set_model', provider: nextModel.provider, modelId: nextModel.id } satisfies AgentRpcCommand)
+        await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort } satisfies AgentRpcCommand)
         rememberSelectionRef.current(nextModelKey)
       },
       () => { updateModel(previous.model); updateEffort(previous.effort); updateFast(previous.fast) },
@@ -270,7 +271,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     }
     queueRuntimeMutation(
       runtime.runtimeId,
-      async () => { await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort }) },
+      async () => { await bridge.agent.command(runtime.runtimeId, { type: 'set_thinking_level', level: nextEffort } satisfies AgentRpcCommand) },
       () => updateEffort(previous),
     )
   }, [bridge, queueRuntimeMutation, runtime, updateEffort])
@@ -281,7 +282,7 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
     if (!bridge || !runtime) return
     queueRuntimeMutation(
       runtime.runtimeId,
-      async () => { await bridge.agent.command(runtime.runtimeId, { type: 'set_service_tier', serviceTier: enabled ? 'priority' : 'default' }) },
+      async () => { await bridge.agent.command(runtime.runtimeId, { type: 'set_service_tier', serviceTier: enabled ? 'priority' : 'default' } satisfies AgentRpcCommand) },
       () => updateFast(previous),
     )
   }, [bridge, queueRuntimeMutation, runtime, updateFast])
