@@ -35,7 +35,7 @@ describe('TerminalService', () => {
       const combined = output.join('')
       expect(exitCode).toBe(0)
       const expected = `${'a'.repeat(20_000_000)}END`
-      expect(combined === expected, `Received ${combined.length} of ${expected.length} characters; tail: ${JSON.stringify(combined.slice(-16))}`).toBe(true)
+      expect(combined === expected, `Received ${combined.length} of ${expected.length} characters; start: ${JSON.stringify(combined.slice(0, 64))}; tail: ${JSON.stringify(combined.slice(-64))}`).toBe(true)
     } finally { await service.killAll() }
   }, 15_000)
 
