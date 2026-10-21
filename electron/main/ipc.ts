@@ -94,7 +94,20 @@ export function isTrustedRendererUrl(url: string, expectedRendererUrl: string): 
   } catch { return false }
 }
 
+export function isTrustedContents(contents: WebContents, expectedUrl: string): boolean {
+  if (contents.isDestroyed()) return false
+  try { return isTrustedRendererUrl(contents.getURL(), expectedUrl) && isTrustedRendererUrl(contents.mainFrame.url, expectedUrl) } catch { return false }
+}
+
+function sendToTrustedRenderer(contents: WebContents | undefined, expectedUrl: string, channel: string, ...payload: unknown[]): void {
+  if (!contents || !isTrustedContents(contents, expectedUrl)) return
+  try { contents.send(channel, ...payload) } catch (error) {
+    console.warn(`GooeyPi renderer delivery failed (${channel}): ${boundedErrorMessage(error)}`)
+  }
+}
+
 export interface IpcRegistration {
+  broadcast(channel: string, ...payload: unknown[]): void
   authorize(webContents: WebContents): void
   revoke(webContentsId: number): void
   dispose(): void
@@ -128,10 +141,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const whenRendererReady = new Promise<void>((resolve) => { announceRendererReady = resolve })
 
   const verify = (event: IpcEvent): void => {
-    const trustedFrame = event.senderFrame === event.sender.mainFrame
-      && isTrustedRendererUrl(event.senderFrame.url, expectedRendererUrl)
-      && isTrustedRendererUrl(event.sender.getURL(), expectedRendererUrl)
-    if (closed || !authorized.has(event.sender.id) || event.sender.isDestroyed() || !trustedFrame) throw new Error('IPC sender is not authorized')
+    if (closed || authorized.get(event.sender.id) !== event.sender || !isTrustedContents(event.sender, expectedRendererUrl)
+      || event.senderFrame !== event.sender.mainFrame) throw new Error('IPC sender is not authorized')
   }
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -471,24 +482,20 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const broadcast = (channel: string, ...payload: unknown[]): void => {
     for (const [id, contents] of authorized) {
       if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send(channel, ...payload)
+      sendToTrustedRenderer(contents, expectedRendererUrl, channel, ...payload)
     }
   }
   const forwardSessionChange = (change: SessionChangeEvent): void => broadcast('sessions:changed', change)
   const unsubscribeSessionChanges = services.sessions.onDidChange(forwardSessionChange)
   const unsubscribeOmpSessionChanges = services.omp.sessions.onDidChange(forwardSessionChange)
   const unsubscribePiSessionChanges = services.pi.sessions.onDidChange(forwardSessionChange)
-  const scheduleSubscription = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
-  const unsubscribeScheduleChanges = typeof scheduleSubscription === 'function' ? scheduleSubscription : () => undefined
-  const browserSubscription = services.browser.onDidChange((state) => broadcast('browser:changed', state))
-  const unsubscribeBrowserChanges = typeof browserSubscription === 'function' ? browserSubscription : () => undefined
-  const pointerSubscription = services.browser.onPointer((event) => broadcast('browser:pointer', event))
-  const unsubscribeBrowserPointer = typeof pointerSubscription === 'function' ? pointerSubscription : () => undefined
-  const activitySubscription = services.browser.onActivity((event) => broadcast('browser:activity', event))
-  const unsubscribeBrowserActivity = typeof activitySubscription === 'function' ? activitySubscription : () => undefined
+  const unsubscribeScheduleChanges = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
+  const unsubscribeBrowserChanges = services.browser.onDidChange((state) => broadcast('browser:changed', state))
+  const unsubscribeBrowserPointer = services.browser.onPointer((event) => broadcast('browser:pointer', event))
+  const unsubscribeBrowserActivity = services.browser.onActivity((event) => broadcast('browser:activity', event))
 
   const registration: IpcRegistration = {
+    broadcast,
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
     revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId).catch((error: unknown) => console.error(`GooeyPi terminal cleanup failed: ${boundedErrorMessage(error)}`)) },
@@ -502,10 +509,10 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       unsubscribeSessionChanges()
       unsubscribeOmpSessionChanges()
       unsubscribePiSessionChanges()
-      if (typeof unsubscribeScheduleChanges === 'function') unsubscribeScheduleChanges()
-      if (typeof unsubscribeBrowserChanges === 'function') unsubscribeBrowserChanges()
-      if (typeof unsubscribeBrowserPointer === 'function') unsubscribeBrowserPointer()
-      if (typeof unsubscribeBrowserActivity === 'function') unsubscribeBrowserActivity()
+      unsubscribeScheduleChanges()
+      unsubscribeBrowserChanges()
+      unsubscribeBrowserPointer()
+      unsubscribeBrowserActivity()
       for (const channel of invokeChannels) ipcMain.removeHandler(channel)
       // Event listeners are removed wholesale only for our private fixed channels.
       for (const channel of eventChannels) ipcMain.removeAllListeners(channel)

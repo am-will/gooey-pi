@@ -18,7 +18,7 @@ import { installCrashGuards, writeCrashLog } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
 import { CheckoutService } from './checkouts'
-import { isTrustedRendererUrl, registerIpc, type IpcRegistration } from './ipc'
+import { registerIpc, type IpcRegistration } from './ipc'
 import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-discovery'
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
@@ -183,8 +183,8 @@ async function bootstrap(): Promise<void> {
     iconPath: appIconPath(),
     getSettings: () => stateStore.getSettings(),
     onOpen: () => requestWindow('menu bar'),
-    onSettings: () => requestWindow('settings', (window) => {
-      if (!window.webContents.isDestroyed()) window.webContents.send('app:open-settings')
+    onSettings: () => requestWindow('settings', () => {
+      ipc?.broadcast('app:open-settings')
     }),
     onQuit: () => app.quit(),
     startInBackground,
@@ -390,7 +390,7 @@ async function bootstrap(): Promise<void> {
       kind: 'extension', location: 'system', path: ompAskUserExtensionPath, enabled: stateStore.getSettings().askUserEnabled,
     }, {
       id: 'prime-work-browser', name: 'Browser',
-      description: 'Drive the in-app browser for this thread: tabs, navigation, clicks, typing, and screenshots.',
+      description: 'Drive this thread’s browser tabs, navigation, clicks, typing, and screenshots; terminal_read reads its terminal output.',
       kind: 'skill', location: 'system', path: browserSkillPath, enabled: stateStore.getSettings().browserEnabled,
     }, await computerUseSkill(), ...providers.mcpCapabilities()],
   })
@@ -402,7 +402,7 @@ async function bootstrap(): Promise<void> {
       kind: 'extension', location: 'system', path: ompScheduleExtensionPath, enabled: true,
     }, {
       id: 'omp-work-browser', name: 'Browser',
-      description: 'OMP extension for driving this thread\'s in-app browser.',
+      description: 'Drive this thread’s in-app browser and read its terminal output with terminal_read.',
       kind: 'extension', location: 'system', path: ompBrowserExtensionPath, enabled: stateStore.getSettings().browserEnabled,
     }, {
       id: 'gooeypi-ask-user', name: 'Ask user',
@@ -420,7 +420,7 @@ async function bootstrap(): Promise<void> {
       kind: 'extension', location: 'system', path: ompScheduleExtensionPath, enabled: true,
     }, {
       id: 'omp-work-browser', name: 'Browser',
-      description: 'Pi extension for driving this thread\'s in-app browser.',
+      description: 'Drive this thread’s in-app browser and read its terminal output with terminal_read.',
       kind: 'extension', location: 'system', path: ompBrowserExtensionPath, enabled: stateStore.getSettings().browserEnabled,
     }, {
       id: 'gooeypi-ask-user', name: 'Ask user',
@@ -594,31 +594,16 @@ async function bootstrap(): Promise<void> {
   // Both managers share the one renderer forwarding path: envelopes carry the
   // runtimeId and RuntimeInfo carries the harness, so the renderer can route.
   const forwardAgentEvent = (envelope: PrimeEventEnvelope): void => {
-    const renderer = windows.current?.webContents
-    if (!shutdownStarted && renderer && !renderer.isDestroyed()
-      && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)
-      && isTrustedRendererUrl(renderer.mainFrame.url, trustedRendererUrl)) {
-      renderer.send('agent:event', envelope)
-    }
+    if (!shutdownStarted) ipc?.broadcast('agent:event', envelope)
   }
   agents.setEventSink(forwardAgentEvent)
   ompManager.setEventSink(forwardAgentEvent)
   piManager.setEventSink(forwardAgentEvent)
   providers.setEventSink((event: ProviderAuthEvent) => {
-    const renderer = windows.current?.webContents
-    if (!shutdownStarted && renderer && !renderer.isDestroyed()
-      && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)
-      && isTrustedRendererUrl(renderer.mainFrame.url, trustedRendererUrl)) {
-      renderer.send('providers:auth-event', event)
-    }
+    if (!shutdownStarted) ipc?.broadcast('providers:auth-event', event)
   })
   updates.setEventSink((state: AppUpdateState) => {
-    const renderer = windows.current?.webContents
-    if (!shutdownStarted && renderer && !renderer.isDestroyed()
-      && isTrustedRendererUrl(renderer.getURL(), trustedRendererUrl)
-      && isTrustedRendererUrl(renderer.mainFrame.url, trustedRendererUrl)) {
-      renderer.send('updates:changed', state)
-    }
+    if (!shutdownStarted) ipc?.broadcast('updates:changed', state)
   })
   installApplicationMenu({
     appName: 'GooeyPi',
