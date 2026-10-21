@@ -18,6 +18,7 @@ import type { TerminalService } from './terminal'
 import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
+import { createKeyedMutex } from './lib/async'
 import { requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
@@ -330,7 +331,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     await services.providers.logout(providerId)
     return providerCatalog(true)
   })
-  handle('providers:set-enabled', async (_event, providerId, enabled, harness) => {
+  const visibilityMutations = createKeyedMutex<'visibility'>()
+  handle('providers:set-enabled', (_event, providerId, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const id = requireString(providerId, 'providerId', { min: 1, max: 128, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
@@ -350,8 +352,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [modelSettingsKey]: [...disabledModels].sort(),
     })
     return providerCatalogs[target]()
-  })
-  handle('providers:set-disabled', async (_event, providerIds, harness) => {
+  }))
+  handle('providers:set-disabled', (_event, providerIds, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     if (!Array.isArray(providerIds) || providerIds.length > 256) throw new TypeError('providerIds must be a bounded array')
     const ids = [...new Set(providerIds.map((value, index) => requireString(value, `providerIds[${index}]`, { min: 1, max: 128, trim: true })))].sort()
@@ -363,8 +365,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     const disabledModels = ids.length ? services.settings.get()[modelSettingsKey] : []
     await services.settings.update({ [providerSettingsKey]: ids, [modelSettingsKey]: disabledModels })
     return providerCatalogs[target]()
-  })
-  handle('providers:set-model-enabled', async (_event, modelKey, enabled, harness) => {
+  }))
+  handle('providers:set-model-enabled', (_event, modelKey, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const key = requireString(modelKey, 'modelKey', { min: 3, max: 385, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
@@ -394,7 +396,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [modelSettingsKey]: [...disabledModels].sort(),
     })
     return providerCatalogs[target]()
-  })
+  }))
   handle('providers:start-oauth', (_event, providerId, harness) => {
     requirePrimeProviderAuth(harness)
     return services.providers.startOAuth(providerId)
