@@ -50,6 +50,13 @@ class FakeGuest extends EventEmitter {
   isLoading() { return this.loading }
   getURL() { return this.url }
   getTitle() { return this.title }
+  readonly history = { back: false, forward: false, backCalls: 0, forwardCalls: 0 }
+  readonly navigationHistory = {
+    canGoBack: () => this.history.back,
+    canGoForward: () => this.history.forward,
+    goBack: () => { this.history.backCalls += 1 },
+    goForward: () => { this.history.forwardCalls += 1 },
+  }
   canGoBack() { return false }
   canGoForward() { return false }
   goBack() {}
@@ -188,6 +195,22 @@ describe('AgentBrowserService', () => {
     await service.pressKey('/sessions/a.jsonl', { tabId, key: 'Enter' })
     expect(focus).not.toHaveBeenCalled()
     expect(guest.insertedText).toEqual(['hello'])
+  })
+
+  it('uses navigationHistory for agent and toolbar back and forward', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    guest.history.back = true
+    guest.history.forward = true
+    guest.canGoBack = () => { throw new Error('Deprecated history API') }
+    guest.canGoForward = () => { throw new Error('Deprecated history API') }
+    await service.navigate('/sessions/a.jsonl', { tabId, action: 'back' })
+    await service.navigate('/sessions/a.jsonl', { tabId, action: 'forward' })
+    service.navigateTab(tabId, 'back')
+    service.navigateTab(tabId, 'forward')
+    expect(guest.history.backCalls).toBe(2)
+    expect(guest.history.forwardCalls).toBe(2)
+    expect(service.state().tabs[0]).toMatchObject({ canGoBack: true, canGoForward: true })
   })
 
   it('bounds oversized script responses before parsing them', async () => {
