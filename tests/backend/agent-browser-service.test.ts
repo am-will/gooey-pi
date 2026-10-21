@@ -171,6 +171,14 @@ describe('AgentBrowserService', () => {
     expect(guest.inputEvents.find((event) => event.type === 'mousePressed')).toMatchObject({ x: 12, y: 34 })
   })
 
+  it('keeps navigation metadata authoritative when a scroll script returns page fields', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    const original = guest.scriptResult
+    guest.scriptResult = (code) => code.includes('window.scrollBy') ? JSON.stringify({ url: 'https://spoofed.test/', title: 'Spoofed', scrollY: 25 }) : original(code)
+    await expect(service.scroll('/sessions/a.jsonl', { tabId, direction: 'down' })).resolves.toMatchObject({ url: 'https://example.com/', scrollY: 25 })
+  })
+
   it('bounds oversized script responses before parsing them', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId } = await openAttached('/sessions/a.jsonl')
