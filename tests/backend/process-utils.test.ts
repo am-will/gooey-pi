@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { probeHarnessExecutable } from '../../electron/main/harness-discovery'
 import { HARNESSES } from '../../electron/main/harness'
-import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, primeAgentCandidates, primeAgentExecutableName, processFailureReason, processOutcome, runProcess, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
+import { PROCESS_CONCURRENCY_LIMIT, executableChildEnvironment, harnessExecutableCandidates, isAbsolutePathForPlatform, killProcessTree, prepareExecutableSpawn, resolveGitExecutable, nvmHarnessExecutableCandidates, processFailureReason, processOutcome, runProcess, spawnTrackedChild, stopChildProcesses, waitForProcessExit, type ProcessResult } from '../../electron/main/process-utils'
 import { waitUntil } from '../helpers/wait'
 
 const spawnOverride = vi.hoisted(() => ({ current: null as null | ((...args: unknown[]) => unknown) }))
@@ -58,6 +58,27 @@ describe('Windows Git executable resolution', () => {
     expect(resolveGitExecutable('/repo', {}, { platform: 'darwin' })).toBe('git')
   })
 })
+describe('child PATH precedence', () => {
+  it('preserves user shims and the active nvm selection before system fallbacks', () => {
+    const env = executableChildEnvironment('/opt/agent/bin/omp', {
+      HOME: '/home/ada', PATH: '/home/ada/.pyenv/shims:/home/ada/.cargo/bin:/usr/bin:/bin', NVM_BIN: '/home/ada/.nvm/versions/node/v20/bin',
+    }, 'linux')
+    const paths = env.PATH!.split(':')
+    expect(paths.slice(0, 4)).toEqual(['/opt/agent/bin', '/home/ada/.pyenv/shims', '/home/ada/.cargo/bin', '/home/ada/.nvm/versions/node/v20/bin'])
+    expect(paths.indexOf('/usr/bin')).toBeGreaterThan(paths.indexOf('/home/ada/.cargo/bin'))
+  })
+
+  it.each(['data', ''])('rejects injected relative candidate directories with XDG_DATA_HOME=%s', (dataHome) => {
+    const env = executableChildEnvironment('/opt/pi/bin/pi', {
+      HOME: '/home/ada', PATH: '/usr/bin:user-rel', PNPM_HOME: '.pnpm', NVM_BIN: 'node_modules/.bin', BUN_INSTALL_BIN: 'bb',
+      NPM_CONFIG_PREFIX: 'npm', BUN_INSTALL: 'bun', VOLTA_HOME: 'volta', XDG_DATA_HOME: dataHome,
+    }, 'linux')
+    const paths = env.PATH!.split(':')
+    expect(paths.filter((path) => !path.startsWith('/'))).toEqual(['user-rel'])
+    expect(paths).toContain('/home/ada/.local/share/pnpm')
+  })
+})
+
 describe('runProcess resource bounds', () => {
   it('runs a pnpm CLI under a Finder-style minimal PATH', async () => {
     const home = temp()
@@ -153,6 +174,34 @@ setTimeout(() => update(-1), 250)
     expect(state.max).toBeLessThanOrEqual(PROCESS_CONCURRENCY_LIMIT)
   }, 15_000)
 
+  it.skipIf(process.platform === 'win32').each([500, 5_000])('releases inherited pipes after direct exit without reporting a timeout (%s ms)', async (timeoutMs) => {
+    const dir = temp()
+    const pidPath = join(dir, 'escaped.pid')
+    const started = Date.now()
+    try {
+      const result = await runProcess(process.execPath, ['-e', `
+const { spawn } = require('node:child_process')
+const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { detached: true, stdio: 'inherit' })
+require('node:fs').writeFileSync(process.argv.at(-1), String(child.pid))
+child.unref()
+console.log('done')
+`, pidPath], { timeoutMs })
+      expect(result).toMatchObject({ code: 0, timedOut: false, stdout: 'done\n' })
+      expect(Date.now() - started).toBeLessThan(3_500)
+    } finally {
+      try { process.kill(Number(readFileSync(pidPath, 'utf8')), 'SIGKILL') } catch { /* child already exited */ }
+    }
+  })
+
+  it('tracks direct probe children for shutdown cleanup', async () => {
+    const child = spawnTrackedChild(process.execPath, ['-e', 'process.stdout.write("tracked"); setInterval(() => {}, 1000)'], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
+    await new Promise<void>((resolve) => child.stdout.once('data', () => resolve()))
+    const exited = new Promise<void>((resolve) => child.once('close', () => resolve()))
+    child.kill()
+    await exited
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+  })
+
   it('closes queued admission and still terminates every active child during shutdown', async () => {
     const dir = temp()
     const active = Array.from({ length: PROCESS_CONCURRENCY_LIMIT }, (_, index) => runProcess(process.execPath, ['-e', `
@@ -165,9 +214,13 @@ setInterval(() => {}, 1000)
 
     const deniedMarker = join(dir, 'queued-ran')
     const queued = runProcess(process.execPath, ['-e', `require('node:fs').writeFileSync(process.argv.at(-1), 'unexpected')`, deniedMarker])
+    const probe = spawnTrackedChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: process.platform !== 'win32', stdio: 'ignore' })
+    const probeExited = new Promise<void>((resolve) => probe.once('close', () => resolve()))
     const cleanup = stopChildProcesses()
     await expect(queued).rejects.toThrow(/admission is closed/)
     await cleanup
+    await probeExited
+    expect(() => spawnTrackedChild(process.execPath, ['-e', ''], {})).toThrow(/admission is closed/)
     const completed = await Promise.all(active)
 
     expect(completed.every((result) => result.signal === 'SIGKILL' || result.signal === 'SIGTERM')).toBe(true)
@@ -291,16 +344,16 @@ describe('waitForProcessExit', () => {
 
 describe('Prime Agent discovery candidates', () => {
   it('uses native executable names and absolute paths for every supported desktop platform', () => {
-    expect(primeAgentExecutableName('darwin')).toBe('prime-agent')
-    expect(primeAgentExecutableName('linux')).toBe('prime-agent')
-    expect(primeAgentExecutableName('win32')).toBe('prime-agent.exe')
+    expect(HARNESSES.prime.executableName('darwin')).toBe('prime-agent')
+    expect(HARNESSES.prime.executableName('linux')).toBe('prime-agent')
+    expect(HARNESSES.prime.executableName('win32')).toBe('prime-agent.exe')
     expect(isAbsolutePathForPlatform('/opt/prime-agent', 'linux')).toBe(true)
     expect(isAbsolutePathForPlatform('C:\\Tools\\prime-agent.exe', 'win32')).toBe(true)
     expect(isAbsolutePathForPlatform('prime-agent.exe', 'win32')).toBe(false)
   })
 
   it('accepts explicit Windows binaries and searches the Windows PATH without speculative install locations', () => {
-    const candidates = primeAgentCandidates({
+    const candidates = harnessExecutableCandidates(HARNESSES.prime, {
       PRIME_AGENT_BINARY: 'C:\\Tools\\prime-agent.exe',
       Path: 'C:\\Program Files\\Prime Agent;D:\\bin',
       LOCALAPPDATA: 'C:\\Users\\Ada\\AppData\\Local',
@@ -557,7 +610,7 @@ describe('runProcess stdio pipe failures', () => {
       const pipeError = new Error('read EPIPE')
       child.stdout.emit('error', pipeError)
       await expect(pending).rejects.toThrow('read EPIPE')
-      expect(child.killed).toContain('SIGTERM')
+      expect(child.killed).toContain('SIGKILL')
       // A late close event must not settle the promise a second time.
       child.emit('close', null, 'SIGKILL')
       expect(uncaught).toEqual([])

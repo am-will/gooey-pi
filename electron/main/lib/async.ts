@@ -111,6 +111,7 @@ export interface AdmissionQueueOptions {
 }
 
 export interface AdmissionQueue {
+  readonly isClosed: boolean
   readonly activeCount: number
   readonly pendingCount: number
   /** Runs the task within the concurrency bound. Starts synchronously when capacity is available. */
@@ -136,6 +137,7 @@ export function createAdmissionQueue(options: AdmissionQueueOptions): AdmissionQ
   }
 
   return {
+    get isClosed() { return closed },
     get activeCount() { return active },
     get pendingCount() { return pending.length },
     run<T>(task: () => Promise<T>): Promise<T> {
