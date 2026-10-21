@@ -21,6 +21,7 @@ import { keepLiveCompactionReasons } from '@/lib/events/compaction'
 import { previewMatchesPrompt } from '@/lib/session-actions'
 import { findRuntimeForWorkspace, workspaceCwd } from '@/lib/workspace'
 import type { HarnessId, MessagePart, PrimeWorkApi, ProjectRecord, PromptDeliveryIntent, QueuedPrompt, RuntimeInfo, SessionActionSnapshot, SessionRecord, TranscriptMessage } from '@/types/api'
+import { HARNESS_IDS } from '@/types/api'
 
 let queuedPromptSequence = 0
 
@@ -498,8 +499,8 @@ export function useWorkspaceRuntime({
   }, [updateQueuedPrompts])
   const dropPendingSteers = useCallback((runtimeId?: string) => {
     const sessionFile = runtimeId ? runtimeSessionsRef.current.get(runtimeId) : undefined
-    const owners = runtimeId ? [...queuedPromptsByOwnerRef.current.keys()].filter((owner) => (
-      sessionFile ? owner.endsWith(`:session:${sessionFile}`) : owner.endsWith(`:runtime:${runtimeId}`)
+    const owners: Array<string | undefined> = runtimeId ? HARNESS_IDS.map((harness) => (
+      sessionFile ? `${harness}:session:${sessionFile}` : `${harness}:runtime:${runtimeId}`
     )) : [activeQueuedPromptOwnerRef.current]
     if (runtimeId && runtimeIdRef.current === runtimeId) owners.push(activeQueuedPromptOwnerRef.current)
     for (const owner of new Set(owners)) {

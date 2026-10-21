@@ -77,7 +77,7 @@ describe('workspace runtime ownership', () => {
   })
 
   it('drops only an exited runtime owner’s steers and retains ordinary queued prompts', () => {
-    const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
+    const other = { ...session, id: 'other', filePath: `/colon:session:${session.filePath}` }
     act(() => root.render(createElement(Probe, { initialSession: session, sessions: [session, other] })))
     act(() => {
       latest.attachRuntime(runtime, 0)
