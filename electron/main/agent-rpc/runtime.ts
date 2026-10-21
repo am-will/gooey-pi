@@ -177,9 +177,13 @@ export class RpcRuntime {
     this.info.fastModeSupported = Boolean(this.adapter.buildServiceTierCommand) && (model?.fastModeSupported ?? false)
     this.info.imageInputSupported = model ? model.input.includes('image') : undefined
     if (!this.info.fastModeSupported) {
-      this.requestedServiceTier = 'default'
-      this.info.serviceTier = 'default'
+      this.resetServiceTier()
     }
+  }
+
+  private resetServiceTier(): void {
+    this.requestedServiceTier = 'default'
+    this.info.serviceTier = 'default'
   }
 
   async setServiceTier(serviceTier: 'default' | 'priority', probe = false): Promise<boolean> {
@@ -187,15 +191,13 @@ export class RpcRuntime {
     if (!buildServiceTierCommand) {
       // The harness has no service-tier command at all; nothing goes on the
       // wire, and a direct request fails with a per-harness error.
-      this.requestedServiceTier = 'default'
-      this.info.serviceTier = 'default'
+      this.resetServiceTier()
       this.info.fastModeAvailable = false
       if (probe) return false
       throw new Error(`Service tier is not supported by the ${this.adapter.agentName} harness`)
     }
     if (serviceTier === 'priority' && !this.info.fastModeSupported) {
-      this.requestedServiceTier = 'default'
-      this.info.serviceTier = 'default'
+      this.resetServiceTier()
       return false
     }
     try {
@@ -411,10 +413,8 @@ export class RpcRuntime {
     return new Promise((resolveRequest, reject) => {
       let write: QueuedRpcWrite | null = null
       const timer = setTimeout(() => {
-        const pending = this.pending.get(id)
+        const pending = this.takePending(id)
         if (!pending) return
-        this.pendingBytes -= pending.bytes
-        this.pending.delete(id)
         if (write?.cancel() !== 'flushed') {
           // The line never reached the child: the command cannot execute, so
           // a retry is safe.
@@ -430,11 +430,8 @@ export class RpcRuntime {
       timer.unref()
       this.pending.set(id, { resolve: resolveRequest, reject, timer, bytes, command: commandType })
       const failWrite = (error: unknown) => {
-        const pending = this.pending.get(id)
+        const pending = this.takePending(id)
         if (!pending) return
-        clearTimeout(pending.timer)
-        this.pendingBytes -= pending.bytes
-        this.pending.delete(id)
         pending.reject(error instanceof Error ? error : new Error(errorMessage(error)))
       }
       write = this.transport.enqueue(line)
@@ -457,7 +454,7 @@ export class RpcRuntime {
     this.receivedFrame = true
     if (raw.type !== 'response') this.lastActivityAt = Date.now()
     if (raw.type === 'response' && typeof raw.id === 'string') {
-      const pending = this.pending.get(raw.id)
+      const pending = this.takePending(raw.id)
       if (!pending) {
         // A late answer to a request that timed out after its write flushed
         // is consumed, not surfaced as an orphan.
@@ -465,9 +462,6 @@ export class RpcRuntime {
         this.emit({ type: 'orphan_response', command: raw.command })
         return
       }
-      clearTimeout(pending.timer)
-      this.pendingBytes -= pending.bytes
-      this.pending.delete(raw.id)
       if (raw.command !== pending.command) {
         pending.reject(new Error(`${this.adapter.agentName} returned a mismatched response for ${pending.command}`))
         this.emit({ type: 'transport_limit', kind: 'response', error: `${this.adapter.agentName} returned a mismatched RPC response` })
@@ -729,6 +723,15 @@ export class RpcRuntime {
   }
 
   private emit(event: RpcObject): void { this.eventForwarder.emit(event) }
+
+  private takePending(id: string): PendingRequest | undefined {
+    const pending = this.pending.get(id)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.pending.delete(id)
+    this.pendingBytes -= pending.bytes
+    return pending
+  }
 
   private rememberUncertainDelivery(id: string): void {
     this.uncertainDeliveries.add(id)
