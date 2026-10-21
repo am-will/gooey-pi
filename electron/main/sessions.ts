@@ -232,8 +232,8 @@ export class SessionService {
       const runtime = runtimeBySession
         ? runtimeBySession.get(resolve(metadata.filePath))
         : this.runtimeForSession(metadata.filePath)
-      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting ? 'running' : 'idle'
-      const { sessionName: _sessionName, ...record } = metadata
+      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting || metadata.hasRunningRlmChildren ? 'running' : 'idle'
+      const { sessionName: _sessionName, hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
       records.push({ ...record, harness: this.harness, archived: isArchived })
     }
     return records.sort((a, b) => Date.parse(b.lastUserMessageAt ?? b.createdAt) - Date.parse(a.lastUserMessageAt ?? a.createdAt) || comparePaths(a.filePath, b.filePath))

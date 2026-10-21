@@ -72,6 +72,25 @@ describe('live session metadata', () => {
     expect(active.status).toBe('running')
     expect(legacy.status).toBe('running')
   })
+
+  it('keeps an idle parent running while its RLM children are working', () => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, { lifecycle: 'live', isSessionActive: false, isStreaming: false, hasRunningRlmChildren: true })
+    expect(record.status).toBe('running')
+    applyLiveMetadata(record, { lifecycle: 'live', isSessionActive: false, isStreaming: false, hasRunningRlmChildren: false })
+    expect(record.status).toBe('idle')
+  })
+
+  it('preserves the working-child status when the GooeyPi parent runtime is idle', async () => {
+    const { root, project, service } = setup(undefined, {
+      metadataReader: async (path) => ({ ...metadata(path, project, 'parent'), status: 'running', hasRunningRlmChildren: true }),
+    })
+    writeSession(join(root, 'parent.jsonl'), project, 'parent')
+    service.bindRuntimeHooks({ get: () => ({ isStreaming: false }), stop: async () => {}, rename: async () => false })
+    const [parent] = await service.list()
+    expect(parent.status).toBe('running')
+    expect(parent).not.toHaveProperty('hasRunningRlmChildren')
+  })
 })
 
 describe('Rust Prime native archives', () => {
