@@ -22,7 +22,7 @@ vi.mock('electron', () => electron)
 import '../../electron/main/index'
 import { isMacWindowCloseShortcut, loadInitialRenderer, mainWindowChromeOptions, windowCanvasColor } from '../../electron/main/main-window'
 import { hardenRenderer, resolveRendererAssetPath } from '../../electron/main/renderer-security'
-import { activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/app-lifecycle'
+import { ApplicationRevealQueue, activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/app-lifecycle'
 import { StateMigrationError, UnsupportedStateVersionError } from '../../electron/main/store'
 import type { RuntimeInfo } from '../../src/types/api'
 import type { BrowserWindow, MenuItemConstructorOptions } from 'electron'
@@ -30,6 +30,30 @@ import type { BrowserWindow, MenuItemConstructorOptions } from 'electron'
 type Handler = (...args: never[]) => void
 
 describe('application window lifecycle', () => {
+  it('queues a second instance until startup is ready and coalesces activation events', () => {
+    const reveal = vi.fn()
+    const queue = new ApplicationRevealQueue(reveal, () => false)
+    queue.request('activation')
+    queue.request('second instance')
+    queue.request('activation')
+    expect(reveal).not.toHaveBeenCalled()
+    queue.startupComplete()
+    expect(reveal.mock.calls).toEqual([['second instance']])
+    queue.request('activation')
+    expect(reveal.mock.calls).toEqual([['second instance'], ['activation']])
+  })
+
+  it('drops queued activation when shutdown begins during startup', () => {
+    const reveal = vi.fn()
+    let shuttingDown = false
+    const queue = new ApplicationRevealQueue(reveal, () => shuttingDown)
+    queue.request('second instance')
+    shuttingDown = true
+    queue.startupComplete()
+    queue.request('activation')
+    expect(reveal).not.toHaveBeenCalled()
+  })
+
   it('uses the same canvas color for the initial window and native caption background', () => {
     expect(windowCanvasColor('dark')).toBe('#171716')
     expect(windowCanvasColor('light')).toBe('#ffffff')

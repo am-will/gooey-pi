@@ -106,3 +106,23 @@ export function routeAllWindowsClosed(
   if (!background?.handleAllWindowsClosed()) quit()
 }
 
+
+/** Activation may arrive while stores and IPC are still being initialized. */
+export class ApplicationRevealQueue {
+  private ready = false
+  private pending: 'activation' | 'second instance' | undefined
+  constructor(private readonly reveal: (reason: 'activation' | 'second instance') => void, private readonly shuttingDown: () => boolean) {}
+
+  request(reason: 'activation' | 'second instance'): void {
+    if (this.shuttingDown()) return
+    if (this.ready) this.reveal(reason)
+    else if (this.pending !== 'second instance') this.pending = reason
+  }
+
+  startupComplete(): void {
+    this.ready = true
+    const pending = this.pending
+    this.pending = undefined
+    if (pending) this.request(pending)
+  }
+}

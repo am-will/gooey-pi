@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, protocol, safeStorage, session, shell, webC
 import { join, resolve } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog, type ShutdownPrompt } from './app-lifecycle'
+import { ApplicationRevealQueue, activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog, type ShutdownPrompt } from './app-lifecycle'
 import { boundedErrorMessage, firstAccepted } from './validation'
 import { isAllowedBrowserUrl } from '../../src/lib/browser-url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
@@ -664,9 +664,16 @@ async function runPackagedSmoke(window: BrowserWindow | null, markerPath: string
   app.quit()
 }
 
+const revealQueue = new ApplicationRevealQueue(revealApplication, () => shutdownStarted)
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
-else void app.whenReady().then(async () => {
+else {
+  app.on('second-instance', () => revealQueue.request('second instance'))
+  app.on('activate', () => {
+    if (!windows.current || windows.current.isDestroyed() || !windows.current.isVisible()) revealQueue.request('activation')
+  })
+}
+if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   // Parsed from the first instance's own argv only: a second-instance command
   // line must never be able to make a running application write a marker and quit.
   const requestedSmokeMarker = packagedSmokeMarkerPath(process.argv)
@@ -705,12 +712,7 @@ else void app.whenReady().then(async () => {
     })
   }
   await bootstrap()
-  app.on('second-instance', () => {
-    if (!shutdownStarted) revealApplication('second instance')
-  })
-  app.on('activate', () => {
-    if (!shutdownStarted && (!windows.current || windows.current.isDestroyed() || !windows.current.isVisible())) revealApplication('activation')
-  })
+  revealQueue.startupComplete()
 }).catch((error: unknown) => {
   writeCrashLog(() => join(app.getPath('userData'), 'crash.log'), 'startup', error)
   const failureDialog = startupFailureDialog(error)
