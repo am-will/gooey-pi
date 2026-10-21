@@ -81,7 +81,7 @@ type ProjectScriptRunOutcome = { cancelled: true } | { exitCode: number }
 
 
 export default function App() {
-  const bridge = hasBridge() ? window.prime : null
+  const bridge = hasBridge() ? window.prime ?? null : null
   const initialProject = bridge ? undefined : SAMPLE_PROJECTS[0]
   const initialSession = bridge ? undefined : SAMPLE_SESSIONS[0]
   const [projects, setProjects] = useState<ProjectRecord[]>(() => bridge ? [] : SAMPLE_PROJECTS)
@@ -244,7 +244,7 @@ export default function App() {
     activeSessionVisible: view === 'session',
   })
 
-  const { checkoutCatalog, checkoutsLoading, refreshCheckouts } = useCheckoutCatalog({ bridge, project: activeProject, checkoutStrategy: settingsState.settings.checkoutStrategy, reportError })
+  const { checkoutCatalog, checkoutsLoading } = useCheckoutCatalog({ bridge, project: activeProject, checkoutStrategy: settingsState.settings.checkoutStrategy, reportError })
   const agentBrowser = useAgentBrowserTabs({ bridge, reportError })
   const terminalDrawerRefs = useRef(new Map<string, TerminalDrawerHandle>())
   const [terminalSelection, setTerminalSelection] = useState<TerminalSelectionContext>()

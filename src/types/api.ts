@@ -268,7 +268,7 @@ export interface PrimeWorkApi {
   }
 }
 
-declare global { interface Window { prime: PrimeWorkApi } }
+declare global { interface Window { prime?: PrimeWorkApi } }
 
 export * from './api/harness'
 

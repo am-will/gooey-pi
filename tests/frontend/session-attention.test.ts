@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { writeClearedSignatures, activityClearEntry, companionClearEntry, activityNotificationSignature, applySessionLifecycleEvent, readClearedActivity, readClearedAttention, sessionAttentionSignature, sessionCompanionNotificationSignature, signatureCleared } from '../../src/app/session-attention'
+import { writeClearedSignatures, activityClearEntry, companionClearEntry, activityNotificationSignature, applySessionLifecycleEvent, readClearedActivity, readClearedAttention, sessionAttentionSignature, signatureCleared } from '../../src/app/session-attention'
 import { mergeSessionCatalog } from '../../src/hooks/useBootstrap'
 import type { SessionRecord } from '../../src/types/api'
 
