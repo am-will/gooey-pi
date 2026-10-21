@@ -100,8 +100,8 @@ describe('validatePackageSource', () => {
     expect(() => validatePackageSource(source)).toThrow(/Invalid npm package source/)
   })
 
-  it.each(['git:-bad/repo', 'git:--help'])('rejects option-like nested git source %s', async (source) => {
-    expect(() => validatePackageSource(source)).toThrow('Invalid git package source')
+  it.each(['git:-bad/repo', 'git:--help', 'git: --help', 'npm: --help'])('rejects option-like nested git source %s', async (source) => {
+    expect(() => validatePackageSource(source)).toThrow()
     await expect(executeOmpPluginInstall('/does-not-exist', source)).rejects.toThrow('Invalid OMP plugin target')
     await expect(executeOmpPluginAction('/does-not-exist', 'uninstall', source)).rejects.toThrow('Invalid OMP plugin target')
   })

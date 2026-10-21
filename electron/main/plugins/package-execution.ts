@@ -73,7 +73,7 @@ export async function executePackageRemove(primeAgentPath: string, source: strin
 }
 
 function ompTarget(source: string): string {
-  const target = source.startsWith('npm:') || source.startsWith('git:') ? source.slice(4) : source
+  const target = (source.startsWith('npm:') || source.startsWith('git:') ? source.slice(4) : source).trim()
   if (!target || target.startsWith('-') || /[\r\n\u2028\u2029]/.test(target)) throw new TypeError('Invalid OMP plugin target')
   return target
 }
