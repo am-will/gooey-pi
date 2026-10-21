@@ -1,3 +1,4 @@
+// Domain contracts are re-exported here so existing bridge imports keep one entry point.
 import type { HarnessId, HarnessStatus } from './api/harness'
 import type { PrimeModelDescriptor, PrimeThinkingLevel, PrimeModelCatalog, ProviderAuthEvent } from './api/models'
 import type { AppSettings, ThemeMode } from './api/settings'
@@ -10,26 +11,6 @@ import type { AgentBrowserState, AgentBrowserPointerEvent, AgentBrowserActivityE
 import type { NativeHeartbeatRecord, AutomationScheduleRecord, ScheduleTiming, SchedulePreview, ScheduleInput, SchedulePatch, ScheduleRunRecord, ScheduleChangeEvent } from './api/schedules'
 import type { ChildRoster, ChildHistoryOptions, ChildHistoryPage } from './subagents'
 export type { ChildSession, ChildRoster, ChildHistoryOptions, ChildHistoryPage } from './subagents'
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 export interface AppMeta {
   version: string
@@ -49,95 +30,6 @@ export interface AppUpdateState {
   message?: string
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /**
  * The one result shape for subprocess-backed operations (git commit, package
  * install, MCP settings updates). `reason` classifies failures: the subprocess
@@ -154,10 +46,6 @@ export interface TerminalSelectionContext { tabId: string; label: string; text: 
 export interface TerminalPromptContext extends TerminalSelectionContext { cwd?: string }
 export interface TerminalActiveContext { label: string; content: string; truncated: boolean }
 
-
-
-
-
 export interface PetDefinition {
   /** Stable settings key. Codex pets are namespaced as codex/<folder>. */
   id: string
@@ -168,19 +56,6 @@ export interface PetDefinition {
   source: 'built-in' | 'codex'
   kind: 'orb' | 'spritesheet'
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 export const VOICE_TRANSCRIPTION_PROVIDERS = ['openai-live', 'openai', 'groq', 'deepgram', 'self-hosted', 'local-whisper'] as const
 export type VoiceTranscriptionProvider = typeof VOICE_TRANSCRIPTION_PROVIDERS[number]
