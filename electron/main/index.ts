@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, session, shell, webContents } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, screen, session, shell, webContents } from 'electron'
 import type { BrowserWindowConstructorOptions, Input, WebContents } from 'electron'
 import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -9,6 +9,7 @@ import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
+import { mainWindowBounds } from './window-bounds'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
 import { installCrashGuards } from './crash-guard'
@@ -365,11 +366,9 @@ export function setTitleBarTheme(sender: WebContents, theme: ResolvedTheme): boo
 
 async function createWindow(): Promise<BrowserWindow | null> {
   if (shutdownStarted) return null
+  const bounds = mainWindowBounds(screen.getPrimaryDisplay().workArea)
   const window = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 960,
-    minHeight: 640,
+    ...bounds,
     show: false,
     backgroundColor: '#f5f5f4',
     icon: appIconPath(),

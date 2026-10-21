@@ -750,6 +750,9 @@ describe('harness settings surfaces', () => {
         onSetAllProvidersDisabled={noopAsync}
         onSetModelEnabled={noopAsync}
         onStartProviderOAuth={noopAsync}
+        archivedSessions={[]}
+        projects={[]}
+        onRestoreSession={noopAsync}
       />
     )
 
@@ -771,6 +774,7 @@ describe('harness settings surfaces', () => {
     const rustMeta: AppMeta = { ...meta, harnesses: { ...meta.harnesses, prime: { path: '/usr/local/bin/prime-agent', version: '0.10.0', implementation: 'rust' } } }
     await act(async () => {
       root.render(<SettingsPage
+        archivedSessions={[]} projects={[]} onRestoreSession={noopAsync}
         settings={{ ...DEFAULT_SETTINGS, activeHarness: 'prime' }} meta={rustMeta} providerCatalog={null} voice={null} pets={null} initialSection="providers"
         onClose={noop} onUpdate={noop} onResetBrowser={noop} onOpenDocs={noop} onRefreshProviders={noopAsync} onRefreshHarnesses={noopAsync}
         onSaveProviderApiKey={noopAsync} onLogoutProvider={noopAsync} onSetProviderEnabled={noopAsync} onSetAllProvidersEnabled={noopAsync}

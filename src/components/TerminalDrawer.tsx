@@ -4,6 +4,7 @@ import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import { useI18n } from '@/lib/i18n'
 import { boundTerminalText, TERMINAL_CONTEXT_MAX_CHARS, TERMINAL_SELECTION_MAX_CHARS } from '@/lib/terminal-context'
 import { openExternalUrl } from '@/lib/desktop-actions'
 import { terminalLinkOpensExternally } from '@/lib/terminal-links'
@@ -117,6 +118,7 @@ function readTerminalContent(terminal: Terminal): { content: string; contentTrun
 
 
 const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function TerminalView({ cwd, sessionPath, shell, command, label, visible, onStateChange, onSelectionChange, onError, onOpenLink, onExit }, ref) {
+  const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const terminalIdRef = useRef<string | null>(null)
@@ -231,7 +233,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     const announceExit = (exitCode: number) => {
       if (exitAnnounced) return
       exitAnnounced = true
-      terminal.writeln(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m`)
+      terminal.writeln(`\r\n\x1b[90m${t('terminal.exitNotice', { code: exitCode })}\x1b[0m`)
       onStateChangeRef.current({ shellName: shell?.split('/').at(-1) ?? 'terminal', connected: false })
       onExitRef.current?.(exitCode)
     }
@@ -278,14 +280,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
         if (earlyExit !== undefined) announceExit(earlyExit)
       }).catch((error: unknown) => {
         if (cancelled) return
-        const message = error instanceof Error ? error.message : 'Unable to start terminal'
+        const message = error instanceof Error ? error.message : t('terminal.error.start')
         terminal.writeln(`\x1b[31m${message}\x1b[0m`)
         onErrorRef.current?.(message)
         onExitRef.current?.()
       })
     } else {
-      terminal.writeln('\x1b[38;5;141mGooeyPi terminal\x1b[0m')
-      terminal.writeln('\x1b[90mA live PTY will connect when the desktop bridge and project are available.\x1b[0m')
+      terminal.writeln(`\x1b[38;5;141m${t('terminal.placeholder.title')}\x1b[0m`)
+      terminal.writeln(`\x1b[90m${t('terminal.placeholder.body')}\x1b[0m`)
       terminal.write('\r\n\x1b[32m➜\x1b[0m \x1b[36mprime-work\x1b[0m \x1b[90mgit:(main)\x1b[0m ')
     }
 
@@ -328,6 +330,7 @@ function createTab(number: number, shell?: string, command?: string, label?: str
   }
 }
 export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerProps>(function TerminalDrawer({ visible = true, cwd, sessionPath, shell, initialCommand, height, minHeight, maxHeight, defaultHeight, onHeightChange, onClose, onError, onInitialCommandConsumed, onOpenLink, onReady, onSelectionChange }, ref) {
+  const { t } = useI18n()
   const firstTabRef = useRef<TerminalTab | undefined>(undefined)
   firstTabRef.current ??= createTab(1, shell, initialCommand?.command, initialCommand?.label, initialCommand?.onExit, initialCommand?.id)
   const nextNumberRef = useRef(2)
@@ -363,7 +366,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
       return { tabId, label: tab.label ?? `${tab.shellName} ${tab.number}`, cwd, ...value }
     },
     runCommand: (command, label, onExit) => {
-      if (tabsRef.current.length >= MAX_TERMINAL_TABS) throw new Error(`GooeyPi supports at most ${MAX_TERMINAL_TABS} concurrent terminals.`)
+      if (tabsRef.current.length >= MAX_TERMINAL_TABS) throw new Error(t('terminal.tabLimit', { count: MAX_TERMINAL_TABS }))
       const tab = createTab(nextNumberRef.current++, shell, command, label, onExit)
       setTabs((current) => [...current, tab])
       setActiveTabId(tab.id)
@@ -380,7 +383,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
 
   const addTerminal = () => {
     if (tabs.length >= MAX_TERMINAL_TABS) {
-      onError?.(`GooeyPi supports at most ${MAX_TERMINAL_TABS} concurrent terminals.`)
+      onError?.(t('terminal.tabLimit', { count: MAX_TERMINAL_TABS }))
       return
     }
     const tab = createTab(nextNumberRef.current++, shell)
@@ -415,10 +418,10 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
   }
 
   return (
-    <section className={`terminal-drawer ${maximized ? 'is-maximized' : ''}`} aria-label="Integrated terminal" hidden={!visible}>
-      {!maximized ? <ResizeHandle orientation="horizontal" label="Resize terminal" value={height} min={minHeight} max={maxHeight} defaultValue={defaultHeight} onChange={onHeightChange} /> : null}
+    <section className={`terminal-drawer ${maximized ? 'is-maximized' : ''}`} aria-label={t('terminal.drawer.aria')} hidden={!visible}>
+      {!maximized ? <ResizeHandle orientation="horizontal" label={t('terminal.resize')} value={height} min={minHeight} max={maxHeight} defaultValue={defaultHeight} onChange={onHeightChange} /> : null}
       <div className="terminal-toolbar">
-        <div className="terminal-tabs" role="tablist" aria-label="Terminal tabs">
+        <div className="terminal-tabs" role="tablist" aria-label={t('terminal.tabs.aria')}>
           {tabs.map((tab) => (
             <div className={`terminal-tab ${tab.id === activeTabId ? 'is-active' : ''}`} key={tab.id}>
               <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => setActiveTabId(tab.id)}>
@@ -427,16 +430,16 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
                 <span>{tab.label ?? `${tab.shellName} ${tab.number}`}</span>
                 <span className={`terminal-live-dot ${tab.connected ? 'is-connected' : ''}`}/>
               </button>
-              <button type="button" className="terminal-tab__close" aria-label={`Close tab ${tab.number}`} onClick={() => closeTerminal(tab.id)}><X size={11}/></button>
+              <button type="button" className="terminal-tab__close" aria-label={t('terminal.tab.close', { number: tab.number })} onClick={() => closeTerminal(tab.id)}><X size={11}/></button>
             </div>
           ))}
-          <IconButton label="New terminal" size="small" disabled={tabs.length >= MAX_TERMINAL_TABS} onClick={addTerminal}><Plus size={14}/></IconButton>
+          <IconButton label={t('terminal.new')} size="small" disabled={tabs.length >= MAX_TERMINAL_TABS} onClick={addTerminal}><Plus size={14}/></IconButton>
         </div>
         <div className="terminal-actions">
-          <span className="terminal-cwd" title={cwd}>{cwd?.split('/').at(-1) ?? 'No project'}</span>
-          <IconButton label="Clear terminal" onClick={() => viewRefs.current.get(activeTabId)?.clear()}><Trash2 size={13}/></IconButton>
-          <IconButton label={maximized ? 'Restore terminal' : 'Maximize terminal'} onClick={() => setMaximized((value) => !value)}>{maximized ? <Minimize2 size={13}/> : <Maximize2 size={13}/>}</IconButton>
-          <IconButton label="Close terminal" onClick={onClose}><X size={14}/></IconButton>
+          <span className="terminal-cwd" title={cwd}>{cwd?.split('/').at(-1) ?? t('terminal.noProject')}</span>
+          <IconButton label={t('terminal.clear')} onClick={() => viewRefs.current.get(activeTabId)?.clear()}><Trash2 size={13}/></IconButton>
+          <IconButton label={maximized ? t('terminal.restore') : t('terminal.maximize')} onClick={() => setMaximized((value) => !value)}>{maximized ? <Minimize2 size={13}/> : <Maximize2 size={13}/>}</IconButton>
+          <IconButton label={t('terminal.close')} onClick={onClose}><X size={14}/></IconButton>
         </div>
       </div>
       <div className="terminal-views">

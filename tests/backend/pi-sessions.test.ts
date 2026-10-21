@@ -321,6 +321,7 @@ describe('pi transcript access through the service', () => {
     })
 
     const transcript = await service.read(file)
+    expect(transcript[0].notice).toEqual({ kind: 'branch-summary' })
     expect(transcript.map((message) => [message.role, message.kind, message.parts[0]])).toEqual([
       ['system', 'notice', { type: 'text', text: 'Summary of the branched-away work' }],
       ['user', undefined, { type: 'text', text: 'continue from here' }],

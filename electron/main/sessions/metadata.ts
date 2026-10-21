@@ -10,7 +10,7 @@ import { compactText, textFromContent, validTimestamp } from './transcript'
 export type JsonRecord = Record<string, unknown>
 
 /** Per-file metadata snapshot; the owning SessionService stamps the harness when it builds SessionRecords. */
-export interface SessionMetadata extends Omit<SessionRecord, 'harness'> { sessionName?: string }
+export interface SessionMetadata extends Omit<SessionRecord, 'harness'> { sessionName?: string; hasRunningRlmChildren?: boolean }
 
 const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024
 export const MAX_METADATA_RECORDS = 200_000
@@ -39,8 +39,9 @@ export function statusFrom(
 
 export function applyLiveMetadata(metadata: SessionMetadata, live: JsonRecord): void {
   const active = live.isSessionActive !== false
+  metadata.hasRunningRlmChildren = live.hasRunningRlmChildren === true || live.hasRunningSubagents === true
   if (live.workerState === 'failed') metadata.status = 'failed'
-  else if (active && (live.isStreaming === true || live.activity === 'working' || live.isCompacting === true)) metadata.status = 'running'
+  else if (metadata.hasRunningRlmChildren || (active && (live.isStreaming === true || live.activity === 'working' || live.isCompacting === true))) metadata.status = 'running'
   else if (live.lifecycle === 'archived') metadata.status = 'complete'
   else if (live.taskState === 'completed') metadata.status = 'complete'
   else if (live.taskState === 'needs_input') metadata.status = 'waiting'

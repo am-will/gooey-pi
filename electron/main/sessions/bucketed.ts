@@ -192,11 +192,15 @@ export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
       || Boolean(fallbackModelFromRecord(entry)),
     renderEntry: (entry, safeId) => {
       const fallback = fallbackModelFromRecord(entry)
-      if (fallback) return noticeRow(entry, safeId, fallbackNoticeText(fallback.label))
+      if (fallback) {
+        const row = noticeRow(entry, safeId, fallbackNoticeText(fallback.label, fallback.from))
+        row.parts = [{ type: 'text', text: boundedString(fallbackNoticeText(fallback.label, fallback.from), MAX_PART_TEXT_CHARS), notice: { kind: 'provider-fallback', label: boundedString(fallback.label, MAX_PART_TEXT_CHARS), from: fallback.from ? boundedString(fallback.from, MAX_PART_TEXT_CHARS) : undefined } }]
+        return row
+      }
       if (entry.type !== 'branch_summary') return undefined
       const summary = typeof entry.summary === 'string' ? entry.summary : textFromContent(entry.content, MAX_PART_TEXT_CHARS)
       // A summary with no text has nothing to show; the walk still passes through its record.
-      return summary.trim() ? noticeRow(entry, safeId, summary) : undefined
+      return summary.trim() ? { ...noticeRow(entry, safeId, summary), notice: { kind: 'branch-summary' } } : undefined
     },
   })
 }

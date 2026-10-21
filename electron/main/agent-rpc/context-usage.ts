@@ -130,6 +130,8 @@ export class ContextUsageProjection {
   private snapshot: PrimeContextUsage | undefined
   /** Live activity tokens the snapshot already accounts for. */
   private snapshotActivityTokens = 0
+  /** Activity proved to be included in the stored snapshot, unaffected by request rebases. */
+  private capturedActivityTokens = 0
   private snapshotGeneration = 0
 
   get generation(): number { return this.snapshotGeneration }
@@ -141,6 +143,7 @@ export class ContextUsageProjection {
     const update = this.live.handleEvent(event)
     if (update.reset) {
       this.snapshotActivityTokens = 0
+      this.capturedActivityTokens = 0
       this.snapshotGeneration += 1
       return true
     }
@@ -148,7 +151,10 @@ export class ContextUsageProjection {
     const rebased = this.snapshotActivityTokens !== this.live.tokens
     this.snapshotActivityTokens = this.live.tokens
     // Stats requested before a compaction ended describe the history it replaced.
-    if (event.type === 'compaction_end') this.snapshotGeneration += 1
+    if (event.type === 'compaction_end') {
+      this.capturedActivityTokens = this.live.tokens
+      this.snapshotGeneration += 1
+    }
     return update.changed || rebased
   }
 
@@ -156,6 +162,12 @@ export class ContextUsageProjection {
   applySnapshot(usage: PrimeContextUsage, activityTokens?: number): void {
     if (activityTokens !== undefined) {
       const previous = this.snapshot
+      // The harness can capture stats after newer output than was present
+      // when the request was sent. Count that output only once when snapshot
+      // growth covers it, including any earlier output hidden by a rebase.
+      const liveDelta = Math.max(0, this.live.tokens - this.capturedActivityTokens)
+      if (previous?.tokens !== undefined && previous.tokens !== null && usage.tokens !== null
+        && usage.tokens >= previous.tokens + liveDelta) activityTokens = this.live.tokens
       const activityDelta = Math.max(0, activityTokens - this.snapshotActivityTokens)
       // A message_end event is forwarded just before persistence. If a very
       // fast stats response still reflects the preceding message, keep its
@@ -165,7 +177,10 @@ export class ContextUsageProjection {
         || previous.tokens === null
         || usage.tokens === null
         || usage.tokens >= previous.tokens + activityDelta
-      if (includesActivity) this.snapshotActivityTokens = Math.max(this.snapshotActivityTokens, activityTokens)
+      if (includesActivity) {
+        this.snapshotActivityTokens = Math.max(this.snapshotActivityTokens, activityTokens)
+        this.capturedActivityTokens = Math.max(this.capturedActivityTokens, activityTokens)
+      }
     }
     this.snapshot = usage
   }
@@ -175,6 +190,7 @@ export class ContextUsageProjection {
     if (!this.snapshot) return
     this.snapshot = this.current()
     this.snapshotActivityTokens = this.live.tokens
+    this.capturedActivityTokens = this.live.tokens
   }
 
   /** Forgets everything about the previous session. */
@@ -182,6 +198,7 @@ export class ContextUsageProjection {
     this.live.reset()
     this.snapshot = undefined
     this.snapshotActivityTokens = 0
+    this.capturedActivityTokens = 0
     this.snapshotGeneration += 1
   }
 

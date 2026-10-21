@@ -616,6 +616,57 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     }
   })
 
+  it('does not double-count output persisted while a stats request waits in the harness', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-context-capture-'))
+    dirs.push(cwd)
+    const executable = join(cwd, 'capture-context-agent.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+const readline = require('node:readline')
+let requests = 0
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const command = JSON.parse(line)
+  if (command.type === 'get_state') {
+    send({ id: command.id, type: 'response', command: command.type, success: true, data: { sessionId: 'capture-context', isStreaming: false } })
+  } else if (command.type === 'get_session_stats') {
+    requests += 1
+    if (requests === 2) {
+      // The request has reached the harness, but capture its snapshot only
+      // after the following provider response is persisted. No timer race.
+      send({ type: 'message_start', message: { role: 'assistant' } })
+      send({ type: 'message_end', message: { role: 'assistant', usage: { output: 3000 } } })
+    }
+    const tokens = requests === 1 ? 40100 : 43100
+    send({ id: command.id, type: 'response', command: command.type, success: true, data: { contextUsage: { tokens, contextWindow: 200000, percent: tokens / 2000 } } })
+    // This next request is a barrier: it cannot be sent until the runtime has
+    // applied the preceding response and drained its queued refresh.
+    if (requests === 3) send({ type: 'agent_end' })
+  } else if (command.type === 'prompt') {
+    send({ id: command.id, type: 'response', command: command.type, success: true })
+    send({ type: 'agent_start' })
+    send({ type: 'message_start', message: { role: 'user', content: 'go' } })
+    send({ type: 'message_end', message: { role: 'user', content: 'go' } })
+  } else if (command.type === 'abort') {
+    send({ id: command.id, type: 'response', command: command.type, success: true })
+  }
+})
+`)
+    chmodSync(executable, 0o755)
+    const events: Array<Record<string, unknown>> = []
+    const runtime = new RpcRuntime(process.execPath, [executable], cwd, ({ event }) => events.push(event), () => undefined)
+    try {
+      await runtime.handshake()
+      await runtime.command({ type: 'prompt', message: 'go' })
+      await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+      await waitUntil(() => runtime.snapshot().contextUsage?.tokens === 43_100)
+      const tokens = events.filter((event) => event.type === 'context_usage').map((event) => (event.contextUsage as { tokens: number }).tokens)
+      expect(tokens.length).toBeGreaterThan(1)
+      expect(Math.max(...tokens)).toBe(43_100)
+    } finally {
+      await runtime.stop()
+    }
+  })
+
   it('runs a trailing authoritative refresh when agent_end lands during an in-flight refresh', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-trailing-context-'))
     dirs.push(cwd)

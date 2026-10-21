@@ -190,7 +190,7 @@ describe('batched Prime event reduction', () => {
     ])
     expect(result[1]).toMatchObject({ id: 'user-queued-1', steerState: 'read' })
     expect(result[2]?.parts).toEqual([{ type: 'text', text: 'still finishing the current work', partId: expect.any(String) }])
-    expect(result[3]?.parts).toEqual([{ type: 'text', text: 'Steer read here' }])
+    expect(result[3]?.parts).toEqual([{ type: 'text', text: 'Steer read here', notice: { kind: 'steer-read', count: 1 } }])
     expect(result[4]?.parts).toEqual([{ type: 'text', text: 'after pickup', partId: expect.any(String) }])
   })
 

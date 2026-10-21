@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { INTERFACE_FONT_SCALES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
+import { INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PRIME_THINKING_LEVELS, PROJECT_SORT_MODES, type AppSettings, type HarnessId, type LocalePreference, type ProjectRecord, type ProjectScripts, type ScheduleExecution, type AutomationScheduleRecord, type ScheduleRunRecord, type ScheduleTarget, type ScheduleTiming } from '../../src/types/api'
 import { normalizeScheduleRunHistory } from './schedules/retention'
 import { isRecord } from './validation'
 
@@ -123,6 +123,7 @@ export function defaultSettings(): AppSettings {
     enabledHarnesses: ['omp', 'prime', 'pi'],
     telemetry: false,
     askUserEnabled: false,
+  askUserTimeoutMs: 120_000,
     browserEnabled: true,
     computerUseEnabled: false,
     disabledProviders: [],
@@ -247,7 +248,9 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     : defaults.lastSelectedModels
   return {
     theme: value.theme === 'light' || value.theme === 'dark' || value.theme === 'system' ? value.theme : defaults.theme,
-    locale: value.locale === 'en' || value.locale === 'zh-CN' || value.locale === 'system' ? value.locale : defaults.locale,
+    // Derived from the shared tuple so a locale the renderer can select is never
+    // rewritten to the default when the state file is read back.
+    locale: LOCALE_PREFERENCES.includes(value.locale as LocalePreference) ? value.locale as LocalePreference : defaults.locale,
     interfaceFontScale: INTERFACE_FONT_SCALES.includes(value.interfaceFontScale as AppSettings['interfaceFontScale'])
       ? value.interfaceFontScale as AppSettings['interfaceFontScale']
       : defaults.interfaceFontScale,
@@ -273,6 +276,7 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     enabledHarnesses: usableHarnesses,
     telemetry: typeof value.telemetry === 'boolean' ? value.telemetry : defaults.telemetry,
     askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
+    askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
     browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,
     computerUseEnabled: typeof value.computerUseEnabled === 'boolean' ? value.computerUseEnabled : defaults.computerUseEnabled,
     disabledProviders: Array.isArray(value.disabledProviders)

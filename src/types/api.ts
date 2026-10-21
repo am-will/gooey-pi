@@ -145,8 +145,13 @@ export type PrimeCompactionReason = 'manual' | 'threshold' | 'overflow' | 'reque
 export type PrimeCompactionStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type PrimeCompactionOutcome = 'failed' | 'cancelled' | 'skipped'
 
+export type TranscriptTextNotice =
+  | { kind: 'provider-fallback'; label: string; from?: string }
+  | { kind: 'empty-turn' }
+  | { kind: 'steer-read'; count: number }
+
 export type MessagePart =
-  | { type: 'text'; partId?: string; text: string }
+  | { type: 'text'; partId?: string; text: string; notice?: TranscriptTextNotice }
   | { type: 'thinking'; partId?: string; text: string }
   | { type: 'toolCall'; partId?: string; id?: string; name: string; args?: unknown }
   | { type: 'toolResult'; partId?: string; name?: string; text: string; isError?: boolean; streaming?: boolean }
@@ -163,6 +168,8 @@ export type MessagePart =
       firstKeptEntryId?: string
       summary?: string
       error?: string
+      /** App-generated fallback, translated only when displayed. */
+      errorKind?: 'incomplete'
       customInstructions?: string
       willRetry?: boolean
     }
@@ -174,6 +181,7 @@ export interface TranscriptMessage {
   steerState?: 'accepted' | 'read'
   /** Neutral system row: a renderer-only steer-read boundary, or a notice (provider fallback, branch summary) that never reads as a failure. */
   kind?: 'steer-read-marker' | 'notice'
+  notice?: { kind: 'branch-summary' }
   timestamp?: string | number
   agentName?: string
   startedAt?: string | number
@@ -475,7 +483,7 @@ export interface SessionActionSnapshot {
 
 export const INTERFACE_FONT_SCALES = [105, 110, 115] as const
 export type InterfaceFontScale = typeof INTERFACE_FONT_SCALES[number]
-export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN'] as const
+export const LOCALE_PREFERENCES = ['system', 'en', 'zh-CN', 'ja'] as const
 export type LocalePreference = typeof LOCALE_PREFERENCES[number]
 export const PROJECT_SORT_MODES = ['recent', 'alphabetical'] as const
 export type ProjectSortMode = typeof PROJECT_SORT_MODES[number]
@@ -515,6 +523,8 @@ export interface AppSettings {
   telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
+  /** Visible time allowed for app-owned questionnaires; 0 waits until answered. Harness deadlines are unchanged. */
+  askUserTimeoutMs: number
   /** Expose GooeyPi's thread-scoped in-app browser controls to new sessions. */
   browserEnabled: boolean
   /** Expose the separately installed TryCUA driver to new sessions through its official CLI. */
@@ -767,7 +777,7 @@ export interface PrimeWorkApi {
   }
   projects: {
     list(harness?: HarnessId): Promise<ProjectRecord[]>
-    listFiles(root: string, harness?: HarnessId): Promise<ProjectFileListing>
+    listFiles(root: string, harness?: HarnessId, mode?: 'children'): Promise<ProjectFileListing>
     listCheckouts(projectId: string, harness?: HarnessId): Promise<CheckoutCatalog>
     executeCheckout(projectId: string, action: CheckoutAction, harness?: HarnessId): Promise<CheckoutChangeResult>
     add(harness?: HarnessId): Promise<ProjectRecord | null>

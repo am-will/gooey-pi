@@ -50,7 +50,7 @@ const api: PrimeWorkApi = {
   },
   projects: {
     list: (harness) => invoke('projects:list', harness),
-    listFiles: (root, harness) => invoke('projects:list-files', root, harness),
+    listFiles: (root, harness, mode) => invoke('projects:list-files', root, harness, mode),
     listCheckouts: (projectId, harness) => invoke('projects:list-checkouts', projectId, harness),
     executeCheckout: (projectId, action, harness) => invoke('projects:execute-checkout', projectId, action, harness),
     add: (harness) => invoke('projects:add', harness),

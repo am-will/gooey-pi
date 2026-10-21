@@ -3,6 +3,7 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { annotationMarkersScript, annotationPickerScript, annotationTakeScript } from '@/lib/annotation-picker'
 import { MAX_BROWSER_ANNOTATIONS, sanitizeCapturedElement } from '@/lib/browser-annotations'
 import { detectRendererPlatform, shortcutLabel } from '@/lib/platform-shortcuts'
+import { useI18n } from '@/lib/i18n'
 import type { BrowserAnnotationsApi } from '@/hooks/useBrowserAnnotations'
 import type { StampedPointerEvent } from '@/hooks/useAgentBrowserTabs'
 import { AgentCursorOverlay, type AgentSlotRect } from '../AgentBrowserLayer'
@@ -47,7 +48,6 @@ function normalizeUrl(value: string) {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
 }
 
-const ANNOTATION_LIMIT_NOTICE = `You can attach at most ${MAX_BROWSER_ANNOTATIONS} annotations. Remove one from the composer attachment to add more.`
 
 interface BrowserPanelProps {
   navigationRequest?: { id: number; url: string }
@@ -77,16 +77,18 @@ interface BrowserPanelProps {
   pollIntervalMs?: number
 }
 
-function agentTabLabel(tab: AgentBrowserTabRecord): string {
+/** `fallback` carries the localized "New tab" label, because a helper outside a component cannot call useI18n. */
+function agentTabLabel(tab: AgentBrowserTabRecord, fallback: string): string {
   if (tab.title) return tab.title
   try {
     const host = new URL(tab.url).hostname
     if (host) return host
   } catch { /* about:blank and friends */ }
-  return 'New tab'
+  return fallback
 }
 
 export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
+  const { t } = useI18n()
   const webviewRef = useRef<WebviewElement | null>(null)
   const [address, setAddress] = useState(home)
   const [currentUrl, setCurrentUrl] = useState(home)
@@ -315,7 +317,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       return
     }
     if (annotationsRef.current.atCapacity) {
-      showNotice(ANNOTATION_LIMIT_NOTICE)
+      showNotice(t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }))
       return
     }
     setNotice('')
@@ -334,7 +336,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       /* webview not ready */
     }
     if (!annotationsRef.current.add({ comment: annotationText, element: pendingElement, pageUrl, pageTitle })) {
-      showNotice(ANNOTATION_LIMIT_NOTICE)
+      showNotice(t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }))
       return
     }
     setPendingElement(null)
@@ -357,9 +359,9 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   return (
     <div className="browser-panel">
       {agentTabs.length ? (
-        <div className="browser-tabstrip" role="tablist" aria-label="Browser tabs">
+        <div className="browser-tabstrip" role="tablist" aria-label={t('inspector.browser.tabs')}>
           <button type="button" role="tab" aria-selected={!showAgentTab} className={showAgentTab ? '' : 'is-active'} onClick={() => onShowPreview?.()}>
-            Preview
+            {t('inspector.browser.preview')}
           </button>
           {agentTabs.map((tab) => (
             <div
@@ -377,10 +379,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
               }}
             >
               <Bot size={11} aria-hidden />
-              <span>{agentTabLabel(tab)}</span>
+              <span>{agentTabLabel(tab, t('inspector.browser.newTab'))}</span>
               <button
                 type="button"
-                aria-label={`Close agent tab ${agentTabLabel(tab)}`}
+                aria-label={t('inspector.browser.closeTab', { name: agentTabLabel(tab, t('inspector.browser.newTab')) })}
                 onClick={(event) => {
                   event.stopPropagation()
                   onCloseAgentTab?.(tab.tabId)
@@ -394,13 +396,13 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       ) : null}
       <div className={`browser-preview ${showAgentTab ? 'browser-preview--hidden' : ''}`} inert={showAgentTab ? true : undefined}>
       <div className="browser-toolbar">
-        <IconButton label="Back" disabled={!canBack} onClick={() => webviewRef.current?.goBack()}>
+        <IconButton label={t('common.back')} disabled={!canBack} onClick={() => webviewRef.current?.goBack()}>
           <ArrowLeft size={14} />
         </IconButton>
-        <IconButton label="Forward" disabled={!canForward} onClick={() => webviewRef.current?.goForward()}>
+        <IconButton label={t('inspector.browser.forward')} disabled={!canForward} onClick={() => webviewRef.current?.goForward()}>
           <ArrowRight size={14} />
         </IconButton>
-        <IconButton label={loading ? 'Stop loading' : 'Reload'} onClick={() => (loading ? webviewRef.current?.stop() : webviewRef.current?.reload())}>
+        <IconButton label={loading ? t('inspector.browser.stopLoading') : t('inspector.browser.reload')} onClick={() => (loading ? webviewRef.current?.stop() : webviewRef.current?.reload())}>
           {loading ? <X size={14} /> : <RefreshCw size={14} />}
         </IconButton>
         <form
@@ -411,24 +413,24 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
           }}
         >
           <ShieldCheck size={12} />
-          <input value={address} onChange={(event) => setAddress(event.target.value)} aria-label="Browser address" spellCheck={false} />
-          <button type="button" aria-label="Browser history" onClick={() => setHistoryOpen((value) => !value)}>
+          <input value={address} onChange={(event) => setAddress(event.target.value)} aria-label={t('inspector.browser.address')} spellCheck={false} />
+          <button type="button" aria-label={t('inspector.browser.history')} onClick={() => setHistoryOpen((value) => !value)}>
             <History size={13} />
           </button>
         </form>
-        <IconButton className={picking || pendingElement ? 'is-active annotation-active' : ''} label={picking ? 'Stop annotating' : 'Annotate page'} aria-pressed={picking} onClick={toggleAnnotation}>
+        <IconButton className={picking || pendingElement ? 'is-active annotation-active' : ''} label={picking ? t('inspector.browser.stopAnnotating') : t('inspector.browser.annotate')} aria-pressed={picking} onClick={toggleAnnotation}>
           <MessageCirclePlus size={15} />
         </IconButton>
-        <IconButton label="Open in default browser" onClick={() => onOpenExternal(currentUrl)}>
+        <IconButton label={t('inspector.browser.openExternal')} onClick={() => onOpenExternal(currentUrl)}>
           <ExternalLink size={14} />
         </IconButton>
       </div>
       {historyOpen ? (
         <div className="browser-history">
           <div>
-            <strong>Recent pages</strong>
+            <strong>{t('inspector.browser.recentPages')}</strong>
             <button type="button" onClick={() => setHistory([])}>
-              Clear
+              {t('inspector.browser.clear')}
             </button>
           </div>
           {history
@@ -453,7 +455,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         {webview}
         {picking ? (
           <div className="annotation-hint" role="status">
-            <MessageCirclePlus size={12} /> Click an element in the page to comment on it
+            <MessageCirclePlus size={12} /> {t('inspector.browser.pickHint')}
           </div>
         ) : null}
         {pendingElement ? (
@@ -461,10 +463,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
             <div className="annotation-popover">
               <div>
                 <MessageCirclePlus size={14} />
-                <strong>Comment on element {count + 1}</strong>
+                <strong>{t('inspector.browser.commentOn', { count: count + 1 })}</strong>
                 <button
                   type="button"
-                  aria-label="Discard annotation"
+                  aria-label={t('inspector.browser.discard')}
                   onClick={() => {
                     setPendingElement(null)
                     setAnnotationText('')
@@ -485,14 +487,14 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
                   // Ctrl/Cmd+Enter also fires the composer's send with the saved annotation attached.
                   if (event.ctrlKey || event.metaKey) annotationsRef.current.requestSend()
                 }}
-                placeholder="Describe what should change…"
+                placeholder={t('inspector.browser.describe')}
               />
               <p className="annotation-popover__hints">
                 <span>
-                  <kbd>{platform === 'darwin' ? '↩' : 'Enter'}</kbd> add to chat
+                  <kbd>{platform === 'darwin' ? '↩' : 'Enter'}</kbd> {t('inspector.browser.addToChat')}
                 </span>
                 <span>
-                  <kbd>{shortcutLabel(platform, ['Primary', 'Enter'])}</kbd> send now
+                  <kbd>{shortcutLabel(platform, ['Primary', 'Enter'])}</kbd> {t('inspector.browser.sendNow')}
                 </span>
               </p>
               <div>
@@ -504,10 +506,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
                     setAnnotationText('')
                   }}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button type="button" className="button button--primary" disabled={!annotationText.trim()} onClick={saveAnnotation}>
-                  Add comment
+                  {t('inspector.browser.addComment')}
                 </button>
               </div>
             </div>
@@ -515,8 +517,8 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         ) : null}
         {count ? (
           <div className="annotation-count">
-            <MessageCirclePlus size={12} /> {count} of {MAX_BROWSER_ANNOTATIONS} annotation{count === 1 ? '' : 's'}
-            {staleCount ? ` · ${staleCount} from earlier pages` : ''}
+            <MessageCirclePlus size={12} /> {t('inspector.browser.annotationCount', { count, max: MAX_BROWSER_ANNOTATIONS })}
+            {staleCount ? t('inspector.browser.staleCount', { count: staleCount }) : ''}
           </div>
         ) : null}
         {notice ? (
@@ -530,13 +532,13 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       {showAgentTab && activeAgentTab ? (
         <div className="browser-agent-area">
           <div className="browser-agent-urlbar">
-            <IconButton label="Back" disabled={!activeAgentTab.canGoBack} onClick={() => onNavigateAgentTab?.(activeAgentTab.tabId, 'back')}>
+            <IconButton label={t('common.back')} disabled={!activeAgentTab.canGoBack} onClick={() => onNavigateAgentTab?.(activeAgentTab.tabId, 'back')}>
               <ArrowLeft size={14} />
             </IconButton>
-            <IconButton label="Forward" disabled={!activeAgentTab.canGoForward} onClick={() => onNavigateAgentTab?.(activeAgentTab.tabId, 'forward')}>
+            <IconButton label={t('inspector.browser.forward')} disabled={!activeAgentTab.canGoForward} onClick={() => onNavigateAgentTab?.(activeAgentTab.tabId, 'forward')}>
               <ArrowRight size={14} />
             </IconButton>
-            <IconButton label="Reload" onClick={() => onNavigateAgentTab?.(activeAgentTab.tabId, 'reload')}>
+            <IconButton label={t('inspector.browser.reload')} onClick={() => onNavigateAgentTab?.(activeAgentTab.tabId, 'reload')}>
               <RefreshCw size={14} />
             </IconButton>
             <form
@@ -555,13 +557,13 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
                   setAgentAddress(event.target.value)
                 }}
                 onBlur={() => { agentAddressEditingRef.current = false }}
-                aria-label="Agent tab address"
+                aria-label={t('inspector.browser.agentAddress')}
                 spellCheck={false}
               />
             </form>
-            {!activeAgentTab.attached ? <em>connecting…</em> : null}
+            {!activeAgentTab.attached ? <em>{t('inspector.browser.connecting')}</em> : null}
           </div>
-          <div className="browser-agent-slot" ref={slotRef} aria-label="Agent-controlled browser tab" />
+          <div className="browser-agent-slot" ref={slotRef} aria-label={t('inspector.browser.agentTab')} />
         </div>
       ) : null}
     </div>

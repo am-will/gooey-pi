@@ -239,6 +239,43 @@ describe('FilesPanel tree building logic', () => {
 })
 
 describe('FilesPanel component', () => {
+  it('loads folders on expansion and searches paths in unopened folders', async () => {
+    const listFiles = vi.fn(async (path: string, _harness?: string, mode?: 'children') => ({
+      entries: mode !== 'children' ? sampleEntries : path === sampleProject.primaryFolder
+        ? [{ path: 'src', type: 'directory' as const }, { path: 'README.md', type: 'file' as const }]
+        : [{ path: 'components', type: 'directory' as const }],
+      skipped: 0,
+    }))
+    Object.defineProperty(window, 'prime', { configurable: true, value: { projects: { listFiles } } })
+    await act(async () => root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />))
+    expect(listFiles).toHaveBeenCalledTimes(1)
+    expect(container.textContent).not.toContain('AgentProgress.tsx')
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    expect(listFiles).toHaveBeenLastCalledWith(`${sampleProject.primaryFolder}/src`, 'prime', 'children')
+    expect(container.querySelectorAll('.file-tree__item').length).toBe(3)
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    expect(listFiles).toHaveBeenCalledTimes(2)
+    await enter(container.querySelector<HTMLInputElement>('.files-search input')!, 'Progress')
+    expect(listFiles).toHaveBeenLastCalledWith(sampleProject.primaryFolder, 'prime', undefined)
+    expect(container.textContent).toContain('AgentProgress.tsx')
+    expect(container.textContent).not.toContain('ChatPanel.tsx')
+  })
+
+  it('discards a directory response after switching projects', async () => {
+    let resolveDirectory: (value: { entries: ProjectFileEntry[]; skipped: number }) => void = () => undefined
+    const listFiles = vi.fn(async (path: string) => path.endsWith('/src')
+      ? new Promise<{ entries: ProjectFileEntry[]; skipped: number }>((resolve) => { resolveDirectory = resolve })
+      : { entries: [{ path: 'src', type: 'directory' as const }], skipped: 0 })
+    Object.defineProperty(window, 'prime', { configurable: true, value: { projects: { listFiles } } })
+    await act(async () => root.render(<FilesPanel project={sampleProject} git={emptyGit} onReveal={vi.fn()} />))
+    await act(async () => container.querySelector<HTMLButtonElement>('.file-tree__item.is-directory')?.click())
+    const next = { ...sampleProject, id: 'next', primaryFolder: '/workspace/next', folders: ['/workspace/next'] }
+    await act(async () => root.render(<FilesPanel project={next} git={emptyGit} onReveal={vi.fn()} />))
+    await act(async () => resolveDirectory({ entries: [{ path: 'stale.txt', type: 'file' }], skipped: 0 }))
+    expect(container.textContent).not.toContain('stale.txt')
+  })
+
   it('renders empty state when no project is provided', async () => {
     await act(async () => {
       root.render(<FilesPanel git={emptyGit} onReveal={vi.fn()} />)
@@ -263,7 +300,7 @@ describe('FilesPanel component', () => {
       await Promise.resolve()
     })
 
-    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'prime')
+    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'prime', 'children')
 
     // Root button should show project name
     const treeRoot = container.querySelector('.tree-root')
@@ -374,7 +411,7 @@ describe('FilesPanel component', () => {
     const expandAllBtn = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Expand all folders"]',
     )
-    act(() => {
+    await act(async () => {
       expandAllBtn?.click()
     })
 
@@ -521,7 +558,7 @@ describe('FilesPanel component', () => {
     )
     expect(expandAllBtn).toBeTruthy()
 
-    act(() => {
+    await act(async () => {
       expandAllBtn?.click()
     })
 
@@ -644,7 +681,7 @@ describe('FilesPanel component', () => {
       await Promise.resolve()
     })
 
-    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'pi')
+    expect(listFiles).toHaveBeenCalledWith('/workspace/test-project', 'pi', 'children')
     expect(container.textContent).toContain('test-project')
     expect(container.textContent).toContain('src')
     expect(container.textContent).toContain('package.json')

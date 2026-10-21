@@ -1,6 +1,6 @@
 import { session } from 'electron'
 import { isAbsolute } from 'node:path'
-import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, PROJECT_SORT_MODES, type AppSettings, type ProjectSortMode } from '../../src/types/api'
+import { BROWSER_PARTITION, HARNESS_IDS, INTERFACE_FONT_SCALES, LOCALE_PREFERENCES, PROJECT_SORT_MODES, type AppSettings, type LocalePreference, type ProjectSortMode } from '../../src/types/api'
 import type { JsonStateStore } from './store'
 import { isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
@@ -25,8 +25,10 @@ export class SettingsService {
         return value
       },
       locale: (value) => {
-        if (value !== 'system' && value !== 'en' && value !== 'zh-CN') throw new TypeError('Invalid locale')
-        return value
+        // Derived from the same tuple the renderer's language picker is built
+        // from: a locale the picker can offer can never be rejected here.
+        if (!LOCALE_PREFERENCES.includes(value as LocalePreference)) throw new TypeError('Invalid locale')
+        return value as LocalePreference
       },
       interfaceFontScale: (value) => {
         if (!INTERFACE_FONT_SCALES.includes(value as AppSettings['interfaceFontScale'])) throw new TypeError('Invalid interface font scale')
@@ -52,6 +54,7 @@ export class SettingsService {
       showToolCalls: (value) => requireBoolean(value, 'showToolCalls'),
       telemetry: (value) => requireBoolean(value, 'telemetry'),
       askUserEnabled: (value) => requireBoolean(value, 'askUserEnabled'),
+      askUserTimeoutMs: (value) => requireInteger(value, 'askUserTimeoutMs', 0, 1_800_000),
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),
       computerUseEnabled: (value) => requireBoolean(value, 'computerUseEnabled'),
       defaultInspectorTab: (value) => {

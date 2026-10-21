@@ -1,43 +1,54 @@
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { AppSettings } from '@/types/api'
 import type { SettingsSectionProps } from './contracts'
 import { SettingsToggle } from './SettingsToggle'
 
+// Option tables carry keys so the English text stays in the catalog only.
+const checkoutStrategies: Array<{ value: AppSettings['checkoutStrategy']; label: MessageKey }> = [
+  { value: 'worktree', label: 'settings.general.checkout.worktrees' },
+  { value: 'branch', label: 'settings.general.checkout.branches' },
+]
+
+const inspectorTabs: Array<{ value: AppSettings['defaultInspectorTab']; label: MessageKey }> = [
+  { value: 'summary', label: 'settings.general.inspectorTab.summary' },
+  { value: 'changes', label: 'settings.general.inspectorTab.changes' },
+  { value: 'browser', label: 'settings.general.inspectorTab.browser' },
+  { value: 'files', label: 'settings.general.inspectorTab.files' },
+]
+
 export function GeneralSettings({ settings, onUpdate, platform }: SettingsSectionProps & { platform: NodeJS.Platform }) {
+  const { t } = useI18n()
   return (
     <>
-      <header><h1>General</h1><p>Choose how GooeyPi behaves across projects.</p></header>
+      <header><h1>{t('settings.general')}</h1><p>{t('settings.general.description')}</p></header>
       <section className="settings-group">
-        <h2>Window</h2>
-        <SettingsToggle checked={settings.sidebarOpen} onChange={(sidebarOpen) => { void onUpdate({ sidebarOpen }) }} label="Show project sidebar" description="Keep projects and sessions visible when the app opens." />
-        <SettingsToggle checked={settings.inspectorOpen} onChange={(inspectorOpen) => { void onUpdate({ inspectorOpen }) }} label="Open session inspector" description="Show the summary pane for newly opened sessions." />
-        <SettingsToggle checked={settings.showFileChangesPopup} onChange={(showFileChangesPopup) => { void onUpdate({ showFileChangesPopup }) }} label="Show file changes popup" description="Show the review card above the composer when the workspace has uncommitted changes." />
+        <h2>{t('settings.general.window.title')}</h2>
+        <SettingsToggle checked={settings.sidebarOpen} onChange={(sidebarOpen) => { void onUpdate({ sidebarOpen }) }} label={t('settings.general.sidebar.label')} description={t('settings.general.sidebar.description')} />
+        <SettingsToggle checked={settings.inspectorOpen} onChange={(inspectorOpen) => { void onUpdate({ inspectorOpen }) }} label={t('settings.general.inspector.label')} description={t('settings.general.inspector.description')} />
+        <SettingsToggle checked={settings.showFileChangesPopup} onChange={(showFileChangesPopup) => { void onUpdate({ showFileChangesPopup }) }} label={t('settings.general.fileChanges.label')} description={t('settings.general.fileChanges.description')} />
       </section>
       {platform === 'darwin' ? (
         <section className="settings-group">
-          <h2>Startup &amp; background</h2>
-          <SettingsToggle checked={settings.keepRunningInBackground} onChange={(keepRunningInBackground) => { void onUpdate({ keepRunningInBackground }) }} label="Keep running after closing the app window" description="Keep scheduled work running from the menu bar until you quit the app." />
-          <SettingsToggle checked={settings.launchAtLogin} onChange={(launchAtLogin) => { void onUpdate({ launchAtLogin }) }} label="Launch at login" description="Start the app in the background when you log in to this Mac." />
+          <h2>{t('settings.general.startup.title')}</h2>
+          <SettingsToggle checked={settings.keepRunningInBackground} onChange={(keepRunningInBackground) => { void onUpdate({ keepRunningInBackground }) }} label={t('settings.general.background.label')} description={t('settings.general.background.description')} />
+          <SettingsToggle checked={settings.launchAtLogin} onChange={(launchAtLogin) => { void onUpdate({ launchAtLogin }) }} label={t('settings.general.launchAtLogin.label')} description={t('settings.general.launchAtLogin.description')} />
         </section>
       ) : null}
       <section className="settings-group">
-        <h2>Session defaults</h2>
+        <h2>{t('settings.general.sessions.title')}</h2>
         <label className="settings-row">
-          <span><strong>Git checkout style</strong><small>Worktrees use separate folders for safe parallel tasks. Branches reuse the same folder and require a clean, idle project.</small></span>
+          <span><strong>{t('settings.general.checkout.label')}</strong><small>{t('settings.general.checkout.description')}</small></span>
           <select value={settings.checkoutStrategy} onChange={(event) => {
             const checkoutStrategy = event.target.value
             if (checkoutStrategy === 'worktree' || checkoutStrategy === 'branch') void onUpdate({ checkoutStrategy })
           }}>
-            <option value="worktree">Worktrees</option>
-            <option value="branch">Branches</option>
+            {checkoutStrategies.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
           </select>
         </label>
         <label className="settings-row">
-          <span><strong>Default inspector tab</strong><small>The first detail surface shown in a session.</small></span>
+          <span><strong>{t('settings.general.inspectorTab.label')}</strong><small>{t('settings.general.inspectorTab.description')}</small></span>
           <select value={settings.defaultInspectorTab} onChange={(event) => { void onUpdate({ defaultInspectorTab: event.target.value as AppSettings['defaultInspectorTab'] }) }}>
-            <option value="summary">Summary</option>
-            <option value="changes">Changes</option>
-            <option value="browser">Browser</option>
-            <option value="files">Files</option>
+            {inspectorTabs.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
           </select>
         </label>
       </section>

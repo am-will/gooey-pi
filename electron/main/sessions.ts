@@ -1,7 +1,7 @@
 import { watch, type Dirent, type Stats } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import type { HarnessId, PrimeImplementation, SessionChangeEvent, SessionRecord, TranscriptMessage } from '../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { RUST_PRIME_AGENT_NAME } from '../../src/lib/prime-compat'
@@ -11,6 +11,7 @@ import { resolveExecutable, runProcess, type ExecutableSource } from './process-
 import { SessionMetadataCatalog, type SessionCatalogIo, type SessionNameTimestamp } from './sessions/catalog'
 import { createSessionMetadataReader, type JsonRecord, type SessionMetadata, type SessionMetadataReader } from './sessions/metadata'
 import { readTranscript } from './sessions/transcript'
+import { PrimeSessionArchive } from './sessions/prime-archive'
 import type { JsonStateStore } from './store'
 import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString } from './validation'
 
@@ -114,6 +115,7 @@ export class SessionService {
   private readonly watchDirectory: SessionWatchFactory
   private readonly renameFile: ((filePath: string, title: string) => boolean) | undefined
   private readonly primeImplementation: () => PrimeImplementation | undefined
+  private readonly nativeArchive: PrimeSessionArchive
   private readonly changeListeners = new Set<(event: SessionChangeEvent) => void>()
   private sessionWatcher: SessionWatcher | null = null
   private readonly bucketWatchers = new Map<string, SessionWatcher>()
@@ -128,7 +130,7 @@ export class SessionService {
   constructor(
     private readonly store: JsonStateStore,
     private readonly primeAgentPath: ExecutableSource,
-    maxSessionFiles = MAX_SESSION_FILES,
+    private readonly maxSessionFiles = MAX_SESSION_FILES,
     options: SessionServiceOptions = {},
   ) {
     const transcriptLimit = options.maxConcurrentTranscriptReads ?? MAX_CONCURRENT_TRANSCRIPT_READS
@@ -158,6 +160,15 @@ export class SessionService {
     )
     this.renameFile = options.renameFile
     this.primeImplementation = options.primeImplementation ?? (() => undefined)
+    this.nativeArchive = new PrimeSessionArchive(
+      () => this.sessionRoot,
+      () => this.harness === 'prime' && this.primeImplementation() === 'rust',
+      new SessionMetadataCatalog(
+        () => join(dirname(this.sessionRoot), 'sessions-archive'), null, maxSessionFiles,
+        (filePath, knownStat) => this.readMetadata(filePath, knownStat),
+      ),
+      this.watchDirectory,
+    )
   }
 
   bindRuntimeHooks(hooks: {
@@ -202,7 +213,14 @@ export class SessionService {
     // recursive delivery varies by platform and an event may still be queued.
     // Force advances the scan revision while retaining metadata-level caches.
     if (force) this.catalog.invalidateLiveCatalog()
-    const sessions = await this.catalog.all()
+    let sessions = await this.catalog.all()
+    if (this.nativeArchive.enabled()) {
+      if (force) this.nativeArchive.catalog.invalidateLiveCatalog()
+      if (this.changeListeners.size) this.nativeArchive.watch(() => this.queueSessionChange(null))
+      sessions = [...new Map([...sessions, ...await this.nativeArchive.catalog.all()].map((session) => [session.filePath, session])).values()]
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || comparePaths(left.filePath, right.filePath))
+        .slice(0, this.maxSessionFiles)
+    }
     const archived = new Set(this.store.getArchivedSessions().map((path) => resolve(path)))
     // One runtime snapshot per list call; each session then resolves in O(1).
     const runtimeBySession = this.snapshotRuntimeSessions()
@@ -214,8 +232,8 @@ export class SessionService {
       const runtime = runtimeBySession
         ? runtimeBySession.get(resolve(metadata.filePath))
         : this.runtimeForSession(metadata.filePath)
-      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting ? 'running' : 'idle'
-      const { sessionName: _sessionName, ...record } = metadata
+      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting || metadata.hasRunningRlmChildren ? 'running' : 'idle'
+      const { sessionName: _sessionName, hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
       records.push({ ...record, harness: this.harness, archived: isArchived })
     }
     return records.sort((a, b) => Date.parse(b.lastUserMessageAt ?? b.createdAt) - Date.parse(a.lastUserMessageAt ?? a.createdAt) || comparePaths(a.filePath, b.filePath))
@@ -323,14 +341,16 @@ export class SessionService {
 
   async requireSessionPath(value: unknown): Promise<string> {
     const requested = requireString(value, 'filePath', { min: 1, max: 4096 })
-    const root = await realpath(this.sessionRoot)
     const path = await realpath(requested)
+    if (await this.nativeArchive.authorizes(path)) return path
+    const root = await realpath(this.sessionRoot)
     if (!this.isSessionPathAuthorized(root, path)) throw new TypeError('Session path is outside the Prime session directory')
     return path
   }
 
   private startWatcher(): void {
     if (this.sessionWatcher || this.watcherRetry || !this.changeListeners.size) return
+    this.nativeArchive.watch(() => this.queueSessionChange(null))
     try {
       // A missing session root (harness never used on this machine) throws
       // here and lands in the retry below, which watches once the root appears.
@@ -367,6 +387,7 @@ export class SessionService {
   }
 
   private stopWatcher(): void {
+    this.nativeArchive.close()
     this.sessionWatcher?.close()
     this.sessionWatcher = null
     this.closeBucketWatchers()

@@ -1,9 +1,9 @@
 /* Transcript */
-.transcript { position: absolute; inset: 0; overflow-y: auto; padding: 30px 0 170px; }
-.transcript.has-pinned-changes { padding-bottom: 245px; }
-.transcript.has-docked-changes { padding-bottom: 250px; }
-.transcript.has-queued-messages { padding-bottom: 325px; }
-.transcript.has-docked-changes.has-queued-messages { padding-bottom: 405px; }
+.transcript { position: absolute; inset: 0; overflow-y: auto; padding: 30px 0 max(170px, calc(var(--dock-h, 0px) + 26px)); }
+.transcript.has-pinned-changes { padding-bottom: max(245px, calc(var(--dock-h, 0px) + 26px)); }
+.transcript.has-docked-changes { padding-bottom: max(250px, calc(var(--dock-h, 0px) + 26px)); }
+.transcript.has-queued-messages { padding-bottom: max(325px, calc(var(--dock-h, 0px) + 26px)); }
+.transcript.has-docked-changes.has-queued-messages { padding-bottom: max(405px, calc(var(--dock-h, 0px) + 26px)); }
 .transcript-changes-pin { z-index: 9; bottom: 137px; }
 .conversation-pane .changes-card { margin: 0; box-shadow: 0 4px 18px color-mix(in srgb, #000 12%, transparent); }
 .transcript__inner { min-height: 100%; padding: 0 24px; }
@@ -177,3 +177,6 @@
 .goal-message__chevron { flex: 0 0 auto; margin-left: auto; color: var(--annotation); }
 .goal-message__content { padding: 11px 13px 12px 37px; border-top: 1px solid color-mix(in srgb, var(--annotation) 22%, var(--border)); background: color-mix(in srgb, var(--annotation) 5%, var(--canvas)); }
 .goal-message__content .prose { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.55; }
+
+.branch-summary > summary { color: var(--text-secondary); font-size: 12px; cursor: pointer; padding-block: 6px; }
+.branch-summary[open] > summary { margin-bottom: 8px; }

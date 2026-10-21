@@ -1,6 +1,6 @@
 import type { AppMeta, AppSettings } from '@/types/api'
 
-export type SettingsSection = 'general' | 'appearance' | 'agent' | 'providers' | 'voice' | 'pets' | 'browser' | 'terminal' | 'privacy' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'agent' | 'providers' | 'voice' | 'pets' | 'browser' | 'terminal' | 'archived' | 'privacy' | 'about'
 
 export type SettingsUpdate = (patch: Partial<AppSettings>) => Promise<void> | void
 
@@ -38,6 +38,7 @@ export const SETTINGS_FIELD_SECTIONS = {
   enabledHarnesses: 'agent',
   telemetry: 'privacy',
   askUserEnabled: 'agent',
+  askUserTimeoutMs: 'agent',
   browserEnabled: 'agent',
   computerUseEnabled: 'agent',
   disabledProviders: 'providers',

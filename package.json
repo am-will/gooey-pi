@@ -103,6 +103,7 @@
       "!**/node_modules/koffi/**"
     ],
     "mac": {
+      "minimumSystemVersion": "14.0.0",
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",

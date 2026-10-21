@@ -1,6 +1,7 @@
 import { CheckCircle2, ChevronDown, CircleAlert, LoaderCircle, Play, RotateCcw, Square } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { ProjectRecord } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
 
 export type ProjectScriptKind = 'setup' | 'run'
 
@@ -13,6 +14,7 @@ interface ProjectRunControlProps {
 }
 
 export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }: ProjectRunControlProps) {
+  const { t } = useI18n()
   const menuId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const runInputRef = useRef<HTMLTextAreaElement>(null)
@@ -49,7 +51,7 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
   const startScript = (kind: ProjectScriptKind) => {
     setError('')
     void Promise.resolve(onRun(kind)).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : `Could not start the ${kind} script`)
+      setError(cause instanceof Error ? cause.message : kind === 'setup' ? t('projectRun.startSetupError') : t('projectRun.startRunError'))
       setOpen(true)
     })
   }
@@ -71,7 +73,7 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
       await onSave({ setup, run })
       setOpen(false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not save project scripts')
+      setError(cause instanceof Error ? cause.message : t('projectRun.saveError'))
     } finally {
       setSaving(false)
     }
@@ -80,40 +82,40 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
   const setupStatus = (() => {
     const scripts = project.scripts
     if (!setup.trim()) return null
-    if (activeKind === 'setup') return <span className="project-run-menu__status is-running"><LoaderCircle className="spin" size={12} /> Setup running</span>
-    if (scripts?.setup !== setup.trim() || scripts.setupLastRun !== scripts.setup) return <span className="project-run-menu__status">Runs automatically after save</span>
-    if (scripts.setupLastExitCode === 0) return <span className="project-run-menu__status is-success"><CheckCircle2 size={12} /> Setup completed</span>
-    if (scripts.setupLastExitCode !== undefined) return <span className="project-run-menu__status is-error"><CircleAlert size={12} /> Setup exited with code {scripts.setupLastExitCode}</span>
-    return <span className="project-run-menu__status">Setup did not finish</span>
+    if (activeKind === 'setup') return <span className="project-run-menu__status is-running"><LoaderCircle className="spin" size={12} /> {t('projectRun.setupRunning')}</span>
+    if (scripts?.setup !== setup.trim() || scripts.setupLastRun !== scripts.setup) return <span className="project-run-menu__status">{t('projectRun.setupAutoRun')}</span>
+    if (scripts.setupLastExitCode === 0) return <span className="project-run-menu__status is-success"><CheckCircle2 size={12} /> {t('projectRun.setupCompleted')}</span>
+    if (scripts.setupLastExitCode !== undefined) return <span className="project-run-menu__status is-error"><CircleAlert size={12} /> {t('projectRun.setupExited', { code: scripts.setupLastExitCode })}</span>
+    return <span className="project-run-menu__status">{t('projectRun.setupUnfinished')}</span>
   })()
 
   return (
     <div ref={rootRef} className="project-run-control">
       <div className={`project-run-split ${running ? 'is-running' : ''}`}>
-        <button type="button" title={running ? (activeKind === 'setup' ? 'Stop setup' : 'Stop project') : 'Run project'} className="project-run-split__primary" aria-label={running ? `Stop ${activeKind} script` : 'Run project'} onClick={runPrimary}>
+        <button type="button" title={running ? (activeKind === 'setup' ? t('projectRun.stopSetupTitle') : t('projectRun.stopProjectTitle')) : t('projectRun.runProject')} className="project-run-split__primary" aria-label={running ? (activeKind === 'setup' ? t('projectRun.stopSetupScript') : t('projectRun.stopRunScript')) : t('projectRun.runProject')} onClick={runPrimary}>
           {running ? <Square size={11} fill="currentColor" /> : <Play size={15} />}
         </button>
-        <button type="button" title="Configure project scripts" className="project-run-split__menu" aria-label="Configure project scripts" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? menuId : undefined} onClick={() => setOpen((value) => !value)}>
+        <button type="button" title={t('projectRun.configure')} className="project-run-split__menu" aria-label={t('projectRun.configure')} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? menuId : undefined} onClick={() => setOpen((value) => !value)}>
           <ChevronDown size={13} />
         </button>
       </div>
       {open ? (
-        <section id={menuId} className="project-run-menu" role="dialog" aria-label={`Scripts for ${project.name}`}>
-          <header><strong>Project scripts</strong><small>{project.name}</small></header>
+        <section id={menuId} className="project-run-menu" role="dialog" aria-label={t('projectRun.scriptsFor', { name: project.name })}>
+          <header><strong>{t('projectRun.scriptsTitle')}</strong><small>{project.name}</small></header>
           <label htmlFor={`${menuId}-setup`}>
-            <span>Setup command</span>
+            <span>{t('projectRun.setupCommand')}</span>
             <textarea id={`${menuId}-setup`} className="mono" rows={2} value={setup} placeholder="npm install" spellCheck={false} onChange={(event) => setSetup(event.target.value)} />
-            <small>Runs once when first configured, and again whenever this command changes.</small>
+            <small>{t('projectRun.setupHelp')}</small>
           </label>
           {setupStatus}
           <label htmlFor={`${menuId}-run`}>
-            <span>Run command</span>
+            <span>{t('projectRun.runCommand')}</span>
             <textarea ref={runInputRef} id={`${menuId}-run`} className="mono" rows={2} value={run} placeholder="npm run dev" spellCheck={false} onChange={(event) => setRun(event.target.value)} />
           </label>
           {error ? <p className="project-run-menu__error" role="alert">{error}</p> : null}
           <footer>
-            <button type="button" className="button button--quiet" disabled={!project.scripts?.setup.trim() || running || saving} onClick={() => startScript('setup')}><RotateCcw size={13} /> Run setup again</button>
-            <button type="button" className="button button--primary" disabled={saving} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={13} /> : null} Save</button>
+            <button type="button" className="button button--quiet" disabled={!project.scripts?.setup.trim() || running || saving} onClick={() => startScript('setup')}><RotateCcw size={13} /> {t('projectRun.runSetupAgain')}</button>
+            <button type="button" className="button button--primary" disabled={saving} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={13} /> : null} {t('common.save')}</button>
           </footer>
         </section>
       ) : null}

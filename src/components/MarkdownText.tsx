@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import type { Components } from 'react-markdown'
+import { memo, useEffect, useMemo, useRef, useState, type JSX, type MouseEvent } from 'react'
+import type { Components, ExtraProps } from 'react-markdown'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { openExternalUrl } from '@/lib/desktop-actions'
+import { useI18n } from '@/lib/i18n'
 
 interface MarkdownTextProps {
   text: string
@@ -32,14 +33,29 @@ function openMarkdownLink(event: MouseEvent<HTMLAnchorElement>, href?: string): 
 const markdownPlugins = [remarkGfm]
 
 /**
+ * Links and images carry user-visible text (a title and a placeholder), so they
+ * live in named components instead of the module-level map: react-markdown
+ * renders every entry as a component, which is what lets these read the locale.
+ */
+function MarkdownAnchor({ node: _node, href, children, ...props }: JSX.IntrinsicElements['a'] & ExtraProps) {
+  const { t } = useI18n()
+  return href && (/^(https?:|mailto:|#)/i.test(href))
+    ? <a {...props} href={href} rel="noreferrer" onClick={(event) => openMarkdownLink(event, href)}><bdi>{children}</bdi></a>
+    : <span className="markdown-link-unsupported" title={href ? t('markdown.projectRelativeLink', { href }) : undefined}>{children}</span>
+}
+
+function MarkdownImage({ alt }: JSX.IntrinsicElements['img'] & ExtraProps) {
+  const { t } = useI18n()
+  return <span className="markdown-image-placeholder">{t('markdown.imagePlaceholder', { alt: alt || t('markdown.imageFallbackAlt') })}</span>
+}
+
+/**
  * Each block resolves its own base direction from its first strong character.
  * The browser skips descendants that carry their own `dir`, so a paragraph
  * opening with LTR code still lays out RTL prose correctly.
  */
 const markdownComponents: Components = {
-  a: ({ node: _node, href, children, ...props }) => href && (/^(https?:|mailto:|#)/i.test(href))
-    ? <a {...props} href={href} rel="noreferrer" onClick={(event) => openMarkdownLink(event, href)}><bdi>{children}</bdi></a>
-    : <span className="markdown-link-unsupported" title={href ? `Project-relative link: ${href}` : undefined}>{children}</span>,
+  a: MarkdownAnchor,
   blockquote: ({ node: _node, ...props }) => <blockquote {...props} dir="auto" />,
   code: ({ node: _node, children, ...props }) => <code {...props} dir="ltr">{children}</code>,
   h1: ({ node: _node, ...props }) => <h1 {...props} dir="auto" />,
@@ -48,7 +64,7 @@ const markdownComponents: Components = {
   h4: ({ node: _node, ...props }) => <h4 {...props} dir="auto" />,
   h5: ({ node: _node, ...props }) => <h5 {...props} dir="auto" />,
   h6: ({ node: _node, ...props }) => <h6 {...props} dir="auto" />,
-  img: ({ alt }) => <span className="markdown-image-placeholder">[Image: {alt || 'attachment'}]</span>,
+  img: MarkdownImage,
   li: ({ node: _node, ...props }) => <li {...props} dir="auto" />,
   ol: ({ node: _node, ...props }) => <ol {...props} dir="auto" />,
   p: ({ node: _node, ...props }) => <p {...props} dir="auto" />,
