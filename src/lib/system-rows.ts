@@ -4,6 +4,7 @@ import type { TranscriptMessage } from '@/types/api'
 const NEUTRAL_KINDS: Record<NonNullable<TranscriptMessage['kind']>, boolean> = {
   'steer-read-marker': true,
   notice: true,
+  error: false,
 }
 
 /**
