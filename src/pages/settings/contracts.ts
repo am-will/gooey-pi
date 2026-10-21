@@ -35,8 +35,6 @@ export const SETTINGS_FIELD_SECTIONS = {
   showToolCalls: 'agent',
   messageEnterAction: 'agent',
   runtimePaths: 'agent',
-  enabledHarnesses: 'agent',
-  telemetry: 'privacy',
   askUserEnabled: 'agent',
   askUserTimeoutMs: 'agent',
   browserEnabled: 'agent',

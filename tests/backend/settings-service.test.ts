@@ -40,8 +40,6 @@ describe('SettingsService.update', () => {
       showToolCalls: false,
       messageEnterAction: 'steer',
       runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' },
-      enabledHarnesses: ['prime', 'omp', 'prime'],
-      telemetry: false,
       askUserEnabled: false,
       disabledProviders: ['openai', 'openai', 'google'],
       disabledModels: ['openai/gpt-5.6', 'openai/gpt-5.6'],
@@ -72,8 +70,8 @@ describe('SettingsService.update', () => {
       defaultInspectorTab: 'changes', browserHome: 'https://example.test/',
       browserAskForDownloads: false, terminalShell: '/bin/zsh', reduceMotion: true,
       showReasoningSummaries: false, showToolCalls: false, messageEnterAction: 'steer',
-      runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' }, enabledHarnesses: ['prime', 'omp'],
-      telemetry: false, askUserEnabled: false, disabledProviders: ['openai', 'google'], disabledModels: ['openai/gpt-5.6'], ompDisabledProviders: ['anthropic'],
+      runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' },
+      askUserEnabled: false, disabledProviders: ['openai', 'google'], disabledModels: ['openai/gpt-5.6'], ompDisabledProviders: ['anthropic'],
       ompDisabledModels: ['anthropic/claude-sonnet-4'], piDisabledModels: ['openai/gpt-5.6-codex'],
       lastSelectedModels: { prime: 'openai/gpt-5.6-sol', omp: 'anthropic/claude-opus', pi: '' },
       activeHarness: 'omp', ompApprovalMode: 'always-ask', petEnabled: true, petId: 'codex/rocky', petSize: 65,
@@ -113,8 +111,6 @@ describe('SettingsService.update', () => {
     await expect(service.update({ messageEnterAction: 'send' })).rejects.toThrow(/Invalid message Enter action/)
     await expect(service.update({ runtimePaths: { prime: 'relative/prime-agent', omp: '', pi: '' } })).rejects.toThrow(/must be absolute/)
     await expect(service.update({ runtimePaths: { prime: '/opt/prime-agent', omp: '', pi: '', extra: '/tmp/evil' } })).rejects.toThrow(/not supported/)
-    await expect(service.update({ enabledHarnesses: [] })).rejects.toThrow(/At least one harness/)
-    await expect(service.update({ enabledHarnesses: ['prime', 'codex'] })).rejects.toThrow(/is invalid/)
     await expect(service.update({ sidebarOpen: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ keepRunningInBackground: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ launchAtLogin: 1 })).rejects.toThrow(/must be a boolean/)
@@ -175,19 +171,6 @@ describe('SettingsService.update', () => {
     const next = await service.update({ activeHarness: 'pi', piDisabledProviders: ['openai', 'openai', 'anthropic'] })
     expect(next.activeHarness).toBe('pi')
     expect(next.piDisabledProviders).toEqual(['openai', 'anthropic'])
-  })
-
-  it('keeps the active harness independent from the legacy enabled set', async () => {
-    const service = makeService()
-    const onlyPi = await service.update({ enabledHarnesses: ['pi'] })
-    expect(onlyPi.enabledHarnesses).toEqual(['pi'])
-    expect(onlyPi.activeHarness).toBe('omp')
-
-    const stillPi = await service.update({ enabledHarnesses: ['prime', 'pi'] })
-    expect(stillPi.activeHarness).toBe('omp')
-
-    const fallback = await service.update({ enabledHarnesses: ['prime'] })
-    expect(fallback.activeHarness).toBe('omp')
   })
 
   it('routes terminalShell through the injected shell validator', async () => {

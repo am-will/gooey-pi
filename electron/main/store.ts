@@ -122,8 +122,6 @@ export function defaultSettings(): AppSettings {
     showToolCalls: true,
     messageEnterAction: 'queue',
     runtimePaths: { prime: '', omp: '', pi: '' },
-    enabledHarnesses: ['omp', 'prime', 'pi'],
-    telemetry: false,
     askUserEnabled: false,
   askUserTimeoutMs: 120_000,
     browserEnabled: true,
@@ -229,10 +227,6 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
         pi: parseRuntimePath(value.runtimePaths.pi, defaults.runtimePaths.pi),
       }
     : defaults.runtimePaths
-  const enabledHarnesses = Array.isArray(value.enabledHarnesses)
-    ? [...new Set(value.enabledHarnesses.filter((item): item is HarnessId => item === 'prime' || item === 'omp' || item === 'pi'))]
-    : defaults.enabledHarnesses
-  const usableHarnesses = enabledHarnesses.length ? enabledHarnesses : defaults.enabledHarnesses
   const activeHarness = value.activeHarness === 'prime' || value.activeHarness === 'omp' || value.activeHarness === 'pi'
     ? value.activeHarness as HarnessId
     : legacyState ? 'prime' : defaults.activeHarness
@@ -275,8 +269,6 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     showToolCalls: typeof value.showToolCalls === 'boolean' ? value.showToolCalls : defaults.showToolCalls,
     messageEnterAction: value.messageEnterAction === 'queue' || value.messageEnterAction === 'steer' ? value.messageEnterAction : defaults.messageEnterAction,
     runtimePaths,
-    enabledHarnesses: usableHarnesses,
-    telemetry: typeof value.telemetry === 'boolean' ? value.telemetry : defaults.telemetry,
     askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
     askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
     browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,

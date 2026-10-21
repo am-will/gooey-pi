@@ -943,7 +943,6 @@ describe('JsonStateStore', () => {
     }))
     const state = new JsonStateStore(path).snapshot()
     expect(state.settings.runtimePaths).toEqual({ prime: '/opt/prime-agent', omp: '', pi: '' })
-    expect(state.settings.enabledHarnesses).toEqual(['pi'])
     expect(state.settings.activeHarness).toBe('omp')
   })
 

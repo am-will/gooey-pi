@@ -34,8 +34,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showToolCalls: true,
   messageEnterAction: 'queue',
   runtimePaths: { prime: '', omp: '', pi: '' },
-  enabledHarnesses: ['omp', 'prime', 'pi'],
-  telemetry: false,
   askUserEnabled: false,
   askUserTimeoutMs: 120_000,
   browserEnabled: true,

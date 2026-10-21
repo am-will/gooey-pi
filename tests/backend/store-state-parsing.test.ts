@@ -173,7 +173,6 @@ describe('persisted settings parsing', () => {
       settings: { runtimePaths: { prime: '/usr/local/bin/prime', omp: 'omp', pi: '/'.padEnd(4_097, 'x') }, enabledHarnesses: ['omp', 'omp', 'ollama'], activeHarness: 'ollama' },
     })
     expect(settings.runtimePaths).toEqual({ prime: '/usr/local/bin/prime', omp: '', pi: '' })
-    expect(settings.enabledHarnesses).toEqual(['omp'])
     expect(settings.activeHarness).toBe('omp')
   })
 

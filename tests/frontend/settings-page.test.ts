@@ -163,8 +163,6 @@ describe('settings field ownership', () => {
       showToolCalls: 'agent',
       messageEnterAction: 'agent',
       runtimePaths: 'agent',
-      enabledHarnesses: 'agent',
-      telemetry: 'privacy',
       askUserEnabled: 'agent',
       askUserTimeoutMs: 'agent',
       browserEnabled: 'agent',

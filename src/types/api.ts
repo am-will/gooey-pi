@@ -514,13 +514,6 @@ export interface AppSettings {
   messageEnterAction: MessageEnterAction
   /** Optional absolute executable overrides; blank keeps automatic discovery. */
   runtimePaths: Record<HarnessId, string>
-  /** Legacy visibility preference retained for state compatibility; executable detection is authoritative. */
-  enabledHarnesses: HarnessId[]
-  /**
-   * Legacy diagnostics preference retained for persisted-state compatibility.
-   * The Privacy UI deliberately ignores this field; any reporting use needs separate review.
-   */
-  telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
   /** Visible time allowed for app-owned questionnaires; 0 waits until answered. Harness deadlines are unchanged. */

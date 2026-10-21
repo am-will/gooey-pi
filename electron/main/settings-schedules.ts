@@ -55,7 +55,6 @@ export class SettingsService {
       reduceMotion: (value) => requireBoolean(value, 'reduceMotion'),
       showReasoningSummaries: (value) => requireBoolean(value, 'showReasoningSummaries'),
       showToolCalls: (value) => requireBoolean(value, 'showToolCalls'),
-      telemetry: (value) => requireBoolean(value, 'telemetry'),
       askUserEnabled: (value) => requireBoolean(value, 'askUserEnabled'),
       askUserTimeoutMs: (value) => requireInteger(value, 'askUserTimeoutMs', 0, 1_800_000),
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),
@@ -78,15 +77,6 @@ export class SettingsService {
           paths[harness] = path
         }
         return paths
-      },
-      enabledHarnesses: (value) => {
-        if (!Array.isArray(value) || value.length > HARNESS_IDS.length) throw new TypeError('enabledHarnesses must be a bounded array')
-        const enabled = [...new Set(value.map((entry, index) => {
-          if (entry !== 'prime' && entry !== 'omp' && entry !== 'pi') throw new TypeError(`enabledHarnesses[${index}] is invalid`)
-          return entry
-        }))]
-        if (!enabled.length) throw new TypeError('At least one harness must be enabled')
-        return enabled
       },
       browserHome: (value) => requireWebUrl(value),
       terminalShell: (value) => this.validateShell(value),
