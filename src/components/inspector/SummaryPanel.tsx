@@ -1,3 +1,4 @@
+import { HARNESS_AGENT_NAMES, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { memo, useMemo } from 'react'
 import { CalendarClock, Check, CircleDot, GitBranch, HeartPulse, LoaderCircle } from 'lucide-react'
 import type { AutomationScheduleRecord, GitStatus, NativeHeartbeatRecord, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
@@ -47,7 +48,7 @@ export function summarizeTranscript(messages: TranscriptMessage[], t?: ReturnTyp
   return { toolCount, lastText }
 }
 
-export const SummaryPanel = memo(function SummaryPanel({ agentName = 'Prime Agent', shortName = 'Prime', project, runtime, messages, git, automations, heartbeats, onOpenAutomation }: SummaryPanelProps) {
+export const SummaryPanel = memo(function SummaryPanel({ agentName = HARNESS_AGENT_NAMES.prime, shortName = HARNESS_SHORT_NAMES.prime, project, runtime, messages, git, automations, heartbeats, onOpenAutomation }: SummaryPanelProps) {
   const { t } = useI18n()
   const { toolCount, lastText } = useMemo(() => summarizeTranscript(messages, t), [messages, t])
   const active = Boolean(runtime?.isStreaming || runtime?.isCompacting)
