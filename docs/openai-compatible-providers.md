@@ -27,7 +27,7 @@ For Pi's `openai-completions` API, add a provider to `~/.pi/agent/models.json`. 
 
 Replace the example URL and model ID with your server's values. Supply `MY_ENDPOINT_API_KEY` through the environment inherited by Pi. A variable set in one terminal is not automatically present in a desktop app launched from Finder. Alternatively, use the credential mechanism documented by your installed harness.
 
-Verify the configuration in Pi before opening GooeyPi. Pi's `/model` command reloads the file. The [Pi model documentation](https://pi.dev/docs/models) describes additional model metadata and endpoint options. The example above matches the model configuration documented with the installed Pi 1.3 release.
+Verify the configuration in Pi before opening GooeyPi. Pi's `/model` command reloads the file. The [Pi model documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) describes additional model metadata and endpoint options. The example above matches the model configuration documented with the installed Pi 1.3 release.
 
 ## Refresh the selected harness in GooeyPi
 
