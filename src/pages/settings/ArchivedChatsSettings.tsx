@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { formatRelative } from '@/lib/data'
 import { useI18n } from '@/lib/i18n'
+import { findProjectForSession } from '@/lib/workspace'
 import type { ProjectRecord, SessionRecord } from '@/types/api'
 
 interface ArchivedChatsSettingsProps {
@@ -11,9 +12,9 @@ interface ArchivedChatsSettingsProps {
   onRestore(session: SessionRecord): Promise<void> | void
 }
 
-function projectLabel(session: SessionRecord, projects: readonly ProjectRecord[]): string {
-  const match = projects.find((project) => project.path === session.projectPath)
-  return match?.name ?? session.projectPath.split('/').filter(Boolean).pop() ?? session.projectPath
+function projectLabel(session: SessionRecord, projects: ProjectRecord[]): string {
+  const match = findProjectForSession(projects, session)
+  return match?.name ?? session.projectPath.split(/[\\/]/).filter(Boolean).pop() ?? session.projectPath
 }
 
 export function ArchivedChatsSettings({ archived, projects, onRestore }: ArchivedChatsSettingsProps) {

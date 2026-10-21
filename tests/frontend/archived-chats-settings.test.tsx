@@ -68,6 +68,16 @@ describe('archived chats settings', () => {
     expect(restoreButtons()).toHaveLength(2)
   })
 
+  it('uses the project name for sessions in a secondary project folder', async () => {
+    await render({ archived: [archivedSession({ projectPath: '/workspace/secondary' })], projects: [{ ...project, folders: [project.path, '/workspace/secondary'] }] })
+    expect(rows()[0]?.textContent).toContain('Gooey Pi')
+  })
+
+  it('labels a missing Windows project with its folder name', async () => {
+    await render({ archived: [archivedSession({ projectPath: 'C:\\workspace\\deleted-repo' })], projects: [] })
+    expect(rows()[0]?.textContent).toContain('deleted-repo ·')
+  })
+
   it('labels a chat whose project is no longer in the sidebar by its folder name', async () => {
     await render({ archived: [orphaned] })
     expect(rows()[0]?.textContent).toContain('deleted-repo')
