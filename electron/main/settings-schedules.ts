@@ -4,7 +4,7 @@ import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { createKeyedMutex } from './lib/async'
 import type { JsonStateStore } from './store'
-import { isOneOf, isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
+import { isProviderId, isModelKey, isOneOf, isRecord, rejectUnknownKeys, requireBoolean, requireInteger, requireSelfHostedVoiceUrl, requireString, requireWebUrl } from './validation'
 
 export class SettingsService {
   private readonly updates = createKeyedMutex<'settings'>()
@@ -128,7 +128,7 @@ export class SettingsService {
         const models = {} as AppSettings['lastSelectedModels']
         for (const harness of HARNESS_IDS) {
           const model = requireString(value[harness], `lastSelectedModels.${harness}`, { max: 385, trim: true })
-          if (model && !/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(model)) throw new TypeError(`lastSelectedModels.${harness} is not a valid model key`)
+          if (model && !isModelKey(model)) throw new TypeError(`lastSelectedModels.${harness} is not a valid model key`)
           models[harness] = model
         }
         return models
@@ -171,7 +171,7 @@ export class SettingsService {
     if (!Array.isArray(value) || value.length > MAX_CATALOG_PROVIDERS) throw new TypeError(`${label} must be a bounded array`)
     return [...new Set(value.map((entry, index) => {
       const id = requireString(entry, `${label}[${index}]`, { min: 1, max: 128, trim: true })
-      if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id)) throw new TypeError(`${label}[${index}] is not a valid provider ID`)
+      if (!isProviderId(id)) throw new TypeError(`${label}[${index}] is not a valid provider ID`)
       return id
     }))]
   }
@@ -180,7 +180,7 @@ export class SettingsService {
     if (!Array.isArray(value) || value.length > 5_000) throw new TypeError(`${label} must be a bounded array`)
     return [...new Set(value.map((entry, index) => {
       const key = requireString(entry, `${label}[${index}]`, { min: 3, max: 385, trim: true })
-      if (!/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(key)) throw new TypeError(`${label}[${index}] is not a valid model key`)
+      if (!isModelKey(key)) throw new TypeError(`${label}[${index}] is not a valid model key`)
       return key
     }))]
   }

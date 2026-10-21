@@ -8,7 +8,7 @@ import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS
 import { renameWithWindowsRetry } from './lib/durable-write'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
-import { isOneOf, isRecord } from './validation'
+import { isProviderId, isModelKey, isOneOf, isRecord } from './validation'
 
 export interface FolderIdentity {
   dev: string
@@ -184,7 +184,7 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     ? value.activeHarness
     : legacyState ? 'prime' : defaults.activeHarness
   const parseLastSelectedModel = (model: unknown, fallback: string): string => (
-    typeof model === 'string' && model.length <= 385 && (!model || /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(model))
+    typeof model === 'string' && model.length <= 385 && (!model || isModelKey(model))
       ? model
       : fallback
   )
@@ -251,14 +251,14 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
 function parseDisabledProviders(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback
   return [...new Set(value.filter((item): item is string => (
-    typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(item)
+    typeof item === 'string' && isProviderId(item)
   )))].slice(0, MAX_CATALOG_PROVIDERS)
 }
 
 function parseDisabledModels(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback
   return [...new Set(value.filter((item): item is string => (
-    typeof item === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9._:/+-]{1,256}$/i.test(item)
+    typeof item === 'string' && isModelKey(item)
   )))].slice(0, 5_000)
 }
 
