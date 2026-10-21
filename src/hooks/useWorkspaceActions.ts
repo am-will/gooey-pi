@@ -10,11 +10,11 @@ import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/se
 import { parseCompactCommand, parseMcpCommand } from '@/lib/prompt-commands'
 import { deliverToStartedSession } from '@/lib/started-session-delivery'
 import { isSystemReport } from '@/lib/system-rows'
-import { formattingLocaleTag, resolveLocale, translate } from '@/lib/i18n'
+import { formattingLocaleTag, resolveLocale, translate, type MessageKey } from '@/lib/i18n'
 import { isUntitledSessionTitle } from '@/lib/session-title'
 import type { DEFAULT_SETTINGS } from '@/lib/default-settings'
 import { type OwnedGitStatus, type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { CapabilityMutationInput, ExtensionInstallInput, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, ProcessOutcome, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -113,6 +113,10 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
  * stable identity (created once) and dispatches against the latest render's
  * dependencies, mirroring useStableCallback/useSidebarActions semantics.
  */
+function blocked(reason: MessageKey): ProcessOutcome {
+  return { ok: false, reason: 'blocked', output: translate(formattingLocaleTag(), reason) }
+}
+
 function ownsRuntime(workspace: WorkspaceActionsDeps['workspace'], runtimeId: string, generation: number): boolean {
   const owner = workspace.runtimeOwnerRef.current
   return workspace.runtimeIdRef.current === runtimeId && owner?.runtimeId === runtimeId && owner.generation === generation
@@ -576,71 +580,69 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.packageInstallDesktopOnly') }
     try { return await bridge.plugins.install(source, settingsState.settings.activeHarness) } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
   }
-  const installExtension = async (input: ExtensionInstallInput) => {
-    const { activeProject, bridge, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.extensionInstallDesktopOnly') }
+  const capabilityMutation = async (operation: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> => {
+    const { pluginSkills, reportError } = getDeps()
     try {
+      const response = await operation()
+      if (response.ok) await pluginSkills.refresh()
+      return response
+    } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
+  }
+  const installExtension = async (input: ExtensionInstallInput) => {
+    const { activeProject, bridge, settingsState } = getDeps()
+    if (!bridge) return blocked('error.extensionInstallDesktopOnly')
+    return capabilityMutation(async () => {
       let installation = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.extensionNeedsProject') }
+        if (!activeProject) return blocked('error.extensionNeedsProject')
         const project = await grantProject(activeProject)
         installation = { ...input, projectPath: project.primaryFolder }
       }
-      const response = await bridge.plugins.installExtension(installation, settingsState.settings.activeHarness)
-      if (response.ok) await pluginSkills.refresh()
-      return response
-    } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
+      return bridge.plugins.installExtension(installation, settingsState.settings.activeHarness)
+    })
   }
   const setMcpSupport = async (enabled: boolean) => {
-    const { bridge, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpSupportDesktopOnly') }
-    try {
-      const response = await bridge.plugins.setMcpSupport(enabled, settingsState.settings.activeHarness)
-      if (response.ok) await pluginSkills.refresh()
-      return response
-    } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
+    const { bridge, settingsState } = getDeps()
+    if (!bridge) return blocked('error.mcpSupportDesktopOnly')
+    return capabilityMutation(async () => {
+      return bridge.plugins.setMcpSupport(enabled, settingsState.settings.activeHarness)
+    })
   }
   const connectMcp = async (input: McpConnectionInput) => {
-    const { bridge, activeProject, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpConnectDesktopOnly') }
-    try {
+    const { bridge, activeProject, settingsState } = getDeps()
+    if (!bridge) return blocked('error.mcpConnectDesktopOnly')
+    return capabilityMutation(async () => {
       let connection = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpAddNeedsProject') }
+        if (!activeProject) return blocked('error.mcpAddNeedsProject')
         const project = await grantProject(activeProject); connection = { ...input, projectPath: project.primaryFolder }
       }
-      const response = await bridge.plugins.connectMcp(connection, settingsState.settings.activeHarness)
-      if (response.ok) await pluginSkills.refresh()
-      return response
-    } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
+      return bridge.plugins.connectMcp(connection, settingsState.settings.activeHarness)
+    })
   }
   const setMcpEnabled = async (input: McpStateInput) => {
-    const { bridge, activeProject, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpConnectDesktopOnly') }
-    try {
+    const { bridge, activeProject, settingsState } = getDeps()
+    if (!bridge) return blocked('error.mcpConnectDesktopOnly')
+    return capabilityMutation(async () => {
       let update = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.mcpChangeNeedsProject') }
+        if (!activeProject) return blocked('error.mcpChangeNeedsProject')
         const project = await grantProject(activeProject); update = { ...input, projectPath: project.primaryFolder }
       }
-      const response = await bridge.plugins.setMcpEnabled(update, settingsState.settings.activeHarness)
-      if (response.ok) await pluginSkills.refresh()
-      return response
-    } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
+      return bridge.plugins.setMcpEnabled(update, settingsState.settings.activeHarness)
+    })
   }
   const mutateCapability = async (input: CapabilityMutationInput) => {
-    const { bridge, activeProject, pluginSkills, reportError, settingsState } = getDeps()
-    if (!bridge) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.capabilitiesDesktopOnly') }
-    try {
+    const { bridge, activeProject, settingsState } = getDeps()
+    if (!bridge) return blocked('error.capabilitiesDesktopOnly')
+    return capabilityMutation(async () => {
       let update = input
       if (input.scope === 'project') {
-        if (!activeProject) return { ok: false as const, reason: 'blocked' as const, output: translate(formattingLocaleTag(), 'error.capabilityNeedsProject') }
+        if (!activeProject) return blocked('error.capabilityNeedsProject')
         const project = await grantProject(activeProject); update = { ...input, projectPath: project.primaryFolder }
       }
-      const response = await bridge.plugins.mutateCapability(update, settingsState.settings.activeHarness)
-      if (response.ok) await pluginSkills.refresh()
-      return response
-    } catch (error) { reportError(error); return { ok: false, output: errorMessage(error) } }
+      return bridge.plugins.mutateCapability(update, settingsState.settings.activeHarness)
+    })
   }
   const createSchedule = async (input: ScheduleInput) => {
     const { bridge, refreshSchedules, reportError, settingsState } = getDeps()
