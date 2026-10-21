@@ -406,15 +406,16 @@ describe('AgentCollaborationBridge', () => {
   })
 
   it('serializes concurrent deliveries to the same target', async () => {
-    const { call, primeManager } = await fixture()
+    const { call, primeManager, primeSessions } = await fixture()
     let releaseFirst!: () => void
     primeManager.command
       .mockImplementationOnce(() => new Promise((resolveCommand) => { releaseFirst = () => resolveCommand({ ok: true }) }))
       .mockResolvedValue({ ok: true })
     const first = call('send', { target_session_id: target.id, message: 'First' })
     await vi.waitFor(() => expect(primeManager.command).toHaveBeenCalledTimes(1))
+    const catalogCalls = primeSessions.list.mock.calls.length
     const second = call('send', { target_session_id: target.id, message: 'Second' })
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20))
+    await vi.waitFor(() => expect(primeSessions.list.mock.calls.length).toBeGreaterThan(catalogCalls))
     expect(primeManager.command).toHaveBeenCalledTimes(1)
     releaseFirst()
     await expect(Promise.all([first, second])).resolves.toEqual([
@@ -424,15 +425,17 @@ describe('AgentCollaborationBridge', () => {
   })
 
   it('allows only one active wait per target and bounds idle transcript polling', async () => {
-    const { call, primeSessions } = await fixture()
+    const clock = new FakeCollaborationWaitClock()
+    const { call, primeSessions } = await fixture(true, defaultTargetTranscript, clock)
     const read = await call('read', { target_session_id: target.id })
     const cursor = (read.body.result as Record<string, unknown>).cursor
     const readsBefore = primeSessions.read.mock.calls.length
     const first = call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 150 })
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20))
+    const timer = await clock.takeNextTimer()
     const duplicate = await call('wait', { target_session_id: target.id, after_cursor: cursor, timeout_ms: 150 })
     expect(duplicate.status).toBe(409)
     expect(duplicate.body.error).toContain('already active')
+    clock.fireAt(timer, timer.dueAt)
     const completed = await first
     expect(completed.body.result).toMatchObject({ timed_out: true })
     expect(primeSessions.read.mock.calls.length - readsBefore).toBeLessThanOrEqual(2)
