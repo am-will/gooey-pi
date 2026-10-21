@@ -133,6 +133,10 @@ describe('free-text settings validation', () => {
   })
 
   it('performs deterministic local shell validation before privileged validation', () => {
+    expect(terminalShellValidation('C:\\Windows\\System32\\cmd.exe', 'win32')).toBe('')
+    expect(terminalShellValidation('C:/Windows/System32/cmd.exe', 'win32')).toBe('')
+    expect(terminalShellValidation('C:cmd.exe', 'win32')).toContain('absolute')
+    expect(terminalShellValidation('C:/Windows/cmd.exe', 'linux')).toContain('absolute')
     expect(terminalShellValidation('/bin/zsh')).toBe('')
     expect(terminalShellValidation('bin/zsh')).toContain('absolute')
     expect(terminalShellValidation('')).toContain('Enter')

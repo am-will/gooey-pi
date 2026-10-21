@@ -1,3 +1,4 @@
+import { isAbsolutePathForPlatform } from '@/lib/platform-paths'
 import { formattingLocaleTag, translate, type MessageKey } from '@/lib/i18n'
 
 // This reducer and its validators run outside React, so they resolve their copy
@@ -114,11 +115,11 @@ export function normalizeBrowserHome(value: string): string {
   return new URL(value.trim()).toString()
 }
 
-export function terminalShellValidation(value: string): string {
+export function terminalShellValidation(value: string, platform: NodeJS.Platform = 'darwin'): string {
   if (value.length === 0) return copy('settings.draft.shellRequired')
   if (value.includes('\0')) return copy('settings.draft.shellNul')
   if (value.length > 4096) return copy('settings.draft.shellTooLong')
-  if (!value.startsWith('/')) return copy('settings.draft.shellAbsolute')
+  if (!isAbsolutePathForPlatform(value, platform)) return copy('settings.draft.shellAbsolute')
   return ''
 }
 
