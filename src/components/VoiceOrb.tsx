@@ -1,7 +1,6 @@
 import { Mic, MicOff, X } from 'lucide-react'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import type { HarnessId, PrimeWorkApi, VoiceTaskStarted, VoiceToolRequest } from '@/types/api'
-import { useI18n, type MessageKey } from '@/lib/i18n'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { DesktopPet, type DesktopPetProps } from './DesktopPet'
 import type { PetActivity } from './PetAvatar'
@@ -49,28 +48,18 @@ function boundedErrorField(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 500) : ''
 }
 
-// Mirrors the object returned by useI18n so the module-level error composer can
-// take the translator as a parameter instead of calling the hook itself.
-type Translate = (key: MessageKey, values?: Record<string, string | number>) => string
-
-function realtimeErrorMessage(message: Record<string, unknown>, t: Translate): string {
-  if (!message.error || typeof message.error !== 'object' || Array.isArray(message.error)) return t('voice.error.session')
+function realtimeErrorMessage(message: Record<string, unknown>): string {
+  if (!message.error || typeof message.error !== 'object' || Array.isArray(message.error)) return 'The realtime voice session reported an error.'
   const error = message.error as Record<string, unknown>
   const detail = boundedErrorField(error.message)
   const code = boundedErrorField(error.code)
   const param = boundedErrorField(error.param)
   const eventId = boundedErrorField(error.event_id)
-  if (!detail) return t('voice.error.session')
-  return t('voice.error.realtime', {
-    code: code ? t('voice.error.code', { code }) : '',
-    detail,
-    param: param ? t('voice.error.param', { param }) : '',
-    event: eventId ? t('voice.error.event', { eventId }) : '',
-  })
+  if (!detail) return 'The realtime voice session reported an error.'
+  return `Realtime error${code ? ` (${code})` : ''}: ${detail}${param ? ` [${param}]` : ''}${eventId ? ` [event ${eventId}]` : ''}`
 }
 
 export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPetControl = false, onPetControlFocused }: VoiceOrbProps) {
-  const { t } = useI18n()
   const [orbState, setOrbState] = useState<OrbState>('connecting')
   const [muted, setMuted] = useState(false)
   const [error, setError] = useState('')
@@ -102,8 +91,6 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
     let continuationPending = false
     let pendingResponseCreateEventId: string | null = null
     let clientEventSequence = 0
-    // Kept as a prefix so the guard below can recognise our own task error in any locale.
-    const taskNotStartedPrefix = t('voice.error.taskNotStarted', { detail: '' })
     const peer = new RTCPeerConnection()
     const channel = peer.createDataChannel('oai-events')
     channelRef.current = channel
@@ -146,14 +133,14 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
             if (active) setTaskOpened(true)
           }).catch((failure) => {
             if (!active) return
-            setError(t('voice.error.openTask', { detail: failure instanceof Error ? failure.message : t('voice.error.unknown') }))
+            setError(`The task started, but GooeyPi could not open it: ${failure instanceof Error ? failure.message : 'Unknown error'}`)
           })
         }
       } catch (failure) {
-        const message = failure instanceof Error ? failure.message : t('voice.error.toolFailed')
+        const message = failure instanceof Error ? failure.message : 'Voice tool failed'
         if (active && request.name === 'start_task') {
           setTaskReceipt(null)
-          setError(`${taskNotStartedPrefix}${message}`)
+          setError(`Task was not started: ${message}`)
         }
         sendToolOutput(callId, JSON.stringify({ error: message }))
       }
@@ -184,7 +171,7 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
         const item = message.item as Record<string, unknown>
         if (item.type === 'function_call' && typeof item.call_id === 'string') void execute(item.call_id, item.name, item.arguments)
       } else if (message.type === 'error') {
-        const detail = realtimeErrorMessage(message, t)
+        const detail = realtimeErrorMessage(message)
         const realtimeError = message.error && typeof message.error === 'object' && !Array.isArray(message.error) ? message.error as Record<string, unknown> : {}
         const triggeringEventId = boundedErrorField(realtimeError.event_id)
         const correlatedResponseCreate = Boolean(triggeringEventId && triggeringEventId === pendingResponseCreateEventId)
@@ -205,7 +192,7 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
             continuationPending = false
           }
         }
-        setError((current) => current.startsWith(taskNotStartedPrefix) ? current : detail)
+        setError((current) => current.startsWith('Task was not started:') ? current : detail)
         setOrbState('error')
       }
     })
@@ -226,7 +213,7 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
         await peer.setRemoteDescription({ type: 'answer', sdp: answer })
       } catch (failure) {
         if (!active) return
-        setError(failure instanceof Error ? failure.message : t('voice.error.start'))
+        setError(failure instanceof Error ? failure.message : 'Could not start realtime voice.')
         setOrbState('error')
       }
     })()
@@ -266,14 +253,14 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
     localStorage.setItem('prime-work:voice-orb-position', JSON.stringify(position))
   }
 
-  const status = muted ? t('voice.status.muted') : orbState === 'connecting' ? t('voice.status.connecting') : orbState === 'user-speaking' ? t('voice.status.listeningToYou') : orbState === 'thinking' ? t('voice.status.thinking') : orbState === 'agent-speaking' ? t('voice.status.speaking') : orbState === 'error' ? t('voice.status.unavailable') : t('voice.status.listening')
+  const status = muted ? 'Muted' : orbState === 'connecting' ? 'Connecting' : orbState === 'user-speaking' ? 'Listening to you' : orbState === 'thinking' ? 'Thinking' : orbState === 'agent-speaking' ? 'Speaking' : orbState === 'error' ? 'Voice unavailable' : 'Listening'
   const petActivity: PetActivity = muted || orbState === 'listening' || orbState === 'user-speaking' ? 'idle'
     : orbState === 'agent-speaking' ? 'speaking'
       : orbState === 'error' ? 'failed' : 'working'
   const receipt = taskReceipt ? <div className="voice-orb__receipt" role="status">
-    <strong>{t('voice.receipt.title')}</strong>
+    <strong>Task started</strong>
     <span>{taskReceipt.projectName} · {HARNESS_SHORT_NAMES[taskReceipt.harness]}</span>
-    <small>{taskOpened ? t('voice.receipt.opened') : t('voice.receipt.opening')}</small>
+    <small>{taskOpened ? 'Opened in the sidebar' : 'Opening task…'}</small>
   </div> : null
   return (
     <>
@@ -292,14 +279,14 @@ export function VoiceOrb({ voice, harness, onClose, onTaskStarted, pet, focusPet
         onVoiceControlFocused={onPetControlFocused}
       >
         {receipt}
-      </DesktopPet> : <aside className={`voice-orb voice-orb--${orbState} ${muted ? 'is-muted' : ''}`} style={{ '--orb-x': `${position.x}px`, '--orb-y': `${position.y}px` } as CSSProperties} aria-label={t('voice.session.aria')}>
+      </DesktopPet> : <aside className={`voice-orb voice-orb--${orbState} ${muted ? 'is-muted' : ''}`} style={{ '--orb-x': `${position.x}px`, '--orb-y': `${position.y}px` } as CSSProperties} aria-label="Realtime voice session">
         <div className="voice-orb__drag" onPointerDown={beginDrag} onPointerMove={drag} onPointerUp={endDrag} onPointerCancel={endDrag}>
           <div className="voice-orb__halo" aria-hidden="true" />
           <div className="voice-orb__core" aria-hidden="true"><i /><i /><i /></div>
           <span className="voice-orb__status">{status}</span>
           <div className="voice-orb__controls">
-            <button type="button" aria-label={muted ? t('voice.unmute') : t('voice.mute')} onClick={toggleMute}>{muted ? <MicOff size={15} /> : <Mic size={15} />}</button>
-            <button type="button" aria-label={t('voice.close')} onClick={onClose}><X size={16} /></button>
+            <button type="button" aria-label={muted ? 'Unmute realtime voice' : 'Mute realtime voice'} onClick={toggleMute}>{muted ? <MicOff size={15} /> : <Mic size={15} />}</button>
+            <button type="button" aria-label="Close realtime voice" onClick={onClose}><X size={16} /></button>
           </div>
         </div>
         {error ? <p role="alert">{error}</p> : null}
