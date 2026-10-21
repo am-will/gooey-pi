@@ -427,6 +427,12 @@ export function createAndSwitchGitBranch(cwd: string, branchValue: unknown): Pro
   return changeGitBranch(cwd, branchValue, true)
 }
 
+async function hasHead(cwd: string, overrides: readonly string[]): Promise<boolean> {
+  const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 }, overrides)
+  if (head.timedOut || head.outputExceeded || (head.code !== 0 && head.code !== 1)) requireProcessSuccess('Git HEAD inspection', head)
+  return head.code === 0
+}
+
 export class GitService {
   constructor(
     private readonly authorizeCwd: (cwd: string) => Promise<string>,
@@ -540,11 +546,16 @@ export class GitService {
   async unstage(cwdValue: unknown, pathsValue: unknown): Promise<boolean> {
     const paths = this.validPaths(pathsValue)
     const { cwd, overrides } = await this.withRepositoryGuards(cwdValue)
-    const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 }, overrides)
-    if (head.timedOut || head.outputExceeded || (head.code !== 0 && head.code !== 1)) requireProcessSuccess('Git HEAD inspection', head)
-    const args = head.code === 0
-      ? ['restore', '--staged', '--', ...paths]
-      : ['rm', '--cached', '--ignore-unmatch', '-r', '-f', '--', ...paths]
+    const status = await runGit(cwd, ['status', '--porcelain=v1', '--untracked-files=no', '--ignore-submodules=all', '-z'], { timeoutMs: 15_000, maxBytes: GIT_STATUS_OUTPUT_LIMIT }, overrides)
+    requireProcessSuccess('Git status', status)
+    const states = changedPathStatesFromStatus(status.stdout)
+    const restorePaths = [...new Set(paths.flatMap((path) => {
+      const source = states.get(path)?.indexRenameSource
+      return source ? [path, source] : [path]
+    }))]
+    const args = await hasHead(cwd, overrides)
+      ? ['restore', '--staged', '--', ...restorePaths]
+      : ['rm', '--cached', '--ignore-unmatch', '-r', '-f', '--', ...restorePaths]
     const result = await runGit(cwd, args, { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
     requireProcessSuccess('Git unstage', result)
     return true
@@ -562,9 +573,8 @@ export class GitService {
     await rejectFilteredPaths(cwd, restorePaths, overrides)
     const untracked = restorePaths.filter((path) => states.get(path)?.untracked === true)
     const tracked = restorePaths.filter((path) => !untracked.includes(path))
-    const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 }, overrides)
-    if (head.code !== 0 && head.code !== 1) requireProcessSuccess('Git HEAD inspection', head)
-    if (head.code === 0) {
+    const existingHead = await hasHead(cwd, overrides)
+    if (existingHead) {
       if (tracked.length) {
         const result = await runGit(cwd, ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...tracked], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
         requireProcessSuccess('Git restore', result)
@@ -573,7 +583,7 @@ export class GitService {
       const result = await runGit(cwd, ['rm', '--cached', '--ignore-unmatch', '-r', '-f', '--', ...tracked], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
       requireProcessSuccess('Git restore', result)
     }
-    const pathsToClean = head.code === 0 ? untracked : restorePaths
+    const pathsToClean = existingHead ? untracked : restorePaths
     if (pathsToClean.length) {
       const result = await runGit(cwd, ['clean', '-f', '--', ...pathsToClean], { timeoutMs: 30_000, maxBytes: 1024 * 1024 }, overrides)
       requireProcessSuccess('Git clean', result)

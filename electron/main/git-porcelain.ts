@@ -101,6 +101,7 @@ export function parseStatus(output: string, staged: ParsedNumstat, unstaged: Par
 export interface ChangedPathState {
   untracked: boolean
   restorePaths: string[]
+  indexRenameSource?: string
 }
 
 export function changedPathStatesFromStatus(output: string): Map<string, ChangedPathState> {
@@ -114,12 +115,17 @@ export function changedPathStatesFromStatus(output: string): Map<string, Changed
     const code = record.slice(0, 2)
     const path = requireGitPath(statusRecordPath(record), 'Git status path')
     const restorePaths = [path]
+    let indexRenameSource: string | undefined
     if (code.includes('R') || code.includes('C')) {
       const previous = nextNulField(output, cursor)
       cursor = previous.cursor
-      if (previous.value) restorePaths.push(requireGitPath(previous.value, 'Git status path'))
+      if (previous.value) {
+        const source = requireGitPath(previous.value, 'Git status path')
+        restorePaths.push(source)
+        if (code[0] === 'R') indexRenameSource = source
+      }
     }
-    states.set(path, { untracked: code === '??', restorePaths })
+    states.set(path, { untracked: code === '??', restorePaths, indexRenameSource })
   }
   return states
 }

@@ -41,6 +41,17 @@ describe('GitService', () => {
     expect(status.root).toBe(realpathSync(cwd))
   })
 
+  it('unstages both sides of an index rename while preserving the renamed worktree file', async () => {
+    const cwd = repository('gooeypi-git-unstage-rename-')
+    git(cwd, 'mv', 'file.txt', 'renamed.txt')
+    const service = new GitService(async () => cwd)
+    await expect(service.unstage(cwd, ['renamed.txt'])).resolves.toBe(true)
+    const staged = spawnSync('git', ['diff', '--cached', '--name-only'], { cwd, encoding: 'utf8' })
+    expect(staged.stdout).toBe('')
+    expect(existsSync(join(cwd, 'file.txt'))).toBe(false)
+    expect(readFileSync(join(cwd, 'renamed.txt'), 'utf8')).toBe('base\n')
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')
