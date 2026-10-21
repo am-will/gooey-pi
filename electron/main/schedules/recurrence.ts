@@ -11,6 +11,7 @@ export const MAX_RRULE_LENGTH = 1024
 export const MAX_PREVIEW_OCCURRENCES = 1_000
 export const MAX_MISSED_OCCURRENCES = 100_000
 
+const MAX_SKIPPED_CANDIDATES = 100_000
 const MAX_RRULE_COUNT = 100_000
 const MAX_RRULE_INTERVAL = 1_000_000
 const MAX_RRULE_LIST_VALUES = 366
@@ -305,7 +306,7 @@ function recurrenceFor(
   return {
     recurrence: new RRule(options, true),
     until,
-    candidateLimit: count ?? MAX_PREVIEW_OCCURRENCES,
+    candidateLimit: count ?? MAX_SKIPPED_CANDIDATES,
   }
 }
 

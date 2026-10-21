@@ -138,6 +138,12 @@ describe('schedule occurrence expansion', () => {
     ])
   })
 
+  it('walks more than a thousand historical monthly and yearly occurrences', () => {
+    const old: ScheduleTiming = { kind: 'rrule', dtstartLocal: '1970-01-01T09:00:00', timeZone: 'UTC', rrule: 'FREQ=YEARLY' }
+    expect(nextScheduleOccurrence(old, '4000-06-01T00:00:00Z')).toBe('4001-01-01T09:00:00.000Z')
+    expect(nextScheduleOccurrence({ ...old, rrule: 'FREQ=MONTHLY' }, '2100-06-01T00:00:00Z')).toBe('2100-06-01T09:00:00.000Z')
+  })
+
   it('bounds preview sizes before expansion', () => {
     expect(() => previewScheduleOccurrences(dailyNewYork, MAX_PREVIEW_OCCURRENCES + 1, '2024-01-01T00:00:00Z')).toThrow(/count/i)
     expect(() => previewScheduleOccurrences(dailyNewYork, -1, '2024-01-01T00:00:00Z')).toThrow(/count/i)
