@@ -1,3 +1,4 @@
+import { ContextUsageDial } from './composer/ContextUsageDial'
 import { ComposerQueue } from './composer/ComposerQueue'
 import { ComposerAttachments } from './composer/ComposerAttachments'
 import { useComposerSuggestions } from '@/hooks/useComposerSuggestions'
@@ -6,7 +7,6 @@ import { THINKING_LEVEL_KEYS } from '@/lib/thinking-levels'
 import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
 import { ArrowUp, Gauge, LoaderCircle, Mic, Paperclip, Plus, Square, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
 import type {
   BrowserAnnotation,
   CheckoutAction,
@@ -30,7 +30,6 @@ import type {
 } from '@/types/api'
 import { composePrompt } from '@/lib/composer-prompt'
 import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft } from '@/lib/composer-draft'
-import { contextDialLabel } from '@/lib/format-cost'
 import { useI18n } from '@/lib/i18n'
 import { messageActionForKey } from '@/lib/message-shortcuts'
 import { useComposerImages } from '@/hooks/useComposerImages'
@@ -281,10 +280,6 @@ export const Composer = memo(function Composer({
     else requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
-  const contextPercent = contextUsage?.percent === null || contextUsage?.percent === undefined ? null : Math.min(100, Math.max(0, contextUsage.percent))
-  const contextLabel = contextDialLabel(contextUsage, sessionUsage)
-  const contextDisplayPercent = contextPercent === null ? null : Math.min(99, Math.round(contextPercent))
-  const contextStyle = { '--context-percent': `${contextPercent ?? 0}%` } as CSSProperties
   const sendQueuedMessageImmediately = async (queued: QueuedPrompt) => {
     onDeleteQueuedMessage?.(queued)
     try {
@@ -441,21 +436,7 @@ export const Composer = memo(function Composer({
             <CheckoutPicker catalog={checkoutCatalog} fallbackLabel={checkoutLabel} loading={checkoutsLoading} onExecute={onExecuteCheckout} />
           </div>
           <div className="composer__actions">
-            {dictation.state === 'connecting' || dictation.state === 'recording' ? <button type="button" className="context-usage-dial context-usage-dial--cancel" aria-label={t('dictation.cancel')} title={t('dictation.cancel')} onClick={dictation.cancel}><X size={14} /></button> : <span
-              className={`context-usage-dial ${contextPercent === null ? 'is-unavailable' : contextPercent >= 95 ? 'is-critical' : contextPercent >= 80 ? 'is-warning' : ''}`}
-              role="meter"
-              tabIndex={0}
-              aria-label={t('composer.context.usage')}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={contextPercent === null ? undefined : Math.round(contextPercent)}
-              aria-valuetext={contextLabel}
-              title={contextLabel}
-              data-tooltip={contextLabel}
-              style={contextStyle}
-            >
-              <span>{contextDisplayPercent ?? '—'}</span>
-            </span>}
+            {dictation.state === 'connecting' || dictation.state === 'recording' ? <button type="button" className="context-usage-dial context-usage-dial--cancel" aria-label={t('dictation.cancel')} title={t('dictation.cancel')} onClick={dictation.cancel}><X size={14} /></button> : <ContextUsageDial contextUsage={contextUsage} sessionUsage={sessionUsage} />}
             <button
               type="button"
               className={`dictation-button ${dictation.state === 'recording' ? 'is-recording' : ''}`}
