@@ -11,8 +11,8 @@ const runtime: RuntimeInfo = { runtimeId: 'a', harness: 'omp', cwd: '/work', ses
 let latest: ReturnType<typeof useWorkspaceRuntime>
 let root: Root
 let container: HTMLDivElement
-function Probe({ bridge = null, initialSession, sessions = [], reportError = () => {} }: { bridge?: PrimeWorkApi | null; initialSession?: SessionRecord; sessions?: SessionRecord[]; reportError?: (error: unknown) => void }) {
-  latest = useWorkspaceRuntime({ bridge, harness: 'omp', initialProject: project, initialSession, sessions, initialMessages: [], reportError })
+function Probe({ bridge = null, initialSession, sessions = [], reportError = () => {}, onRuntimeSnapshot }: { bridge?: PrimeWorkApi | null; initialSession?: SessionRecord; sessions?: SessionRecord[]; reportError?: (error: unknown) => void; onRuntimeSnapshot?: (snapshot: RuntimeInfo) => void }) {
+  latest = useWorkspaceRuntime({ bridge, harness: 'omp', initialProject: project, initialSession, sessions, initialMessages: [], reportError, onRuntimeSnapshot })
   return null
 }
 beforeEach(() => {
@@ -26,6 +26,42 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('observes only accepted main snapshots, using the latest observer without replaying local patches', () => {
+    const first = vi.fn()
+    const next = vi.fn()
+    const snapshot = { ...runtime, pendingExtensionUi: [{ id: 'q1', type: 'extension_ui_request' }], pendingExtensionUiGroups: [] }
+    act(() => root.render(createElement(Probe, { onRuntimeSnapshot: first })))
+    const attach = latest.attachRuntime
+    act(() => latest.attachRuntime(snapshot, 0))
+    expect(first).toHaveBeenCalledExactlyOnceWith(snapshot)
+    act(() => latest.setRuntime((current) => current ? { ...current, isStreaming: true } : current))
+    expect(first).toHaveBeenCalledOnce()
+    act(() => root.render(createElement(Probe, { onRuntimeSnapshot: next })))
+    expect(latest.attachRuntime).toBe(attach)
+    expect(next).not.toHaveBeenCalled()
+    act(() => latest.attachRuntime(snapshot, -1))
+    expect(next).not.toHaveBeenCalled()
+    act(() => latest.activateWorkspace(project, session, snapshot))
+    expect(next).toHaveBeenCalledExactlyOnceWith(snapshot)
+    act(() => latest.attachRuntime(undefined, 1))
+    expect(next).toHaveBeenCalledOnce()
+  })
+
+  it('observes current discovery snapshots but drops discovery completed after a workspace switch', async () => {
+    let resolve!: (snapshots: RuntimeInfo[]) => void
+    const list = vi.fn(() => new Promise<RuntimeInfo[]>((done) => { resolve = done }))
+    const observer = vi.fn()
+    const bridge = { sessions: { read: async () => [] }, agent: { list } } as unknown as PrimeWorkApi
+    await act(async () => root.render(createElement(Probe, { bridge, initialSession: session, sessions: [session], onRuntimeSnapshot: observer })))
+    let discovery!: Promise<void>
+    act(() => { discovery = latest.reconcileRuntime(0) })
+    await act(async () => { resolve([runtime]); await discovery })
+    expect(observer).toHaveBeenCalledExactlyOnceWith(runtime)
+    act(() => { discovery = latest.reconcileRuntime(0); latest.activateWorkspace(project) })
+    await act(async () => { resolve([runtime]); await discovery })
+    expect(observer).toHaveBeenCalledOnce()
+  })
+
   it('carries a new chat’s queue through runtime attachment and catalog adoption', () => {
     const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
     act(() => root.render(createElement(Probe)))
