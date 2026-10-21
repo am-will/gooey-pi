@@ -323,6 +323,7 @@ export default function App() {
     submissionAdmissionRef, gitRequestRef, demoTimerRef,
     setProjects, setSessions, setGitSnapshot, setView, setPaletteOpen, setToast, setSubmitting,
     refreshSchedules, refreshHeartbeats,
+    onNewWorkspace: (project, generation) => { if (settingsState.settings.terminalOpen) void mountActiveTerminal(project, `${project.harness}:new:${generation}`, generation).catch(reportError) },
     resetBrowserView: browserPreview.reset,
     closeTerminalForSession: (sessionPath) => {
       const removed = terminalSessions.find((terminal) => terminal.sessionPath === sessionPath)
@@ -402,23 +403,24 @@ export default function App() {
     setTerminalSessions((current) => current.filter((terminal) => terminal.id !== id))
     if (activeTerminalSession?.id === id) setTerminalSelection(undefined)
   }, [activeTerminalSession?.id, finishProjectScriptRun])
-  const toggleTerminal = useCallback(async () => {
+  const mountActiveTerminal = useStableCallback(async (project: ProjectRecord, workspaceKey: string, generation: number, sessionPath?: string) => {
+    const selected = workspace.workspaceRef.current
+    if (selected.generation !== generation) return
+    const granted = project.inferred ? await grantProject(project) : project
+    if (workspace.workspaceRef.current.generation !== generation) return
+    const cwd = workspaceCwd(granted, selected.session)
+    if (!cwd) return
+    const ownerFile = sessionPath ?? workspace.workspaceRef.current.sessionFile
+    setTerminalSessions((current) => current.some((terminal) => terminal.workspaceKey === workspaceKey || Boolean(ownerFile && terminal.sessionPath === ownerFile))
+      ? current : [...current, { id: crypto.randomUUID(), workspaceKey, cwd, sessionPath: ownerFile }])
+  })
+  const toggleTerminal = useStableCallback(async () => {
     if (view !== 'session') { navigate('session'); if (activeTerminalSession) return }
-    if (activeTerminalSession) {
-      closeTerminal(activeTerminalSession.id)
-      return
-    }
-    if (!activeProject || !activeCwd) return
-    if (activeProject.inferred) {
-      try { await grantProject(activeProject) } catch (error) { reportError(error); return }
-    }
-    setTerminalSessions((current) => {
-      const existing = current.find((terminal) => terminal.workspaceKey === workspaceViewKey
-        || Boolean(activeTerminalSessionPath && terminal.sessionPath === activeTerminalSessionPath))
-      if (existing) return current
-      return [...current, { id: crypto.randomUUID(), workspaceKey: workspaceViewKey, cwd: activeCwd, sessionPath: activeTerminalSessionPath }]
-    })
-  }, [activeCwd, activeProject, activeTerminalSession, activeTerminalSessionPath, closeTerminal, grantProject, navigate, reportError, view, workspaceViewKey])
+    if (activeTerminalSession) { closeTerminal(activeTerminalSession.id); return }
+    if (!activeProject) return
+    try { await mountActiveTerminal(activeProject, workspaceViewKey, workspace.workspaceRef.current.generation, activeTerminalSessionPath) }
+    catch (error) { reportError(error) }
+  })
   useEffect(() => {
     settingsState.setTerminalOpen(terminalOpen)
   }, [settingsState.setTerminalOpen, terminalOpen])
