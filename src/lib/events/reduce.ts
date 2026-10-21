@@ -400,6 +400,14 @@ export function replayPrimeEvents(
     }
     if (type === 'runtime_exit') {
       finalizeStreaming(Date.now(), false)
+      // No later compaction_end can arrive from a runtime that has exited.
+      for (let index = 0; index < next.length; index += 1) {
+        if (!next[index].parts.some((part) => part.type === 'compaction' && part.status === 'running')) continue
+        const message = draftMessage(index)
+        message.parts = message.parts.map((part) => part.type === 'compaction' && part.status === 'running'
+          ? { ...part, status: 'cancelled', outcome: 'cancelled' }
+          : part)
+      }
       if (raw.expected === true || next.at(-1)?.kind === 'error') continue
       const reason = raw.code !== null && raw.code !== undefined ? `exit code ${String(raw.code)}` : string(raw.signal) ?? 'an unknown error'
       copyTranscript()

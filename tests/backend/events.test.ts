@@ -33,6 +33,22 @@ describe('agent transport events', () => {
     expect(exit.at(-1)?.kind).toBe('error')
   })
 
+  it('closes an interrupted compaction before a restarted runtime compacts again', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const events = [{ type: 'compaction_start', reason: 'manual' }, { type: 'runtime_exit', expected: false, code: 1 },
+      { type: 'agent_start' }, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'new turn' } }, { type: 'agent_end' },
+      { type: 'compaction_start', reason: 'manual' }, { type: 'compaction_end', result: { summary: 'new summary' } }]
+    resetTranscriptIdsForTests()
+    const batched = replayPrimeEvents([], events)
+    resetTranscriptIdsForTests()
+    const sequential = events.reduce<TranscriptMessage[]>((current, event) => applyPrimeEvent(current, event), [])
+    expect(batched).toEqual(sequential)
+    expect(batched.flatMap(({ parts }) => parts.filter((part) => part.type === 'compaction'))).toMatchObject([
+      { status: 'cancelled', outcome: 'cancelled' }, { status: 'done', summary: 'new summary' },
+    ])
+    vi.restoreAllMocks()
+  })
+
   it('keeps the stream open when the desktop rate limiter drops events', () => {
     const messages = applyPrimeEvent([streamingMessage()], { type: 'transport_limit', kind: 'count', error: 'Prime Agent event rate exceeded the desktop limit' })
 
