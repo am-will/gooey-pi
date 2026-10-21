@@ -164,6 +164,21 @@ export function replayPrimeEvents(
     }
     return appendNode(draft, withPartId(tool))
   }
+  const toolIndex = (id: string): number => {
+    if (lastStreamingAssistant >= 0 && draftParts(lastStreamingAssistant).firstToolById.has(id)) return lastStreamingAssistant
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      const message = next[index]
+      if (message.role === 'user' && !message.steerState) break
+      if (message.role !== 'assistant' || index === lastStreamingAssistant) continue
+      const draft = partDrafts.get(index)
+      const call = draft?.firstToolById.get(id)
+      const at = draft ? -1 : message.parts.findIndex((part) => part.type === 'toolCall' && part.id === id)
+      if (!call && at < 0) continue
+      const result = call ? call.next?.part : message.parts[at + 1]
+      if (result?.type !== 'toolResult' || result.streaming === true) return index === next.length - 1 ? assistantIndex() : index
+    }
+    return assistantIndex()
+  }
   const setToolResult = (draft: PartDraft, call: PartNode, result: MessagePart) => {
     if (call.next?.part.type === 'toolResult') call.next.part = { ...result, partId: call.next.part.partId }
     else insertAfter(draft, call, withPartId(result))
@@ -307,14 +322,15 @@ export function replayPrimeEvents(
     if (type === 'tool_execution_start') {
       const rawName = string(raw.toolName)
       const name = rawName ?? 'Tool'
-      upsertToolDraft(assistantIndex(), effectiveToolId(string(raw.toolCallId), rawName), name, raw.args)
+      const id = effectiveToolId(string(raw.toolCallId), rawName)
+      upsertToolDraft(toolIndex(id), id, name, raw.args)
       continue
     }
     if (type === 'tool_execution_update') {
-      const index = assistantIndex()
       const rawName = string(raw.toolName)
       const name = rawName ?? 'Tool'
       const id = effectiveToolId(string(raw.toolCallId), rawName)
+      const index = toolIndex(id)
       upsertToolDraft(index, id, name, raw.args)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
@@ -322,10 +338,10 @@ export function replayPrimeEvents(
       continue
     }
     if (type === 'tool_execution_end') {
-      const index = assistantIndex()
       const rawName = string(raw.toolName)
       const name = rawName ?? 'Tool'
       const id = effectiveToolId(string(raw.toolCallId), rawName)
+      const index = toolIndex(id)
       const draft = draftParts(index)
       const call = draft.firstToolById.get(id)
       const resultPart: MessagePart = { type: 'toolResult', name, text: resultText(raw.result), isError: raw.isError === true }
