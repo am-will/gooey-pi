@@ -75,6 +75,7 @@ export function sessionCompanionNotificationSignature(session: SessionRecord): s
 export function signatureCleared(signature: string | undefined, clearedSignature: string | undefined, unread = false, updatedAt?: string): boolean {
   if (!signature || !clearedSignature) return false
   const [core, launch, clearedUpdatedAt] = clearedSignature.split('@')
+  if (!launch && /^\d+$/.test(core.slice(core.indexOf(':') + 1))) return false
   if (launch && launch !== LAUNCH_ID) {
     const status = signature.slice(0, signature.indexOf(':'))
     const clearedStatus = core.slice(0, core.indexOf(':'))
