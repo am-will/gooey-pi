@@ -13,7 +13,7 @@ import type {
   ScheduleTiming,
   HarnessId,
 } from '../../../src/types/api'
-import type { JsonStateStore } from '../store'
+import { MAX_SCHEDULED_TASKS, type JsonStateStore } from '../store'
 import { rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
 import {
   countMissedOccurrences,
@@ -22,7 +22,6 @@ import {
   validateScheduleTiming,
 } from './recurrence'
 
-const MAX_TASKS = 500
 const MAX_CONCURRENT_RUNS = 2
 const DUE_GRACE_MS = 60_000
 const THINKING_LEVELS: ReadonlySet<string> = new Set(['auto', ...PRIME_THINKING_LEVELS])
@@ -235,7 +234,7 @@ export class AutomationService {
       runs: [],
     }
     await this.store.update((state) => {
-      if (state.schedules.length >= MAX_TASKS) throw new Error(`GooeyPi supports at most ${MAX_TASKS} scheduled tasks`)
+      if (state.schedules.length >= MAX_SCHEDULED_TASKS) throw new Error(`GooeyPi supports at most ${MAX_SCHEDULED_TASKS} scheduled tasks`)
       state.schedules.push(task)
     })
     this.changed({ taskId: task.id, reason: 'created' })
