@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { assertNoMcpAuthenticationCommand, NETWORK_MCP_AUTH_UNAVAILABLE } from '../../src/lib/mcp-policy'
 import type { ScheduleExecution, ScheduleTarget } from '../../src/types/api'
-import { AutomationService } from '../../electron/main/schedules/service'
+import { AutomationService, ScheduleBlockedError } from '../../electron/main/schedules/service'
 import { JsonStateStore } from '../../electron/main/store'
 
 let workerFixture: Awaited<ReturnType<typeof recurrenceWorkerFixture>>
@@ -410,6 +410,49 @@ describe('AutomationService', () => {
     await service.stop()
     await starting
     expect(service.get(task.id)).toMatchObject({ status: 'active', runs: [] })
+  })
+
+  it('spaces retries after bookkeeping failures instead of hot-looping a due task', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const stateStore = store()
+    let now = new Date('2030-01-01T00:00:00Z')
+    const service = new AutomationService(stateStore, {
+      validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => ({}), now: () => now,
+    })
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let attempts = 0
+    let writes: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      await service.create({ prompt: 'Due task', target, timing: onceAt('2030-01-01T00:00:00.001Z'), execution })
+      await service.start()
+      const original = stateStore.update.bind(stateStore)
+      writes = vi.spyOn(stateStore, 'update').mockImplementation((mutator) => original((state) => {
+        const value = mutator(state)
+        if (state.schedules.some((task) => task.runs.some((run) => run.status === 'queued'))) { attempts += 1; throw new Error('Disk write refused') }
+        return value
+      }))
+      now = new Date('2030-01-01T00:00:00.001Z')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(attempts).toBe(1)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(attempts).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(attempts).toBe(2)
+    } finally { writes?.mockRestore(); logged.mockRestore(); await service.stop(); vi.useRealTimers() }
+  })
+
+  it('blocks a scheduled definition when its executor reports lost authorization', async () => {
+    const service = new AutomationService(store(), {
+      validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => { throw new ScheduleBlockedError('Project authorization was revoked') },
+      now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const task = await service.create({ prompt: 'Review', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    try {
+      await service.runNow(task.id)
+      await eventually(() => expect(service.get(task.id)).toMatchObject({ status: 'blocked', nextRunAt: undefined, blockedReason: 'Project authorization was revoked', runs: [expect.objectContaining({ status: 'failed' })] }))
+    } finally { await service.stop() }
   })
 
   it('records missed occurrences as skipped without dispatching them', async () => {
