@@ -6,6 +6,8 @@ import type { ProjectService } from '../projects'
 import type { SessionService } from '../sessions'
 import { ScheduleBlockedError, type ScheduleRunResult } from './service'
 
+const SESSION_LEASE_CONFLICT = /\bsession is already active in\b|\bcould not acquire session lease\b|\bholds the file's runtime lease\b/i
+
 interface ResolvedTarget {
   cwd: string
   sessionPath?: string
@@ -129,7 +131,7 @@ export class ScheduledRunExecutor {
     } catch (error) {
       if (error instanceof ScheduleBlockedError) throw error
       const message = error instanceof Error ? error.message : String(error)
-      if (/lease|already active|already.*open|in use/i.test(message)) throw new ScheduleBlockedError('The thread is active in another client. Close it there or use inherited thread settings.')
+      if (SESSION_LEASE_CONFLICT.test(message)) throw new ScheduleBlockedError('The thread is active in another client. Close it there or use inherited thread settings.')
       throw new Error(message)
     } finally {
       if (runtime) await this.agents.stop(runtime.runtimeId)
