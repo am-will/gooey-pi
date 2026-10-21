@@ -384,13 +384,14 @@ async function bootstrap(): Promise<void> {
   const collaborationExtensionPath = extensionPathFor('omp', 'collaboration')
   const piFastModeExtensionPath = extensionPathFor('pi', 'piFastMode')
   const computerUseSkill = async () => {
-    const status = await cuaDriver.status()
+    const enabled = stateStore.getSettings().computerUseEnabled
+    const status = enabled ? await cuaDriver.status() : undefined
     return {
       id: 'gooeypi-computer-use', name: 'Computer Use | TryCUA',
       description: 'Drive native apps through a separately installed TryCUA driver. Install the driver before enabling.',
       kind: 'extension' as const, location: 'system' as const, path: computerUseSkillPath,
-      enabled: stateStore.getSettings().computerUseEnabled,
-      availability: { available: status.available, detail: status.detail, actionUrl: status.available ? undefined : status.installUrl },
+      enabled,
+      availability: status ? { available: status.available, detail: status.detail, actionUrl: status.available ? undefined : status.installUrl } : undefined,
     }
   }
   const plugins = new PluginService(primeExecutable, (path) => projects.authorizeProjectRoot(path), {
