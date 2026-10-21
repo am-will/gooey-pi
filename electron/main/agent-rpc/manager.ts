@@ -1,6 +1,6 @@
 import type { PrimeEventEnvelope, PrimeImplementation, PrimeModelDescriptor, RuntimeInfo } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
+import { isRuntimeIdle, parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
 import { resolveExecutable, type ExecutableSource } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
 import { isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
@@ -417,10 +417,7 @@ export class AgentRpcManager {
   private isIdle(runtime: RpcRuntime): boolean {
     if (this.startingRuntimes.has(runtime.runtimeId)) return false
     if (this.retiringRuntimes.has(runtime.runtimeId)) return false
-    const snapshot = runtime.snapshot()
-    const actions = snapshot.sessionActions
-    return !snapshot.isStreaming && !snapshot.isCompacting && !actions?.active
-      && (actions?.queuedCount ?? 0) === 0
+    return isRuntimeIdle(runtime.snapshot())
   }
 
   private requireOpen(): void {
