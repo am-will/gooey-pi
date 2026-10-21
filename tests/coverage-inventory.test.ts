@@ -97,7 +97,6 @@ describe('safety-critical coverage inventory', () => {
       'assets/extensions/omp-work-collaboration.ts',
       'assets/extensions/omp-work-schedules.ts',
       'assets/extensions/pi-work-fast-mode.ts',
-      'assets/extensions/prime-work-browser.ts',
     ])
 
     const projectRoot = mkdtempSync(join(tmpdir(), 'gooeypi-coverage-inventory-'))

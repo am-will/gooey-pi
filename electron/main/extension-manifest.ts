@@ -11,7 +11,7 @@ export interface ExtensionInjection {
 
 const injectionsByHarness = {
   prime: [
-    { capability: 'browser', filename: 'prime-work-browser.ts', environmentVariable: 'PRIME_WORK_BROWSER_EXTENSION_PATH' },
+    { capability: 'browser', filename: 'omp-work-browser.ts', environmentVariable: 'PRIME_WORK_BROWSER_EXTENSION_PATH' },
     { capability: 'askUser', filename: 'omp-work-ask-user.ts', environmentVariable: 'PRIME_WORK_ASK_USER_EXTENSION_PATH' },
     { capability: 'collaboration', filename: 'omp-work-collaboration.ts', environmentVariable: 'GOOEYPI_COLLABORATION_EXTENSION_PATH' },
   ],

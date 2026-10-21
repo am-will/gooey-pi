@@ -87,9 +87,6 @@ const fixtureFactories = {
 }
 
 const expectedRegistrations: Record<string, Registration[]> = {
-  'prime-work-browser.ts': [
-    ...['terminal_read', 'browser_tabs', 'browser_navigate', 'browser_screenshot', 'browser_read_page', 'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll', 'browser_evaluate'].map((name) => ({ kind: 'tool' as const, name })),
-  ],
   'omp-work-browser.ts': [
     ...['terminal_read', 'browser_tabs', 'browser_navigate', 'browser_screenshot', 'browser_read_page', 'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll', 'browser_evaluate'].map((name) => ({ kind: 'tool' as const, name })),
   ],
