@@ -20,14 +20,10 @@ function subscribeSignal(channel: string, callback: () => void): () => void {
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args).catch((error: unknown) => {
     if (!(error instanceof Error)) throw error
-    const match = /^Error invoking remote method '[^']+': ([A-Za-z_$][\w$]*): ([\s\S]*)$/.exec(error.message)
+    const match = /^Error invoking remote method '[^']+': (?:[A-Za-z_$][\w$]*): ([\s\S]*)$/.exec(error.message)
     if (!match) throw error
     console.error('Electron IPC invocation failed:', error)
-    const unwrapped = new Error(match[2])
-    Object.setPrototypeOf(unwrapped, Object.getPrototypeOf(error))
-    unwrapped.name = error.name
-    Object.defineProperty(unwrapped, 'cause', { value: error, configurable: true })
-    throw unwrapped
+    throw new Error(match[1])
   })
 }
 

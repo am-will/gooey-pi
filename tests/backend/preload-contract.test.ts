@@ -182,8 +182,8 @@ describe('preload bridge contract', () => {
   })
 
 
-  it('unwraps recognized Electron invoke errors while retaining diagnostics and error type', async () => {
-    const original = new TypeError("Error invoking remote method 'voice:transcribe': TypeError: Invalid voice URL")
+  it('unwraps the real Electron invoke error shape and logs the original', async () => {
+    const original = new Error("Error invoking remote method 'voice:transcribe': TypeError: Invalid voice URL")
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     electronMocks.ipcRenderer.invoke.mockRejectedValueOnce(original)
     const api = electronMocks.api as { voice: { transcribe(request: unknown): Promise<unknown> } }
@@ -191,9 +191,8 @@ describe('preload bridge contract', () => {
     const rejection = api.voice.transcribe({})
     await expect(rejection).rejects.toMatchObject({ message: 'Invalid voice URL' })
     await rejection.catch((error: unknown) => {
-      expect(error).toBeInstanceOf(TypeError)
+      expect(error).toBeInstanceOf(Error)
       expect(error).not.toBe(original)
-      expect((error as Error).cause).toBe(original)
     })
     expect(errorSpy).toHaveBeenCalledWith('Electron IPC invocation failed:', original)
     errorSpy.mockRestore()
