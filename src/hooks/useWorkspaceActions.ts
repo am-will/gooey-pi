@@ -294,8 +294,9 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       return
     }
     if (compactCommand && images.length > 0) {
-      reportError(translate(formattingLocaleTag(), 'error.compactAttachments'))
-      return
+      const error = new Error(translate(formattingLocaleTag(), 'error.compactAttachments'))
+      reportError(error)
+      throw error
     }
     const currentWorkspace = workspace.workspaceRef.current
     const currentRuntime = workspace.runtime
