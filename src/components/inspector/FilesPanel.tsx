@@ -58,67 +58,30 @@ export function buildTreeFromEntries(
   const rootNodes: FileTreeNode[] = []
   const nodeMap = new Map<string, FileTreeNode>()
 
-  const getOrCreateDir = (dirPath: string): FileTreeNode => {
-    const normalized = dirPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
-    let node = nodeMap.get(normalized)
-    if (node) return node
-
+  const getOrCreateNode = (path: string, type: FileTreeNode['type']): FileTreeNode => {
+    const normalized = path.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
+    const existing = nodeMap.get(normalized)
+    if (existing) { existing.type = type; return existing }
     const lastSlash = normalized.lastIndexOf('/')
     const parentPath = lastSlash === -1 ? '' : normalized.slice(0, lastSlash)
-    const name = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1)
-    const depth = baseDepth + (normalized ? normalized.split('/').length - 1 : 0)
-
-    node = {
+    const node: FileTreeNode = {
       id: `${root}\0${normalized}`,
-      name,
+      name: lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1),
       path: normalized,
       fullPath: `${root}/${normalized}`,
       root,
-      type: 'directory',
+      type,
       children: [],
-      depth,
+      depth: baseDepth + normalized.split('/').length - 1,
     }
     nodeMap.set(normalized, node)
-
-    if (parentPath) {
-      getOrCreateDir(parentPath).children.push(node)
-    } else {
-      rootNodes.push(node)
-    }
+    if (parentPath) getOrCreateNode(parentPath, 'directory').children.push(node)
+    else rootNodes.push(node)
     return node
   }
 
   for (const entry of entries) {
-    if (!entry.path) continue
-    const normalized = entry.path.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
-    if (!normalized) continue
-    const lastSlash = normalized.lastIndexOf('/')
-    const parentPath = lastSlash === -1 ? '' : normalized.slice(0, lastSlash)
-    const name = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1)
-    const depth = baseDepth + (lastSlash === -1 ? 0 : normalized.split('/').length - 1)
-
-    let node = nodeMap.get(normalized)
-    if (node) {
-      node.type = entry.type
-    } else {
-      node = {
-        id: `${root}\0${normalized}`,
-        name,
-        path: normalized,
-        fullPath: `${root}/${normalized}`,
-        root,
-        type: entry.type,
-        children: [],
-        depth,
-      }
-      nodeMap.set(normalized, node)
-
-      if (parentPath) {
-        getOrCreateDir(parentPath).children.push(node)
-      } else {
-        rootNodes.push(node)
-      }
-    }
+    if (entry.path.replace(/\//g, '')) getOrCreateNode(entry.path, entry.type)
   }
 
   const sortNodes = (nodes: FileTreeNode[]) => {
@@ -218,6 +181,12 @@ export function collectDirectoryIds(nodes: FileTreeNode[]): Set<string> {
   }
   collect(nodes)
   return ids
+}
+
+function FileStatus({ status }: { status?: string }) {
+  if (!status) return null
+  const variant = status === 'M' ? 'modified' : status === 'A' ? 'added' : status === 'D' ? 'deleted' : ''
+  return <small className={`file-tree__status ${variant ? `file-tree__status--${variant}` : ''}`}>{status}</small>
 }
 
 export function FilesPanel({
@@ -437,21 +406,7 @@ export function FilesPanel({
                       {isExpanded ? <FolderOpen size={13} /> : <Folder size={13} />}
                     </span>
                     <span className="file-tree__name">{node.name}</span>
-                    {status ? (
-                      <small
-                        className={`file-tree__status ${
-                          status === 'M'
-                            ? 'file-tree__status--modified'
-                            : status === 'A'
-                              ? 'file-tree__status--added'
-                              : status === 'D'
-                                ? 'file-tree__status--deleted'
-                                : ''
-                        }`}
-                      >
-                        {status}
-                      </small>
-                    ) : null}
+                    <FileStatus status={status} />
                   </button>
                 )
               }
@@ -468,21 +423,7 @@ export function FilesPanel({
                   <span className="file-tree__expander-placeholder" />
                   <span className="file-tree__icon">{getFileIcon(node.name)}</span>
                   <span className="file-tree__name">{node.name}</span>
-                  {status ? (
-                    <small
-                      className={`file-tree__status ${
-                        status === 'M'
-                          ? 'file-tree__status--modified'
-                          : status === 'A'
-                            ? 'file-tree__status--added'
-                            : status === 'D'
-                              ? 'file-tree__status--deleted'
-                              : ''
-                      }`}
-                    >
-                      {status}
-                    </small>
-                  ) : null}
+                  <FileStatus status={status} />
                 </button>
               )
             })
