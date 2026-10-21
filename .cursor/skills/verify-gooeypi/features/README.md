@@ -10,7 +10,7 @@ map lists others.
 
 - Run `npm run build` after source changes before each verification session.
   The driver runs the built bundle and does not rebuild it.
-- Select the toolchain in the [validation guide](../../../../docs/validation.md#supported-toolchain).
+- Select the toolchain in the [validation guide](../../../../docs/validation.md#reproducible-setup).
 - Linux needs an X display. Use `xvfb-run -a` on headless Linux. macOS and
   Windows use their native desktop session.
 - Drives run against a throwaway `HOME` + Electron `--user-data-dir`, so the real

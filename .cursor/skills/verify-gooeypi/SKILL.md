@@ -20,7 +20,7 @@ its index before driving, then use the matching feature file as the recipe.
 - **Rebuild before verification.** Run `npm run build` after source changes.
   The driver launches `out/main/index.js` and does not rebuild it.
 - **Toolchain.** Select the toolchain described in the
-  [validation guide](../../../docs/validation.md#supported-toolchain).
+  [validation guide](../../../docs/validation.md#reproducible-setup).
 - **Display.** Linux needs an X display. On headless Linux, prefix commands
   with `xvfb-run -a`. macOS and Windows use their native desktop session.
 - **Isolation.** Every drive launches its own app instance with a throwaway
