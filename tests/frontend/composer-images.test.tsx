@@ -4,9 +4,10 @@ import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '../../src/lib
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as ComposerImageHooks from '../../src/hooks/useComposerImages'
 import { Composer } from '../../src/components/Composer'
 import { groupModelsByProvider } from '../../src/hooks/useProviderCatalog'
-import type { HarnessId, PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo, SkillRecord } from '../../src/types/api'
+import type { HarnessId, PrimeContextUsage, PrimeModelDescriptor, PrimeProviderDescriptor, RuntimeInfo } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -364,7 +365,7 @@ describe('Composer image ingestion', () => {
     expect(container.querySelector('.composer-menu')).toBeNull()
     act(() => trigger.click())
     expect(container.querySelector('.composer-menu')).not.toBeNull()
-    act(() => document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+    act(() => document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
     expect(container.querySelector('.composer-menu')).toBeNull()
   })
 
@@ -616,30 +617,22 @@ describe('Composer memoization', () => {
   }
 
   it('does not re-render when a streaming parent re-renders with identical props', () => {
-    // Composer's render body scans `skills` for enabled entries, so counting
-    // those scans counts Composer renders.
-    let renderProbes = 0
-    const probedSkills = new Proxy([] as SkillRecord[], {
-      get(target, key, receiver) {
-        if (key === 'filter') renderProbes += 1
-        return Reflect.get(target, key, receiver)
-      },
-    })
+    const renderProbe = vi.spyOn(ComposerImageHooks, 'useComposerImages')
     let forceParentRender: () => void = () => undefined
     function Parent() {
       const [, setTick] = useState(0)
       forceParentRender = () => setTick((value) => value + 1)
-      return <Composer {...stableProps} skills={probedSkills} />
+      return <Composer {...stableProps} />
     }
 
     act(() => root.render(<Parent />))
-    const initialRenders = renderProbes
+    const initialRenders = renderProbe.mock.calls.length
     expect(initialRenders).toBeGreaterThan(0)
 
     act(() => forceParentRender())
     act(() => forceParentRender())
     // memo(Composer) bails out for identical props: no further renders.
-    expect(renderProbes).toBe(initialRenders)
+    expect(renderProbe.mock.calls.length).toBe(initialRenders)
 
     expect(container.querySelector('.model-picker__trigger')?.textContent).toContain('Vision')
   })
