@@ -51,7 +51,7 @@ it('enforces exact-file floors without subtracting files from family or global s
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(fail ? 1 : 0)
       const summary = JSON.parse(readFileSync(join(reports, 'coverage-summary.json'), 'utf8')) as Record<string, { lines: { total: number; covered: number; pct: number } }>
       expect(summary.total.lines).toMatchObject({ total: 2, covered: 1, pct: 50 })
-      expect(Object.keys(summary).some((file) => file.endsWith('/src/uncovered.ts'))).toBe(true)
+      expect(Object.keys(summary).some((file) => file.replaceAll('\\', '/').endsWith('/src/uncovered.ts'))).toBe(true)
       if (fail) {
         expect(result.stderr).toContain('"src/uncovered.ts" threshold (1%)')
         expect(result.stderr).not.toContain('global threshold')
