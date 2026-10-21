@@ -1,3 +1,5 @@
+import type { PrimeEventReplayStats } from '../../src/lib/events/reduce'
+import { resetTranscriptIdsForTests } from '../../src/lib/events/ids'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PendingAgentEvent } from '../../src/app/agent-events'
 import { createScopedRequestGuard } from '../../src/app/scoped-request'
@@ -8,7 +10,7 @@ import {
   updateActivityCriteria,
   type ActivityViewState,
 } from '../../src/pages/ActivityPage'
-import { applyPrimeEvent, createPrimeEventBuffer, createSteerAcceptedEvent, createSteerPickupEvent, replayPrimeEvents, resetTranscriptIdsForTests, type PrimeEventReplayStats } from '../../src/lib/events'
+import { applyPrimeEvent, createPrimeEventBuffer, createSteerAcceptedEvent, createSteerPickupEvent, replayPrimeEvents } from '../../src/lib/events'
 import { reconcileTranscripts } from '../../src/app/transcript-reconcile'
 import { createSidebarActionProxy } from '../../src/hooks/useSidebarActions'
 import { mergeSessionCatalog } from '../../src/hooks/useBootstrap'

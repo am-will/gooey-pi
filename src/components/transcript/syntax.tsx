@@ -1,8 +1,6 @@
 import { Fragment } from 'react'
 import { tokenizeSyntaxText, type SyntaxTokenKind } from '@/lib/syntax-text'
 
-export type { SyntaxTokenKind }
-
 export interface SyntaxToken {
   kind: SyntaxTokenKind
   text: string

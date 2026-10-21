@@ -1,5 +1,6 @@
+import { resetTranscriptIdsForTests } from '../../src/lib/events/ids'
 import { describe, expect, it, vi } from 'vitest'
-import { applyPrimeEvent, createPrimeEventBuffer, replayPrimeEvents, resetTranscriptIdsForTests } from '../../src/lib/events'
+import { applyPrimeEvent, createPrimeEventBuffer, replayPrimeEvents } from '../../src/lib/events'
 import { keepLiveCompactionReasons } from '../../src/lib/events/compaction'
 import type { TranscriptMessage } from '../../src/types/api'
 

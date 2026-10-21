@@ -16,7 +16,7 @@ import { MarkdownText } from '../MarkdownText'
 import { HarnessMark } from '../HarnessMark'
 import { InlineText } from './syntax'
 import { TranscriptImage } from './TranscriptImage'
-import { ThinkingDots, WorkDisclosure, WorkTimeline } from './timeline'
+import { WorkDisclosure, WorkTimeline } from './timeline'
 
 function imageSource(part: Extract<MessagePart, { type: 'image' }>): string | undefined {
   if (part.dataTruncated || !part.data || !part.mimeType || !/^image\/(png|jpeg|gif|webp)$/i.test(part.mimeType) || !/^[a-z\d+/=\s]+$/i.test(part.data)) return undefined
@@ -126,7 +126,6 @@ function MessageActions({ message, text: suppliedText }: { message: TranscriptMe
 
 export const AssistantMessage = memo(
   function AssistantMessage({ message, harness = 'prime', showReasoning, showTools }: { message: TranscriptMessage; harness?: HarnessId; showReasoning: boolean; showTools: boolean }) {
-    const { t } = useI18n()
     const isActivity = (part: MessagePart) => part.type === 'thinking' || part.type === 'toolCall' || part.type === 'toolResult' || part.type === 'agentMessage' || part.type === 'compaction'
     const firstActivity = message.parts.findIndex(isActivity)
     let lastActivity = -1
@@ -160,11 +159,6 @@ export const AssistantMessage = memo(
             renderNarrative(hiddenMiddleNarrative, 'middle', message.streaming)
           )}
           {renderNarrativeWithActivity(after, 'after', showReasoning, showTools, message.streaming)}
-          {message.streaming && !hasVisibleActivity ? (
-            <div className="streaming-state" aria-live="polite">
-              <ThinkingDots /> {t('transcript.isWorking', { harness: HARNESS_SHORT_NAMES[harness] })}
-            </div>
-          ) : null}
           {!message.streaming ? <MessageActions message={message} text={copyableText} /> : null}
         </div>
       </article>

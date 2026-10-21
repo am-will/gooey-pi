@@ -10,8 +10,6 @@ import { ActivityMessage, AgentMessage, AssistantMessage, GoalMessage, SteerRead
 import { useTranscriptScroll } from './transcript/scroll'
 import { LiveElapsed, ThinkingDots, WorkDisclosure } from './transcript/timeline'
 
-export { classifyTool, formatWorkedDuration } from './transcript/timeline'
-export { tokenizeSyntax } from './transcript/syntax'
 
 export function coalesceAssistantTurns(messages: TranscriptMessage[]): TranscriptMessage[] {
   let changed = false
