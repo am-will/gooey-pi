@@ -9,7 +9,7 @@ import { SettingsService } from '../../electron/main/settings'
 import { defaultSettings, type DesktopState, type JsonStateStore } from '../../electron/main/store'
 
 let registration: IpcRegistration | undefined
-afterEach(() => registration?.dispose())
+afterEach(() => { registration?.dispose(); vi.restoreAllMocks() })
 
 function deferred() {
   let resolve!: () => void
@@ -18,7 +18,7 @@ function deferred() {
 }
 
 describe('settings IPC transition ownership', () => {
-  it('retires capabilities retained after a partially refused login-item update', async () => {
+  it.each([false, true])('reconciles fields retained after login-item refusal (retirement rejects=%j)', async (refreshFails) => {
     const handlers = new Map<string, (event: unknown, patch: unknown) => Promise<AppSettings>>()
     electron.ipcMain.handle.mockImplementation((channel, handler) => { handlers.set(channel, handler) })
     const state = { settings: { ...defaultSettings(), browserEnabled: true, launchAtLogin: false } }
@@ -28,6 +28,8 @@ describe('settings IPC transition ownership', () => {
     }
     const settings = new SettingsService(store as unknown as JsonStateStore, () => '/bin/sh', undefined, () => { throw new Error('macOS refused login item') })
     const refresh = vi.fn(async () => {})
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    if (refreshFails) refresh.mockRejectedValueOnce(new Error('Retirement failed'))
     const services = ipcServiceStubs()
     services.settings = settings
     services.agents = { ...services.agents as object, requestRuntimeEnvironmentRefresh: refresh }
@@ -35,9 +37,12 @@ describe('settings IPC transition ownership', () => {
     const sender = { id: 1, getURL: () => url, mainFrame: { url }, isDestroyed: () => false }
     registration = registerIpc(services as never, url)
     registration.authorize(sender as never)
-    await expect(handlers.get('settings:update')!({ sender, senderFrame: sender.mainFrame }, { browserEnabled: false, launchAtLogin: true })).rejects.toThrow('macOS refused login item')
+    await expect(handlers.get('settings:update')!({ sender, senderFrame: sender.mainFrame }, { browserEnabled: false, launchAtLogin: true, interfaceFontScale: 115 })).rejects.toThrow('macOS refused login item')
     expect(settings.get()).toMatchObject({ browserEnabled: false, launchAtLogin: false })
     expect(refresh).toHaveBeenCalledOnce()
+    expect(services.applyInterfaceZoom).toHaveBeenCalledWith(115)
+    if (refreshFails) expect(log).toHaveBeenCalledWith(expect.stringContaining('Retirement failed'))
+    else expect(log).not.toHaveBeenCalled()
   })
 
   it.each([

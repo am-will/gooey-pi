@@ -1,5 +1,5 @@
 import { ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { APPLICATION_MENU_NAMES, HARNESS_IDS, THEME_MODES, type ApplicationMenuName, type AppMeta, type HarnessId, type SessionChangeEvent, type ThemeMode } from '../../src/types/api'
+import { APPLICATION_MENU_NAMES, HARNESS_IDS, THEME_MODES, type ApplicationMenuName, type AppMeta, type AppSettings, type HarnessId, type SessionChangeEvent, type ThemeMode } from '../../src/types/api'
 import type { AgentRpcManager } from './agent-rpc'
 import { assertRendererCommand } from './agent-rpc/command-schema'
 import type { GitService } from './git'
@@ -441,11 +441,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
 
   handle('settings:get', () => services.settings.get())
   const settingsTransitions = createKeyedMutex<'settings'>()
-  handle('settings:update', (_event, patch) => settingsTransitions.run('settings', async () => {
-    const previous = services.settings.get()
-    const patchRecord = requireRecord(patch, 'settings patch')
-    if (patchRecord.computerUseEnabled === true && !previous.computerUseEnabled) await services.cuaDriver.requireAvailable()
-    const settings = await services.settings.update(patch)
+  const reconcileSettings = async (previous: AppSettings, settings: AppSettings): Promise<void> => {
     if (settings.interfaceFontScale !== previous.interfaceFontScale) services.applyInterfaceZoom?.(settings.interfaceFontScale)
     if (settings.askUserEnabled !== previous.askUserEnabled || settings.browserEnabled !== previous.browserEnabled || settings.computerUseEnabled !== previous.computerUseEnabled) {
       await Promise.all([
@@ -456,6 +452,22 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     } else if (settings.ompApprovalMode !== previous.ompApprovalMode) {
       await services.omp.agents.requestRuntimeEnvironmentRefresh()
     }
+  }
+  handle('settings:update', (_event, patch) => settingsTransitions.run('settings', async () => {
+    const previous = services.settings.get()
+    const patchRecord = requireRecord(patch, 'settings patch')
+    if (patchRecord.computerUseEnabled === true && !previous.computerUseEnabled) await services.cuaDriver.requireAvailable()
+    let settings: AppSettings
+    try {
+      settings = await services.settings.update(patch)
+    } catch (error) {
+      // OS login-item refusal retains the other saved fields in a mixed patch.
+      try { await reconcileSettings(previous, services.settings.get()) } catch (secondary) {
+        console.error(`GooeyPi could not reconcile saved settings: ${boundedErrorMessage(secondary)}`)
+      }
+      throw error
+    }
+    await reconcileSettings(previous, settings)
     return settings
   }))
   handle('settings:reset-browser-data', () => services.settings.resetBrowserData())
