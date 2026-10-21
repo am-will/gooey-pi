@@ -286,10 +286,10 @@ export function FilesPanel({
     }
   }, [project?.id, project?.primaryFolder, project?.folders.join('\0'), project?.harness, isSearching])
 
-  const changed = useMemo(
-    () => new Map(git.files.map((file) => [file.path, file.status])),
-    [git.files],
-  )
+  const changed = useMemo(() => {
+    const root = (git.root ?? project?.primaryFolder ?? '').replaceAll('\\', '/').replace(/\/+$/, '')
+    return new Map(git.files.map((file) => [`${root}/${file.path.replaceAll('\\', '/')}`, file.status]))
+  }, [git.files, git.root, project?.primaryFolder])
 
   const filteredTree = useMemo(() => filterFileTree(treeRoots, query), [treeRoots, query])
   const visibleNodes = useMemo(
@@ -409,8 +409,7 @@ export function FilesPanel({
           ? displayedNodes.map((node) => {
               const isDirectory = node.type === 'directory'
               const isExpanded = isSearching || expandedIds.has(node.id)
-              const status =
-                node.root === project.primaryFolder ? changed.get(node.path) : undefined
+              const status = changed.get(node.fullPath.replaceAll('\\', '/'))
 
               if (isDirectory) {
                 return (
