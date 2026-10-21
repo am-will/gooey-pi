@@ -79,6 +79,13 @@ export abstract class CapabilityBridge {
     return this.environmentEntries(`http://127.0.0.1:${this.port}/v1/call`, token)
   }
 
+  /** Attach a newly discovered session file once; an existing capability scope never changes. */
+  bindSession(token: string | undefined, sessionFile: string | undefined): void {
+    if (!token || !sessionFile) return
+    const claim = this.claimForToken(token)
+    if (claim && !claim.sessionPath) claim.sessionPath = sessionFile
+  }
+
   protected claimForToken(token: string): CapabilityClaim | undefined {
     return this.claims.get(token)
   }

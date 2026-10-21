@@ -52,6 +52,18 @@ describe('AgentScheduleBridge', () => {
     expect(await call('list', {}, other.PRIME_WORK_SCHEDULE_TOKEN)).toMatchObject({ status: 200 })
   })
 
+  it('binds a newly created session capability once without replacing its scope', async () => {
+    const { service, call } = await fixture()
+    const unbound = bridges[0].environmentFor({ cwd: '/project' })
+    const token = unbound.PRIME_WORK_SCHEDULE_TOKEN
+    const input = { prompt: 'Check this thread', timing: { kind: 'once', at: '2030-01-02T00:00:00Z' }, execution: { model: 'auto', thinking: 'auto', speed: 'normal' } }
+    expect(await call('create', { target: 'current_session', input }, token)).toMatchObject({ status: 400 })
+    bridges[0].bindSession(token, '/sessions/one.jsonl')
+    bridges[0].bindSession(token, undefined)
+    expect(await call('create', { target: 'current_session', input }, token)).toMatchObject({ status: 200 })
+    expect(service.list()[0].target).toEqual({ kind: 'session', projectId: 'project-one', sessionId: 'session-one' })
+  })
+
   it('creates agent-attributed tasks only in the capability current target', async () => {
     const { service, environment, call } = await fixture()
     expect(environment.PRIME_WORK_SCHEDULE_SKILL_PATH).toBe('/app/skills/prime-work-schedules')

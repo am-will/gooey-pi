@@ -190,7 +190,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     }
     if (runtimeId && !sessionFile) this.pendingRuntimeTokens.set(runtimeId, token)
     if (!sessionFile) return
-    if (!claim.sessionPath) claim.sessionPath = sessionFile
+    super.bindSession(token, sessionFile)
     if (runtimeId) this.pendingRuntimeTokens.delete(runtimeId)
   }
 
