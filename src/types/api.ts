@@ -217,6 +217,8 @@ export interface SessionUsage {
 }
 
 export interface RuntimeInfo {
+  /** Outstanding harness dialogs that can be restored after a renderer reload. */
+  pendingExtensionUi?: Record<string, unknown>[]
   runtimeId: string
   harness: HarnessId
   sessionId?: string
