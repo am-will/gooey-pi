@@ -152,3 +152,18 @@ it('refreshes an unchanged selected file on a new Git snapshot without replacing
   await act(async () => { resolve?.({ text: '+after' }) })
   expect(container.querySelector('.diff-view')?.textContent).toContain('+after')
 })
+
+
+it('admits only one Git mutation until persistence and refresh finish', async () => {
+  let finish: ((value: boolean) => void) | undefined
+  const stage = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve }))
+  const diff = vi.fn(async () => ({ text: '+change' }))
+  Object.defineProperty(window, 'prime', { configurable: true, value: { git: { stage, diff } } })
+  await act(async () => root.render(<ChangesPanel cwd="/project" git={{ isRepo: true, files: [{ path: 'file.txt', status: 'M', staged: false, additions: 1, deletions: 0 }] }} onRefreshGit={() => undefined} />))
+  const button = [...container.querySelectorAll<HTMLButtonElement>('.diff-header button')].find((item) => item.textContent?.trim() === 'Stage')!
+  act(() => { button.click(); button.click() })
+  expect(stage).toHaveBeenCalledTimes(1)
+  expect(button.disabled).toBe(true)
+  await act(async () => { finish?.(true) })
+  expect(button.disabled).toBe(false)
+})
