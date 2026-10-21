@@ -117,6 +117,7 @@ function delay(ms: number): Promise<void> {
 
 function parseScriptJson(payload: unknown, label: string): Record<string, unknown> {
   if (typeof payload !== 'string') throw new Error(`The page did not respond to ${label}. It may still be loading; try again.`)
+  if (Buffer.byteLength(payload, 'utf8') > 256 * 1024) throw new Error(`The page response exceeded the byte limit for ${label}.`)
   let parsed: unknown
   try { parsed = JSON.parse(payload) } catch { throw new Error(`The page returned malformed data for ${label}.`) }
   return requireRecord(parsed, label)
@@ -537,14 +538,14 @@ export class AgentBrowserService {
       const rawKey = requireString(params.key, 'key', { min: 1, max: 24, trim: true })
       const key = rawKey.length === 1
         ? { key: rawKey, code: '', keyCode: rawKey.toUpperCase().charCodeAt(0), text: rawKey }
-        : PRESS_KEYS[rawKey.toLowerCase()]
+        : Object.hasOwn(PRESS_KEYS, rawKey.toLowerCase()) ? PRESS_KEYS[rawKey.toLowerCase()] : undefined
       if (!key) throw new TypeError(`key must be a single character or one of: ${Object.keys(PRESS_KEYS).join(', ')}`)
       const modifiers: string[] = []
       if (params.modifiers !== undefined) {
         if (!Array.isArray(params.modifiers)) throw new TypeError('modifiers must be an array')
         for (const modifier of params.modifiers.slice(0, 4)) {
           const name = requireString(modifier, 'modifier', { min: 1, max: 12, trim: true }).toLowerCase()
-          if (PRESS_MODIFIER_BITS[name] === undefined) throw new TypeError('modifiers may only include shift, control, alt, meta')
+          if (!Object.hasOwn(PRESS_MODIFIER_BITS, name)) throw new TypeError('modifiers may only include shift, control, alt, meta')
           modifiers.push(name)
         }
       }
