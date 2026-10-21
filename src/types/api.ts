@@ -184,8 +184,8 @@ export interface TranscriptMessage {
   role: 'user' | 'assistant' | 'agent' | 'goal' | 'tool' | 'system'
   /** Renderer-local steering lifecycle. Persisted transcripts remain harness-owned. */
   steerState?: 'accepted' | 'read'
-  /** Neutral system row: a renderer-only steer-read boundary, or a notice (provider fallback, branch summary) that never reads as a failure. */
-  kind?: 'steer-read-marker' | 'notice'
+  /** Renderer-owned steering boundary, neutral notice, or failure row. */
+  kind?: 'steer-read-marker' | 'notice' | 'error'
   notice?: { kind: 'branch-summary' }
   timestamp?: string | number
   agentName?: string
