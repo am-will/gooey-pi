@@ -209,6 +209,50 @@ describe('authorized OMP child observation', () => {
     expect(unchanged.messages).toEqual([])
   })
 
+  it('fences a pending parent authorization across revoke and readmission of the same renderer', async () => {
+    const f = await fixture()
+    let resolveAuthorization: ((value: string) => void) | undefined
+    f.authorizeParent.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveAuthorization = resolve }))
+    const pending = f.service.list(1, f.parent)
+    f.service.revoke(1)
+    const fresh = await f.service.list(1, f.parent)
+    if (!fresh.supported || !fresh.children[0]) throw new Error('Missing readmitted child')
+    expect(fresh.children[0].id).not.toBe(f.id)
+    resolveAuthorization?.(f.parent)
+    await expect(pending).rejects.toThrow('authorization was revoked')
+    await expect(f.service.history(1, f.parent, f.id, undefined)).rejects.toThrow('Unknown child')
+  })
+
+  it('rejects a pending history request after revoke even when the renderer is readmitted', async () => {
+    const f = await fixture()
+    const page = await f.service.history(1, f.parent, f.id, undefined)
+    let release: ((value: string) => void) | undefined
+    f.authorizeParent.mockImplementationOnce(() => new Promise<string>((resolve) => { release = resolve }))
+    const pending = f.service.history(1, f.parent, f.id, { cursor: page.newerCursor })
+    f.service.revoke(1)
+    await f.service.list(1, f.parent)
+    release?.(f.parent)
+    await expect(pending).rejects.toThrow('authorization was revoked')
+  })
+
+  it('fences a pending live roster across revoke and never restores old handles or cursors', async () => {
+    const f = await fixture()
+    const page = await f.service.history(1, f.parent, f.id, undefined)
+    let resolveRoster: ((value: unknown) => void) | undefined
+    let entered: (() => void) | undefined
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    f.liveRoster.mockImplementationOnce(() => new Promise<unknown>((resolve) => { resolveRoster = resolve; entered?.() }))
+    const pending = f.service.list(1, f.parent)
+    await waiting
+    f.service.revoke(1)
+    const fresh = await f.service.list(1, f.parent)
+    if (!fresh.supported || !fresh.children[0]) throw new Error('Missing readmitted child')
+    resolveRoster?.({ subagents: [] })
+    await expect(pending).rejects.toThrow('authorization was revoked')
+    await expect(f.service.history(1, f.parent, f.id, undefined)).rejects.toThrow('Unknown child')
+    await expect(f.service.history(1, f.parent, fresh.children[0].id, { cursor: page.newerCursor })).rejects.toThrow('Invalid child history cursor')
+  })
+
   it('bounds huge records, permits paging past them, and reports skipped content', async () => {
     const f = await fixture()
     const huge = record('huge', 'u', 'assistant', 'x'.repeat(3 * 1024 * 1024))

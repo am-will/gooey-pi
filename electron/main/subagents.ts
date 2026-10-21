@@ -11,8 +11,9 @@ const PAGE_BYTES = 1024 * 1024
 const PAGE_RECORDS = 200
 const MAX_CHILDREN = 128
 const MAX_DEPTH = 8
+interface Admission { owner: number }
 interface Child { handle: string; path: string; parentId?: string; name: string }
-interface Scope { owner: number; parent: string; identity: string; root: string; children: Map<string, Child> }
+interface Scope { admission: Admission; owner: number; parent: string; identity: string; root: string; children: Map<string, Child> }
 interface Cursor { scope: Scope; child: Child; offset: number; identity: string }
 interface Dependencies {
   authorizeParent(path: unknown): Promise<string>
@@ -22,22 +23,25 @@ interface Window { lines: string[]; start: number; end: number; truncated: boole
 
 /** OMP 18.12 persists descendants at <parent-stem>/<child>.jsonl, recursively. */
 export class OmpChildService {
+  private readonly admissions = new Map<number, Admission>()
   private readonly scopes = new Map<string, Scope>()
   private readonly cursors = new Map<string, Cursor>()
   constructor(private readonly dependencies: Dependencies) {}
 
   revoke(owner: number): void {
+    this.admissions.delete(owner)
     for (const [key, scope] of this.scopes) if (scope.owner === owner) this.scopes.delete(key)
     for (const [key, cursor] of this.cursors) if (cursor.scope.owner === owner) this.cursors.delete(key)
   }
 
   async list(owner: number, parentValue: unknown): Promise<ChildRoster> {
-    const scope = await this.scope(owner, parentValue)
+    const scope = await this.scope(owner, parentValue, this.admit(owner))
     const children: ChildSession[] = []
     let truncated = false
     let inspected = 0
     let live: unknown
     try { live = await this.dependencies.liveRoster(scope.parent) } catch { /* Persisted children remain readable after runtime exit. */ }
+    this.assertAdmission(scope.admission)
     const snapshots = isRecord(live) && Array.isArray(live.subagents) ? live.subagents.slice(0, MAX_CHILDREN) : []
     const visit = async (directory: string, parentId: string | undefined, depth: number): Promise<void> => {
       if (depth > MAX_DEPTH) { truncated = true; return }
@@ -52,13 +56,16 @@ export class OmpChildService {
           try {
             const file = await this.openChild(scope, path)
             try {
+              this.assertAdmission(scope.admission)
               const info = await file.stat()
+              this.assertAdmission(scope.admission)
               let child = scope.children.get(path)
               if (!child) {
                 child = { handle: randomUUID(), path, parentId, name: basename(entry.name, '.jsonl') }
                 scope.children.set(path, child)
               }
               const prefix = await readWindow(file, 0, Math.min(info.size, 64 * 1024), 'newer')
+              this.assertAdmission(scope.admission)
               let title = child.name
               let task: string | undefined
               for (const line of prefix.lines) {
@@ -86,6 +93,7 @@ export class OmpChildService {
       }
     }
     await visit(scope.root, undefined, 1)
+    this.assertAdmission(scope.admission)
     // Bound retained handles too, while keeping IDs stable across ordinary refreshes.
     const found = new Set(children.map((child) => child.id))
     for (const [path, child] of scope.children) if (!found.has(child.handle)) scope.children.delete(path)
@@ -93,7 +101,7 @@ export class OmpChildService {
   }
 
   async history(owner: number, parentValue: unknown, childValue: unknown, optionsValue: unknown): Promise<ChildHistoryPage> {
-    const scope = await this.scope(owner, parentValue)
+    const scope = await this.scope(owner, parentValue, this.admit(owner))
     const id = requireString(childValue, 'childId', { min: 1, max: 100 })
     const child = [...scope.children.values()].find((value) => value.handle === id)
     if (!child) throw new TypeError('Unknown child for this parent')
@@ -107,14 +115,17 @@ export class OmpChildService {
     try { file = await this.openChild(scope, child.path) } catch { throw new TypeError('Untrusted child transcript; refresh the child list') }
     try {
       const info = await file.stat()
+      this.assertAdmission(scope.admission)
       const identity = `${info.dev}:${info.ino}:${info.birthtimeMs}`
       const reset = Boolean(cursor && (cursor.identity !== identity || cursor.offset > info.size))
       const offset = cursor && !reset ? cursor.offset : info.size
       const page = !cursor || reset || direction === 'older'
         ? await readWindow(file, Math.max(0, offset - PAGE_BYTES), offset, 'older')
         : await readWindow(file, offset, Math.min(info.size, offset + PAGE_BYTES), 'newer')
+      this.assertAdmission(scope.admission)
       const lines = async function* (): AsyncGenerator<string> { yield* page.lines }
       const messages = await renderTranscriptLines(lines(), false, branchSummaryTranscriptDialect())
+      this.assertAdmission(scope.admission)
       return {
         messages, reset, truncated: page.truncated,
         olderCursor: page.start > 0 ? this.cursor({ scope, child, offset: page.start, identity }) : undefined,
@@ -124,6 +135,7 @@ export class OmpChildService {
   }
 
   private cursor(value: Cursor): string {
+    this.assertAdmission(value.scope.admission)
     for (const [token, cursor] of this.cursors) {
       if (cursor.scope === value.scope && cursor.child === value.child && cursor.identity === value.identity && cursor.offset === value.offset) return token
     }
@@ -136,11 +148,26 @@ export class OmpChildService {
     return token
   }
 
-  private async scope(owner: number, value: unknown): Promise<Scope> {
+  private admit(owner: number): Admission {
+    let admission = this.admissions.get(owner)
+    if (!admission) {
+      admission = { owner }
+      this.admissions.set(owner, admission)
+    }
+    return admission
+  }
+
+  private assertAdmission(admission: Admission): void {
+    if (this.admissions.get(admission.owner) !== admission) throw new Error('Child observer authorization was revoked')
+  }
+
+  private async scope(owner: number, value: unknown, admission: Admission): Promise<Scope> {
     const parent = await this.dependencies.authorizeParent(value)
+    this.assertAdmission(admission)
     if (!parent.endsWith('.jsonl')) throw new TypeError('Invalid parent session')
     const key = `${owner}:${parent}`
     const info = await lstat(parent)
+    this.assertAdmission(admission)
     if (!info.isFile()) throw new TypeError('Invalid parent session')
     const identity = `${info.dev}:${info.ino}:${info.birthtimeMs}`
     let scope = this.scopes.get(key)
@@ -149,7 +176,7 @@ export class OmpChildService {
       scope = undefined
     }
     if (!scope) {
-      scope = { owner, parent, identity, root: parent.slice(0, -6), children: new Map() }
+      scope = { admission, owner, parent, identity, root: parent.slice(0, -6), children: new Map() }
       this.scopes.set(key, scope)
       while (this.scopes.size > 64) {
         const oldest = this.scopes.keys().next().value
@@ -175,6 +202,7 @@ export class OmpChildService {
   }
 
   private async openChild(scope: Scope, path: string): Promise<FileHandle> {
+    this.assertAdmission(scope.admission)
     await this.safeDirectory(scope, dirname(path))
     const expected = await lstat(path)
     if (!expected.isFile() || expected.isSymbolicLink()) throw new TypeError('Untrusted child transcript')
@@ -183,6 +211,7 @@ export class OmpChildService {
       const actual = await file.stat()
       const current = await lstat(path)
       if (current.dev !== actual.dev || current.ino !== actual.ino || !actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino || await realpath(path) !== path) throw new TypeError('Child transcript changed during read')
+      this.assertAdmission(scope.admission)
       return file
     } catch (error) { await file.close(); throw error }
   }
