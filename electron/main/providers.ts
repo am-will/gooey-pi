@@ -150,6 +150,7 @@ export class PrimeProviderService {
   private readonly rustModels: RustPrimeModelCatalogService
   private cachedCatalog: PrimeModelCatalog | null = null
   private cachedAt = 0
+  private catalogGeneration = 0
   private catalogRefresh: Promise<PrimeModelCatalog> | null = null
   private readonly flows = new Map<string, OAuthFlow>()
   private eventSink: (event: ProviderAuthEvent) => void = () => undefined
@@ -201,13 +202,14 @@ export class PrimeProviderService {
   async catalog(force = false, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelCatalog> {
     this.currentContext()
     if (this.implementation() === 'rust') return this.rustCatalog(force, disabledProviders, disabledModels)
+    if (force) this.invalidate()
     if (!force && this.cachedCatalog && Date.now() - this.cachedAt < CATALOG_TTL_MS) {
       return withModelVisibility(this.cachedCatalog, disabledProviders, disabledModels)
     }
     // Single-flight: concurrent callers share one refresh instead of racing
     // duplicate registry work; the in-flight promise is cleared in finally.
     if (!this.catalogRefresh) {
-      const refresh = this.refreshCatalog().finally(() => {
+      const refresh = this.refreshCatalog(this.catalogGeneration).finally(() => {
         if (this.catalogRefresh === refresh) this.catalogRefresh = null
       })
       this.catalogRefresh = refresh
@@ -215,7 +217,7 @@ export class PrimeProviderService {
     return withModelVisibility(await this.catalogRefresh, disabledProviders, disabledModels)
   }
 
-  private async refreshCatalog(): Promise<PrimeModelCatalog> {
+  private async refreshCatalog(generation: number): Promise<PrimeModelCatalog> {
     const context = this.currentContext()
     const { registry } = context
     const snapshot = await registry.refreshModelCatalog()
@@ -253,7 +255,7 @@ export class PrimeProviderService {
       providers: relation.providers,
       warning: warnings.length ? warnings.join(' ') : undefined,
     }
-    if (this.currentContext() === context) {
+    if (this.currentContext() === context && this.catalogGeneration === generation) {
       this.cachedCatalog = catalog
       this.cachedAt = Date.now()
     }
@@ -405,6 +407,7 @@ export class PrimeProviderService {
   cancelAll(): void { for (const flow of this.flows.values()) this.cancelOAuth(flow.id) }
 
   invalidate(): void {
+    this.catalogGeneration += 1
     this.cachedCatalog = null
     this.cachedAt = 0
     this.catalogRefresh = null

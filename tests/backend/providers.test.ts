@@ -356,6 +356,29 @@ describe('Prime provider adapter', () => {
     expect(providerService.cancelOAuth(second.flowId)).toBe(false)
   })
 
+  it.each(['invalidate', 'force'] as const)('does not publish an older catalog refresh after %s', async (action) => {
+    const oldModel = primeModel('test-provider', 'old-model')
+    const newModel = primeModel('test-provider', 'new-model')
+    const providerService = serviceWithRegistryModels([oldModel, newModel])
+    let entered!: () => void
+    let release!: () => void
+    const admission = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const refresh = vi.fn().mockImplementationOnce(async () => { entered(); await gate; return { models: [oldModel] } }).mockResolvedValue({ models: [newModel] })
+    const internals = providerService as unknown as { registry: { refreshModelCatalog: typeof refresh } }
+    internals.registry.refreshModelCatalog = refresh
+    const older = providerService.catalog()
+    await admission
+    if (action === 'invalidate') providerService.invalidate()
+    try {
+      expect((await providerService.catalog(action === 'force')).models.map((model) => model.id)).toEqual(['new-model'])
+      release()
+      expect((await older).models.map((model) => model.id)).toEqual(['old-model'])
+      expect((await providerService.catalog()).models.map((model) => model.id)).toEqual(['new-model'])
+      expect(refresh).toHaveBeenCalledTimes(2)
+    } finally { release() }
+  })
+
   it('ignores late authorization URLs, progress and completion after OAuth cancellation', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'gooeypi-oauth-cancel-'))
     dirs.push(dir)
