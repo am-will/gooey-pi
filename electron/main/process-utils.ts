@@ -242,15 +242,18 @@ export function executableChildEnvironment(
     ...sharedHarnessCandidateDirs(result, platform, home),
     ...inherited.slice(insertAt),
   ]
+  result[pathKey] = uniquePaths(directories, platform).join(separator)
+  return result
+}
+
+function uniquePaths(paths: readonly string[], platform: NodeJS.Platform): string[] {
   const seen = new Set<string>()
-  result[pathKey] = directories.filter((directory) => {
-    if (!directory) return false
-    const key = platform === 'win32' ? directory.toLowerCase() : directory
-    if (seen.has(key)) return false
+  return paths.filter((path) => {
+    const key = platform === 'win32' ? path.toLowerCase() : path
+    if (!path || seen.has(key)) return false
     seen.add(key)
     return true
-  }).join(separator)
-  return result
+  })
 }
 
 export interface ExecutableSpawnInvocation {
@@ -336,14 +339,7 @@ export function prepareExecutableSpawn(
     childEnvironment.ProgramFiles ? win32.join(childEnvironment.ProgramFiles, 'nodejs') : '',
     childEnvironment.LOCALAPPDATA ? win32.join(childEnvironment.LOCALAPPDATA, 'Programs', 'nodejs') : '',
   ]
-  const seen = new Set<string>()
-  const node = nodeDirectories
-    .filter((directory) => {
-      const key = directory.toLowerCase()
-      if (!directory || seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+  const node = uniquePaths(nodeDirectories.filter((directory) => isAbsolutePathForPlatform(directory, platform)), platform)
     .map((directory) => win32.join(directory, 'node.exe'))
     .find((candidate) => canAccess(candidate, fsConstants.X_OK))
   if (!node) throw new Error(`Node.js was not found for the ${descriptor.agentName} npm command shim`)
@@ -355,6 +351,13 @@ export function prepareExecutableSpawn(
  * A package-manager shim can live outside the Node installation that owns its
  * interpreter (for example pnpm under ~/Library/pnpm with Node under nvm).
  */
+function nvmVersionNames(entries: readonly { name: string; isDirectory(): boolean }[]): string[] {
+  return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .sort((left, right) => right.localeCompare(left, 'en', { numeric: true }))
+    .slice(0, 64)
+}
+
 function versionManagerRuntimeDirs(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
@@ -367,11 +370,7 @@ function versionManagerRuntimeDirs(
   const root = env.NVM_DIR && posix.isAbsolute(env.NVM_DIR) ? env.NVM_DIR : posix.join(home, '.nvm')
   const versionsRoot = posix.join(root, 'versions', 'node')
   try {
-    return readdirSync(versionsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-      .sort((left, right) => right.localeCompare(left, 'en', { numeric: true }))
-      .slice(0, 64)
+    return nvmVersionNames(readdirSync(versionsRoot, { withFileTypes: true }))
       .map((version) => posix.join(versionsRoot, version, 'bin'))
   } catch { return [] }
 }
@@ -487,13 +486,7 @@ export function harnessExecutableCandidates(
       for (const name of executableNames) candidates.push(pathApi.join(directory, name))
     }
   }
-  const seen = new Set<string>()
-  return candidates.filter((candidate) => {
-    const key = platform === 'win32' ? candidate.toLowerCase() : candidate
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return uniquePaths(candidates, platform)
 }
 
 /** Bounded, shell-free discovery for nvm installs that a desktop app's PATH does not inherit. */
@@ -508,11 +501,7 @@ export async function nvmHarnessExecutableCandidates(
   const versionsRoot = posix.join(root, 'versions', 'node')
   try {
     const entries = await readdir(versionsRoot, { withFileTypes: true })
-    return entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-      .sort((left, right) => right.localeCompare(left, 'en', { numeric: true }))
-      .slice(0, 64)
+    return nvmVersionNames(entries)
       .map((version) => posix.join(versionsRoot, version, 'bin', descriptor.executableName(platform)))
   } catch { return [] }
 }

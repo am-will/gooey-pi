@@ -518,6 +518,14 @@ describe('OMP discovery candidates', () => {
     })).toThrow(/official Prime Agent installation/)
   })
 
+  it('never resolves a command-shim interpreter through relative environment roots', () => {
+    const inspected: string[] = []
+    expect(() => prepareExecutableSpawn('C:\\cli\\prime-agent.cmd', [], { ProgramFiles: 'relative', LOCALAPPDATA: 'relative', USERPROFILE: 'C:\\Users\\Ada', Path: '' }, {
+      platform: 'win32', canAccess: (path, mode) => { inspected.push(path); return mode === 0 || path.startsWith('relative') },
+    })).toThrow(/Node.js was not found/)
+    expect(inspected.every((path) => isAbsolutePathForPlatform(path, 'win32'))).toBe(true)
+  })
+
   it('reports when Node.js is missing for the official Prime Agent npm command shim', () => {
     const shim = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\prime-agent.cmd'
     const entrypoint = 'C:\\Users\\Ada\\AppData\\Roaming\\npm\\node_modules\\prime-agent\\dist\\bundle\\cli.js'
