@@ -121,7 +121,7 @@ export function useWorkspaceRuntime({
     setPendingQueuedPrompts(next)
   }, [])
 
-  const flushAgentEvents = useCallback(() => {
+  const cancelScheduledFlush = useCallback(() => {
     if (agentEventFrameRef.current !== null) {
       cancelAnimationFrame(agentEventFrameRef.current)
       agentEventFrameRef.current = null
@@ -130,6 +130,10 @@ export function useWorkspaceRuntime({
       window.clearTimeout(chunkedFlushTimerRef.current)
       chunkedFlushTimerRef.current = null
     }
+  }, [])
+
+  const flushAgentEvents = useCallback(() => {
+    cancelScheduledFlush()
     const generation = workspaceRef.current.generation
     const pending = pendingAgentEventsRef.current
     pendingAgentEventsRef.current = []
@@ -137,7 +141,7 @@ export function useWorkspaceRuntime({
     if (admitted.length) {
       setMessages((current) => replayPrimeEvents(current, admitted))
     }
-  }, [])
+  }, [cancelScheduledFlush])
 
   const flushAgentEventsChunked = useCallback(() => {
     if (chunkedFlushTimerRef.current !== null) return
@@ -213,14 +217,7 @@ export function useWorkspaceRuntime({
     reconciliationNeededRef.current = null
     deferredReconciliationRef.current = null
     reconcileOnVisibleRef.current = false
-    if (agentEventFrameRef.current !== null) {
-      cancelAnimationFrame(agentEventFrameRef.current)
-      agentEventFrameRef.current = null
-    }
-    if (chunkedFlushTimerRef.current !== null) {
-      window.clearTimeout(chunkedFlushTimerRef.current)
-      chunkedFlushTimerRef.current = null
-    }
+    cancelScheduledFlush()
     const generation = workspaceRef.current.generation + 1
     workspaceRef.current = {
       generation,
@@ -246,7 +243,7 @@ export function useWorkspaceRuntime({
       setLoadingSession(Boolean(session?.filePath))
     }
     return generation
-  }, [attachRuntime, bridge, commitActiveQueue])
+  }, [attachRuntime, bridge, cancelScheduledFlush, commitActiveQueue])
 
   const reconcileRuntime = useCallback(async (generation: number) => {
     if (!bridge) return
@@ -341,18 +338,11 @@ export function useWorkspaceRuntime({
   const runOverflowReconciliation = useCallback(() => {
     reconcileOnVisibleRef.current = false
     pendingAgentEventsRef.current = []
-    if (agentEventFrameRef.current !== null) {
-      cancelAnimationFrame(agentEventFrameRef.current)
-      agentEventFrameRef.current = null
-    }
-    if (chunkedFlushTimerRef.current !== null) {
-      window.clearTimeout(chunkedFlushTimerRef.current)
-      chunkedFlushTimerRef.current = null
-    }
+    cancelScheduledFlush()
     const selected = workspaceRef.current
     if (!selected.sessionFile) return
     startTranscriptRead(selected, false)
-  }, [startTranscriptRead])
+  }, [cancelScheduledFlush, startTranscriptRead])
 
   const queueAgentEvent = useCallback((event: Record<string, unknown>) => {
     const generation = workspaceRef.current.generation
@@ -363,17 +353,14 @@ export function useWorkspaceRuntime({
       // hidden window does not re-read on every dropped event.
       reconcileOnVisibleRef.current = true
       pendingAgentEventsRef.current = []
-      if (agentEventFrameRef.current !== null) {
-        cancelAnimationFrame(agentEventFrameRef.current)
-        agentEventFrameRef.current = null
-      }
+      cancelScheduledFlush()
       if (typeof document === 'undefined' || document.visibilityState === 'visible') runOverflowReconciliation()
       return
     }
     if (owner === 'frame' && agentEventFrameRef.current === null && chunkedFlushTimerRef.current === null) {
       agentEventFrameRef.current = requestAnimationFrame(flushAgentEvents)
     }
-  }, [flushAgentEvents, runOverflowReconciliation])
+  }, [cancelScheduledFlush, flushAgentEvents, runOverflowReconciliation])
 
   const reconcileTranscriptForEvent = useCallback((runtimeId: string, event: Record<string, unknown>) => {
     const selected = workspaceRef.current
@@ -653,9 +640,8 @@ export function useWorkspaceRuntime({
 
   useEffect(() => () => {
     transcriptLoadRef.current = null
-    if (agentEventFrameRef.current !== null) cancelAnimationFrame(agentEventFrameRef.current)
-    if (chunkedFlushTimerRef.current !== null) window.clearTimeout(chunkedFlushTimerRef.current)
-  }, [])
+    cancelScheduledFlush()
+  }, [cancelScheduledFlush])
 
   return {
     messages,
