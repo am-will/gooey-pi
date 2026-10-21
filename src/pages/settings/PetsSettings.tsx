@@ -1,3 +1,4 @@
+import { selectPet } from '@/lib/pets'
 import { PawPrint, RefreshCw, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PetAvatar } from '@/components/PetAvatar'
@@ -28,7 +29,7 @@ export function PetsSettings({ settings, onUpdate, pets }: SettingsSectionProps 
     } finally { setLoading(false) }
   }, [pets])
   useEffect(() => { void refresh() }, [refresh])
-  const selected = useMemo(() => available.find((item) => item.id === settings.petId) ?? available.find((item) => item.id === 'orb') ?? BUILT_IN_PETS[0], [available, settings.petId])
+  const selected = useMemo(() => selectPet(available, settings.petId), [available, settings.petId])
   const selectedCopy = BUILT_IN_PET_COPY[selected.id]
   const codexCount = available.filter((item) => item.source === 'codex').length
 
