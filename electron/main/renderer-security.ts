@@ -21,7 +21,7 @@ export function registerRendererProtocol(rendererRoot: string): void {
   protocol.handle('prime-work', async (request) => {
     try {
       const url = new URL(request.url)
-      if (url.hostname !== 'app' || url.username || url.password || url.search || url.hash) return new Response('Not found', { status: 404 })
+      if (url.protocol !== 'prime-work:' || url.host !== 'app' || url.username || url.password || url.search || url.hash) return new Response('Not found', { status: 404 })
       const decoded = decodeURIComponent(url.pathname)
       const candidate = resolveRendererAssetPath(rendererRoot, decoded)
       if (!candidate) return new Response('Not found', { status: 404 })

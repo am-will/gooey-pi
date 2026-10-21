@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const electron = vi.hoisted(() => ({
   app: {
@@ -12,7 +15,7 @@ const electron = vi.hoisted(() => ({
   dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
   Menu: { buildFromTemplate: vi.fn((_template: MenuItemConstructorOptions[]) => ({ popup: vi.fn() })) },
   nativeImage: { createFromPath: vi.fn() },
-  protocol: { registerSchemesAsPrivileged: vi.fn() },
+  protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
   session: {},
   Tray: class {},
 }))
@@ -21,7 +24,7 @@ vi.mock('electron', () => electron)
 
 import '../../electron/main/index'
 import { isMacWindowCloseShortcut, loadInitialRenderer, mainWindowChromeOptions, windowCanvasColor } from '../../electron/main/main-window'
-import { hardenRenderer, resolveRendererAssetPath } from '../../electron/main/renderer-security'
+import { hardenRenderer, registerRendererProtocol, RENDERER_CONTENT_SECURITY_POLICY, resolveRendererAssetPath } from '../../electron/main/renderer-security'
 import { ApplicationRevealQueue, activeShutdownWork, confirmAppClose, routeAllWindowsClosed, settleShutdown, shutdownPrompt, startupFailureDialog } from '../../electron/main/app-lifecycle'
 import { StateMigrationError, UnsupportedStateVersionError } from '../../electron/main/store'
 import type { RuntimeInfo } from '../../src/types/api'
@@ -256,6 +259,28 @@ describe('renderer hardening', () => {
     }
   })
 
+  it('denies guest popups and file navigation while allowing web and blank destinations', () => {
+    const { handler } = hardenedWindow()
+    const guestHandlers = new Map<string, Handler>()
+    const guest = {
+      id: 42,
+      setWindowOpenHandler: vi.fn(),
+      on: (name: string, listener: Handler) => { guestHandlers.set(name, listener) },
+      once: vi.fn(),
+    }
+    handler('did-attach-webview')(...[{}, guest] as never[])
+    expect(guest.setWindowOpenHandler.mock.calls[0]?.[0]()).toEqual({ action: 'deny' })
+    for (const name of ['will-navigate', 'will-redirect', 'will-frame-navigate']) {
+      const navigate = guestHandlers.get(name)
+      if (!navigate) throw new Error(`Missing guest ${name} guard`)
+      for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'https://example.test/', 'about:blank']) {
+        const event = { url, preventDefault: vi.fn() }
+        navigate(...[event, url] as never[])
+        expect(event.preventDefault.mock.calls.length, `${name}: ${url}`).toBe(url.startsWith('file:') || url.startsWith('javascript:') ? 1 : 0)
+      }
+    }
+  })
+
   it('offers native text editing and spellcheck suggestions with current edit permissions', () => {
     electron.Menu.buildFromTemplate.mockClear()
     const { handler, webContents } = hardenedWindow()
@@ -298,6 +323,34 @@ describe('renderer hardening', () => {
       handler(name)(...[trusted] as never[])
       expect(trusted.preventDefault, name).not.toHaveBeenCalled()
     }
+  })
+})
+
+describe('packaged renderer protocol', () => {
+  it('serves packaged files with MIME/CSP headers and rejects malformed or out-of-origin requests', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gooeypi-renderer-protocol-'))
+    try {
+      const root = join(directory, 'renderer')
+      await mkdir(root)
+      await writeFile(join(root, 'index.html'), '<html>app</html>')
+      await writeFile(join(root, 'app.js'), 'export const app = true')
+      await writeFile(join(directory, 'private.txt'), 'outside')
+      electron.protocol.handle.mockClear()
+      registerRendererProtocol(root)
+      const handle = electron.protocol.handle.mock.calls[0]?.[1] as ((request: { url: string }) => Promise<Response>) | undefined
+      if (!handle) throw new Error('Renderer protocol was not registered')
+      const html = await handle({ url: 'prime-work://app/' })
+      expect(await html.text()).toBe('<html>app</html>')
+      expect(html.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+      expect(html.headers.get('Content-Security-Policy')).toBe(RENDERER_CONTENT_SECURITY_POLICY)
+      const script = await handle({ url: 'prime-work://app/app.js' })
+      expect(script.headers.get('Content-Type')).toBe('text/javascript; charset=utf-8')
+      for (const url of [
+        'prime-work://other/index.html', 'prime-work://app:123/index.html', 'https://app/index.html',
+        'prime-work://user@app/index.html', 'prime-work://app/index.html?unsafe=1', 'prime-work://app/index.html#unsafe',
+        'prime-work://app/%2e%2e/private.txt', 'prime-work://app/%5c..%5cprivate.txt', 'prime-work://app/%00', 'prime-work://app/%xx',
+      ]) expect((await handle({ url })).status, url).toBe(404)
+    } finally { await rm(directory, { recursive: true, force: true }) }
   })
 })
 

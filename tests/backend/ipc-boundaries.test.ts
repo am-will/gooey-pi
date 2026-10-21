@@ -119,7 +119,7 @@ describe('trusted event broadcast lifetime', () => {
     expect(() => handler({ sender: replacement, senderFrame: replacement.mainFrame })).toThrow()
   })
   it('keeps delivering when an earlier receiver disappears during send', () => {
-    const warn = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     try {
       contents.send.mockImplementation(() => { throw new Error('receiver gone') })
       const later = { ...sender(), id: 2 }
