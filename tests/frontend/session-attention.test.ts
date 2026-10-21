@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activityClearEntry, companionClearEntry, activityNotificationSignature, applySessionLifecycleEvent, readClearedActivity, readClearedAttention, sessionAttentionSignature, sessionCompanionNotificationSignature, sessionShowsCompanionNotification, signatureCleared } from '../../src/app/session-attention'
+import { writeClearedSignatures, activityClearEntry, companionClearEntry, activityNotificationSignature, applySessionLifecycleEvent, readClearedActivity, readClearedAttention, sessionAttentionSignature, sessionCompanionNotificationSignature, sessionShowsCompanionNotification, signatureCleared } from '../../src/app/session-attention'
 import { mergeSessionCatalog } from '../../src/hooks/useBootstrap'
 import type { SessionRecord } from '../../src/types/api'
 
@@ -359,4 +359,17 @@ it('keeps earlier-launch clears until genuinely newer activity arrives', () => {
   const current: SessionRecord = { ...session(), status: 'waiting', eventRevision: 3 }
   expect(signatureCleared(sessionAttentionSignature(current), companionClearEntry(current), false, current.updatedAt)).toBe(true)
   expect(signatureCleared('waiting:4', activityClearEntry(current), false, current.updatedAt)).toBe(false)
+})
+
+it('keeps storage denial from breaking dismissal reads or writes', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } } } })
+  try {
+    expect(readClearedAttention()).toEqual({})
+    expect(readClearedActivity()).toEqual({})
+    expect(() => writeClearedSignatures('key', {})).not.toThrow()
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'window', previous)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
 })

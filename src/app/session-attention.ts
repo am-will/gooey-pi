@@ -2,6 +2,9 @@ import { isRequestedCompactionReason } from '@/lib/compaction-reason'
 import { parseExtensionUiRequest } from '@/lib/extension-ui'
 import type { SessionRecord, SessionStatus } from '@/types/api'
 
+export const CLEARED_ATTENTION_STORAGE_KEY = 'prime-work.cleared-session-attention'
+export const CLEARED_ACTIVITY_STORAGE_KEY = 'prime-work.cleared-activity'
+
 const LAUNCH_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
 
 interface SessionLifecycleChange {
@@ -120,16 +123,21 @@ function parseClearedSignatures(raw: string | null): Record<string, string> {
   } catch { return {} }
 }
 
+function readStoredSignatures(key: string, supplied?: string | null): Record<string, string> {
+  try {
+    return parseClearedSignatures(supplied !== undefined ? supplied : typeof window === 'undefined' ? null : window.localStorage.getItem(key))
+  } catch { return {} }
+}
+
+/** Notification dismissal is best effort when browser storage is unavailable. */
+export function writeClearedSignatures(key: string, signatures: Record<string, string>): void {
+  try { window.localStorage.setItem(key, JSON.stringify(signatures)) } catch { /* State remains valid for this renderer lifetime. */ }
+}
+
 export function readClearedAttention(storedValue?: string | null): Record<string, string> {
-  const raw = storedValue !== undefined
-    ? storedValue
-    : typeof window === 'undefined' ? null : window.localStorage.getItem('prime-work.cleared-session-attention')
-  return parseClearedSignatures(raw)
+  return readStoredSignatures(CLEARED_ATTENTION_STORAGE_KEY, storedValue)
 }
 
 export function readClearedActivity(storedValue?: string | null): Record<string, string> {
-  const raw = storedValue !== undefined
-    ? storedValue
-    : typeof window === 'undefined' ? null : window.localStorage.getItem('prime-work.cleared-activity')
-  return parseClearedSignatures(raw)
+  return readStoredSignatures(CLEARED_ACTIVITY_STORAGE_KEY, storedValue)
 }

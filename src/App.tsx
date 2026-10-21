@@ -9,7 +9,7 @@ import { ResizeHandle } from '@/components/ResizeHandle'
 import { NoHarnessPrompt } from '@/components/NoHarnessPrompt'
 import { createAppKeydownHandler } from '@/lib/app-shortcuts'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
-import { activityClearEntry, companionClearEntry, readClearedActivity, readClearedAttention } from '@/app/session-attention'
+import { activityClearEntry, companionClearEntry, readClearedActivity, readClearedAttention, writeClearedSignatures, CLEARED_ATTENTION_STORAGE_KEY, CLEARED_ACTIVITY_STORAGE_KEY } from '@/app/session-attention'
 import { errorMessage } from '@/lib/errors'
 import { LoadingPanel, TerminalLoadingPanel, VIEW_LOADING_KEYS } from '@/app/loading'
 import { I18nProvider, useLocaleTranslator } from '@/lib/i18n'
@@ -139,10 +139,10 @@ export default function App() {
     void revealPath(bridge.app, path).then((failure) => { if (failure) setToast(failure) })
   }, [bridge])
   useEffect(() => {
-    window.localStorage.setItem('prime-work.cleared-session-attention', JSON.stringify(clearedAttention))
+    writeClearedSignatures(CLEARED_ATTENTION_STORAGE_KEY, clearedAttention)
   }, [clearedAttention])
   useEffect(() => {
-    window.localStorage.setItem('prime-work.cleared-activity', JSON.stringify(clearedActivity))
+    writeClearedSignatures(CLEARED_ACTIVITY_STORAGE_KEY, clearedActivity)
   }, [clearedActivity])
   const clearSessionAttention = useCallback((session: SessionRecord) => {
     const signature = companionClearEntry(session)
