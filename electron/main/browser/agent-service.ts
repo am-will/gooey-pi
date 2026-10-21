@@ -1,13 +1,14 @@
 import type { WebContents } from 'electron'
 import { randomBytes } from 'node:crypto'
 import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AgentBrowserTabRecord } from '../../../src/types/api'
+import { GuestPageIO } from './guest-page-io'
 import { canonicalSessionPath } from '../session-paths'
-import { requireRecord, requireString } from '../validation'
+import { requireString } from '../validation'
 import { ACTION_TIMEOUT_MS, guardGuestCall, guardGuestDeadline, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
 
 /** The user's own Preview webview, adoptable by the active thread's agent. */
 export const PREVIEW_TAB_ID = 'preview'
-import { AGENT_WORLD_ID, cursorMarkerScript, elementAtPointScript, evaluateScript, pageInfoScript, readPageScript, refPointScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
+import { AGENT_WORLD_ID, cursorMarkerScript, evaluateScript, readPageScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
 
 /**
  * Toolbar navigation and post-attach restoration are fire-and-forget because
@@ -82,12 +83,6 @@ const GLIDE_MAX_MS = 550
 const GLIDE_MIN_MS = 160
 const GLIDE_STEP_MS = 28
 
-interface PageInfo {
-  url: string
-  title: string
-  innerWidth: number
-  innerHeight: number
-}
 
 export interface AgentBrowserServiceOptions {
   /** Resolves a webContents id to a live WebContents, or undefined. Injected so tests can fake guests. */
@@ -113,13 +108,6 @@ function delay(ms: number): Promise<void> {
   })
 }
 
-function parseScriptJson(payload: unknown, label: string): Record<string, unknown> {
-  if (typeof payload !== 'string') throw new Error(`The page did not respond to ${label}. It may still be loading; try again.`)
-  if (Buffer.byteLength(payload, 'utf8') > 256 * 1024) throw new Error(`The page response exceeded the byte limit for ${label}.`)
-  let parsed: unknown
-  try { parsed = JSON.parse(payload) } catch { throw new Error(`The page returned malformed data for ${label}.`) }
-  return requireRecord(parsed, label)
-}
 
 /**
  * Owns the agent-controlled browser tabs. The registry (which tabs exist, per
@@ -143,10 +131,13 @@ export class AgentBrowserService {
   private readonly actionTimeoutMs: number
   private closed = false
 
+  private readonly pageIO: GuestPageIO
+
   constructor(private readonly options: AgentBrowserServiceOptions) {
     this.attachTimeoutMs = options.attachTimeoutMs ?? ATTACH_TIMEOUT_MS
     this.loadTimeoutMs = options.loadTimeoutMs ?? LOAD_TIMEOUT_MS
     this.actionTimeoutMs = options.actionTimeoutMs ?? ACTION_TIMEOUT_MS
+    this.pageIO = new GuestPageIO(this.actionTimeoutMs)
   }
 
   // ---- lifecycle -----------------------------------------------------------
@@ -449,7 +440,7 @@ export class AgentBrowserService {
 
   async screenshot(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.withTab(sessionKey, params, async (tab, guest) => {
-      const info = await this.pageInfo(guest)
+      const info = await this.pageIO.pageInfo(guest)
       // Show the agent its own pointer in the capture so it can calibrate.
       if (tab.pointer) await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: cursorMarkerScript(tab.pointer.x, tab.pointer.y) }]), this.actionTimeoutMs).catch(() => undefined)
       let image: Electron.NativeImage
@@ -484,7 +475,7 @@ export class AgentBrowserService {
 
   async click(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.withTab(sessionKey, params, async (tab, guest) => {
-      const point = await this.resolvePoint(guest, params, false)
+      const point = await this.pageIO.resolvePoint(guest, params, false)
       const button = params.button === undefined ? 'left' : requireString(params.button, 'button', { min: 1, max: 8 })
       if (!['left', 'right', 'middle'].includes(button)) throw new TypeError('button must be left, right, or middle')
       const clickCount = params.double === true ? 2 : 1
@@ -495,11 +486,11 @@ export class AgentBrowserService {
       let target = point
       if (params.ref !== undefined) {
         try {
-          target = await this.resolvePoint(guest, params, false)
+          target = await this.pageIO.resolvePoint(guest, params, false)
           tab.pointer = { ...target }
         } catch { /* the pre-glide point remains the best estimate */ }
       }
-      const hit = await this.elementAt(guest, target)
+      const hit = await this.pageIO.elementAt(guest, target)
       for (let press = 0; press < clickCount; press += 1) {
         await this.dispatchInput(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button, buttons: CDP_BUTTON_MASKS[button], clickCount: press + 1 })
         await this.dispatchInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button, buttons: 0, clickCount: press + 1 })
@@ -515,7 +506,7 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       const text = requireString(params.text, 'text', { min: 0, max: MAX_TYPE_CHARS })
       if (params.ref !== undefined) {
-        const point = await this.resolvePoint(guest, params, true)
+        const point = await this.pageIO.resolvePoint(guest, params, true)
         await this.glidePointer(tab, guest, point, 'move')
       }
       guest.focus()
@@ -573,13 +564,13 @@ export class AgentBrowserService {
         // A wheel event at a point reaches nested scroll containers that
         // window.scrollBy cannot; CDP wheel deltas follow DOM semantics
         // (positive scrolls down/right).
-        const point = await this.resolvePoint(guest, { x: params.x, y: params.y }, false)
+        const point = await this.pageIO.resolvePoint(guest, { x: params.x, y: params.y }, false)
         await this.glidePointer(tab, guest, point, 'scroll')
         await this.dispatchInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX, deltaY })
         await delay(SETTLE_MS)
         return this.describe(tab, guest)
       }
-      const payload = await this.runPageScript(guest, scrollByScript(deltaX, deltaY), 'scroll')
+      const payload = await this.pageIO.runPageScript(guest, scrollByScript(deltaX, deltaY), 'scroll')
       return { ...payload, ...await this.describe(tab, guest) }
     })
   }
@@ -588,14 +579,14 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (_tab, guest) => {
       const mode = params.mode === undefined ? 'interactive' : requireString(params.mode, 'mode', { min: 1, max: 16, trim: true })
       if (mode !== 'interactive' && mode !== 'text') throw new TypeError('mode must be interactive or text')
-      return this.runPageScript(guest, readPageScript(mode, MAX_READ_TEXT_CHARS, MAX_READ_ELEMENTS), 'read_page')
+      return this.pageIO.runPageScript(guest, readPageScript(mode, MAX_READ_TEXT_CHARS, MAX_READ_ELEMENTS), 'read_page')
     })
   }
 
   async evaluate(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.withTab(sessionKey, params, async (_tab, guest) => {
       const code = requireString(params.code, 'code', { min: 1, max: MAX_EVALUATE_CHARS })
-      return this.runPageScript(guest, evaluateScript(code, MAX_EVALUATE_RESULT_CHARS), 'evaluate')
+      return this.pageIO.runPageScript(guest, evaluateScript(code, MAX_EVALUATE_RESULT_CHARS), 'evaluate')
     })
   }
 
@@ -666,9 +657,6 @@ export class AgentBrowserService {
     }
   }
 
-  private async runPageScript(guest: WebContents, script: string, label: string): Promise<Record<string, unknown>> {
-    return parseScriptJson(await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: script }]), this.actionTimeoutMs), label)
-  }
   private emitActivity(tab: TabState): void {
     const event: AgentBrowserActivityEvent = { sessionFile: tab.sessionKey, tabId: tab.tabId }
     for (const listener of this.activityListeners) {
@@ -787,18 +775,8 @@ export class AgentBrowserService {
     })
   }
 
-  private async pageInfo(guest: WebContents): Promise<PageInfo> {
-    const payload = await this.runPageScript(guest, pageInfoScript(), 'page info')
-    return {
-      url: guest.getURL().slice(0, 2000),
-      title: guest.getTitle().slice(0, 300),
-      innerWidth: typeof payload.innerWidth === 'number' && Number.isFinite(payload.innerWidth) ? Math.max(0, Math.min(20_000, Math.round(payload.innerWidth))) : 0,
-      innerHeight: typeof payload.innerHeight === 'number' && Number.isFinite(payload.innerHeight) ? Math.max(0, Math.min(20_000, Math.round(payload.innerHeight))) : 0,
-    }
-  }
-
   private async describe(tab: TabState, guest: WebContents): Promise<Record<string, unknown>> {
-    const info = guest.isDestroyed() ? null : await this.pageInfo(guest).catch(() => null)
+    const info = guest.isDestroyed() ? null : await this.pageIO.pageInfo(guest).catch(() => null)
     tab.url = info?.url ?? tab.url
     tab.title = info?.title ?? tab.title
     this.push()
@@ -810,29 +788,6 @@ export class AgentBrowserService {
     }
   }
 
-  private async elementAt(guest: WebContents, point: { x: number; y: number }): Promise<Record<string, unknown> | null> {
-    try {
-      const payload = await this.runPageScript(guest, elementAtPointScript(point.x, point.y), 'element at point')
-      return typeof payload.tag === 'string' ? { tag: payload.tag, name: typeof payload.name === 'string' ? payload.name : '' } : null
-    } catch { return null }
-  }
-
-  private async resolvePoint(guest: WebContents, params: Record<string, unknown>, focus: boolean): Promise<{ x: number; y: number }> {
-    let x: unknown = params.x
-    let y: unknown = params.y
-    if (params.ref !== undefined) {
-      if (typeof params.ref !== 'number' || !Number.isSafeInteger(params.ref) || params.ref < 0 || params.ref > 999) throw new TypeError('ref must be an element number from browser_read_page')
-      const payload = await this.runPageScript(guest, refPointScript(params.ref, focus), 'element ref')
-      if (typeof payload.error === 'string') throw new Error(payload.error.slice(0, 300))
-      x = payload.x
-      y = payload.y
-    }
-    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw new TypeError('Provide either ref (from browser_read_page) or x and y coordinates with finite values')
-    const point = { x: Math.round(x), y: Math.round(y) }
-    const viewport = await this.pageInfo(guest)
-    if (point.x < 0 || point.y < 0 || point.x >= viewport.innerWidth || point.y >= viewport.innerHeight) throw new TypeError('x and y must be within the page viewport')
-    return point
-  }
 
   /**
    * Moves the pointer from its last position to the target as a smooth eased
