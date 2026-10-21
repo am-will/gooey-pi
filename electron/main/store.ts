@@ -352,6 +352,7 @@ function parseSchedule(value: unknown, preHarnessState: boolean): AutomationSche
 
 const MAX_ARCHIVED_SESSIONS = 5_000
 const MAX_DISMISSED_PROJECT_PATHS = 1_024
+export const MAX_SCHEDULED_TASKS = 500
 const MAX_STATE_FILE_BYTES = 64 * 1024 * 1024
 
 /** Normalize every persisted collection against its deterministic retention invariant. */
@@ -385,7 +386,7 @@ function parseState(value: unknown, statePath: string): { sourceVersion: Support
     settings: parseSettings(value.settings, preHarnessProjectState),
     archivedSessions: Array.isArray(value.archivedSessions) ? value.archivedSessions.filter((item): item is string => typeof item === 'string') : [],
     dismissedProjectPaths: Array.isArray(value.dismissedProjectPaths) ? value.dismissedProjectPaths.filter((item): item is string => typeof item === 'string') : [],
-    schedules: version !== 1 && Array.isArray(value.schedules) ? value.schedules.map((schedule) => parseSchedule(schedule, preHarnessScheduleState)).filter((item): item is AutomationScheduleRecord => item !== null).slice(0, 500) : [],
+    schedules: version !== 1 && Array.isArray(value.schedules) ? value.schedules.map((schedule) => parseSchedule(schedule, preHarnessScheduleState)).filter((item): item is AutomationScheduleRecord => item !== null).slice(0, MAX_SCHEDULED_TASKS) : [],
   }
   capUnboundedCollections(state)
   return { sourceVersion: version, state }
