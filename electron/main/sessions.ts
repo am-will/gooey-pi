@@ -229,19 +229,18 @@ export class SessionService {
     const archived = new Set(this.store.getArchivedSessions().map((path) => resolve(path)))
     // One runtime snapshot per list call; each session then resolves in O(1).
     const runtimeBySession = this.snapshotRuntimeSessions()
-    const records: SessionRecord[] = []
+    const decorated: { record: SessionRecord; sortKey: number }[] = []
     for (const original of sessions) {
-      const metadata = { ...original }
-      const isArchived = archived.has(resolve(metadata.filePath))
-      if ((isArchived && !includeArchived) || (project && resolve(metadata.projectPath) !== project)) continue
-      const runtime = runtimeBySession
-        ? runtimeBySession.get(resolve(metadata.filePath))
-        : this.runtimeForSession(metadata.filePath)
-      if (runtime) metadata.status = runtime.isStreaming || runtime.isCompacting || metadata.hasRunningRlmChildren ? 'running' : 'idle'
-      const { hasRunningRlmChildren: _hasRunningRlmChildren, ...record } = metadata
-      records.push({ ...record, harness: this.harness, archived: isArchived })
+      const sessionKey = resolve(original.filePath)
+      const isArchived = archived.has(sessionKey)
+      if ((isArchived && !includeArchived) || (project && resolve(original.projectPath) !== project)) continue
+      const runtime = runtimeBySession ? runtimeBySession.get(sessionKey) : this.runtimeForSession(original.filePath)
+      const { hasRunningRlmChildren, ...rest } = original
+      const record: SessionRecord = { ...rest, harness: this.harness, archived: isArchived }
+      if (runtime) record.status = runtime.isStreaming || runtime.isCompacting || hasRunningRlmChildren ? 'running' : 'idle'
+      decorated.push({ record, sortKey: Date.parse(record.lastUserMessageAt ?? record.createdAt) })
     }
-    return records.sort((a, b) => Date.parse(b.lastUserMessageAt ?? b.createdAt) - Date.parse(a.lastUserMessageAt ?? a.createdAt) || comparePaths(a.filePath, b.filePath))
+    return decorated.sort((a, b) => b.sortKey - a.sortKey || comparePaths(a.record.filePath, b.record.filePath)).map(({ record }) => record)
   }
 
   private snapshotRuntimeSessions(): Map<string, RuntimeSessionState> | null {

@@ -69,15 +69,17 @@ function timestampFromSessionName(name: string): number | undefined {
   return Number.parseInt(`${match[1]}${match[2]}`, 16)
 }
 
-function compareCandidateNames(left: string, right: string, nameTimestamp: SessionNameTimestamp): number {
-  const leftTimestamp = nameTimestamp(left)
-  const rightTimestamp = nameTimestamp(right)
+interface TimestampedName { name: string; timestamp: number | undefined }
+
+function compareCandidateNames(left: TimestampedName, right: TimestampedName): number {
+  const leftTimestamp = left.timestamp
+  const rightTimestamp = right.timestamp
   if (leftTimestamp !== undefined && rightTimestamp !== undefined && leftTimestamp !== rightTimestamp) {
     return rightTimestamp - leftTimestamp
   }
   if (leftTimestamp !== undefined && rightTimestamp === undefined) return -1
   if (leftTimestamp === undefined && rightTimestamp !== undefined) return 1
-  return comparePaths(right, left)
+  return comparePaths(right.name, left.name)
 }
 
 function catalogNameKey(name: string): string {
@@ -121,7 +123,10 @@ function ancestorPathsForName(watchedRoot: string, name: string): string[] {
 
 export function boundedSessionDiscoveryNames(names: readonly string[], maxSessionFiles: number, nameTimestamp: SessionNameTimestamp = timestampFromSessionName): string[] {
   const budget = Math.max(0, Math.ceil(maxSessionFiles))
-  return [...names].sort((left, right) => compareCandidateNames(left, right, nameTimestamp)).slice(0, budget)
+  return names.map((name) => ({ name, timestamp: nameTimestamp(name) }))
+    .sort(compareCandidateNames)
+    .slice(0, budget)
+    .map(({ name }) => name)
 }
 
 export class SessionMetadataCatalog {
