@@ -23,6 +23,9 @@ export interface UpdateServiceOptions {
   setInterval?: typeof globalThis.setInterval
   clearInterval?: typeof globalThis.clearInterval
   setTimeout?: typeof globalThis.setTimeout
+  clearTimeout?: typeof globalThis.clearTimeout
+  confirmInstall?: () => Promise<boolean>
+  onInstallAborted?: () => void
 }
 
 function errorMessage(error: unknown): string {
@@ -82,12 +85,16 @@ export class UpdateService {
   private checkPromise: Promise<AppUpdateState> | null = null
   private downloadPromise: Promise<boolean> | null = null
   private installAfterDownload = false
+  private installPromise: Promise<boolean> | null = null
+  private installing = false
+  private disposed = false
   /** Version of the discovered update, kept independent of the last published phase. */
   private discoveredVersion: string | undefined
   private interval: ReturnType<typeof globalThis.setInterval> | null = null
   private initialTimer: ReturnType<typeof globalThis.setTimeout> | null = null
   private readonly setIntervalFn: typeof globalThis.setInterval
   private readonly clearIntervalFn: typeof globalThis.clearInterval
+  private readonly clearTimeoutFn: typeof globalThis.clearTimeout
   private readonly setTimeoutFn: typeof globalThis.setTimeout
 
   constructor(private readonly updater: UpdateAdapter, private readonly options: UpdateServiceOptions) {
@@ -95,6 +102,7 @@ export class UpdateService {
     this.setIntervalFn = options.setInterval ?? globalThis.setInterval
     this.clearIntervalFn = options.clearInterval ?? globalThis.clearInterval
     this.setTimeoutFn = options.setTimeout ?? globalThis.setTimeout
+    this.clearTimeoutFn = options.clearTimeout ?? globalThis.clearTimeout
     if (!options.enabled) return
 
     updater.autoDownload = false
@@ -114,13 +122,14 @@ export class UpdateService {
       this.publish({ phase: 'downloaded', version: info.version })
       if (!this.installAfterDownload) return
       this.installAfterDownload = false
-      this.updater.quitAndInstall(false, true)
+      void this.installDownloaded()
     })
     updater.on('update-not-available', (info) => {
       this.discoveredVersion = undefined
       this.publish({ phase: 'not-available', version: info.version })
     })
     updater.on('error', (error) => {
+      this.abortInstall()
       this.installAfterDownload = false
       this.publish({ phase: 'error', message: errorMessage(error) })
     })
@@ -142,6 +151,8 @@ export class UpdateService {
   }
 
   dispose(): void {
+    this.disposed = true
+    this.installAfterDownload = false
     this.stopScheduledChecks()
     this.sink = null
   }
@@ -171,10 +182,7 @@ export class UpdateService {
   downloadAndInstall(): Promise<boolean> {
     if (!this.options.enabled) return Promise.resolve(false)
     if (this.downloadPromise) return this.downloadPromise
-    if (this.state.phase === 'downloaded') {
-      this.updater.quitAndInstall(false, true)
-      return Promise.resolve(true)
-    }
+    if (this.state.phase === 'downloaded') return this.installDownloaded()
     if (this.state.phase !== 'available') return Promise.resolve(false)
 
     this.installAfterDownload = true
@@ -192,6 +200,28 @@ export class UpdateService {
     return this.downloadPromise
   }
 
+  private installDownloaded(): Promise<boolean> {
+    if (this.installPromise) return this.installPromise
+    this.installPromise = Promise.resolve().then(async () => {
+      if (this.options.confirmInstall && !await this.options.confirmInstall()) return false
+      if (this.disposed) return false
+      this.installing = true
+      this.updater.quitAndInstall(false, true)
+      return this.installing
+    }).catch((error: unknown) => {
+      this.abortInstall()
+      this.publish({ phase: 'error', message: errorMessage(error) })
+      return false
+    }).finally(() => { this.installPromise = null })
+    return this.installPromise
+  }
+
+  private abortInstall(): void {
+    if (!this.installing) return
+    this.installing = false
+    this.options.onInstallAborted?.()
+  }
+
   private runScheduledCheck(): void {
     if (this.state.phase === 'downloaded') {
       this.stopScheduledChecks()
@@ -202,7 +232,7 @@ export class UpdateService {
 
   private stopScheduledChecks(): void {
     if (this.interval) this.clearIntervalFn(this.interval)
-    if (this.initialTimer) clearTimeout(this.initialTimer)
+    if (this.initialTimer) this.clearTimeoutFn(this.initialTimer)
     this.interval = null
     this.initialTimer = null
   }

@@ -835,7 +835,22 @@ async function bootstrap(): Promise<void> {
     homeDir: homedir(),
     harnesses: initialHarnesses,
   }
-  const updates = new UpdateService(getAutoUpdater(), { enabled: app.isPackaged })
+  const updates = new UpdateService(getAutoUpdater(), {
+    enabled: app.isPackaged,
+    confirmInstall: async () => {
+      if (shutdownStarted || confirmingShutdown) return false
+      confirmingShutdown = true
+      try {
+        const prompt = pendingShutdownPrompt()
+        const window = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null
+        if (prompt && !await confirmAppClose(window, prompt)) return false
+        if (shutdownStarted) return false
+        shutdownApproved = true
+        return true
+      } finally { confirmingShutdown = false }
+    },
+    onInstallAborted: () => { shutdownApproved = false },
+  })
   updateService = updates
   const refreshHarnesses = async () => {
     const harnesses = await discovery.refresh()
