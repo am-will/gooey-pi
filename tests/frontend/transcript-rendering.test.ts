@@ -50,6 +50,29 @@ describe('transcript rendering', () => {
     expect(html).not.toContain('activity-tool__contents')
   })
 
+  it('never visits historical questionnaire entries beyond the supported five questions', () => {
+    const questions = Array.from({ length: 5 }, (_, index) => ({ question: `Question ${index + 1}?` }))
+    questions.length = 1_000_000
+    Object.defineProperty(questions, 5, { get() { throw new Error('Visited an out-of-contract question') } })
+    const html = renderToStaticMarkup(createElement(WorkTimeline, {
+      parts: [{ type: 'toolCall', name: 'ask_user', args: { questions } }], showReasoning: true, showTools: true,
+    }))
+    expect(html).toContain('Question 1?')
+    expect(html).toContain('Question 5?')
+  })
+
+  it('normalizes only bounded question prefixes while the tool details are collapsed', () => {
+    const replace = vi.spyOn(String.prototype, 'replace')
+    try {
+      renderToStaticMarkup(createElement(WorkTimeline, {
+        parts: [{ type: 'toolCall', name: 'ask_user', args: { questions: [{ question: 'x'.repeat(1_000_000) }] } }], showReasoning: true, showTools: true,
+      }))
+      const normalizedLengths = replace.mock.calls.flatMap((args, index) => args[0] instanceof RegExp && args[0].source === '\\s+' ? [String(replace.mock.contexts[index]).length] : [])
+      expect(normalizedLengths.length).toBeGreaterThan(0)
+      expect(Math.max(...normalizedLengths)).toBeLessThanOrEqual(5 * 181 + 4 * 3)
+    } finally { replace.mockRestore() }
+  })
+
   it('streams reasoning inside a distinct process rail with animated thinking dots', () => {
     const html = render([{
       id: 'active',
