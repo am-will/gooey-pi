@@ -120,9 +120,7 @@ export class RpcRuntime {
     }, chunkAssemblyTiming)
     this.info = { runtimeId: this.runtimeId, harness: this.adapter.id, cwd, isStreaming: false, isCompacting: false, sessionActions: emptySessionActionSnapshot(), ...(this.adapter.buildServiceTierCommand ? {} : { fastModeAvailable: false }) }
     this.eventForwarder = new AgentEventForwarder(this.runtimeId, onEvent)
-    // Every harness child is spawned with the authorized cwd as its working
-    // directory. Adapters that declare spawnsInCwd (pi has no --cwd flag and
-    // buckets its sessions by the process working directory) depend on this.
+    // Every harness runs in the authorized cwd; Pi has no --cwd flag.
     const invocation = prepareExecutableSpawn(executable, args, safeChildEnvironment(extraEnvironment))
     this.child = spawn(invocation.file, invocation.args, { cwd, env: invocation.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' })
     this.transport = new FramedRpcTransport(

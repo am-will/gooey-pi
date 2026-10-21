@@ -42,12 +42,6 @@ export interface HarnessRpcAdapter {
   readonly negotiateProtocolVersion?: number
   /** Whether v2 base64 rpc_chunk frames may arrive and must be reassembled. */
   readonly chunkedFrames: boolean
-  /**
-   * True when the harness has no --cwd flag and derives its working directory
-   * (and session bucket) from the process it was spawned as: the runtime must
-   * spawn the child with the authorized cwd as its working directory.
-   */
-  readonly spawnsInCwd?: boolean
   /** The Prime build an alternative Prime adapter speaks; absent for TypeScript Prime and the other harnesses. */
   readonly implementation?: PrimeImplementation
   /**
@@ -368,9 +362,6 @@ export const PI_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'pi',
   agentName: HARNESSES.pi.agentName,
   chunkedFrames: false,
-  // pi has no --cwd flag: the session bucket derives from the child process
-  // working directory, which the runtime sets to the authorized cwd.
-  spawnsInCwd: true,
   compactRefusal: /^(?:Already compacted|Nothing to compact \(session too small\))$/,
   buildStartArgs: (input) => {
     const args = ['--mode', 'rpc']
