@@ -101,6 +101,23 @@ describe('ScheduledRunExecutor target ownership and cleanup', () => {
     expect(agents.startUnattended).not.toHaveBeenCalled()
   })
 
+  it('waits for queued follow-ups before replacing a resident runtime', async () => {
+    vi.useFakeTimers()
+    const { executor, agents, runtime, scheduled } = fixture()
+    const existing = { ...runtime, runtimeId: 'existing' }
+    agents.getForSession.mockReturnValue(existing)
+    agents.list.mockReturnValueOnce([{ ...existing, sessionActions: { queuedCount: 1, steering: [], followUps: ['queued work'] } }]).mockReturnValue([existing])
+    try {
+      const running = executor.run(scheduled)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(agents.stop).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(500)
+      await running
+      expect(agents.stop).toHaveBeenNthCalledWith(1, 'existing')
+      expect(agents.stop).toHaveBeenNthCalledWith(2, 'scheduled')
+    } finally { vi.useRealTimers() }
+  })
+
   it('authorizes an explicitly granted secondary project folder', async () => {
     const { executor, sessions, session, projects, scheduled } = fixture()
     sessions.list.mockResolvedValueOnce([{ ...session, projectPath: '/extra' }])

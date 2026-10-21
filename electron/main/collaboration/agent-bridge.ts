@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { HarnessId, PrimeModelDescriptor, RuntimeInfo, SessionRecord, TranscriptMessage } from '../../../src/types/api'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
-import { streamingBehaviorForIntent } from '../../../src/lib/session-actions'
+import { isRuntimeIdle, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
 import type { AgentRpcManager } from '../agent-rpc'
 import { CapabilityBridge, type CapabilityClaim } from '../lib/capability-bridge'
 import type { ModelCatalogProvider } from '../model-catalog'
@@ -388,7 +388,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
       fromSessionId: source.session.id,
       text: message,
     })
-    const busy = runtime.isStreaming || runtime.isCompacting || runtime.sessionActions?.active
+    const busy = !isRuntimeIdle(runtime)
     await target.manager.command(runtime.runtimeId, { type: busy ? 'follow_up' : 'prompt', message: attribution })
     return { delivered: true, target_session_id: target.session.id, awakened: !existing, queued: Boolean(busy), cursor_before: before.cursor }
   }
@@ -450,7 +450,7 @@ export class AgentCollaborationBridge extends CapabilityBridge {
     let snapshot = await this.snapshot(target)
     while (this.waitClock.now() < deadline) {
       const runtime = target.manager.getForSession(target.session.filePath)
-      const idle = !runtime || (!runtime.isStreaming && !runtime.isCompacting && !runtime.sessionActions?.active && (runtime.sessionActions?.queuedCount ?? 0) === 0)
+      const idle = !runtime || isRuntimeIdle(runtime)
       if (idle && (afterCursor === undefined || snapshot.cursor !== afterCursor)) return { ...snapshot, timed_out: false }
       // Busy runtimes need only a cheap in-memory state probe. Transcript
       // reads resume at a bounded cadence once the target is idle/offline.

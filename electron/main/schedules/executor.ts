@@ -1,4 +1,6 @@
 import type { RuntimeInfo, ScheduleExecution, AutomationScheduleRecord, ScheduleTarget } from '../../../src/types/api'
+import { isRuntimeIdle } from '../../../src/lib/session-actions'
+import { delay } from '../lib/async'
 import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import type { AgentRpcManager } from '../agent-rpc'
 import type { ModelCatalogProvider } from '../model-catalog'
@@ -143,11 +145,8 @@ export class ScheduledRunExecutor {
     while (Date.now() < deadline) {
       const runtime = this.agents.list().find((candidate) => candidate.runtimeId === runtimeId)
       if (!runtime) return
-      if (!runtime.isStreaming && !runtime.isCompacting) return
-      await new Promise<void>((resolveDelay) => {
-        const timer = setTimeout(resolveDelay, 500)
-        timer.unref()
-      })
+      if (isRuntimeIdle(runtime)) return
+      await delay(500)
     }
     throw new Error('The scheduled thread remained busy for 15 minutes')
   }
