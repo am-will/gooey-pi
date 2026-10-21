@@ -15,22 +15,22 @@ export class PendingExtensionUi {
   private readonly closedGroups = new Set<string>()
   constructor(private readonly now: () => number = () => performance.now()) {}
 
-  track(frame: RpcObject): void {
+  track(frame: RpcObject): boolean {
     const cancelled = parseExtensionUiCancel(frame)
-    if (cancelled) { this.resolve(cancelled, true); return }
+    if (cancelled) { this.resolve(cancelled, true); return true }
     const request = parseExtensionUiRequest(frame)
-    if (!request) return
+    if (!request) return true
     const questionnaire = request.method === 'select' ? request.questionnaire : undefined
     const previous = this.pending.get(request.id)?.questionnaire
-    if (previous && (previous.groupId !== questionnaire?.groupId || previous.index !== questionnaire?.index)) return
+    if (previous && (previous.groupId !== questionnaire?.groupId || previous.index !== questionnaire?.index)) return false
     if (questionnaire) {
       const { groupId, index, total } = questionnaire
-      if (this.closedGroups.has(groupId)) return
+      if (this.closedGroups.has(groupId)) return false
       let group = this.questionnaires.get(groupId)
-      if (group && (group.total !== total || group.settled.has(index) || group.arrived.has(index) && group.arrived.get(index) !== request.id)) return
+      if (group && (group.total !== total || group.settled.has(index) || group.arrived.has(index) && group.arrived.get(index) !== request.id)) return false
       for (const [otherId, other] of this.questionnaires) {
         for (const [otherIndex, id] of other.arrived) {
-          if (id === request.id && (otherId !== groupId || otherIndex !== index)) return
+          if (id === request.id && (otherId !== groupId || otherIndex !== index)) return false
         }
       }
       if (!group) {
@@ -59,6 +59,7 @@ export class PendingExtensionUi {
       const oldest = this.pending.keys().next().value
       if (oldest !== undefined) this.resolve(oldest, true)
     }
+    return true
   }
 
   resolve(id: unknown, cancelled = false): void {
