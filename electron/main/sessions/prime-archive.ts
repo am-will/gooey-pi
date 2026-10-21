@@ -36,6 +36,10 @@ export class PrimeSessionArchive {
         this.catalog.invalidateLiveCatalog()
         onChange()
       })
+      // Native watchers can miss writes made while the subscription attaches.
+      // Reconcile once through the same deferred catalog refresh as later events.
+      this.catalog.invalidateLiveCatalog()
+      onChange()
     } catch { /* The directory appears on the first native archive; the next list retries. */ }
   }
 
