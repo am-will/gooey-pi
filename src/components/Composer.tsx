@@ -28,7 +28,7 @@ import type {
   TerminalSelectionContext,
   VoiceTranscriptionProvider,
 } from '@/types/api'
-import { composePrompt } from '@/lib/composer-prompt'
+import { attachmentPlaceholderPrompt, composePrompt } from '@/lib/composer-prompt'
 import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft } from '@/lib/composer-draft'
 import { useI18n } from '@/lib/i18n'
 import { messageActionForKey } from '@/lib/message-shortcuts'
@@ -204,12 +204,7 @@ export const Composer = memo(function Composer({
     const currentTerminalContext = terminalSelection?.text ? getTerminalContext?.() : undefined
     const hasTerminalSelection = Boolean(currentTerminalContext?.text)
     const draftValue = valueOverride ?? value
-    // These bracket labels become the message payload sent to the harness, not
-    // UI chrome, so they stay English and outside the i18n catalog.
-    const prompt = draftValue.trim() || (currentImages.length > 0
-      ? (currentImages.length === 1 ? '[Attached image]' : '[Attached images]')
-      : currentUnsupportedFiles.length > 0 ? (currentUnsupportedFiles.length === 1 ? '[Attached file]' : '[Attached files]')
-        : currentAnnotations.length > 0 ? '[Page annotations]' : '[Terminal selection]')
+    const prompt = attachmentPlaceholderPrompt({ draft: draftValue, images: currentImages.length, files: currentUnsupportedFiles.length, annotations: currentAnnotations.length })
     if ((!draftValue.trim() && currentImages.length === 0 && currentUnsupportedFiles.length === 0 && currentAnnotations.length === 0 && !hasTerminalSelection) || loading || disabled || (intent !== 'steer' && !busy && (submitting || submittingRef.current))) return
     if (imageAttachments.hasPending()) {
       setAttachmentError(t('composer.error.waitForProcessing'))

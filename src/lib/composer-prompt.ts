@@ -41,3 +41,12 @@ function appendContext(prompt: string, { sessions, sessionReferenceIds, skills, 
   const promptWithAnnotations = appendAnnotationsToPrompt(promptWithCapabilities, annotations)
   return appendTerminalContextToPrompt(promptWithAnnotations, terminalContext)
 }
+
+
+/** English attachment labels are sent to the harness as message content. */
+export function attachmentPlaceholderPrompt({ draft, images, files, annotations }: { draft: string; images: number; files: number; annotations: number }): string {
+  return draft.trim() || (images > 0
+    ? (images === 1 ? '[Attached image]' : '[Attached images]')
+    : files > 0 ? (files === 1 ? '[Attached file]' : '[Attached files]')
+      : annotations > 0 ? '[Page annotations]' : '[Terminal selection]')
+}
