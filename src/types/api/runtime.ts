@@ -18,7 +18,15 @@ export interface SessionUsage {
   cost: number | null
   tokens?: SessionUsageTokens
 }
+/** Authoritative membership for native Ask User question groups during dialog replay. */
+export interface ExtensionUiQuestionnaireProgress {
+  groupId: string
+  total: number
+  arrived: number[]
+  settled: number[]
+}
 export interface RuntimeInfo {
+  pendingExtensionUiGroups?: ExtensionUiQuestionnaireProgress[]
   /** Outstanding harness dialogs that can be restored after a renderer reload. */
   pendingExtensionUi?: Record<string, unknown>[]
   runtimeId: string
