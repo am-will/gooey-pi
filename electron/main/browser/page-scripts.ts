@@ -62,7 +62,7 @@ export function readPageScript(mode: 'interactive' | 'text', maxTextChars: numbe
       if (role) entry.role = bound(role, 32)
       if (entry.tag === 'a') entry.href = bound(el.getAttribute('href') || '', 200)
       if (entry.tag === 'input') {
-        entry.inputType = bound(el.getAttribute('type') || 'text', 32)
+        entry.inputType = bound(el.getAttribute('type') || 'text', 32).toLowerCase()
         if (entry.inputType !== 'password' && typeof el.value === 'string') entry.value = bound(el.value, 120)
         if (el.checked === true) entry.checked = true
       }
