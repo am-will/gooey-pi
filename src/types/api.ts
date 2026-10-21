@@ -1,3 +1,4 @@
+import type { HarnessId, HarnessStatus } from './api/harness'
 import type { ChildRoster, ChildHistoryOptions, ChildHistoryPage } from './subagents'
 export type { ChildSession, ChildRoster, ChildHistoryOptions, ChildHistoryPage } from './subagents'
 
@@ -16,8 +17,8 @@ export const INSPECTOR_TABS = ['summary', 'changes', 'browser', 'files'] as cons
 export type InspectorTab = (typeof INSPECTOR_TABS)[number]
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'complete' | 'failed' | 'unknown'
 
-export const HARNESS_IDS = ['omp', 'prime', 'pi'] as const
-export type HarnessId = (typeof HARNESS_IDS)[number]
+
+
 
 /**
  * OMP tool-approval preference. 'inherit' defers to OMP's own
@@ -27,18 +28,9 @@ export type HarnessId = (typeof HARNESS_IDS)[number]
 export const OMP_APPROVAL_MODES = ['inherit', 'always-ask', 'write', 'yolo'] as const
 export type OmpApprovalMode = (typeof OMP_APPROVAL_MODES)[number]
 
-export type PrimeImplementation = 'typescript' | 'rust'
 
-export interface HarnessStatus {
-  path: string | null
-  version: string | null
-  /** Prime only: whether the discovered executable is the TypeScript or the Rust build. */
-  implementation?: PrimeImplementation
-  problem?: {
-    path: string
-    reason: string
-  }
-}
+
+
 
 export interface AppMeta {
   version: string
@@ -890,3 +882,5 @@ export interface PrimeWorkApi {
 }
 
 declare global { interface Window { prime: PrimeWorkApi } }
+
+export * from './api/harness'
