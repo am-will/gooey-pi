@@ -13,7 +13,8 @@ export function serviceStub(): Record<string, unknown> {
   return new Proxy(methods, {
     get(target, key) {
       if (typeof key !== 'string') return undefined
-      return target[key] ??= vi.fn(async () => undefined)
+      target[key] ??= vi.fn(async () => undefined)
+      return target[key]
     },
   })
 }
@@ -22,7 +23,7 @@ export function harnessStub(): Record<string, unknown> {
   return {
     projects: serviceStub(),
     sessions: serviceStub(),
-    agents: { ...serviceStub(), has: vi.fn(() => false) },
+    agents: { ...serviceStub(), has: vi.fn(() => false), requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined) },
     catalog: serviceStub(),
     plugins: serviceStub(),
   }
