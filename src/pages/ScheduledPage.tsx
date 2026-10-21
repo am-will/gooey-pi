@@ -47,7 +47,7 @@ import { errorMessage } from '@/lib/errors'
 import { RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '@/lib/prime-compat'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { sessionTitleText } from '@/lib/session-title'
-import { CREATED_BY_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTION_THINKING_KEYS, RUN_STATUS_KEYS, RUN_TRIGGER_KEYS } from '@/lib/schedule-labels'
+import { CREATED_BY_KEYS, HEARTBEAT_STATUS_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTION_THINKING_KEYS, RUN_STATUS_KEYS, RUN_TRIGGER_KEYS } from '@/lib/schedule-labels'
 import { EmptyState, Modal, Segmented } from '@/components/ui'
 
 type ScheduleFilter = 'active' | 'paused' | 'attention' | 'all'
@@ -215,7 +215,7 @@ export function ScheduledPage({
   const actionPendingRef = useRef(false)
   const [confirmation, setConfirmation] = useState<ScheduleConfirmation | null>(null)
   const [actionError, setActionError] = useState('')
-  const [actionNotice, setActionNotice] = useState('')
+  const [actionNotice, setActionNotice] = useState<MessageKey | null>(null)
   const previewRequest = useRef(0)
   const heartbeatPauseUnavailable = primeImplementation === 'rust' ? RUST_PRIME_HEARTBEAT_PAUSE_DETAIL : undefined
 
@@ -330,10 +330,10 @@ export function ScheduledPage({
     } catch (reason) { setFormError(errorMessage(reason)) }
     finally { setSaving(false) }
   }
-  const perform = async (key: string, work: () => Promise<void>, success: string, after?: () => void) => {
+  const perform = async (key: string, work: () => Promise<void>, success: MessageKey | null, after?: () => void) => {
     if (actionPendingRef.current) return
     actionPendingRef.current = true
-    setAction(key); setActionError(''); setActionNotice('')
+    setAction(key); setActionError(''); setActionNotice(null)
     try { await work(); setActionNotice(success); after?.() }
     catch (reason) { setActionError(errorMessage(reason)) }
     finally { actionPendingRef.current = false; setAction(null) }
@@ -345,13 +345,13 @@ export function ScheduledPage({
     setConfirmation(null)
     if (pending.kind === 'discard') { setEditor(null); setFormError(''); return }
     if (pending.kind === 'delete') {
-      void perform(`delete:${pending.id}`, () => onDelete(pending.id), t('schedule.notice.deleted'), () => setSelectedId(null))
+      void perform(`delete:${pending.id}`, () => onDelete(pending.id), 'schedule.notice.deleted', () => setSelectedId(null))
     } else if (pending.kind === 'stop') {
-      void perform(`heartbeat:${pending.heartbeat.id}`, () => onManageHeartbeat(pending.heartbeat.id, 'stop'), t('schedule.notice.heartbeatStopped'))
+      void perform(`heartbeat:${pending.heartbeat.id}`, () => onManageHeartbeat(pending.heartbeat.id, 'stop'), 'schedule.notice.heartbeatStopped')
     } else {
       const current = schedules.find((item) => item.id === pending.id)
       const eligible = current ? archivableScheduleSessions(current, sessions).filter((session) => pending.files.includes(session.filePath)) : []
-      if (eligible.length && onArchiveSessions) void perform(`archive:${pending.id}`, () => onArchiveSessions(eligible), '')
+      if (eligible.length && onArchiveSessions) void perform(`archive:${pending.id}`, () => onArchiveSessions(eligible), null)
     }
   }
   const confirmationModal = confirmation ? (
@@ -442,20 +442,20 @@ export function ScheduledPage({
     const busy = Boolean(action)
     return (
       <div className="page scroll-area"><div className="page-container schedule-page schedule-page--detail">
-        <button type="button" className="schedule-back" onClick={() => { setSelectedId(null); setActionError(''); setActionNotice('') }}><ArrowLeft size={15} /> {t('schedule.detail.all')}</button>
+        <button type="button" className="schedule-back" onClick={() => { setSelectedId(null); setActionError(''); setActionNotice(null) }}><ArrowLeft size={15} /> {t('schedule.detail.all')}</button>
         <header className="schedule-detail__header">
           <div className={`schedule-detail__mark schedule-detail__mark--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusIcon(selected, 18)}</div>
           <div><span className={`schedule-state schedule-state--${needsAttention(selected) ? 'attention' : selected.status}`}>{statusLabel(t, selected)}</span><h1>{selected.title}</h1><p>{t('schedule.detail.revision', { revision: selected.revision, updated: formatRelative(selected.updatedAt) })}</p></div>
         </header>
         <div className="schedule-detail__actions" aria-label={t('schedule.actions.aria')}>
-          <button type="button" className="button button--primary" disabled={busy || selected.status === 'completed'} onClick={() => void perform(`run:${selected.id}`, () => onRunNow(selected.id), t('schedule.notice.runQueued'))}><Play size={13} />{action === `run:${selected.id}` ? t('schedule.action.queuing') : t('schedule.action.runNow')}</button>
+          <button type="button" className="button button--primary" disabled={busy || selected.status === 'completed'} onClick={() => void perform(`run:${selected.id}`, () => onRunNow(selected.id), 'schedule.notice.runQueued')}><Play size={13} />{action === `run:${selected.id}` ? t('schedule.action.queuing') : t('schedule.action.runNow')}</button>
           <button type="button" className="button" disabled={busy} onClick={() => openEdit(selected)}><Pencil size={13} /> {t('common.edit')}</button>
-          {selected.status === 'active' || selected.status === 'blocked' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`pause:${selected.id}`, () => onPause(selected.id), t('schedule.notice.paused'))}><Pause size={13} />{action === `pause:${selected.id}` ? t('schedule.action.pausing') : t('schedule.action.pause')}</button> : selected.status === 'paused' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`resume:${selected.id}`, () => onResume(selected.id), t('schedule.notice.resumed'))}><RotateCw size={13} />{action === `resume:${selected.id}` ? t('schedule.action.resuming') : t('schedule.action.resume')}</button> : null}
+          {selected.status === 'active' || selected.status === 'blocked' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`pause:${selected.id}`, () => onPause(selected.id), 'schedule.notice.paused')}><Pause size={13} />{action === `pause:${selected.id}` ? t('schedule.action.pausing') : t('schedule.action.pause')}</button> : selected.status === 'paused' ? <button type="button" className="button" disabled={busy} onClick={() => void perform(`resume:${selected.id}`, () => onResume(selected.id), 'schedule.notice.resumed')}><RotateCw size={13} />{action === `resume:${selected.id}` ? t('schedule.action.resuming') : t('schedule.action.resume')}</button> : null}
           <button type="button" className="button schedule-delete" disabled={busy} onClick={() => deleteSchedule(selected)}><Trash2 size={13} /> {t('common.delete')}</button>
         </div>
         {error ? <p className="page-inline-error" role="alert">{t('schedule.error.catalog', { error })}</p> : null}
         {actionError ? <p className="page-inline-error" role="alert">{actionError}</p> : null}
-        {actionNotice ? <p className="schedule-action-notice" role="status"><CheckCircle2 size={14} />{actionNotice}</p> : null}
+        {actionNotice ? <p className="schedule-action-notice" role="status"><CheckCircle2 size={14} />{t(actionNotice)}</p> : null}
         {selected.blockedReason ? <div className="schedule-blocked" role="status"><AlertTriangle size={16} /><div><strong>{t('schedule.detail.needsAttention')}</strong><p>{selected.blockedReason}</p></div></div> : null}
 
         <div className="schedule-detail__grid">
@@ -499,7 +499,7 @@ export function ScheduledPage({
       {visible.length ? <div className="schedule-ledger">{visible.map((item) => {
         const project = projectMap.get(item.target.projectId)
         const targetSession = item.target.kind === 'session' ? sessionMap.get(item.target.sessionId) : undefined
-        return <button type="button" key={item.id} className="schedule-row" onClick={() => { setSelectedId(item.id); setActionError(''); setActionNotice('') }} aria-label={t('schedule.open', { title: item.title })}>
+        return <button type="button" key={item.id} className="schedule-row" onClick={() => { setSelectedId(item.id); setActionError(''); setActionNotice(null) }} aria-label={t('schedule.open', { title: item.title })}>
           <span className={`schedule-row__status schedule-row__status--${needsAttention(item) ? 'attention' : item.status}`}>{statusIcon(item)}</span>
           <span className="schedule-row__main"><span><strong>{item.title}</strong><i className={`schedule-state schedule-state--${needsAttention(item) ? 'attention' : item.status}`}>{statusLabel(t, item)}</i></span><small>{item.prompt}</small><span className="schedule-row__tags"><span><FolderKanban size={11} />{targetSession?.title ?? project?.name ?? t('schedule.target.unavailable')}</span><span><Repeat2 size={11} />{timingLabel(t, item.timing)}</span><span><Gauge size={11} />{models.find((model) => model.key === item.execution.model)?.name ?? item.execution.model}</span></span></span>
           <span className="schedule-row__next"><small>{t('schedule.row.next')}</small><strong>{item.nextRunAt ? formatDateTime(t, item.nextRunAt) : '—'}</strong><span>{item.nextRunAt ? formatRelative(item.nextRunAt) : t('schedule.row.noFutureRun')}</span></span>
@@ -507,12 +507,12 @@ export function ScheduledPage({
         </button>
       })}</div> : <EmptyState icon={<CalendarClock size={24} />} title={t(EMPTY_TITLE_KEYS[filter])} action={schedules.length ? undefined : <button type="button" className="button button--primary" onClick={openCreate}><Plus size={13} /> {t('schedule.editor.create')}</button>}> {schedules.length ? t('schedule.empty.filterHint') : t('schedule.empty.createHint', { harness: HARNESS_SHORT_NAMES[harness] })}</EmptyState>}
       {nativeHeartbeats.length ? <section className="native-heartbeats" aria-labelledby="native-heartbeats-title">
-        <div className="native-heartbeats__header"><div><span className="schedule-page__kicker">Prime Agent</span><h2 id="native-heartbeats-title">Agent heartbeats</h2></div><small>Auto-discovered; the owning runtime is authoritative</small></div>
+        <div className="native-heartbeats__header"><div><span className="schedule-page__kicker">Prime Agent</span><h2 id="native-heartbeats-title">{t('schedule.heartbeats.title')}</h2></div><small>{t('schedule.heartbeats.note')}</small></div>
         {heartbeatPauseUnavailable ? <p className="native-heartbeats__note">{heartbeatPauseUnavailable}</p> : null}
         <div className="native-heartbeats__list">{nativeHeartbeats.map((heartbeat) => <article key={heartbeat.id} className="native-heartbeat">
           <span className={`schedule-row__status schedule-row__status--${heartbeat.status}`}><CalendarClock size={15} /></span>
-          <div className="native-heartbeat__main"><span><strong>{heartbeat.label || (heartbeat.source === 'heartbeat' ? 'Thread heartbeat' : 'Agent heartbeat')}</strong><i className={`schedule-state schedule-state--${heartbeat.status}`}>{heartbeat.status}</i></span><p>{heartbeat.prompt}</p><small>{heartbeat.schedule}{heartbeat.nextRunAt ? ` · next ${formatRelative(heartbeat.nextRunAt)}` : ''}</small></div>
-          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'Heartbeat paused.')}>Pause</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'Heartbeat resumed.')}>Resume</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => setConfirmation({ kind: 'stop', heartbeat })}>Stop</button></div>
+          <div className="native-heartbeat__main"><span><strong>{heartbeat.label || (t(heartbeat.source === 'heartbeat' ? 'schedule.heartbeats.thread' : 'schedule.heartbeats.agent'))}</strong><i className={`schedule-state schedule-state--${heartbeat.status}`}>{t(HEARTBEAT_STATUS_KEYS[heartbeat.status])}</i></span><p>{heartbeat.prompt}</p><small>{heartbeat.schedule}{heartbeat.nextRunAt ? ` · ${t('schedule.heartbeats.next', { next: formatRelative(heartbeat.nextRunAt) })}` : ''}</small></div>
+          <div className="native-heartbeat__actions">{heartbeat.status === 'active' ? <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'pause'), 'schedule.notice.heartbeatPaused')}>{t('schedule.action.pause')}</button> : <button type="button" className="button" disabled={Boolean(action || heartbeatPauseUnavailable)} title={heartbeatPauseUnavailable} onClick={() => void perform(`heartbeat:${heartbeat.id}`, () => onManageHeartbeat(heartbeat.id, 'resume'), 'schedule.notice.heartbeatResumed')}>{t('schedule.action.resume')}</button>}<button type="button" className="button" disabled={Boolean(action)} onClick={() => setConfirmation({ kind: 'stop', heartbeat })}>{t('schedule.action.stop')}</button></div>
         </article>)}</div>
       </section> : null}
       {editorModal}

@@ -3,6 +3,7 @@ import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AutomationScheduleRecord, PrimeModelDescriptor, ProjectRecord, ScheduleTiming } from '../../src/types/api'
+import { I18nProvider, translate } from '../../src/lib/i18n'
 import { ScheduledPage } from '../../src/pages/ScheduledPage'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -116,4 +117,17 @@ it('keeps unsaved edits when discarding is cancelled and discards only after in-
   act(() => cancelEditor.click())
   act(() => document.querySelector<HTMLButtonElement>('.modal__footer .button--danger')!.click())
   expect(document.querySelector('[role="dialog"]')).toBeNull()
+})
+
+it('retranslates an existing action notice after switching interface language', async () => {
+  const props = renderPage({ schedules: [task] })
+  act(() => host.querySelector<HTMLButtonElement>('.schedule-row')!.click())
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === 'Run now')!.click())
+  expect(host.textContent).toContain(translate('en', 'schedule.notice.runQueued'))
+  await act(async () => root.render(<I18nProvider preference="ja"><ScheduledPage {...props} /></I18nProvider>))
+  // The provider must be present before the action to preserve the same component.
+  act(() => host.querySelector<HTMLButtonElement>('.schedule-row')!.click())
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === translate('ja', 'schedule.action.runNow'))!.click())
+  await act(async () => root.render(<I18nProvider preference="en"><ScheduledPage {...props} /></I18nProvider>))
+  expect(host.querySelector('[role="status"]')?.textContent).toContain(translate('en', 'schedule.notice.runQueued'))
 })
