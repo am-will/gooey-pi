@@ -114,6 +114,7 @@ async function createSettingsLock(lockPath: string): Promise<(() => Promise<void
     throw error
   }
 
+  const directory = await lstat(lockPath)
   const owner: SettingsLockOwner = { application: 'gooeypi', version: 1, pid: process.pid, token: randomUUID(), createdAt: Date.now() }
   activeSettingsLockTokens.add(owner.token)
   try {
@@ -121,7 +122,9 @@ async function createSettingsLock(lockPath: string): Promise<(() => Promise<void
   } catch (error) {
     activeSettingsLockTokens.delete(owner.token)
     const current = await readSettingsLockOwner(lockPath)
-    if (sameSettingsLockOwner(current, owner)) await rm(lockPath, { recursive: true, force: true })
+    const observed = await lstat(lockPath).catch(() => undefined)
+    const ownDirectory = observed?.isDirectory() && !observed.isSymbolicLink() && observed.dev === directory.dev && observed.ino === directory.ino
+    if (ownDirectory && (sameSettingsLockOwner(current, owner) || current === null && errorCode(error) !== 'EEXIST')) await rm(lockPath, { recursive: true, force: true })
     throw error
   }
   return async () => {
