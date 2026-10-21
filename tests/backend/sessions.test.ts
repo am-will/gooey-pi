@@ -139,6 +139,29 @@ describe('Rust Prime native archives', () => {
     await expect(service.requireSessionPath(file)).rejects.toThrow('outside')
   })
 
+  it('rescans native archives after attaching even when startup writes produce no watch event', async () => {
+    const closed = vi.fn()
+    const { root, project, service, store } = setup(undefined, {
+      primeImplementation: () => 'rust',
+      watchDirectory: () => {
+        const watcher = { close: closed, on: () => watcher }
+        return watcher
+      },
+    })
+    await store.ready()
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    expect(await service.list()).toEqual([])
+    const changed = vi.fn()
+    const unsubscribe = service.onDidChange(changed)
+    try {
+      writeSession(join(archive, 'initial.jsonl'), project, 'initial')
+      await waitUntil(() => changed.mock.calls.length > 0, 1_000)
+      expect((await service.list()).map((session) => session.id)).toEqual(['initial'])
+    } finally { unsubscribe() }
+    expect(closed).toHaveBeenCalledTimes(2)
+  })
+
   it('publishes changes to native archived transcripts and closes its watcher', async () => {
     const { root, project, service } = setup(undefined, { primeImplementation: () => 'rust' })
     const archive = join(root, '..', 'sessions-archive')
