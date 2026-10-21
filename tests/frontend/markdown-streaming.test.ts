@@ -36,7 +36,7 @@ describe('streaming Markdown rendering', () => {
       const parts: MessagePart[] = [{ type: 'text', text }]
       root.render(kind === 'timeline'
         ? createElement(WorkTimeline, { parts, streaming: true, showReasoning: true, showTools: true })
-        : createElement(Transcript, { messages: [{ id: 'live', role: 'assistant', streaming: true, parts }], active: true, git: { isRepo: false, files: [] }, onOpenChanges: vi.fn(), onSuggestion: vi.fn() }))
+        : createElement(Transcript, { messages: [{ id: 'live', role: 'assistant', streaming: true, parts }], active: true, onSuggestion: vi.fn() }))
     })
     render('hello')
     render('hello|')

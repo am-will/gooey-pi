@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { LoaderCircle } from 'lucide-react'
-import type { GitStatus, HarnessId, TranscriptMessage } from '@/types/api'
-import { ChangesCard } from './ChangesCard'
+import type { HarnessId, TranscriptMessage } from '@/types/api'
 import { ErrorBoundary } from './ErrorBoundary'
 import { MarkdownText } from './MarkdownText'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
@@ -37,18 +36,14 @@ export function coalesceAssistantTurns(messages: TranscriptMessage[]): Transcrip
 
 interface TranscriptProps {
   messages: TranscriptMessage[]
-  git: GitStatus
   /** Active harness; brands the assistant marks and working copy. */
   harness?: HarnessId
   loading?: boolean
   active?: boolean
   showReasoning?: boolean
   showTools?: boolean
-  onOpenChanges(): void
   onSuggestion(prompt: string): void
   suggestionsDisabled?: boolean
-  /** Render the pinned changes card here; the app docks it beside the composer when false. */
-  showPinnedChanges?: boolean
   /** Reserve room for bottom-docked changes and queued-message affordances. */
   bottomDockHasChanges?: boolean
   queuedMessageCount?: number
@@ -76,7 +71,7 @@ function ActiveAssistantMessage({ message, harness, showReasoning, showTools }: 
 
 
 
-export function Transcript({ messages, git, harness = 'prime', loading, active = false, showReasoning = true, showTools = true, onOpenChanges, onSuggestion, suggestionsDisabled, showPinnedChanges = true, bottomDockHasChanges = false, queuedMessageCount = 0, onOpenSessionReference }: TranscriptProps) {
+export function Transcript({ messages, harness = 'prime', loading, active = false, showReasoning = true, showTools = true, onSuggestion, suggestionsDisabled, bottomDockHasChanges = false, queuedMessageCount = 0, onOpenSessionReference }: TranscriptProps) {
   const { t } = useI18n()
   const groupedMessages = useMemo(() => coalesceAssistantTurns(messages), [messages])
   const { announcement, hiddenCount, scrollRef, showEarlier, updatePinnedState, visibleMessages } = useTranscriptScroll(groupedMessages, HARNESS_SHORT_NAMES[harness])
@@ -84,7 +79,6 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
   const transcriptClasses = [
     'transcript',
     'scroll-area',
-    showPinnedChanges && git.files.length ? 'has-pinned-changes' : '',
     bottomDockHasChanges ? 'has-docked-changes' : '',
     queuedMessageCount > 0 ? 'has-queued-messages' : '',
   ].filter(Boolean).join(' ')
@@ -122,6 +116,5 @@ export function Transcript({ messages, git, harness = 'prime', loading, active =
         <div />
       </div>
     </div>
-    {showPinnedChanges && git.files.length ? <div className="transcript-changes-pin"><ChangesCard git={git} onOpenChanges={onOpenChanges} /></div> : null}
   </>
 }

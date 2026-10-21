@@ -62,8 +62,8 @@ describe('transcript per-message boundary', () => {
     await act(async () => {
       root.render(<Transcript
         messages={[{ id: 'user-pending-steer', role: 'user', steerState: 'accepted', timestamp: 1, parts: [{ type: 'text', text: 'redirect' }] }]}
-        git={{ isRepo: false, files: [] }}
-        onOpenChanges={vi.fn()}
+
+
         onSuggestion={vi.fn()}
       />)
     })
@@ -77,8 +77,8 @@ describe('transcript per-message boundary', () => {
     await act(async () => {
       root.render(<Transcript
         messages={[good, broken]}
-        git={{ isRepo: false, files: [] }}
-        onOpenChanges={vi.fn()}
+
+
         onSuggestion={vi.fn()}
       />)
     })
