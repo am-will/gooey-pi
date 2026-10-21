@@ -7,6 +7,7 @@ import { useStableCallback } from './useStableCallback'
 interface GitStatusOptions {
   bridge: PrimeWorkApi | null
   cwd?: string
+  workspaceGeneration: number
   workspaceRef: RefObject<Pick<WorkspaceSnapshot, 'cwd' | 'generation'>>
   sessionStatus?: SessionRecord['status']
   locallyOwnedSession: boolean
@@ -14,7 +15,7 @@ interface GitStatusOptions {
   reportError(error: unknown): void
 }
 
-export function useGitStatus({ bridge, cwd, workspaceRef, sessionStatus, locallyOwnedSession, initialSnapshot, reportError }: GitStatusOptions) {
+export function useGitStatus({ bridge, cwd, workspaceGeneration, workspaceRef, sessionStatus, locallyOwnedSession, initialSnapshot, reportError }: GitStatusOptions) {
   const [gitSnapshot, setGitSnapshot] = useState<OwnedGitStatus>(() => initialSnapshot ?? { cwd, status: EMPTY_GIT_STATUS })
   const gitRequestRef = useRef(0)
   const report = useStableCallback(reportError)
@@ -29,7 +30,7 @@ export function useGitStatus({ bridge, cwd, workspaceRef, sessionStatus, locally
       if (current()) setGitSnapshot({ cwd, status: next })
     } catch (error) { if (current()) report(error) }
   }, [bridge, cwd, report, workspaceRef])
-  useEffect(() => { void refreshGit(); return () => { gitRequestRef.current += 1 } }, [refreshGit])
+  useEffect(() => { void refreshGit(); return () => { gitRequestRef.current += 1 } }, [refreshGit, workspaceGeneration])
   const previousSessionStatus = useRef<SessionRecord['status'] | undefined>(undefined)
   useEffect(() => {
     const previous = previousSessionStatus.current

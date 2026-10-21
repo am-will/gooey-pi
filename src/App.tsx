@@ -153,7 +153,7 @@ export function WorkspaceApp({ bridge, demo }: { bridge: PrimeWorkApi | null; de
     ?? projects.find((project) => project.id === workspace.activeProjectId)
     ?? projects[0], [projects, activeSession, workspace.activeProjectId])
   const activeCwd = workspaceCwd(activeProject, activeSession)
-  const { git, setGitSnapshot, gitRequestRef, refreshGit } = useGitStatus({ bridge, cwd: activeCwd, workspaceRef: workspace.workspaceRef, sessionStatus: activeSession?.status, locallyOwnedSession: Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath), initialSnapshot: demo ? { cwd: demo.SAMPLE_PROJECTS[0]?.primaryFolder, status: demo.SAMPLE_GIT } : undefined, reportError })
+  const { git, setGitSnapshot, gitRequestRef, refreshGit } = useGitStatus({ bridge, cwd: activeCwd, workspaceRef: workspace.workspaceRef, workspaceGeneration: workspace.workspaceGeneration, sessionStatus: activeSession?.status, locallyOwnedSession: Boolean(activeSession && workspace.runtime?.sessionFile === activeSession.filePath), initialSnapshot: demo ? { cwd: demo.SAMPLE_PROJECTS[0]?.primaryFolder, status: demo.SAMPLE_GIT } : undefined, reportError })
   const mentionableSessions = useMemo(() => sessions.filter((session) => !session.archived
     && session.depth === 0
     && session.id !== activeSession?.id

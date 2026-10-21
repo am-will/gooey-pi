@@ -57,7 +57,7 @@ it('preserves caller-owned demo Git status without a bridge', async () => {
   const workspaceRef = { current: { cwd: '/project', generation: 0 } }
   let git!: ReturnType<typeof useGitStatus>
   const reportError = vi.fn()
-  function Probe() { git = useGitStatus({ bridge: null, cwd: '/project', workspaceRef, initialSnapshot: { cwd: '/project', status }, locallyOwnedSession: false, reportError }); return null }
+  function Probe() { git = useGitStatus({ bridge: null, cwd: '/project', workspaceRef, workspaceGeneration: workspaceRef.current.generation, initialSnapshot: { cwd: '/project', status }, locallyOwnedSession: false, reportError }); return null }
   await act(async () => { root.render(<Probe />) })
   await act(async () => { await git.refreshGit() })
   expect(git.git).toBe(status)
@@ -71,7 +71,7 @@ it('rejects stale Git results and errors after the workspace generation changes'
   const workspaceRef = { current: { cwd: '/project', generation: 0 } }
   const reportError = vi.fn()
   let git!: ReturnType<typeof useGitStatus>
-  function Probe() { git = useGitStatus({ bridge, cwd: '/project', workspaceRef, locallyOwnedSession: false, reportError }); return null }
+  function Probe() { git = useGitStatus({ bridge, cwd: '/project', workspaceRef, workspaceGeneration: workspaceRef.current.generation, locallyOwnedSession: false, reportError }); return null }
   await act(async () => { root.render(<Probe />) })
   workspaceRef.current = { cwd: '/project', generation: 1 }
   await act(async () => { first.resolve({ isRepo: true, branch: 'old', files: [] }); await first.promise })
@@ -89,7 +89,7 @@ it('refreshes Git on an external running-to-idle transition without catalog-tick
   const workspaceRef = { current: { cwd: '/project', generation: 0 } }
   const reportError = vi.fn()
   let sessionStatus: SessionRecord['status'] = 'running'
-  function Probe() { useGitStatus({ bridge, cwd: '/project', workspaceRef, sessionStatus, locallyOwnedSession: false, reportError }); return null }
+  function Probe() { useGitStatus({ bridge, cwd: '/project', workspaceRef, workspaceGeneration: workspaceRef.current.generation, sessionStatus, locallyOwnedSession: false, reportError }); return null }
   await act(async () => { root.render(<Probe />) })
   await act(async () => { root.render(<Probe />) })
   expect(status).toHaveBeenCalledTimes(1)
@@ -129,7 +129,7 @@ it('reports a current Git failure through the latest error callback without anot
   const first = vi.fn()
   const latest = vi.fn()
   let reportError = first
-  function Probe() { useGitStatus({ bridge, cwd: '/project', workspaceRef, locallyOwnedSession: false, reportError }); return null }
+  function Probe() { useGitStatus({ bridge, cwd: '/project', workspaceRef, workspaceGeneration: workspaceRef.current.generation, locallyOwnedSession: false, reportError }); return null }
   await act(async () => { root.render(<Probe />) })
   reportError = latest
   await act(async () => { root.render(<Probe />) })
