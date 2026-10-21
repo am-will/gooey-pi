@@ -146,6 +146,22 @@ describe('context usage projection', () => {
     expect(projection.current()?.tokens).toBe(44_600)
   })
 
+  it.each([false, true])('establishes the first numeric snapshot baseline after output (prior unknown: %s)', (unknownSnapshot) => {
+    const projection = new ContextUsageProjection()
+    if (unknownSnapshot) projection.applySnapshot({ tokens: null, percent: null, contextWindow: 100_000 })
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(3_000))
+    projection.applySnapshot(usage(43_100), 3_000)
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(1_500))
+    projection.applySnapshot(usage(44_600), 4_500)
+    projection.handleEvent(assistantStart)
+    projection.handleEvent(assistantEnd(1_500))
+    projection.applySnapshot(usage(46_100), 4_500)
+    expect(projection.current()?.tokens).toBe(46_100)
+  })
+
   it('forgets pre-compaction activity when checking what a delayed snapshot includes', () => {
     const projection = new ContextUsageProjection()
     projection.applySnapshot(usage(150_000))
