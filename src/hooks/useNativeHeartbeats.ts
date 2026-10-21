@@ -39,19 +39,21 @@ export function useNativeHeartbeats({ bridge, harness, visible, reportError: onE
     scope.requested += 1
     if (manual) scope.manualRequested = scope.requested
     if (scope.running) return scope.running
-    scope.running = (async () => {
-      while (scope.active && scope.completed < scope.requested) {
-        if (scope.manualRequested <= scope.completed && (!scope.automaticEnabled || document.visibilityState !== 'visible')) break
-        const revision = scope.requested
-        try {
-          const records = await nativeBridge.heartbeats.list()
-          if (scope.active && revision === scope.requested) setResult({ scope, records })
-        } catch (error) {
-          if (scope.active && revision === scope.requested) reportError(error)
+    scope.running = Promise.resolve().then(async () => {
+      try {
+        while (scope.active && scope.completed < scope.requested) {
+          if (scope.manualRequested <= scope.completed && (!scope.automaticEnabled || document.visibilityState !== 'visible')) break
+          const revision = scope.requested
+          try {
+            const records = await nativeBridge.heartbeats.list()
+            if (scope.active && revision === scope.requested) setResult({ scope, records })
+          } catch (error) {
+            if (scope.active && revision === scope.requested) reportError(error)
+          }
+          scope.completed = revision
         }
-        scope.completed = revision
-      }
-    })().finally(() => { scope.running = null })
+      } finally { scope.running = null }
+    })
     return scope.running
   }, [reportError, scope])
   const refreshHeartbeats = useCallback(() => requestRefresh(true), [requestRefresh])

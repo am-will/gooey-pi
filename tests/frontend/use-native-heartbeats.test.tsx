@@ -40,6 +40,17 @@ beforeEach(() => {
 afterEach(() => { act(() => root?.unmount()); container.remove(); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('native heartbeat lifecycle', () => {
+  it('does not lose a refresh queued between read completion and runner settlement', async () => {
+    const fixture = bridgeFixture()
+    fixture.list.mockImplementationOnce(() => {
+      const response = Promise.resolve([heartbeat])
+      void response.then(() => queueMicrotask(() => { void latest.refreshHeartbeats() }))
+      return response
+    })
+    await act(async () => root!.render(createElement(Probe, { bridge: fixture.bridge })))
+    expect(fixture.list).toHaveBeenCalledTimes(2)
+  })
+
   it('does not start a queued automatic read after its view is hidden', async () => {
     const fixture = bridgeFixture()
     const pending = deferred<NativeHeartbeatRecord[]>()
