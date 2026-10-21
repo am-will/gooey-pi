@@ -17,21 +17,21 @@ its index before driving, then use the matching feature file as the recipe.
 
 ## Launch
 
-- **Build once.** The driver launches the built bundle (`package.json` `main` →
-  `out/main/index.js`). If it is missing, build it: `npm run build`. The driver
-  aborts with a clear message when the bundle is absent.
-- **Toolchain.** `node`/`npm` come from `nvm` (pinned `24.15.0` / `12.0.2`). If
-  `node -v` is not `v24.15.0`, select it first:
-  `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use >/dev/null`.
-- **Display.** The app needs an X display. On a headless machine prefix every
-  command with `xvfb-run -a` (e.g. `xvfb-run -a --server-args="-screen 0 1600x1000x24" ...`).
+- **Rebuild before verification.** Run `npm run build` after source changes.
+  The driver launches `out/main/index.js` and does not rebuild it.
+- **Toolchain.** Select the toolchain described in the
+  [validation guide](../../../docs/validation.md#reproducible-setup).
+- **Display.** Linux needs an X display. On headless Linux, prefix commands
+  with `xvfb-run -a`. macOS and Windows use their native desktop session.
 - **Isolation.** Every drive launches its own app instance with a throwaway
-  `HOME` and Electron `--user-data-dir`, so it never reads or writes your real
+  `HOME` and Electron `--user-data-dir`. It replaces XDG and Windows profile
+  locations and omits inherited harness overrides, Node version managers, and
+  credential variables. It does not read or write your real
   `~/.prime` / `~/.omp` / `~/.pi` state and never drives an instance it did not
   start. Readiness is `.app-shell[data-ready="true"]`. A fresh `HOME` has no
-  harness installed, so the driver first dismisses the `No Pi family harness
-  detected` modal (that modal makes the shell `inert`).
-- **Command.** `xvfb-run -a node .cursor/skills/verify-gooeypi/control.mjs drive <scenario> --out <dir>`
+  configured sessions. The driver dismisses the `No Pi family harness detected`
+  modal when it appears. System-wide harness binaries may still be detected.
+- **Command.** `node .cursor/skills/verify-gooeypi/control.mjs drive <scenario> --out <dir>`
 
 ## Doctor
 
@@ -39,7 +39,7 @@ Answer "is this instance worth driving?" before anything else, or whenever the
 app looks wrong:
 
 ```
-xvfb-run -a node .cursor/skills/verify-gooeypi/control.mjs doctor --out /tmp/gooeypi-verify/doctor
+node .cursor/skills/verify-gooeypi/control.mjs doctor --out /tmp/gooeypi-verify/doctor
 ```
 
 It launches the app, asserts `.app-shell[data-ready="true"]`, prints the window
@@ -84,4 +84,4 @@ broken or the app never became ready — fix that before driving features.
 
 - [`control.mjs`](./control.mjs) (executable). Subcommands: `doctor`,
   `drive <scenario>`, `list`. Invoke exactly as shown above; run under
-  `xvfb-run` on headless machines.
+  `xvfb-run` on headless Linux.

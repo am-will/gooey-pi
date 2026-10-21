@@ -4,7 +4,8 @@ A user selects a persistent session and sends a prompt to the active harness;
 while a turn runs they can queue a follow-up or steer the turn. This is the core
 product loop, but it requires a working Pi/OMP/Prime harness — so it is driven by
 the repo's hermetic Playwright fixture (which installs fake harness binaries),
-**not** by `control.mjs`, whose disposable `HOME` has no harness.
+**not** by `control.mjs`, which does not configure a test harness or sessions.
+Its isolated profile omits inherited binary overrides and credentials.
 
 ## Sub-features
 
@@ -28,7 +29,7 @@ Preconditions:
   feature is **skipped by the standalone driver** and verified through the repo
   fixture instead.
 
-- **Run the fixture path.** Use the repo's hermetic Electron suite, which sets
+- **Run the fixture path.** Run `npm run build` after source changes, then use the repo's hermetic Electron suite, which sets
   `PRIME_AGENT_BINARY` / `OMP_BINARY` / `PI_BINARY` to fake executables and drives
   the composer. Run `xvfb-run -a npx playwright test tests/e2e/app.spec.ts -g "steers the active turn with Ctrl\\+Enter" --reporter=line`.
 - **Observable proof.** The fake harness writes `steer-args.json` under the
