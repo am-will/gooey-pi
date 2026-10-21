@@ -305,3 +305,17 @@ describe('BrowserPanel navigation admission', () => {
     expect(loadURL).toHaveBeenCalledWith(address)
   })
 })
+
+
+it('loads a mount-time terminal link directly without a home request or duplicate loadURL', async () => {
+  const loadURL = vi.fn(async () => undefined)
+  webviewProto.loadURL = loadURL
+  const handled = vi.fn()
+  await act(async () => root.render(<BrowserPanel home="https://home.example/" navigationRequest={{ id: 1, url: 'localhost:3000' }} onNavigationRequestHandled={handled} annotations={{ annotations: [], atCapacity: false, add: () => true, remove: () => undefined, clear: () => undefined, handleNavigation: () => undefined, sendSignal: 0, requestSend: () => undefined }} onOpenExternal={() => undefined} />))
+  expect(webviewElement().getAttribute('src')).toBe('http://localhost:3000')
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')?.value).toBe('http://localhost:3000')
+  expect(handled).toHaveBeenCalledWith(1)
+  expect(loadURL).not.toHaveBeenCalled()
+  await makeDomReady()
+  expect(loadURL).not.toHaveBeenCalled()
+})

@@ -82,8 +82,14 @@ function agentTabLabel(tab: AgentBrowserTabRecord, fallback: string): string {
 export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
   const { t } = useI18n()
   const webviewRef = useRef<WebviewElement | null>(null)
-  const [address, setAddress] = useState(home)
-  const [currentUrl, setCurrentUrl] = useState(home)
+  const [initialRequest] = useState(() => {
+    if (!navigationRequest) return null
+    const url = normalizeBrowserAddress(navigationRequest.url)
+    return isAllowedBrowserUrl(url) ? { id: navigationRequest.id, url } : null
+  })
+  const initialUrl = initialRequest?.url ?? (isAllowedBrowserUrl(home) ? home : 'about:blank')
+  const [address, setAddress] = useState(initialUrl)
+  const [currentUrl, setCurrentUrl] = useState(initialUrl)
   const [loading, setLoading] = useState(false)
   const [canBack, setCanBack] = useState(false)
   const [canForward, setCanForward] = useState(false)
@@ -93,7 +99,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   const [annotationText, setAnnotationText] = useState('')
   const [notice, setNotice] = useState<'capacity' | 'invalid-url' | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [history, setHistory] = useState<string[]>(() => [home])
+  const [history, setHistory] = useState<string[]>(() => [initialUrl])
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
   const noticeTimerRef = useRef<number | null>(null)
@@ -300,10 +306,15 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     })
   }, [showNotice])
   useEffect(() => {
-    if (!navigationRequest || !domReady) return
+    if (!navigationRequest) return
+    if (navigationRequest.id === initialRequest?.id) {
+      onNavigationRequestHandled?.(navigationRequest.id)
+      return
+    }
+    if (!domReady) return
     navigate(navigationRequest.url)
     onNavigationRequestHandled?.(navigationRequest.id)
-  }, [domReady, navigate, navigationRequest, onNavigationRequestHandled])
+  }, [domReady, initialRequest, navigate, navigationRequest, onNavigationRequestHandled])
 
   const toggleAnnotation = () => {
     if (picking) {
@@ -346,7 +357,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     ref: (node: WebviewElement | null) => {
       webviewRef.current = node
     },
-    src: isAllowedBrowserUrl(home) ? home : 'about:blank',
+    src: initialUrl,
     className: 'browser-webview',
     partition: BROWSER_PARTITION,
     webpreferences: 'contextIsolation=yes,sandbox=yes,nodeIntegration=no',
