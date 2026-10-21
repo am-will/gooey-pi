@@ -572,12 +572,13 @@ export class AgentBrowserService {
       }
       const deltaX = direction === 'left' ? -amount : direction === 'right' ? amount : 0
       const deltaY = direction === 'up' ? -amount : direction === 'down' ? amount : 0
-      if (Number.isSafeInteger(params.x) && Number.isSafeInteger(params.y)) {
+      if (params.x !== undefined || params.y !== undefined) {
         // A wheel event at a point reaches nested scroll containers that
         // window.scrollBy cannot; CDP wheel deltas follow DOM semantics
         // (positive scrolls down/right).
-        await this.glidePointer(tab, guest, { x: params.x as number, y: params.y as number }, 'scroll')
-        await this.dispatchInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: params.x as number, y: params.y as number, deltaX, deltaY })
+        const point = await this.resolvePoint(guest, { x: params.x, y: params.y }, false)
+        await this.glidePointer(tab, guest, point, 'scroll')
+        await this.dispatchInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX, deltaY })
         await delay(SETTLE_MS)
         return this.describe(tab, guest)
       }
@@ -823,18 +824,20 @@ export class AgentBrowserService {
   }
 
   private async resolvePoint(guest: WebContents, params: Record<string, unknown>, focus: boolean): Promise<{ x: number; y: number }> {
+    let x: unknown = params.x
+    let y: unknown = params.y
     if (params.ref !== undefined) {
-      if (!Number.isSafeInteger(params.ref) || (params.ref as number) < 0 || (params.ref as number) > 999) throw new TypeError('ref must be an element number from browser_read_page')
-      const payload = await this.runPageScript(guest, refPointScript(params.ref as number, focus), 'element ref')
+      if (typeof params.ref !== 'number' || !Number.isSafeInteger(params.ref) || params.ref < 0 || params.ref > 999) throw new TypeError('ref must be an element number from browser_read_page')
+      const payload = await this.runPageScript(guest, refPointScript(params.ref, focus), 'element ref')
       if (typeof payload.error === 'string') throw new Error(payload.error.slice(0, 300))
-      if (!Number.isSafeInteger(payload.x) || !Number.isSafeInteger(payload.y)) throw new Error('The element position could not be determined')
-      return { x: payload.x as number, y: payload.y as number }
+      x = payload.x
+      y = payload.y
     }
-    if (!Number.isSafeInteger(params.x) || !Number.isSafeInteger(params.y)) throw new TypeError('Provide either ref (from browser_read_page) or x and y coordinates')
-    const x = params.x as number
-    const y = params.y as number
-    if (x < 0 || y < 0 || x > 20_000 || y > 20_000) throw new TypeError('x and y must be within the page viewport')
-    return { x, y }
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw new TypeError('Provide either ref (from browser_read_page) or x and y coordinates with finite values')
+    const point = { x: Math.round(x), y: Math.round(y) }
+    const viewport = await this.pageInfo(guest)
+    if (point.x < 0 || point.y < 0 || point.x >= viewport.innerWidth || point.y >= viewport.innerHeight) throw new TypeError('x and y must be within the page viewport')
+    return point
   }
 
   /**
