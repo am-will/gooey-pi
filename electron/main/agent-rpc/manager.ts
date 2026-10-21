@@ -254,7 +254,7 @@ export class AgentRpcManager {
     if (this.retiringRuntimes.has(runtime.runtimeId)) throw new Error('Runtime is being retired for a branch checkout')
     const command = await validateRpcCommand(rawCommand, this.validateSessionPath)
     this.requireOpen()
-    const policyPrompt = command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up'
+    const policyPrompt = command.type === 'prompt' || command.type === 'steer' || command.type === 'follow_up' || command.type === 'send_message'
       ? command.message
       : command.type === 'set_heartbeat' ? command.prompt : undefined
     if (typeof policyPrompt === 'string') assertNoMcpAuthenticationCommand(policyPrompt, this.adapter.id)

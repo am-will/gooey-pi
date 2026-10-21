@@ -312,6 +312,7 @@ describe('agent RPC command frame bounds', () => {
         { type: 'prompt', message, images: [{ type: 'image', data: png, mimeType: 'image/png' }] },
         { type: 'steer', message },
         { type: 'follow_up', message },
+        { type: 'send_message', targetActiveSessionId: 'session-1', message },
         { type: 'set_heartbeat', schedule: '0 * * * *', prompt: message },
       ]) {
         await expect(manager.command('runtime-auth-policy', command)).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')

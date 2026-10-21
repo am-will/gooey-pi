@@ -1,7 +1,20 @@
 import { PRIME_THINKING_LEVELS, type PrimeThinkingLevel } from '../../../src/types/api'
-import { rejectUnknownKeys, requireBoolean, requireId, requireRecord, requireString } from '../validation'
+import { isRecord, rejectUnknownKeys, requireBoolean, requireId, requireRecord, requireString } from '../validation'
 import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from './limits'
 import type { RpcObject } from './types'
+
+/** Main services retain the broader protocol vocabulary below. */
+export const RENDERER_COMMAND_TYPES: ReadonlySet<string> = new Set([
+  'abort', 'prompt', 'steer', 'follow_up', 'compact', 'set_model', 'set_thinking_level',
+  'set_service_tier', 'set_session_name', 'extension_ui_response',
+])
+export function isRendererCommandType(value: unknown): boolean {
+  return typeof value === 'string' && RENDERER_COMMAND_TYPES.has(value)
+}
+export function assertRendererCommand(raw: unknown): void {
+  if (!isRecord(raw)) throw new TypeError('command must be an object')
+  if (!isRendererCommandType(raw.type)) throw new TypeError('RPC command is not exposed to the renderer')
+}
 
 const SIMPLE_COMMANDS = new Set([
   'abort', 'new_session', 'get_state', 'cycle_model', 'get_available_models', 'cycle_thinking_level',

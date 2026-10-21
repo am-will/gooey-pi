@@ -266,6 +266,16 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.pi.agents.stop).toHaveBeenCalledWith('pi-runtime')
   })
 
+  it('allows only renderer-owned command types while preserving internal protocol commands', async () => {
+    for (const type of ['send_message', 'manage_heartbeat', 'update_heartbeat', 'switch_session', 'observe', 'get_subagents']) {
+      expect(() => harness.invoke('agent:command', 'prime-runtime', { type })).toThrow('not exposed to the renderer')
+    }
+    expect(harness.services.agents.command).not.toHaveBeenCalled()
+    for (const type of ['abort', 'prompt', 'steer', 'follow_up', 'compact', 'set_model', 'set_thinking_level', 'set_service_tier', 'set_session_name', 'extension_ui_response']) {
+      await expect(harness.invoke('agent:command', 'prime-runtime', { type })).resolves.toEqual({ ok: 'prime' })
+    }
+  })
+
   it('concatenates all managers for agent:list', () => {
     expect(harness.invoke('agent:list')).toEqual([
       { runtimeId: 'prime-runtime', harness: 'prime' },
