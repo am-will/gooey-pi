@@ -198,8 +198,9 @@ function metadataFromAccumulator(state: MetadataAccumulator, filePath: string, f
 interface IncrementalMetadataState<Accumulator> {
   size: number
   mtimeMs: number
-  /** Raw bytes of the current unterminated final line, resumed on the next append. */
-  pending: Buffer
+  /** LF-free fragments of the final line, concatenated once when it completes. */
+  pendingChunks: Buffer[]
+  pendingBytes: number
   /** Last raw bytes of the parsed range, re-read and compared before resuming. */
   tail: Buffer
   accumulator: Accumulator
@@ -239,28 +240,38 @@ function ingestBytes<Accumulator extends object>(parser: MetadataLineParser<Accu
   state.tail = state.tail.length + bytes.length <= METADATA_VERIFY_TAIL_BYTES
     ? Buffer.concat([state.tail, bytes])
     : lastBytes(bytes.length >= METADATA_VERIFY_TAIL_BYTES ? bytes : Buffer.concat([state.tail, bytes]), METADATA_VERIFY_TAIL_BYTES)
-  const data = state.pending.length ? Buffer.concat([state.pending, bytes]) : bytes
   let start = 0
   while (true) {
-    const newline = data.indexOf(LINE_FEED, start)
+    const newline = bytes.indexOf(LINE_FEED, start)
     if (newline < 0) break
-    if (newline - start > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
-    const end = newline > start && data[newline - 1] === CARRIAGE_RETURN ? newline - 1 : newline
-    parser.ingestLine(state.accumulator, data.toString('utf8', start, end))
+    let line: Buffer
+    if (state.pendingBytes) {
+      if (state.pendingBytes + newline > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
+      state.pendingChunks.push(bytes.subarray(0, newline))
+      line = Buffer.concat(state.pendingChunks, state.pendingBytes + newline)
+      state.pendingChunks = []
+      state.pendingBytes = 0
+    } else {
+      if (newline - start > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
+      line = bytes.subarray(start, newline)
+    }
+    const end = line.length && line[line.length - 1] === CARRIAGE_RETURN ? line.length - 1 : line.length
+    parser.ingestLine(state.accumulator, line.toString('utf8', 0, end))
     start = newline + 1
   }
-  const rest = data.subarray(start)
-  if (rest.length > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
-  state.pending = Buffer.from(rest)
+  if (start === bytes.length) return
+  if (state.pendingBytes + bytes.length - start > MAX_METADATA_RECORD_BYTES) throw new SessionFileLimitError('JSONL record exceeded the maximum frame size')
+  state.pendingChunks.push(Buffer.from(bytes.subarray(start)))
+  state.pendingBytes += bytes.length - start
 }
 
 function snapshotState<Accumulator extends object>(parser: MetadataLineParser<Accumulator>, state: IncrementalMetadataState<Accumulator>, filePath: string, fallbackUpdated: string): SessionMetadata {
-  if (!state.pending.length) return parser.snapshot(state.accumulator, filePath, fallbackUpdated)
+  if (!state.pendingBytes) return parser.snapshot(state.accumulator, filePath, fallbackUpdated)
   // A full stream read parses the final unterminated line; fold it into a
   // speculative copy so incremental snapshots stay identical without
   // committing a partial record to the retained parse state.
   const speculative = { ...state.accumulator }
-  parser.ingestLine(speculative, trimTrailingCarriageReturn(state.pending.toString('utf8')))
+  parser.ingestLine(speculative, trimTrailingCarriageReturn(Buffer.concat(state.pendingChunks, state.pendingBytes).toString('utf8')))
   return parser.snapshot(speculative, filePath, fallbackUpdated)
 }
 
@@ -312,7 +323,8 @@ export function createIncrementalMetadataReader<Accumulator extends object>(
     const state: IncrementalMetadataState<Accumulator> = {
       size: 0,
       mtimeMs: fileStat.mtimeMs,
-      pending: Buffer.alloc(0),
+      pendingChunks: [],
+      pendingBytes: 0,
       tail: Buffer.alloc(0),
       accumulator: parser.createAccumulator(filePath, fileStat),
     }
@@ -345,7 +357,8 @@ export function createIncrementalMetadataReader<Accumulator extends object>(
         const resumed: IncrementalMetadataState<Accumulator> = {
           size: state.size,
           mtimeMs: fileStat.mtimeMs,
-          pending: state.pending,
+          pendingChunks: [...state.pendingChunks],
+          pendingBytes: state.pendingBytes,
           tail: state.tail,
           accumulator: { ...state.accumulator },
         }

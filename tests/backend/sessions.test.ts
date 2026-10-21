@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream'
+import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
@@ -379,6 +381,39 @@ describe('incremental session metadata reads', () => {
     }
     expect(statSync(file).size).toBeGreaterThan(METADATA_VERIFY_TAIL_BYTES)
   }
+
+  it('frames a large CRLF record linearly without corrupting split UTF-8', async () => {
+    const { root } = setup()
+    const file = join(root, 'fragmented.jsonl')
+    writeSession(file, '/project', 'fragmented')
+    const content = `visible 🌿 ${'x'.repeat(20 * 1024 * 1024)}`
+    const data = Buffer.from(`${readFileSync(file, 'utf8')}${JSON.stringify({ type: 'message', message: { role: 'user', content } })}\r\n`)
+    const info = Object.assign(statSync(file), { size: data.length })
+    const reader = (chunkSize: number) => createSessionMetadataReader({
+      inspect: async () => info,
+      openStream: () => Readable.from((function* () {
+        for (let offset = 0; offset < data.length; offset += chunkSize) yield data.subarray(offset, offset + chunkSize)
+      })()),
+    })
+    expect(await reader(1_024)(file)).toEqual(await reader(data.length)(file))
+  })
+
+  it.each([false, true])('enforces record byte bounds with a trailing LF: %s', async (terminated) => {
+    const { root } = setup()
+    const file = join(root, 'limit.jsonl')
+    writeFileSync(file, '')
+    const chunk = Buffer.alloc(64 * 1024, 'x')
+    const reader = (extraByte: boolean) => createSessionMetadataReader({
+      inspect: async () => Object.assign(statSync(file), { size: SESSION_FILE_RECORD_LIMIT_BYTES + Number(extraByte) + Number(terminated) }),
+      openStream: () => Readable.from((function* () {
+        for (let size = 0; size < SESSION_FILE_RECORD_LIMIT_BYTES; size += chunk.length) yield chunk
+        if (extraByte) yield Buffer.from('x')
+        if (terminated) yield Buffer.from('\n')
+      })()),
+    })
+    await expect(reader(false)(file)).resolves.toMatchObject({ title: 'Untitled session' })
+    await expect(reader(true)(file)).rejects.toThrow('JSONL record exceeded the maximum frame size')
+  })
 
   it('reads only the appended byte range plus the verification tail after the initial parse', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'prime-work-incremental-')); dirs.push(dir)
