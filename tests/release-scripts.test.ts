@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { FuseState, FuseV1Options, FuseVersion, flipFuses, getCurrentFuseWire } from '@electron/fuses'
 import { describe, expect, test, vi } from 'vitest'
+import { LOCALE_PREFERENCES } from '../src/types/api'
 import {
   bootstrapNpm,
   parsePinnedNpmArtifact,
@@ -1594,7 +1595,7 @@ describe('post-package verification helpers', () => {
     const normalize = (locale: string) => locale.trim().toLowerCase().replaceAll('_', '-')
     const kept = (packageJson.build.electronLanguages as string[]).map(normalize)
     // The explicit locale preferences the settings validator accepts.
-    for (const locale of ['en', 'zh-CN'].map(normalize)) {
+    for (const locale of LOCALE_PREFERENCES.filter((value) => value !== 'system').map(normalize)) {
       expect(
         kept.some((wanted) => wanted === locale || locale.startsWith(`${wanted}-`) || wanted.startsWith(`${locale}-`)),
         locale,
