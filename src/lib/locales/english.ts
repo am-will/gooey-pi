@@ -466,6 +466,7 @@ export const englishCatalog = {
   'inspector.browser.openExternal': 'Open in default browser',
   'inspector.browser.recentPages': 'Recent pages',
   'inspector.browser.clear': 'Clear',
+  'inspector.browser.invalidUrl': 'Only credential-free http(s) URLs and about:blank can be opened here.',
   'inspector.browser.capacity': 'You can attach at most {max} annotations. Remove one from the composer attachment to add more.',
   'inspector.browser.pickHint': 'Click an element in the page to comment on it',
   'inspector.browser.commentOn': 'Comment on element {count}',

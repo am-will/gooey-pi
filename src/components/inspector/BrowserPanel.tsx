@@ -1,3 +1,4 @@
+import { isAllowedBrowserUrl } from '@/lib/browser-url'
 import { ArrowLeft, ArrowRight, Bot, ExternalLink, History, MessageCirclePlus, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { annotationMarkersScript, annotationPickerScript, annotationTakeScript } from '@/lib/annotation-picker'
@@ -99,7 +100,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   const [domReady, setDomReady] = useState(false)
   const [pendingElement, setPendingElement] = useState<BrowserAnnotationElement | null>(null)
   const [annotationText, setAnnotationText] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<'capacity' | 'invalid-url' | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [history, setHistory] = useState<string[]>(() => [home])
   const annotationsRef = useRef(annotations)
@@ -177,14 +178,14 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     }
   }, [showAgentTab])
 
-  const showNotice = (text: string) => {
+  const showNotice = useCallback((text: 'capacity' | 'invalid-url') => {
     setNotice(text)
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
     noticeTimerRef.current = window.setTimeout(() => {
       noticeTimerRef.current = null
-      setNotice('')
+      setNotice(null)
     }, 5_000)
-  }
+  }, [])
   useEffect(
     () => () => {
       if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
@@ -297,12 +298,16 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
 
   const navigate = useCallback((value: string) => {
     const url = normalizeUrl(value)
+    if (!isAllowedBrowserUrl(url)) {
+      showNotice('invalid-url')
+      return
+    }
     setAddress(url)
     setCurrentUrl(url)
     void webviewRef.current?.loadURL(url).catch((error: unknown) => {
       if (!String(error).includes('ERR_ABORTED')) console.error('Browser navigation failed', error)
     })
-  }, [])
+  }, [showNotice])
   useEffect(() => {
     if (!navigationRequest || !domReady) return
     navigate(navigationRequest.url)
@@ -320,10 +325,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       return
     }
     if (annotationsRef.current.atCapacity) {
-      showNotice(t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }))
+      showNotice('capacity')
       return
     }
-    setNotice('')
+    setNotice(null)
     setPicking(true)
   }
 
@@ -339,7 +344,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       /* webview not ready */
     }
     if (!annotationsRef.current.add({ comment: annotationText, element: pendingElement, pageUrl, pageTitle })) {
-      showNotice(t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }))
+      showNotice('capacity')
       return
     }
     setPendingElement(null)
@@ -350,7 +355,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     ref: (node: WebviewElement | null) => {
       webviewRef.current = node
     },
-    src: home,
+    src: isAllowedBrowserUrl(home) ? home : 'about:blank',
     className: 'browser-webview',
     partition: BROWSER_PARTITION,
     webpreferences: 'contextIsolation=yes,sandbox=yes,nodeIntegration=no',
@@ -526,7 +531,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         ) : null}
         {notice ? (
           <p className="annotation-notice" role="alert">
-            {notice}
+            {notice === 'capacity' ? t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }) : t('inspector.browser.invalidUrl')}
           </p>
         ) : null}
         <AgentCursorOverlay pointerEvent={previewPointerEvent} />
@@ -549,7 +554,9 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
               onSubmit={(event) => {
                 event.preventDefault()
                 agentAddressEditingRef.current = false
-                onNavigateAgentTab?.(activeAgentTab.tabId, 'url', normalizeUrl(agentAddress))
+                const url = normalizeUrl(agentAddress)
+                if (isAllowedBrowserUrl(url)) onNavigateAgentTab?.(activeAgentTab.tabId, 'url', url)
+                else showNotice('invalid-url')
               }}
             >
               <Bot size={12} aria-hidden />

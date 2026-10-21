@@ -452,6 +452,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'inspector.browser.openExternal': '既定のブラウザで開く',
   'inspector.browser.recentPages': '最近のページ',
   'inspector.browser.clear': 'クリア',
+  'inspector.browser.invalidUrl': 'ここでは認証情報を含まない http(s) URL と about:blank のみ開けます。',
   'inspector.browser.capacity': 'Prime が保持できる注釈は最大 {max} 件です。追加するにはコンポーザーの添付から 1 件削除してください。',
   'inspector.browser.pickHint': 'ページ内の要素をクリックしてコメントします',
   'inspector.browser.commentOn': '要素 {count} にコメント',

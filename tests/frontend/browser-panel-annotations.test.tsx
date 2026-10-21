@@ -277,3 +277,31 @@ describe('BrowserPanel annotation mode', () => {
     expect(latestApi.annotations).toHaveLength(0)
   })
 })
+
+describe('BrowserPanel navigation admission', () => {
+  it.each(['file:///etc/passwd', 'chrome://gpu', 'about:config', 'https://user:secret@example.com/'])('rejects %s before calling the guest', async (address) => {
+    const loadURL = vi.fn(async () => undefined)
+    webviewProto.loadURL = loadURL
+    await act(async () => root.render(<Harness />))
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, address)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(loadURL).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('credential-free http(s)')
+  })
+  it.each(['https://example.org/', 'http://localhost:5173/', 'about:blank'])('admits %s', async (address) => {
+    const loadURL = vi.fn(async () => undefined)
+    webviewProto.loadURL = loadURL
+    await act(async () => root.render(<Harness />))
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Browser address"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, address)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(loadURL).toHaveBeenCalledWith(address)
+  })
+})
