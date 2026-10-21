@@ -16,22 +16,20 @@ The inventory retains concrete repository-relative filenames and supplies [`vite
 
 Technical exclusions can name only one exact discovered file. Each entry must include a substantive reason and at least one compensating verification; duplicate, undocumented, and stale entries fail the structural test. Directory and glob exclusions are not representable. There are currently **no technical exclusions**.
 
-[`coverage-inventory.test.ts`](../tests/coverage-inventory.test.ts) locks the family roots, required safety modules, shipped extension set, unchanged global thresholds, per-family threshold declarations, automatic new-file enrollment, and exclusion validation. It also launches the explicit config from a foreign working directory and runs a real nested coverage fixture proving that the unexecuted, inventoried files `@(authority).ts`, `{authority,other}.ts`, and `authority[.].ts` all appear in `coverage-summary.json`.
+[`coverage-inventory.test.ts`](../tests/coverage-inventory.test.ts) locks the family roots, required safety modules, shipped extension set, configured global thresholds, per-family threshold declarations, automatic new-file enrollment, and exclusion validation. It also launches the explicit config from a foreign working directory and runs a real nested coverage fixture proving that the unexecuted, inventoried files `@(authority).ts`, `{authority,other}.ts`, and `authority[.].ts` all appear in `coverage-summary.json`.
 
-## Per-family thresholds
+## Coverage thresholds and limits
 
-Global thresholds remain 65% statements, 50% branches, 70% functions, and 75% lines. Because the inventoried denominator is much larger than the previous allowlist, the global gate alone cannot protect individual authority-bearing families, so each family additionally declares its own floors in `coverage-inventory.ts`. The floors are set from measured values on the base commit minus a small margin, and are expected to ratchet upward as characterization tests land family by family.
+[`vitest.config.ts`](../vitest.config.ts) defines the global thresholds.
+[`coverage-inventory.ts`](../scripts/release/coverage-inventory.ts) defines each
+family's thresholds. These files are the source of truth for the current
+values. Update a floor only from coverage measured at the commit under review.
 
-| Family | Floor st/br/fn/ln (%) |
-|---|---|
-| `electron/main` | 77 / 71 / 76 / 83 |
-| `electron/preload` | 100 / 100 / 100 / 100 |
-| `src/app` | 92 / 88 / 93 / 94 |
-| `src/lib` | 90 / 85 / 92 / 92 |
-| `src/hooks` | 56 / 46 / 59 / 64 |
-| `scripts/release` | 63 / 58 / 79 / 66 |
-| `assets/extensions` | 59 / 45 / 54 / 63 |
-
+Renderer components and pages under `src/components` and `src/pages` are outside
+the coverage inventory. Their component tests and Electron scenarios still run,
+but their source files do not contribute to the reported coverage denominator.
+The `src/app`, `src/lib`, and `src/hooks` families measure renderer authority and
+shared logic.
 
 Coverage is reported with `reportOnFailure: true`, so the report and every threshold are still evaluated when unrelated tests fail; a failing suite can never silently skip the gate.
 
