@@ -1,3 +1,4 @@
+import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '@/lib/rpc-frame'
 import { ArrowUp, AtSign, ChevronDown, Clock3, Command, Edit3, Gauge, ImageIcon, LoaderCircle, MessageCirclePlus, Mic, Paperclip, Plus, Square, SquareTerminal, Trash2, X, Zap } from 'lucide-react'
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -119,8 +120,6 @@ const reasoningLabels: Record<PrimeThinkingLevel, MessageKey> = {
   xhigh: 'composer.effort.xhigh',
   max: 'composer.effort.max',
 }
-
-const MAX_IMAGE_PROMPT_BYTES = 2 * 1024 * 1024
 
 const EMPTY_ANNOTATIONS: BrowserAnnotation[] = []
 const noop = () => undefined
@@ -309,8 +308,7 @@ export const Composer = memo(function Composer({
     const composed = composePrompt(prompt, harness, { sessions, sessionReferenceIds, skills: enabledSkills, annotations: currentAnnotations, terminalContext: currentTerminalContext })
     if ('error' in composed) { setAttachmentError(composed.error); return }
     const promptWithContext = composed.prompt
-    const frame = `${JSON.stringify({ type: intent === 'steer' ? 'steer' : 'follow_up', message: promptWithContext, ...(submittedImages.length ? { images: submittedImages } : {}), id: '00000000-0000-0000-0000-000000000000' })}\n`
-    if (new TextEncoder().encode(frame).byteLength > MAX_IMAGE_PROMPT_BYTES) {
+    if (rpcRequestFrameBytes({ type: intent === 'steer' ? 'steer' : 'follow_up', message: promptWithContext, ...(submittedImages.length ? { images: submittedImages } : {}) }) > RPC_WRITE_FRAME_LIMIT_BYTES) {
       setAttachmentError(t('composer.error.tooLarge'))
       return
     }

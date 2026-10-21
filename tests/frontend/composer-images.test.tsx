@@ -1,3 +1,4 @@
+import { rpcRequestFrameBytes, RPC_WRITE_FRAME_LIMIT_BYTES } from '../../src/lib/rpc-frame'
 // @vitest-environment jsdom
 
 import { act, useState } from 'react'
@@ -141,6 +142,21 @@ async function dropFiles(files: File[]): Promise<void> {
 }
 
 describe('Composer image ingestion', () => {
+  it('rejects a composed JSONL frame exactly one byte over the shared limit', async () => {
+    const onSend = renderComposer()
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!
+    const length = RPC_WRITE_FRAME_LIMIT_BYTES - rpcRequestFrameBytes({ type: 'follow_up', message: '' }) + 1
+    const text = 'x'.repeat(length)
+    expect(rpcRequestFrameBytes({ type: 'follow_up', message: text })).toBe(RPC_WRITE_FRAME_LIMIT_BYTES + 1)
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click())
+    expect(onSend).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('too large')
+  })
+
   it('previews and sends a pasted image through the prompt callback', async () => {
     const onSend = renderComposer(vi.fn(async () => undefined))
     await paste(pastedPng())
@@ -516,6 +532,7 @@ describe('Composer submission lifecycle', () => {
     const onSend = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve }))
     renderComposer(onSend)
     const textarea = await setDraft('First message')
+    textarea.focus()
     await pressEnter(textarea)
     // Typing and pressing Enter again while the first send is in flight must
     // not double-submit, because the textarea stays enabled.
