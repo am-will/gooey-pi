@@ -88,15 +88,27 @@ export function rruleParts(rrule: string) {
   }))
 }
 
+function representableFrequency(rrule: string): Frequency {
+  const parts = rruleParts(rrule)
+  const frequency = parts.get('FREQ')?.toLowerCase()
+  if (frequency !== 'hourly' && frequency !== 'daily' && frequency !== 'weekly' && frequency !== 'monthly') return 'advanced'
+  const keys = rrule.replace(/^RRULE:/i, '').split(';').map((part) => part.split('=')[0].toUpperCase())
+  if (keys.length !== parts.size || keys.some((key) => !['FREQ', 'INTERVAL', ...(frequency === 'weekly' ? ['BYDAY'] : [])].includes(key))) return 'advanced'
+  const interval = parts.get('INTERVAL')
+  if (interval !== undefined && (!/^[1-9]\d*$/.test(interval) || !Number.isSafeInteger(Number(interval)))) return 'advanced'
+  if (frequency === 'weekly') {
+    const days = parts.get('BYDAY')?.split(',') ?? []
+    if (!days.length || days.some((day) => !DAY_CODES.some((code) => code === day)) || new Set(days).size !== days.length) return 'advanced'
+  }
+  return frequency
+}
+
 export function formFromSchedule(item: AutomationScheduleRecord, models: PrimeModelDescriptor[], lastSelectedModel: string): ScheduleForm {
   const start = item.timing.kind === 'once'
     ? localParts(new Date(item.timing.at))
     : { date: item.timing.dtstartLocal.slice(0, 10), time: item.timing.dtstartLocal.slice(11, 16) }
   const parts = item.timing.kind === 'rrule' ? rruleParts(item.timing.rrule) : new Map<string, string>()
-  const rawFrequency = parts.get('FREQ')?.toLowerCase()
-  const frequency = rawFrequency === 'hourly' || rawFrequency === 'daily' || rawFrequency === 'weekly' || rawFrequency === 'monthly'
-    ? rawFrequency
-    : 'advanced'
+  const frequency = item.timing.kind === 'rrule' ? representableFrequency(item.timing.rrule) : 'advanced'
   return {
     title: item.title,
     prompt: item.prompt,

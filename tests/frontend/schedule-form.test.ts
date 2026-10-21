@@ -33,3 +33,17 @@ describe('schedule form mapping', () => {
     expect(validTimeZone('not/a/timezone')).toBe(false)
   })
 })
+
+
+it.each([
+  'FREQ=DAILY;COUNT=4', 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20280101T000000Z',
+  'FREQ=MONTHLY;BYMONTHDAY=15', 'FREQ=DAILY;BYHOUR=9,17', 'FREQ=MONTHLY;BYDAY=2MO',
+  'FREQ=WEEKLY', 'FREQ=WEEKLY;BYDAY=MO;BYDAY=FR', 'FREQ=DAILY;INTERVAL=0',
+  'FREQ=DAILY;BYDAY=MO', 'FREQ=YEARLY',
+])('retains advanced recurrence %s when editing unrelated fields', (rrule) => {
+  const timing = { kind: 'rrule', rrule, dtstartLocal: '2027-01-01T09:00:00', timeZone: 'UTC' } as const
+  const form = formFromSchedule({ ...record, timing }, [], '')
+  expect(form.frequency).toBe('advanced')
+  expect(form.advancedRrule).toBe(rrule)
+  expect(timingFromForm({ ...form, title: 'Renamed' })).toEqual(timing)
+})
