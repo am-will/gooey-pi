@@ -2,7 +2,7 @@ import { compactText } from '@/lib/text'
 import { useRef, useState } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { requestFailureMessage } from '@/app/workspace'
-import { clearComposerDraft } from '@/lib/composer-draft'
+import { clearComposerDraft, composerDraftScope } from '@/lib/composer-draft'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
@@ -192,7 +192,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const project = newSessionProject(requestedProject, workspace.workspaceRef.current.project, activeProject)
     if (!project) return
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
-    clearComposerDraft(`${project.id}:new`)
+    clearComposerDraft(composerDraftScope(project.id))
     workspace.activateWorkspace(project)
     if (!bridge) workspace.setMessages([])
     setView('session'); setPaletteOpen(false)
