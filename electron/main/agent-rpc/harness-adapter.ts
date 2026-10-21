@@ -267,19 +267,19 @@ export function primeStartRecovery(redetect: () => Promise<PrimeImplementation |
   }
 }
 
-const OMP_UNSUPPORTED_COMMANDS = new Set([
+const PRIME_ONLY_COMMANDS = new Set([
   'send_message', 'clone', 'set_heartbeat', 'update_heartbeat', 'manage_heartbeat', 'observe', 'unobserve',
   'list_heartbeats', 'get_heartbeat', 'agent_messages_status', 'agent_messages_pause', 'agent_messages_resume',
   'agent_messages_clear',
 ])
 
-const rejectOmpCommands = rejectCommands(OMP_UNSUPPORTED_COMMANDS, 'OMP')
+const rejectOmpCommands = rejectCommands(PRIME_ONLY_COMMANDS, 'OMP')
 // pi keeps Prime's vocabulary (fork/get_fork_messages pass through
 // untranslated) but lacks the same Prime-only daemon/heartbeat family OMP
 // rejects, clone included.
-const rejectPiCommands = rejectCommands(OMP_UNSUPPORTED_COMMANDS, 'Pi')
+const rejectPiCommands = rejectCommands(PRIME_ONLY_COMMANDS, 'Pi')
 
-const OMP_APPROVAL_MODES = new Set(['always-ask', 'write', 'yolo'])
+const RUNTIME_APPROVAL_MODES = new Set(['always-ask', 'write', 'yolo'])
 
 export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
   id: 'omp',
@@ -300,7 +300,7 @@ export const OMP_RPC_ADAPTER: HarnessRpcAdapter = {
     }
     if (input.thinking) args.push('--thinking', input.thinking)
     if (input.approvalMode !== undefined) {
-      if (!OMP_APPROVAL_MODES.has(input.approvalMode)) throw new TypeError('Invalid approval mode')
+      if (!RUNTIME_APPROVAL_MODES.has(input.approvalMode)) throw new TypeError('Invalid approval mode')
       args.push('--approval-mode', input.approvalMode)
     }
     const computerUseSkillPath = input.environment.GOOEYPI_COMPUTER_USE_SKILL_PATH
