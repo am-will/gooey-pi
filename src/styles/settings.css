@@ -154,7 +154,7 @@
 .provider-model-group + .provider-model-group { border-top: 1px solid var(--border-strong); }
 .provider-model-group__heading { width: 100%; min-height: 31px; position: sticky; z-index: 1; top: 0; display: flex; align-items: center; gap: 7px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border); color: inherit; background: color-mix(in srgb, var(--surface-subtle) 94%, transparent); text-align: left; cursor: pointer; backdrop-filter: blur(8px); transition: background 120ms ease; }
 .provider-model-group__heading:hover { background: color-mix(in srgb, var(--surface-hover) 94%, transparent); }
-.provider-model-group__heading:focus-visible { z-index: 2; outline: 2px solid var(--accent); outline-offset: -2px; }
+.provider-model-group__heading:focus-visible { z-index: 2; outline: 2px solid var(--prime); outline-offset: -2px; }
 .provider-model-group__heading::before { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); content: ''; }
 .provider-model-group.is-disabled .provider-model-group__heading::before { background: var(--text-tertiary); box-shadow: 0 0 0 3px var(--surface-selected); }
 .provider-model-group__heading strong { min-width: 0; overflow: hidden; flex: 1; font-size: 10px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
