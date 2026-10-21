@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/errors'
 import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 import { Check, ChevronDown, FolderGit2 } from 'lucide-react'
 import { useId, useRef, useState } from 'react'
@@ -41,7 +42,7 @@ export function CheckoutPicker({ catalog, fallbackLabel, loading = false, onExec
       setOpen(false)
       return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('checkout.error'))
+      setError(errorMessage(cause, t('checkout.error')))
       return false
     }
   }
