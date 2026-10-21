@@ -2291,6 +2291,27 @@ test.describe('Prime Work desktop smoke', () => {
     await page.locator('.terminal-drawer:not([hidden])').getByLabel('Close terminal', { exact: true }).click()
   })
 
+  test('keeps the same PTY and panel sizes while visiting full-page views', async () => {
+    await page.getByLabel(/Toggle terminal/).click()
+    const drawer = page.locator('.terminal-drawer:not([hidden])')
+    await expect(drawer.locator('.terminal-live-dot.is-connected')).toBeVisible()
+    const input = drawer.locator('.terminal-surface:not([hidden]) .xterm-helper-textarea')
+    await input.click()
+    await page.keyboard.type('echo retained-pty-output')
+    await page.keyboard.press('Enter')
+    await expect(drawer.locator('.xterm-rows')).toContainText('retained-pty-output')
+    await drawer.locator('.xterm').evaluate((element) => { element.setAttribute('data-retained-pty', 'original') })
+    const sizes = await page.evaluate(() => ({ inspector: localStorage.getItem('prime-work.inspector-width'), terminal: localStorage.getItem('prime-work.terminal-height') }))
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await expect(page.locator('.session-workspace')).toHaveAttribute('hidden', '')
+    await expect(page.locator('.terminal-drawer')).toHaveAttribute('hidden', '')
+    await expect(page.locator('.xterm[data-retained-pty="original"]')).toHaveCount(1)
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await expect(drawer.locator('.xterm[data-retained-pty="original"]')).toBeVisible()
+    await expect(drawer.locator('.xterm-rows')).toContainText('retained-pty-output')
+    expect(await page.evaluate(() => ({ inspector: localStorage.getItem('prime-work.inspector-width'), terminal: localStorage.getItem('prime-work.terminal-height') }))).toEqual(sizes)
+  })
+
   test('opens independent terminal tabs inside the conversation column', async () => {
     const project = await page.evaluate(async () => {
       const projects = await window.prime.projects.list()
