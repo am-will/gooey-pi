@@ -1102,6 +1102,12 @@ describe('ProjectService worktrees', () => {
       expect.objectContaining({ path: realpathSync(root), current: true }),
       expect.objectContaining({ path: realpathSync(linked), branch: 'linked-test', current: false }),
     ]) })
+    await store.update((state) => { state.projects.push({ ...state.projects[0], id: 'different-owner' }) })
+    const beforeWrongOwner = store.getProjects()
+    await expect(service.adoptCheckoutWorktree('different-owner', root, realpathSync(linked))).rejects.toThrow('different project grant')
+    expect(store.getProjects()).toEqual(beforeWrongOwner)
+    await store.update((state) => { state.projects = state.projects.filter((project) => project.id !== 'different-owner') })
+
     const transition = await checkouts.execute('project', { strategy: 'worktree', operation: 'open', path: realpathSync(linked) })
     if (transition.kind !== 'applied') throw new Error(`Expected applied transition, received ${transition.kind}`)
     const opened = transition.project
