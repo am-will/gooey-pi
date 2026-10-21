@@ -491,7 +491,7 @@ export class RpcRuntime {
       this.manualCompaction.end = value
       if (!reportsCompactionOutcome(value)) return
     }
-    if (!this.pendingUi.track(value)) return
+    if (!this.pendingUi.track(value, (targetId) => this.emit({ type: 'extension_ui_request', method: 'cancel', targetId }))) return
     const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)

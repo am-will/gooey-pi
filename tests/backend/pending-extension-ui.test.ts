@@ -145,3 +145,14 @@ describe('questionnaire replay membership', () => {
     expect(pending.list()).toEqual([])
   })
 })
+
+
+it('closes a group when native cancellation targets a response already written locally and fans out remaining ids', () => {
+  const pending = new PendingExtensionUi()
+  pending.track(grouped('q1', 0)); pending.resolve('q1'); pending.track(grouped('q2', 1))
+  const cancel = vi.fn()
+  pending.track({ type: 'extension_ui_request', method: 'cancel', targetId: 'q1' }, cancel)
+  expect(cancel).toHaveBeenCalledExactlyOnceWith('q2')
+  expect(pending.snapshot()).toEqual({ pendingExtensionUi: [], pendingExtensionUiGroups: [] })
+  expect(pending.track(grouped('q2', 1))).toBe(false)
+})

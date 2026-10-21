@@ -15,9 +15,12 @@ export class PendingExtensionUi {
   private readonly closedGroups = new Set<string>()
   constructor(private readonly now: () => number = () => performance.now()) {}
 
-  track(frame: RpcObject): boolean {
+  track(frame: RpcObject, onGroupCancel?: (id: string) => void): boolean {
     const cancelled = parseExtensionUiCancel(frame)
-    if (cancelled) { this.resolve(cancelled, true); return true }
+    if (cancelled) {
+      for (const id of this.resolve(cancelled, true)) if (id !== cancelled) onGroupCancel?.(id)
+      return true
+    }
     const request = parseExtensionUiRequest(frame)
     if (!request) return true
     const questionnaire = request.method === 'select' ? request.questionnaire : undefined
@@ -62,16 +65,26 @@ export class PendingExtensionUi {
     return true
   }
 
-  resolve(id: unknown, cancelled = false): void {
-    if (typeof id !== 'string') return
-    const entry = this.remove(id)
+  resolve(id: unknown, cancelled = false): string[] {
+    if (typeof id !== 'string') return []
+    const entry = this.pending.get(id)
+    if (cancelled) {
+      // Native timeout/abort can race a response already written to the pipe but not yet read.
+      const groupId = entry?.questionnaire?.groupId ?? [...this.questionnaires].find(([, group]) => [...group.arrived.values()].includes(id))?.[0]
+      if (groupId) {
+        const remaining = [...this.pending].filter(([, pending]) => pending.questionnaire?.groupId === groupId).map(([pendingId]) => pendingId)
+        this.closeGroup(groupId)
+        return remaining
+      }
+    }
+    this.remove(id)
     const metadata = entry?.questionnaire
-    if (!metadata) return
-    if (cancelled) { this.closeGroup(metadata.groupId); return }
+    if (!metadata) return []
     const group = this.questionnaires.get(metadata.groupId)
-    if (!group) return
+    if (!group) return []
     group.settled.add(metadata.index)
     if (group.settled.size === group.total) this.closeGroup(metadata.groupId)
+    return []
   }
 
   clear(): void {
