@@ -1,5 +1,6 @@
 import type { HarnessId, HarnessStatus } from './api/harness'
 import type { PrimeThinkingLevel, PrimeServiceTier, PrimeModelDescriptor, PrimeModelCatalog, ProviderAuthEvent } from './api/models'
+import type { ProjectRecord, ProjectFileListing, ProjectScripts } from './api/projects'
 import type { PluginCatalog, ExtensionInstallInput, McpConnectionInput, McpStateInput, CapabilityMutationInput } from './api/plugins'
 import type { AgentBrowserState, AgentBrowserPointerEvent, AgentBrowserActivityEvent } from './api/browser'
 import type { NativeHeartbeatRecord, AutomationScheduleRecord, ScheduleTiming, SchedulePreview, ScheduleInput, SchedulePatch, ScheduleRunRecord, ScheduleChangeEvent } from './api/schedules'
@@ -49,32 +50,9 @@ export interface AppUpdateState {
   message?: string
 }
 
-export interface ProjectScripts {
-  setup: string
-  run: string
-  /** Exact setup command most recently started for this project. */
-  setupLastRun?: string
-  /** Missing while the latest setup command is running or was interrupted. */
-  setupLastExitCode?: number
-}
 
-export interface ProjectRecord {
-  id: string
-  /** Agent harness this project grant belongs to; grants never cross harnesses. */
-  harness: HarnessId
-  name: string
-  path: string
-  folders: string[]
-  primaryFolder: string
-  pinned: boolean
-  createdAt: string
-  lastOpenedAt: string
-  sessionCount: number
-  gitBranch?: string
-  inferred?: boolean
-  readOnly?: boolean
-  scripts?: ProjectScripts
-}
+
+
 
 export interface SessionRecord {
   id: string
@@ -247,9 +225,9 @@ export interface SessionChangeEvent {
 
 
 
-export interface ProjectFileEntry { path: string; type: 'file' | 'directory' }
-export interface ProjectFileListing { entries: ProjectFileEntry[]; skipped: number; truncated: boolean }
-export const PROJECT_FILE_LISTING_LIMIT = 25_000
+
+
+
 
 export interface GitWorktree {
   path: string
@@ -673,3 +651,5 @@ export * from './api/browser'
 export * from './api/plugins'
 
 export * from './api/schedules'
+
+export * from './api/projects'
