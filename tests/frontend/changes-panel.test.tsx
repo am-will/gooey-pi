@@ -167,3 +167,24 @@ it('admits only one Git mutation until persistence and refresh finish', async ()
   await act(async () => { finish?.(true) })
   expect(button.disabled).toBe(false)
 })
+
+it('does not submit the same commit twice from rapid modal clicks', async () => {
+  let finish: ((value: { ok: boolean; output: string }) => void) | undefined
+  const commit = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+  const diff = vi.fn(async () => ({ text: '' }))
+  Object.defineProperty(window, 'prime', { configurable: true, value: { git: { commit, diff } } })
+  await act(async () => root.render(<ChangesPanel cwd="/project" git={{ isRepo: true, files: [{ path: 'file.txt', status: 'M', staged: true, additions: 1, deletions: 0 }] }} onRefreshGit={() => undefined} />))
+  const open = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Commit')!
+  act(() => open.click())
+  const input = document.body.querySelector<HTMLInputElement>('.commit-message-input input')!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Update file')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const submit = document.body.querySelector<HTMLButtonElement>('.modal__footer .button--primary')!
+  act(() => { submit.click(); submit.click() })
+  expect(commit).toHaveBeenCalledTimes(1)
+  expect(submit.disabled).toBe(true)
+  await act(async () => { finish?.({ ok: true, output: '' }) })
+  expect(document.body.querySelector('.modal')).toBeNull()
+})
