@@ -80,8 +80,8 @@ export function AgentSettings({ settings, meta, onUpdate, onRefreshHarnesses }: 
             <div className="runtime-card" key={harness}>
               <span className={status?.path ? 'is-online' : ''}><Bot size={17} /></span>
               <div>
-                <strong>{status?.path ? `${name} is ready` : `${name} not detected`}</strong>
-                <small title={status?.problem ? `${status.problem.path}: ${status.problem.reason}` : undefined}>{status?.path ?? (status?.problem ? `${status.problem.path}: ${status.problem.reason}` : `Install ${name}, then refresh harnesses.`)}</small>
+                <strong>{status?.path ? t('settings.agent.runtime.ready', { name }) : t('settings.agent.runtime.notDetected', { name })}</strong>
+                <small title={status?.problem ? `${status.problem.path}: ${status.problem.reason}` : undefined}>{status?.path ?? (status?.problem ? `${status.problem.path}: ${status.problem.reason}` : t('settings.agent.runtime.install', { name }))}</small>
                 {unavailable ? <small className="runtime-card__limits">{unavailable}</small> : null}
               </div>
               {badge ? <code>{badge}</code> : null}

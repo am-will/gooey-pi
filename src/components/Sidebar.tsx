@@ -339,11 +339,11 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                       <IconButton
                         size="small"
                         className="session-row__archive"
-                        label={`Archive ${session.title}`}
+                        label={t('sidebar.archiveSession', { title: displayTitle(session.title) })}
                         onClick={() => { setSessionMenu(null); archiveSession(session) }}
                       ><Archive size={13}/></IconButton>
-                      <IconButton size="small" className="session-row__more" label={`Session options for ${session.title}`} onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><MoreHorizontal size={13}/></IconButton>
-                      {sessionMenu === session.id ? <div className="session-row__menu" aria-label="Session options"><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> Copy session UUID</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> Rename</button></div> : null}
+                      <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><MoreHorizontal size={13}/></IconButton>
+                      {sessionMenu === session.id ? <div className="session-row__menu" aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
                     </div>
                   ))}
                   {projectSessions.length === 0 ? <button type="button" title={t('nav.newSessionIn', { name: project.name })} className="session-row session-row--empty" onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={12} /> {t('nav.newSession')}</button> : null}

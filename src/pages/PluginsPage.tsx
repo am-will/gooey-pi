@@ -345,8 +345,8 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
         {harness === 'pi' && mcpSupportNotice ? <p className="connection-warning" role="status">{mcpSupportUpdating ? <RefreshCw className="spin" size={13}/> : <ShieldCheck size={13}/>} {mcpSupportNotice}</p> : null}
         {harness === 'pi' && !piMcpAdapterInstalled ? <p className="connection-warning"><ShieldCheck size={13}/> Pi core has no MCP client. Enable Pi MCP Adapter below before adding servers.</p> : null}
         {primeLimits ? <p className="connection-warning"><ShieldCheck size={13}/> {primeLimits}</p> : null}
-        <p className="connection-warning"><ShieldCheck size={13}/> {NETWORK_MCP_UNAVAILABLE_DETAIL}</p>
-        <div className="directory-heading"><h2>{filter === 'installed' ? 'Installed' : tab === 'plugins' ? 'Capabilities' : 'Skills'}</h2><span>{visible.length} shown</span></div>
+        <p className="connection-warning"><ShieldCheck size={13}/> {t('plugins.warning.networkMcpUnavailable')}</p>
+        <div className="directory-heading"><h2>{filter === 'installed' ? t('plugins.filter.installed') : tab === 'plugins' ? t('nav.capabilities') : t('plugins.tab.skills')}</h2><span>{t('plugins.shownCount', { count: visible.length })}</span></div>
         {visible.length ? (
           <div className="directory-list">{visible.map((skill) => {
             const statusDetail = capabilityStatusDetail(skill)
