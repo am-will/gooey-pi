@@ -102,6 +102,17 @@ describe('registerIpc verify gate', () => {
     registration.dispose()
   })
 
+  it('rejects untrusted and revoked child-observer senders before loading history', () => {
+    const event = fakeEvent()
+    for (const channel of ['subagents:list', 'subagents:history']) {
+      expect(() => handlers.get(channel)!(event, '/parent.jsonl', 'omp')).toThrow('not authorized')
+    }
+    registration.authorize(event.sender as never)
+    registration.revoke(event.sender.id)
+    expect(() => handlers.get('subagents:list')!(event, '/parent.jsonl', 'omp')).toThrow('not authorized')
+    registration.dispose()
+  })
+
   it('exposes fixed read-only pet discovery channels to an authorized renderer', async () => {
     const event = fakeEvent()
     registration.authorize(event.sender as never)
