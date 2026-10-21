@@ -14,7 +14,7 @@ import { createSessionMetadataReader, type JsonRecord, type SessionMetadata, typ
 import { readTranscript } from './sessions/transcript'
 import { PrimeSessionArchive } from './sessions/prime-archive'
 import type { JsonStateStore } from './store'
-import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString } from './validation'
+import { isPathWithin, isRecord, requireBoolean, requireExistingDirectory, requireId, requireString, stripAnsi } from './validation'
 
 interface RuntimeSessionState { isStreaming: boolean; isCompacting?: boolean }
 
@@ -320,7 +320,11 @@ export class SessionService {
     const sessionId = requireId(selector, 'session id')
     if (sessionId.startsWith('-')) throw new TypeError('session id is invalid')
     const result = await runProcess(primeAgentPath, ['rename', sessionId, safeTitle, '--json'], { timeoutMs: 30_000 })
-    return result.code === 0
+    if (result.code === 0 && !result.timedOut && !result.outputExceeded) return true
+    if (result.timedOut) throw new Error('Prime Agent timed out while renaming this session')
+    if (result.outputExceeded) throw new Error('Prime Agent produced too much output while renaming this session')
+    const detail = stripAnsi(result.stderr || result.stdout).trim().slice(0, 500)
+    throw new Error(detail ? `Prime Agent could not rename this session: ${detail}` : `Prime Agent could not rename this session (exit ${result.code})`)
   }
 
   /**

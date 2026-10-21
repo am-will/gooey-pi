@@ -1644,8 +1644,24 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       rename: async () => false,
     })
 
-    await expect(service.rename(file, 'Prime title')).resolves.toBe(false)
+    await expect(service.rename(file, 'Prime title')).rejects.toThrow(/could not rename this session/)
     expect(renameFile).not.toHaveBeenCalled()
+  })
+
+  it('reports bounded ANSI-free CLI rename failures', async () => {
+    const { root, project, service } = setup()
+    const executable = join(root, 'rename.cjs')
+    writeFileSync(executable, `#!/usr/bin/env node
+process.stderr.write('\\u001b[31m' + 'failure '.repeat(100) + '\\u001b[0m')
+process.exit(1)
+`)
+    chmodSync(executable, 0o755)
+    Object.defineProperty(service, 'primeAgentPath', { value: executable })
+    const file = join(root, 'rename.jsonl')
+    writeSession(file, project, 'rename')
+    const error = await service.rename(file, 'Title').catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(Error)
+    expect(error).toMatchObject({ message: `Prime Agent could not rename this session: ${'failure '.repeat(100).trim().slice(0, 500)}` })
   })
 
   it('never passes an option-shaped session id to the Prime rename CLI', async () => {
