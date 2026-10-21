@@ -500,11 +500,11 @@ export function FilesPanel({
           </button>
         ) : null}
 
-        {!loading && !error && treeRoots.length > 0 && visibleNodes.length === 0 ? (
+        {!loading && !error && !truncated && treeRoots.length > 0 && visibleNodes.length === 0 ? (
           <p>{query.trim() ? t('inspector.files.noMatch', { query }) : t('inspector.files.none')}</p>
         ) : null}
 
-        {!loading && !error && treeRoots.length === 0 ? <p>{t('inspector.files.none')}</p> : null}
+        {!loading && !error && !truncated && treeRoots.length === 0 ? <p>{t('inspector.files.none')}</p> : null}
       </div>
     </div>
   )
