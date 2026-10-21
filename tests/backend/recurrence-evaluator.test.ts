@@ -17,12 +17,20 @@ const daily: ScheduleTiming = { kind: 'rrule', dtstartLocal: '2030-01-01T09:00:0
 const impossible: ScheduleTiming = { ...daily, rrule: 'FREQ=MINUTELY;BYMONTH=2;BYMONTHDAY=30' }
 
 describe('isolated recurrence evaluation', () => {
-  it('runs real previews, historical yearly rules and saturated missed counts', async () => {
-    const service = evaluator()
-    expect(await service.preview(daily, 2, new Date('2030-01-01T00:00:00Z'))).toEqual(['2030-01-01T09:00:00.000Z', '2030-01-02T09:00:00.000Z'])
-    expect(await service.next({ ...daily, dtstartLocal: '1970-01-01T09:00:00', rrule: 'FREQ=YEARLY' }, new Date('4000-06-01T00:00:00Z'))).toBe('4001-01-01T09:00:00.000Z')
-    expect(await service.countMissed({ ...daily, dtstartLocal: '2030-01-01T00:00:00', rrule: 'FREQ=MINUTELY' }, new Date('2030-01-01T00:00:00Z'), new Date('2030-01-09T00:00:00Z'), 10_000)).toBe(10_000)
-    expect(await service.next({ ...daily, dtstartLocal: '1970-01-01T00:00:00', rrule: 'FREQ=MINUTELY;COUNT=100000' }, new Date('2030-01-01T00:00:00Z'))).toBeNull()
+  it('runs real previews', async () => {
+    expect(await evaluator().preview(daily, 2, new Date('2030-01-01T00:00:00Z'))).toEqual(['2030-01-01T09:00:00.000Z', '2030-01-02T09:00:00.000Z'])
+  })
+
+  it('walks historical yearly rules', async () => {
+    expect(await evaluator().next({ ...daily, dtstartLocal: '1970-01-01T09:00:00', rrule: 'FREQ=YEARLY' }, new Date('4000-06-01T00:00:00Z'))).toBe('4001-01-01T09:00:00.000Z')
+  })
+
+  it('saturates missed counts', async () => {
+    expect(await evaluator().countMissed({ ...daily, dtstartLocal: '2030-01-01T00:00:00', rrule: 'FREQ=MINUTELY' }, new Date('2030-01-01T00:00:00Z'), new Date('2030-01-09T00:00:00Z'), 10_000)).toBe(10_000)
+  })
+
+  it('exhausts a bounded minutely rule before the cursor', async () => {
+    expect(await evaluator().next({ ...daily, dtstartLocal: '1970-01-01T00:00:00', rrule: 'FREQ=MINUTELY;COUNT=100000' }, new Date('2030-01-01T00:00:00Z'))).toBeNull()
   })
 
   it('keeps the event loop responsive during a rule that never produces a candidate', async () => {
