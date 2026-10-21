@@ -27,6 +27,7 @@ class FakeGuest extends EventEmitter {
   readonly inputEvents: Array<Record<string, unknown>> = []
   readonly insertedText: string[] = []
   readonly executedScripts: string[] = []
+  readonly executedWorlds: number[] = []
   debuggerAttached = false
   readonly debugger = {
     isAttached: () => this.debuggerAttached,
@@ -75,6 +76,12 @@ class FakeGuest extends EventEmitter {
     this.emit('did-start-navigation', details, url, isSameDocument, isMainFrame, 1, 2)
   }
   async executeJavaScript(code: string) {
+    this.executedScripts.push(code)
+    return this.scriptResult(code)
+  }
+  async executeJavaScriptInIsolatedWorld(worldId: number, scripts: Electron.WebSource[]) {
+    this.executedWorlds.push(worldId)
+    const code = scripts.map((script) => script.code).join("\n")
     this.executedScripts.push(code)
     return this.scriptResult(code)
   }
@@ -135,6 +142,16 @@ function fixture(options?: { actionTimeoutMs?: number }) {
 }
 
 describe('AgentBrowserService', () => {
+  it('runs agent scripts outside the page main world', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
+    guest.executeJavaScript = async () => { throw new Error('Page replaced main-world globals') }
+    await service.readPage('/sessions/a.jsonl', { tabId })
+    await service.evaluate('/sessions/a.jsonl', { tabId, code: 'return 1' })
+    expect(guest.executedWorlds.length).toBeGreaterThan(0)
+    expect(guest.executedWorlds.every((worldId) => worldId === 1001)).toBe(true)
+  })
+
   it('opens a tab once the renderer attaches an approved guest and navigates it', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId, result } = await openAttached('/sessions/a.jsonl', 'https://example.com/')
