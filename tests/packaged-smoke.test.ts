@@ -27,7 +27,7 @@ describe('packaged smoke contract', () => {
   })
 
   it('keeps the packaged renderer URL a single source of truth in the main process', () => {
-    const main = readFileSync(resolve('electron/main/index.ts'), 'utf8')
+    const main = readFileSync(resolve('electron/main/renderer-security.ts'), 'utf8')
     expect(main).toContain('PACKAGED_RENDERER_URL')
     expect(main).not.toContain(`'${PACKAGED_RENDERER_URL}'`)
   })

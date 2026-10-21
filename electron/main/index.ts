@@ -1,9 +1,8 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, screen, session, shell, webContents } from 'electron'
 import type { BrowserWindowConstructorOptions, Input, WebContents } from 'electron'
-import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path'
-import { readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { pathToFileURL } from 'node:url'
 import { isAllowedBrowserUrl } from '../../src/lib/browser-url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
@@ -13,6 +12,7 @@ import { installApplicationMenu } from './application-menu'
 import { mainWindowBounds } from './window-bounds'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
+import { hardenRenderer, registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY_POLICY } from './renderer-security'
 import { installCrashGuards } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
@@ -26,7 +26,7 @@ import { bindRuntimeCapabilities, extensionHarnessRuntimeEnvironment } from './c
 import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
-import { PACKAGED_RENDERER_URL, PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
+import { PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
 import { PetService } from './pets'
 import { ProjectService } from './projects'
 import { SettingsService } from './settings'
@@ -92,104 +92,6 @@ installCrashGuards({
 
 function appIconPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(app.getAppPath(), 'assets', 'icon.png')
-}
-
-// One policy for every surface that serves renderer content: the app protocol
-// response headers and the packaged browser-session header rewrite.
-const RENDERER_CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
-
-const rendererContentTypes: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
-  '.woff': 'font/woff', '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8',
-}
-
-function registerRendererProtocol(): void {
-  if (!app.isPackaged) return
-  const rendererRoot = resolve(__dirname, '../renderer')
-  protocol.handle('prime-work', async (request) => {
-    try {
-      const url = new URL(request.url)
-      if (url.hostname !== 'app' || url.username || url.password || url.search || url.hash) return new Response('Not found', { status: 404 })
-      const decoded = decodeURIComponent(url.pathname)
-      const candidate = resolveRendererAssetPath(rendererRoot, decoded)
-      if (!candidate) return new Response('Not found', { status: 404 })
-      const body = await readFile(candidate)
-      return new Response(body, { headers: {
-        'Content-Type': rendererContentTypes[extname(candidate).toLowerCase()] ?? 'application/octet-stream',
-        'Content-Security-Policy': RENDERER_CONTENT_SECURITY_POLICY,
-        'X-Content-Type-Options': 'nosniff',
-      } })
-    } catch { return new Response('Not found', { status: 404 }) }
-  })
-}
-
-/** Resolves a renderer URL path without relying on a platform-specific separator. */
-export function resolveRendererAssetPath(rendererRoot: string, decodedPath: string): string | null {
-  if (!decodedPath.startsWith('/') || decodedPath.includes('\0') || decodedPath.includes('\\')) return null
-  const pathApi = /^[A-Za-z]:[\\/]/.test(rendererRoot) ? win32Path : { resolve, relative, isAbsolute }
-  const candidate = pathApi.resolve(rendererRoot, `.${decodedPath === '/' ? '/index.html' : decodedPath}`)
-  const relativePath = pathApi.relative(rendererRoot, candidate)
-  if (!relativePath || relativePath.startsWith('..') || pathApi.isAbsolute(relativePath)) return null
-  return candidate
-}
-
-function resolveRendererUrl(): string {
-  const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
-  if (!developmentUrl) return app.isPackaged ? PACKAGED_RENDERER_URL : pathToFileURL(join(__dirname, '../renderer/index.html')).href
-  const parsed = new URL(developmentUrl)
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) {
-    throw new Error('ELECTRON_RENDERER_URL must use an uncredentialed loopback HTTP(S) origin')
-  }
-  return parsed.href
-}
-
-
-export function hardenRenderer(window: BrowserWindow, trustedUrl: () => string = () => trustedRendererUrl): void {
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  window.webContents.on('context-menu', (_event, params) => {
-    if (params.mediaType !== 'image' || !params.hasImageContents) return
-    const contents = window.webContents
-    Menu.buildFromTemplate([{
-      label: 'Copy Image',
-      click: () => { if (!window.isDestroyed() && !contents.isDestroyed()) contents.copyImageAt(params.x, params.y) },
-    }]).popup({ window })
-  })
-  window.webContents.on('will-attach-webview', (event, preferences, params) => {
-    delete preferences.preload
-    preferences.nodeIntegration = false
-    preferences.nodeIntegrationInSubFrames = false
-    preferences.contextIsolation = true
-    preferences.sandbox = true
-    preferences.webSecurity = true
-    preferences.allowRunningInsecureContent = false
-    // A guest page must never be able to attach a nested guest of its own.
-    preferences.webviewTag = false
-    const partition = typeof params.partition === 'string' ? params.partition : ''
-    if (partition !== BROWSER_PARTITION || !isAllowedBrowserUrl(params.src)) event.preventDefault()
-  })
-  window.webContents.on('did-attach-webview', (_event, contents) => {
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    contents.on('will-navigate', (event, target) => { if (!isAllowedBrowserUrl(target)) event.preventDefault() })
-    contents.on('will-redirect', (event) => { if (!isAllowedBrowserUrl(event.url)) event.preventDefault() })
-    contents.on('will-frame-navigate', (event) => { if (!isAllowedBrowserUrl(event.url)) event.preventDefault() })
-    contents.once('destroyed', () => downloads?.cancelOwner(contents.id))
-    // Guests reaching this point passed the will-attach-webview partition and
-    // URL gates above, which makes them eligible for agent control.
-    agentBrowser?.approveGuest(contents)
-  })
-  window.webContents.on('will-navigate', (event, target) => {
-    const current = window.webContents.getURL()
-    if (target !== current) event.preventDefault()
-  })
-  // Server redirects and sub-frame navigations bypass will-navigate; hold them
-  // to the same trusted-renderer predicate the IPC gate uses.
-  window.webContents.on('will-redirect', (event) => {
-    if (!isTrustedRendererUrl(event.url, trustedUrl())) event.preventDefault()
-  })
-  window.webContents.on('will-frame-navigate', (event) => {
-    if (!isTrustedRendererUrl(event.url, trustedUrl())) event.preventDefault()
-  })
 }
 
 interface InitialRendererWindow {
@@ -386,7 +288,10 @@ async function createWindow(): Promise<BrowserWindow | null> {
   mainWindow = window
   const renderer = window.webContents
   const rendererId = renderer.id
-  hardenRenderer(window)
+  hardenRenderer(window, () => trustedRendererUrl, {
+    approveGuest: (contents) => agentBrowser?.approveGuest(contents),
+    cancelDownloads: (ownerId) => downloads?.cancelOwner(ownerId),
+  })
   renderer.on('before-input-event', (event, input) => {
     if (!isMacWindowCloseShortcut(input)) return
     event.preventDefault()
@@ -939,7 +844,7 @@ async function bootstrap(): Promise<void> {
     return { meta: structuredClone(meta), settings: currentSettings }
   }
   agents.setStartRecovery(primeStartRecovery(async () => { await refreshHarnesses(); ipc?.notifyHarnessesChanged(); return discovery.primeImplementation() }))
-  trustedRendererUrl = resolveRendererUrl()
+  trustedRendererUrl = resolveRendererUrl({ isPackaged: app.isPackaged, rendererRoot: resolve(__dirname, '../renderer'), developmentUrl: process.env.ELECTRON_RENDERER_URL })
   ipc = registerIpc({
     meta, refreshHarnesses, projects, checkouts, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,
     popupApplicationMenu, setTitleBarTheme,
@@ -1030,7 +935,7 @@ else void app.whenReady().then(async () => {
     if (!app.isPackaged) throw new Error('Packaged smoke mode is only available in packaged builds')
     packagedSmokeMarkerFile = requestedSmokeMarker
   }
-  registerRendererProtocol()
+  if (app.isPackaged) registerRendererProtocol(resolve(__dirname, '../renderer'))
   let wasOpenedAtLogin = false
   if (process.platform === 'darwin' && app.isPackaged) {
     try { wasOpenedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin } catch { /* The explicit flag remains available if the OS lookup fails. */ }
