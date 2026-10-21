@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ session: { fromPartition: vi.fn(), defaultSession: {} } }))
 
-import { SettingsService } from '../../electron/main/settings-schedules'
+import { SettingsService } from '../../electron/main/settings'
 import { JsonStateStore } from '../../electron/main/store'
 
 const dirs: string[] = []
