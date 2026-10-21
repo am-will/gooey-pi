@@ -8,7 +8,7 @@ import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS
 import { renameWithWindowsRetry } from './lib/durable-write'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
-import { isProviderId, isModelKey, isOneOf, isRecord } from './validation'
+import { errorCode, isProviderId, isModelKey, isOneOf, isRecord } from './validation'
 
 export interface FolderIdentity {
   dev: string
@@ -427,7 +427,7 @@ export class JsonStateStore {
       try {
         size = statSync(sourcePath).size
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (errorCode(error) !== 'ENOENT') throw error
         if (!legacyFilePath) {
           this.scheduleFreshInitialization()
           return
@@ -486,7 +486,7 @@ export class JsonStateStore {
         }
         return
       }
-      if (!stateRead && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (!stateRead && errorCode(error) !== 'ENOENT') {
         // A stat or read failure is not evidence of corruption, so the file is never quarantined for it.
         this.scheduleInitializationOperation(
           () => Promise.reject(error),
@@ -497,7 +497,7 @@ export class JsonStateStore {
       let recoveryPath: string | undefined
       let preservationFailure: unknown
       try {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (errorCode(error) !== 'ENOENT') {
           recoveryPath = `${sourcePath}.corrupt-${Date.now()}`
           renameSync(sourcePath, recoveryPath)
           console.error(`GooeyPi desktop state was reset and backed up to ${recoveryPath}: ${error instanceof Error ? error.message : String(error)}`)
@@ -712,7 +712,7 @@ export class JsonStateStore {
     try {
       await this.fileSystem.rename(this.legacyFilePath, backupPath)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !this.pathExists(backupPath)) return
+      if (errorCode(error) === 'ENOENT' && !this.pathExists(backupPath)) return
       throw this.migrationError(`Legacy desktop state could not be retired before startup: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
     }
     try {
@@ -738,7 +738,7 @@ export class JsonStateStore {
     try {
       size = statSync(this.legacyFilePath).size
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if (errorCode(error) !== 'ENOENT') throw error
       await this.initializeWindowsFreshState()
       return
     }
@@ -786,7 +786,7 @@ export class JsonStateStore {
     try {
       size = statSync(this.legacyFilePath).size
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if (errorCode(error) !== 'ENOENT') throw error
       await this.publishWindowsLegacyTombstone(this.windowsLegacyTombstone('complete', null, 'fresh'))
       return
     }
@@ -864,7 +864,7 @@ export class JsonStateStore {
       await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
     } finally {
       await this.fileSystem.unlink(temp).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (errorCode(error) !== 'ENOENT') throw error
       })
     }
   }
@@ -883,7 +883,7 @@ export class JsonStateStore {
     } finally {
       if (!completed) {
         await this.fileSystem.unlink(path).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          if (errorCode(error) !== 'ENOENT') throw error
         })
       }
     }
@@ -948,7 +948,7 @@ export class JsonStateStore {
       await this.syncParentDirectory(this.filePath, requireDirectorySync)
     } finally {
       await this.fileSystem.unlink(temp).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (errorCode(error) !== 'ENOENT') throw error
       })
     }
   }
