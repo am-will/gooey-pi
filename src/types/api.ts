@@ -174,6 +174,7 @@ export interface TranscriptMessage {
   steerState?: 'accepted' | 'read'
   /** Neutral system row: a renderer-only steer-read boundary, or a notice (provider fallback, branch summary) that never reads as a failure. */
   kind?: 'steer-read-marker' | 'notice'
+  notice?: { kind: 'branch-summary' }
   timestamp?: string | number
   agentName?: string
   startedAt?: string | number
