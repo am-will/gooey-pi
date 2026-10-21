@@ -52,9 +52,9 @@ it('keeps menu interaction inside the layer and dismisses outside or on Escape',
   const menu = host.querySelector('.session-row__menu')!
   await act(async () => { menu.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
   expect(host.querySelector('.session-row__menu')).not.toBeNull()
-  const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-  await act(async () => { menu.dispatchEvent(escape) })
-  expect(escape.defaultPrevented).toBe(true)
+  const escapeEvent = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+  await act(async () => { menu.dispatchEvent(escapeEvent) })
+  expect(escapeEvent.defaultPrevented).toBe(true)
   expect(host.querySelector('.session-row__menu')).toBeNull()
   await click('.session-row__more')
   await act(async () => { document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
