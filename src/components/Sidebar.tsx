@@ -26,9 +26,11 @@ import {
   SquarePen,
   Trash2,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
+import { Fragment, memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PROJECT_SORT_MODES, type AppMeta, type AppUpdateState, type HarnessId, type ProjectRecord, type ProjectSortMode, type SessionRecord, type WorkspaceView } from '@/types/api'
-import { writeClipboardText } from '@/lib/clipboard'
+import { useCopyFeedback } from '@/hooks/useCopyFeedback'
+import { useToast } from '@/hooks/useToast'
+import { errorMessage } from '@/lib/errors'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_PRODUCT_NAMES, HARNESS_SELECTOR_ORDER, HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { sortProjects } from '@/lib/project-order'
@@ -37,7 +39,9 @@ import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { sessionTitleText } from '@/lib/session-title'
 import { sessionAttentionSignature, signatureCleared } from '@/app/session-attention'
 import { ChildSessionRows, type ChildRosterView } from './ChildSessionRows'
-import { IconButton, Modal, OmpMark, PiMark, PrimeMark, useFocusTrap } from './ui'
+import { IconButton, Modal, useFocusTrap } from './ui'
+import { HarnessMark } from './HarnessMark'
+import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 
 const PROJECT_SORT_LABEL_KEYS = { recent: 'projects.sort.recent', alphabetical: 'projects.sort.alphabetical' } as const satisfies Record<ProjectSortMode, MessageKey>
 
@@ -129,13 +133,6 @@ function SessionStatusMark({ status, attention }: { status: SessionRecord['statu
   return <span className={`session-status-mark session-status-mark--${status}`} title={title}><span /></span>
 }
 
-const HARNESS_MARKS: Record<HarnessId, (props: { size?: number }) => ReactElement> = { omp: OmpMark, prime: PrimeMark, pi: PiMark }
-
-function HarnessMark({ harness, size }: { harness: HarnessId; size: number }) {
-  const Mark = HARNESS_MARKS[harness]
-  return <Mark size={size} />
-}
-
 function updateControlCopy(state: AppUpdateState, t: Translate): { label: string; title: string } {
   // `version` keeps its own leading space so both the "Download 1.2.3" and the
   // bare "Download" forms stay byte-identical to the pre-i18n copy.
@@ -184,6 +181,8 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
   // presented in the interface language (see `src/lib/session-title.ts`).
   const displayTitle = (title: string): string => sessionTitleText(title, t)
   const [query, setQuery] = useState('')
+  const { toast: copyError, setToast: setCopyError } = useToast()
+  const { copied, copy } = useCopyFeedback(undefined, (error) => setCopyError(errorMessage(error)))
   const [harnessMenuOpen, setHarnessMenuOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [sessionLimits, setSessionLimits] = useState<Record<string, number>>({})
@@ -218,35 +217,15 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
   const updateBusy = updateState.phase === 'checking' || updateState.phase === 'downloading'
   const updateIndeterminate = updateState.phase === 'downloading' && updateState.percent === undefined
   const updateVisible = updateState.phase === 'available' || updateState.phase === 'downloading' || updateState.phase === 'downloaded' || updateState.phase === 'error'
-  useEffect(() => {
-    if (!harnessMenuOpen) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.brand-switcher')) setHarnessMenuOpen(false) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setHarnessMenuOpen(false) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [harnessMenuOpen])
-  useEffect(() => {
-    if (!projectMenu) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.project-group')) setProjectMenu(null) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectMenu(null) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [projectMenu])
-  useEffect(() => {
-    if (!projectSortMenuOpen) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.sidebar__sort-menu, .sidebar__sort-toggle')) setProjectSortMenuOpen(false) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setProjectSortMenuOpen(false) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [projectSortMenuOpen])
+  useDismissableLayer(harnessMenuOpen, (target) => target instanceof Element && Boolean(target.closest('.brand-switcher')), () => setHarnessMenuOpen(false))
+  useDismissableLayer(Boolean(projectMenu), (target) => target instanceof Element && Boolean(target.closest('.project-group')), () => setProjectMenu(null))
+  useDismissableLayer(projectSortMenuOpen, (target) => target instanceof Element && Boolean(target.closest('.sidebar__sort-menu, .sidebar__sort-toggle')), () => setProjectSortMenuOpen(false))
+  useDismissableLayer(Boolean(sessionMenu), (target) => target instanceof Element && Boolean(target.closest('.session-row-wrap, .session-row__menu')), () => setSessionMenu(null))
   useEffect(() => {
     if (!sessionMenu) return
-    const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.session-row-wrap')) setSessionMenu(null) }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null) } }
     const dismissOnMove = () => setSessionMenu(null)
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
     document.addEventListener('scroll', dismissOnMove, true); window.addEventListener('resize', dismissOnMove)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true); document.removeEventListener('scroll', dismissOnMove, true); window.removeEventListener('resize', dismissOnMove) }
+    return () => { document.removeEventListener('scroll', dismissOnMove, true); window.removeEventListener('resize', dismissOnMove) }
   }, [sessionMenu])
   // Archiving stops a live agent, so running work confirms first. Idle chats
   // archive on a single click because Settings can restore them again.
@@ -303,7 +282,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
 
       <nav className="sidebar__primary" aria-label={t('nav.primary')}>
         <button type="button" title={t('nav.newSessionShortcut', { shortcut: newSessionShortcut })} onClick={() => onNewSession()}><NotebookPen size={15} /><span>{t('nav.newSession')}</span><kbd>{newSessionShortcut}</kbd></button>
-        <button type="button" title={t('common.search')} onClick={() => { setSearchOpen((open) => !open); window.setTimeout(() => document.getElementById('session-search')?.focus(), 0) }} className={searchOpen ? 'is-active' : ''}><Search size={15} /><span>{t('common.search')}</span></button>
+        <button type="button" title={t('common.search')} onClick={() => { if (searchOpen) setQuery(''); setSearchOpen((open) => !open); window.setTimeout(() => document.getElementById('session-search')?.focus(), 0) }} className={searchOpen ? 'is-active' : ''}><Search size={15} /><span>{t('common.search')}</span></button>
         {searchOpen ? (
           <div className="sidebar-search">
             <Search size={13} />
@@ -358,7 +337,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
                         onClick={() => { setSessionMenu(null); archiveSession(session) }}
                       ><Archive size={13}/></IconButton>
                       <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={(event) => openSessionMenu(session.id, event.currentTarget)}><MoreHorizontal size={13}/></IconButton>
-                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
+                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { setCopyError(null); void copy(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
                     </div>{childRoster?.parentFile === session.filePath ? <ChildSessionRows roster={childRoster} /> : null}</Fragment>
                   ))}
                   {projectSessions.length > sessionLimit ? <button type="button" className="session-row session-row--empty" onClick={() => setSessionLimits((limits) => ({ ...limits, [project.id]: sessionLimit + SIDEBAR_SESSION_LIMIT }))}>{t('sidebar.moreSessions', { count: projectSessions.length - sessionLimit })}</button> : null}
@@ -391,6 +370,7 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
         ) : null}
         <button type="button" title={t('nav.settings')} className={activeView === 'settings' ? 'is-active' : ''} onClick={() => onNavigate('settings')}><Settings size={15} /><span>{t('nav.settings')}</span><kbd>{settingsShortcut}</kbd></button>
       </div>
+      {copyError || copied ? <div className="toast" role="status">{copyError ?? t('transcript.copyAction.copied')}</div> : null}
       {renameTarget ? <Modal title="Rename session" onClose={() => setRenameTarget(null)} footer={<><button type="button" className="button" onClick={() => setRenameTarget(null)}>Cancel</button><button type="button" className="button button--primary" disabled={!renameValue.trim()} onClick={() => { const target = renameTarget; const title = renameValue.trim(); setRenameTarget(null); void onRenameSession(target, title) }}>Rename</button></>}><label className="field"><span>Session name</span><input autoFocus value={renameValue} maxLength={200} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && renameValue.trim()) { event.preventDefault(); const target = renameTarget; const title = renameValue.trim(); setRenameTarget(null); void onRenameSession(target, title) } }}/></label></Modal> : null}
       {removeTarget ? <Modal title="Remove project" onClose={() => setRemoveTarget(null)} footer={<><button type="button" className="button" onClick={() => setRemoveTarget(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => { const target = removeTarget; setRemoveTarget(null); onRemoveProject(target) }}>Remove</button></>}><p>Remove “{removeTarget.name}” from {HARNESS_PRODUCT_NAMES[activeHarness]}? The folder and saved sessions will not be deleted.</p></Modal> : null}
       {archiveRunningTarget ? <Modal title={t('archive.running.title')} onClose={() => setArchiveRunningTarget(null)} footer={<><button type="button" className="button" onClick={() => setArchiveRunningTarget(null)}>{t('common.cancel')}</button><button type="button" className="button button--danger" onClick={() => { const target = archiveRunningTarget; setArchiveRunningTarget(null); void onArchiveSession(target) }}>{t('archive.running.confirm')}</button></>}><p>{t('archive.running.body', { title: archiveRunningTarget.title })}</p></Modal> : null}
@@ -400,33 +380,8 @@ function SidebarView({ projects, sessions, childRoster, activeProjectId, activeS
 }
 
 export function areSidebarPropsEqual(previous: SidebarProps, next: SidebarProps): boolean {
-  return previous.projects === next.projects
-    && previous.sessions === next.sessions
-    && previous.childRoster === next.childRoster
-    && previous.activeProjectId === next.activeProjectId
-    && previous.activeSessionId === next.activeSessionId
-    && previous.activeView === next.activeView
-    && previous.activeHarness === next.activeHarness
-    && previous.harnesses === next.harnesses
-    && previous.clearedAttention === next.clearedAttention
-    && previous.updateState === next.updateState
-    && previous.onUpdateAction === next.onUpdateAction
-    && previous.onSelectHarness === next.onSelectHarness
-    && previous.onSelectProject === next.onSelectProject
-    && previous.onSelectSession === next.onSelectSession
-    && previous.onNavigate === next.onNavigate
-    && previous.onNewSession === next.onNewSession
-    && previous.onAddProject === next.onAddProject
-    && previous.onRemoveProject === next.onRemoveProject
-    && previous.projectSortMode === next.projectSortMode
-    && previous.onSetProjectSortMode === next.onSetProjectSortMode
-    && previous.onTogglePinProject === next.onTogglePinProject
-    && previous.onClose === next.onClose
-    && previous.onOpenPalette === next.onOpenPalette
-    && previous.onRenameSession === next.onRenameSession
-    && previous.onArchiveSession === next.onArchiveSession
-    && previous.overlay === next.overlay
-    && previous.platform === next.platform
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  return [...keys].every((key) => Object.is(Reflect.get(previous, key), Reflect.get(next, key)))
 }
 
 export const Sidebar = memo(SidebarView, areSidebarPropsEqual)
