@@ -862,6 +862,31 @@ describe('extension UI runtime ownership', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('expires app questions after thirty cumulative hidden minutes without charging visible time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const command = vi.fn().mockResolvedValue({})
+      const bridge = { agent: { command } } as unknown as PrimeWorkApi
+      let state!: ReturnType<typeof useExtensionUi>
+      function ExtensionProbe({ activeRuntimeId }: { activeRuntimeId: string }) {
+        state = useExtensionUi({ bridge, activeRuntimeId, askUserTimeoutMs: 0, runtimeSessionsRef: { current: new Map() }, setSessions: vi.fn(), setRuntime: vi.fn(), reportError: vi.fn() })
+        return <Probe />
+      }
+      await act(async () => root.render(<ExtensionProbe activeRuntimeId="other" />))
+      await act(async () => state.showExtensionUi('runtime', { type: 'extension_ui_request', id: 'hidden', method: 'select', title: 'Question', options: ['__prime_ask_user__hidden:0:1', 'A'] }))
+      await act(async () => { vi.advanceTimersByTime(20 * 60_000) })
+      expect(command).not.toHaveBeenCalled()
+      await act(async () => root.render(<ExtensionProbe activeRuntimeId="runtime" />))
+      await act(async () => { vi.advanceTimersByTime(60 * 60_000) })
+      expect(command).not.toHaveBeenCalled()
+      await act(async () => root.render(<ExtensionProbe activeRuntimeId="other" />))
+      await act(async () => { vi.advanceTimersByTime(10 * 60_000 - 1) })
+      expect(command).not.toHaveBeenCalled()
+      await act(async () => { vi.advanceTimersByTime(1) })
+      expect(command).toHaveBeenCalledWith('runtime', expect.objectContaining({ id: 'hidden', cancelled: true }))
+    } finally { vi.useRealTimers() }
+  })
+
   it('holds the Ask User countdown for a background questionnaire until its runtime is shown', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
