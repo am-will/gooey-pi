@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { GitDiff, GitFileChange, GitStatus, GitWorktree, LocalGitBranch, ProcessOutcome } from '../../src/types/api'
-import { restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
+import { resolveGitExecutable, restrictedGitEnvironment, runProcess, type ProcessResult } from './process-utils'
 import { errorMessage, requireGitPath, requireString, stripAnsi } from './validation'
 
 interface Numstat { additions: number; deletions: number }
@@ -37,7 +37,7 @@ function hardenedGitArgs(args: readonly string[], extraConfig: readonly string[]
 }
 
 function runGit(cwd: string, args: readonly string[], options: { timeoutMs: number; maxBytes: number; input?: string }, extraConfig: readonly string[] = []): Promise<ProcessResult> {
-  return runProcess('git', hardenedGitArgs(args, extraConfig), { cwd, ...options, env: restrictedGitEnvironment() })
+  return runProcess(resolveGitExecutable(cwd), hardenedGitArgs(args, extraConfig), { cwd, ...options, env: restrictedGitEnvironment() })
 }
 
 function resultDetail(result: ProcessResult): string {
@@ -233,7 +233,7 @@ async function readGlobalConfigValue(cwd: string, key: 'user.name' | 'user.email
     const value = process.env[name]
     if (value !== undefined) env[name] = value
   }
-  const result = await runProcess('git', hardenedGitArgs(['config', '--global', '--no-includes', '--get', key]), {
+  const result = await runProcess(resolveGitExecutable(cwd), hardenedGitArgs(['config', '--global', '--no-includes', '--get', key]), {
     cwd,
     timeoutMs: 5_000,
     maxBytes: GIT_CONFIG_OUTPUT_LIMIT,
