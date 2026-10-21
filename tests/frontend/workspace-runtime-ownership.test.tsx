@@ -26,6 +26,26 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('drops only an exited runtime owner’s steers and retains ordinary queued prompts', () => {
+    const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
+    act(() => root.render(createElement(Probe, { initialSession: session, sessions: [session, other] })))
+    act(() => {
+      latest.attachRuntime(runtime, 0)
+      latest.queuePrompt('A steer', 'steer')
+      latest.queuePrompt('A follow-up', 'queue')
+      latest.activateWorkspace(project, other, { ...runtime, runtimeId: 'b', sessionFile: other.filePath })
+      latest.queuePrompt('B steer', 'steer')
+      latest.dropPendingSteers('a')
+    })
+    expect(latest.pendingQueuedPrompts.map((prompt) => prompt.text)).toEqual(['B steer'])
+    act(() => latest.activateWorkspace(project, session))
+    expect(latest.pendingQueuedPrompts.map((prompt) => prompt.text)).toEqual(['A follow-up'])
+    act(() => latest.dropPendingSteers())
+    expect(latest.pendingQueuedPrompts.map((prompt) => prompt.text)).toEqual(['A follow-up'])
+    act(() => latest.activateWorkspace(project, other))
+    expect(latest.pendingQueuedPrompts.map((prompt) => prompt.text)).toEqual(['B steer'])
+  })
+
   it('does not restart history when the error callback changes and reports to the latest callback', async () => {
     let fail!: (error: unknown) => void
     const read = vi.fn(() => new Promise<TranscriptMessage[]>((_resolve, reject) => { fail = reject }))

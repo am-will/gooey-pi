@@ -485,12 +485,25 @@ export function useWorkspaceRuntime({
   const clearQueuedPromptFlushFailures = useCallback(() => {
     updateQueuedPrompts(({ flushAttemptFailed: _failed, ...prompt }) => prompt)
   }, [updateQueuedPrompts])
-  const clearQueuedPrompts = useCallback(() => {
-    const owner = activeQueuedPromptOwnerRef.current
-    if (owner) queuedPromptsByOwnerRef.current.delete(owner)
-    for (const prompt of pendingQueuedPromptsRef.current) observedSteerIdsRef.current.delete(prompt.id)
-    pendingQueuedPromptsRef.current = []
-    setPendingQueuedPrompts([])
+  const dropPendingSteers = useCallback((runtimeId?: string) => {
+    const sessionFile = runtimeId ? runtimeSessionsRef.current.get(runtimeId) : undefined
+    const owners = runtimeId ? [...queuedPromptsByOwnerRef.current.keys()].filter((owner) => (
+      sessionFile ? owner.endsWith(`:session:${sessionFile}`) : owner.endsWith(`:runtime:${runtimeId}`)
+    )) : [activeQueuedPromptOwnerRef.current]
+    if (runtimeId && runtimeIdRef.current === runtimeId) owners.push(activeQueuedPromptOwnerRef.current)
+    for (const owner of new Set(owners)) {
+      if (!owner) continue
+      const prompts = queuedPromptsByOwnerRef.current.get(owner) ?? []
+      const next = prompts.filter((prompt) => prompt.intent !== 'steer')
+      if (next.length === prompts.length) continue
+      for (const prompt of prompts) if (prompt.intent === 'steer') observedSteerIdsRef.current.delete(prompt.id)
+      if (next.length) queuedPromptsByOwnerRef.current.set(owner, next)
+      else queuedPromptsByOwnerRef.current.delete(owner)
+      if (owner === activeQueuedPromptOwnerRef.current) {
+        pendingQueuedPromptsRef.current = next
+        setPendingQueuedPrompts(next)
+      }
+    }
   }, [])
   const acceptSteer = useCallback((id: string) => {
     const prompt = pendingQueuedPromptsRef.current.find((candidate) => candidate.id === id && candidate.intent === 'steer')
@@ -643,7 +656,7 @@ export function useWorkspaceRuntime({
     removeQueuedPrompt,
     markQueuedPromptFlushFailed,
     clearQueuedPromptFlushFailures,
-    clearQueuedPrompts,
+    dropPendingSteers,
     acceptSteer,
     reconcileQueuedPrompts,
     acknowledgeSteer,
