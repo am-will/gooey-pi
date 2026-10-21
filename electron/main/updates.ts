@@ -70,6 +70,7 @@ export function createManualUpdateCheck(
       .then((state) => notify(manualUpdateNotification(state)))
       .catch((error) => notify({ type: 'error', message: 'GooeyPi Update Check Failed', detail: errorMessage(error) }))
       .finally(() => { inFlight = false })
+      .catch((error: unknown) => console.error(`GooeyPi update notification failed: ${errorMessage(error)}`))
   }
 }
 
@@ -169,7 +170,7 @@ export class UpdateService {
     if (!this.options.enabled) return Promise.resolve(this.getState())
     if (this.state.phase === 'available' || this.state.phase === 'downloading' || this.state.phase === 'downloaded') return Promise.resolve(this.getState())
     if (this.checkPromise) return this.checkPromise
-    this.checkPromise = this.updater.checkForUpdates()
+    this.checkPromise = Promise.resolve().then(() => this.updater.checkForUpdates())
       .then(() => this.getState())
       .catch((error) => {
         this.publish({ phase: 'error', message: errorMessage(error) })
@@ -227,7 +228,7 @@ export class UpdateService {
       this.stopScheduledChecks()
       return
     }
-    void this.check()
+    void this.check().catch((error: unknown) => console.error(`GooeyPi scheduled update check failed: ${errorMessage(error)}`))
   }
 
   private stopScheduledChecks(): void {

@@ -20,7 +20,7 @@ import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
 import { createKeyedMutex } from './lib/async'
-import { requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { boundedErrorMessage, requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -501,7 +501,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const registration: IpcRegistration = {
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
-    revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
+    revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId).catch((error: unknown) => console.error(`GooeyPi terminal cleanup failed: ${boundedErrorMessage(error)}`)) },
     notifyHarnessesChanged() { broadcast('app:harnesses-changed') },
     dispose() {
       if (closed) return
