@@ -16,6 +16,13 @@ const MCP_STDIO_HELP_KEYS: Record<HarnessId, MessageKey> = {
 type DirectoryTab = 'plugins' | 'skills'
 type AddKind = 'mcp' | 'bundle' | 'extension'
 type McpScope = 'user' | 'project'
+type BuiltinCapability = 'askUser' | 'browser' | 'computerUse'
+const BUILTIN_CAPABILITIES = new Map<string, BuiltinCapability>([
+  ['gooeypi-ask-user', 'askUser'],
+  ['prime-work-browser', 'browser'],
+  ['omp-work-browser', 'browser'],
+  ['gooeypi-computer-use', 'computerUse'],
+])
 
 const PACKAGE_LABEL_KEYS: Record<HarnessId, MessageKey> = { prime: 'plugins.packageLabel.prime', omp: 'plugins.packageLabel.omp', pi: 'plugins.packageLabel.pi' }
 const PACKAGE_HELP_KEYS: Record<HarnessId, MessageKey> = {
@@ -126,6 +133,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
   const [mcpSupportNotice, setMcpSupportNotice] = useState('')
   const [capabilityUpdating, setCapabilityUpdating] = useState('')
   const capabilityPendingRef = useRef(false)
+  const builtinPendingRef = useRef(new Set<BuiltinCapability>())
   const [confirmDisable, setConfirmDisable] = useState<SkillRecord | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<SkillRecord | null>(null)
   const [capabilityAlert, setCapabilityAlert] = useState('')
@@ -134,15 +142,17 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
   const extensionsOffered = harness !== 'prime' || primeCapabilityAvailable(primeImplementation, 'typescriptExtensions')
   const canConfigureMcp = harness === 'omp' || harness === 'pi' && piMcpAdapterInstalled
 
-  const visible = useMemo(() => skills.map((skill) => skill.id === 'gooeypi-ask-user'
-    ? { ...skill, enabled: askUserEnabled }
-    : skill.id === 'prime-work-browser' || skill.id === 'omp-work-browser' ? { ...skill, enabled: browserEnabled }
-    : skill.id === 'gooeypi-computer-use' ? { ...skill, enabled: computerUseEnabled } : skill).filter((skill) => {
+  const builtinEnabled = useMemo(() => ({ askUser: askUserEnabled, browser: browserEnabled, computerUse: computerUseEnabled }), [askUserEnabled, browserEnabled, computerUseEnabled])
+  const builtinUpdating = { askUser: askUserUpdating, browser: browserUpdating, computerUse: computerUseUpdating }
+  const visible = useMemo(() => skills.map((skill) => {
+    const builtin = BUILTIN_CAPABILITIES.get(skill.id)
+    return builtin ? { ...skill, enabled: builtinEnabled[builtin] } : skill
+  }).filter((skill) => {
     const capability = skill.id === 'prime-work-browser' || skill.id === 'omp-work-browser' || skill.kind !== 'skill' && skill.kind !== 'prompt'
     return (tab === 'plugins' ? capability : !capability)
       && (filter === 'all' || filter === 'installed' && skill.enabled || filter === skill.location)
       && `${skill.name} ${skill.description}`.toLowerCase().includes(query.toLowerCase())
-  }), [askUserEnabled, browserEnabled, computerUseEnabled, skills, tab, filter, query])
+  }), [builtinEnabled, skills, tab, filter, query])
 
   const canAdd = addKind === 'bundle'
     ? Boolean(source.trim())
@@ -179,40 +189,30 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
 
   const selectAddKind = (value: AddKind | null) => { setAddKind(value); setSource(''); setResult('') }
   const openAdd = () => { setResult(''); setAddKind(null); setAddOpen(true) }
-  const setAskUser = async (enabled: boolean) => {
-    if (askUserUpdating) return
-    setAskUserUpdating(true)
-    try {
-      await onSetAskUserEnabled(enabled)
-      await onRefresh()
-    } finally {
-      setAskUserUpdating(false)
+  const setBuiltin = async (skill: SkillRecord, enabled: boolean) => {
+    const kind = BUILTIN_CAPABILITIES.get(skill.id)
+    if (!kind || builtinPendingRef.current.has(kind)) return
+    if (kind === 'computerUse') {
+      if (enabled && skill.availability?.available === false) {
+        setComputerUseAlert(describeDetail(skill.availability.detail))
+        if (skill.availability.actionUrl) onOpenExternal(skill.availability.actionUrl)
+        return
+      }
+      setComputerUseAlert('')
     }
-  }
-  const setBrowser = async (enabled: boolean) => {
-    if (browserUpdating) return
-    setBrowserUpdating(true)
-    try {
-      await onSetBrowserEnabled(enabled)
-      await onRefresh()
-    } finally {
-      setBrowserUpdating(false)
+    const actions = {
+      askUser: { setUpdating: setAskUserUpdating, update: onSetAskUserEnabled },
+      browser: { setUpdating: setBrowserUpdating, update: onSetBrowserEnabled },
+      computerUse: { setUpdating: setComputerUseUpdating, update: onSetComputerUseEnabled },
     }
-  }
-  const setComputerUse = async (skill: SkillRecord, enabled: boolean) => {
-    if (computerUseUpdating) return
-    if (enabled && skill.availability?.available === false) {
-      setComputerUseAlert(describeDetail(skill.availability.detail))
-      if (skill.availability.actionUrl) onOpenExternal(skill.availability.actionUrl)
-      return
-    }
-    setComputerUseAlert('')
-    setComputerUseUpdating(true)
+    const action = actions[kind]
+    builtinPendingRef.current.add(kind)
+    action.setUpdating(true)
     try {
-      await onSetComputerUseEnabled(enabled)
-      await onRefresh()
+      if (await action.update(enabled) !== false) await onRefresh()
     } finally {
-      setComputerUseUpdating(false)
+      builtinPendingRef.current.delete(kind)
+      action.setUpdating(false)
     }
   }
   const setMcpSupport = async (_skill: SkillRecord, enabling: boolean) => {
@@ -254,9 +254,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
   }
   const disableCapability = async (skill: SkillRecord) => {
     setConfirmDisable(null)
-    if (skill.id === 'gooeypi-ask-user') await setAskUser(false)
-    else if (skill.id === 'prime-work-browser' || skill.id === 'omp-work-browser') await setBrowser(false)
-    else if (skill.id === 'gooeypi-computer-use') await setComputerUse(skill, false)
+    if (BUILTIN_CAPABILITIES.has(skill.id)) await setBuiltin(skill, false)
     else if (skill.id === 'gooeypi-pi-mcp') await setMcpSupport(skill, false)
     else if (skill.kind === 'mcp') await setMcp(skill, false)
     else if (skill.kind === 'package') await mutate(skill, 'disable')
@@ -302,18 +300,12 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
     if (harness === 'pi' && skill.kind === 'mcp' && !piMcpAdapterInstalled) {
       return <span className="plugin-toggle" role="img" aria-label={t('plugins.aria.adapterRequired', { name: skill.name })} aria-describedby={capabilityDetailId(skill)}><ShieldCheck aria-hidden="true" size={14}/></span>
     }
-    const isBrowser = skill.id === 'prime-work-browser' || skill.id === 'omp-work-browser'
-    const actionable = skill.id === 'gooeypi-ask-user' || isBrowser || skill.id === 'gooeypi-computer-use' || skill.id === 'gooeypi-pi-mcp' || skill.kind === 'mcp' || skill.kind === 'package'
+    const builtin = BUILTIN_CAPABILITIES.get(skill.id)
+    const actionable = builtin !== undefined || skill.id === 'gooeypi-pi-mcp' || skill.kind === 'mcp' || skill.kind === 'package'
     if (!actionable) return <span className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={skill.enabled ? t('plugins.aria.enabled', { name: skill.name }) : t('plugins.aria.unavailable', { name: skill.name })}>{skill.enabled ? <Check size={14}/> : <Plus size={14}/>}</span>
-    const updating = skill.id === 'gooeypi-ask-user' ? askUserUpdating
-      : isBrowser ? browserUpdating
-        : skill.id === 'gooeypi-computer-use' ? computerUseUpdating
-          : skill.id === 'gooeypi-pi-mcp' ? mcpSupportUpdating
-            : capabilityUpdating === skill.id
+    const updating = builtin ? builtinUpdating[builtin] : skill.id === 'gooeypi-pi-mcp' ? mcpSupportUpdating : capabilityUpdating === skill.id
     const enable = () => {
-      if (skill.id === 'gooeypi-ask-user') return setAskUser(true)
-      if (isBrowser) return setBrowser(true)
-      if (skill.id === 'gooeypi-computer-use') return setComputerUse(skill, true)
+      if (builtin) return setBuiltin(skill, true)
       if (skill.id === 'gooeypi-pi-mcp') return setMcpSupport(skill, true)
       if (skill.kind === 'package') return mutate(skill, 'enable')
       return setMcp(skill, true)
