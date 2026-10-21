@@ -4,10 +4,11 @@ import { CapabilityBridge, type CapabilityClaim } from '../../electron/main/lib/
 
 class TestBridge extends CapabilityBridge {
   onAdmission?: () => void
+  onEnvironment?: (url: string, token: string) => void
   protected get rateLimit() { this.onAdmission?.(); return 20 }
   protected readonly rateLimitError = 'Too many calls'
   readonly dispatchCall = vi.fn(async (_method: string, params: Record<string, unknown>, claim: CapabilityClaim) => ({ params, sessionPath: claim.sessionPath }))
-  protected environmentEntries(url: string, token: string) { return { URL: url, TOKEN: token } }
+  protected environmentEntries(url: string, token: string) { this.onEnvironment?.(url, token); return { URL: url, TOKEN: token } }
   protected dispatch(method: string, params: Record<string, unknown>, claim: CapabilityClaim) { return this.dispatchCall(method, params, claim) }
 }
 const bridges: TestBridge[] = []
@@ -35,6 +36,17 @@ describe('loopback capability boundary', () => {
     expect((await call({}, '{"method":"echo","params":[]}')).status).toBe(400)
     expect((await call({}, '{broken')).status).toBe(400)
     expect((await call({}, undefined, url.replace('/v1/call', '/wrong'))).status).toBe(404)
+  })
+
+  it('does not authorize a token when constructing its environment fails', async () => {
+    const { bridge } = await fixture()
+    const captured: { url?: string; token?: string } = {}
+    bridge.onEnvironment = (url, token) => { captured.url = url; captured.token = token; throw new Error('environment failed') }
+    expect(() => bridge.environmentFor({ cwd: '/project' })).toThrow('environment failed')
+    if (!captured.url || !captured.token) throw new Error('Environment construction did not run')
+    const response = await fetch(captured.url, { method: 'POST', headers: { authorization: `Bearer ${captured.token}`, 'content-type': 'application/json' }, body: '{"method":"echo"}' })
+    expect(response.status).toBe(401)
+    expect(bridge.dispatchCall).not.toHaveBeenCalled()
   })
 
   it('binds the initial session only once and isolates revoked capabilities', async () => {

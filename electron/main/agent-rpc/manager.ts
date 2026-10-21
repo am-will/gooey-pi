@@ -32,6 +32,7 @@ export interface RuntimeEnvironmentScope {
 export class AgentRpcManager {
   private readonly runtimes = new Map<string, RpcRuntime>()
   private readonly startingRuntimes = new Set<string>()
+  private readonly pendingProjectStarts = new Set<{ cwd: string; cancelled: boolean }>()
   private readonly retirementPolls = new Map<string, NodeJS.Timeout>()
   private readonly retiringRuntimes = new Set<string>()
   private readonly runtimeEnvironmentRevisions = new Map<string, number>()
@@ -164,6 +165,12 @@ export class AgentRpcManager {
       workspaceUse?.release()
       try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
     }
+    const projectStart = { cwd, cancelled: false }
+    this.pendingProjectStarts.add(projectStart)
+    const requireProjectStart = (): void => {
+      this.requireOpen()
+      if (projectStart.cancelled) throw new Error('Project was removed while its runtime was starting')
+    }
     try {
       workspaceUse = await this.beginWorkspaceUse(
         cwd,
@@ -175,7 +182,10 @@ export class AgentRpcManager {
           return retired
         },
       )
-      this.requireOpen()
+      requireProjectStart()
+      const authorizedCwd = await this.authorizeCwd(cwd)
+      requireProjectStart()
+      if (authorizedCwd !== cwd) throw new Error('Project directory authority changed while its runtime was starting')
       const args = adapter.buildStartArgs({
         cwd,
         sessionPath,
@@ -186,6 +196,7 @@ export class AgentRpcManager {
         environment: runtimeEnvironment,
       })
       runtime = await this.admitRuntime(() => {
+        requireProjectStart()
         const created = new RpcRuntime(
           executable,
           args,
@@ -212,6 +223,7 @@ export class AgentRpcManager {
       await runtime.handshake()
       await this.decorate(runtime)
       if (runtime.snapshot().fastModeSupported && options.fast === true) await runtime.setServiceTier('priority', true)
+      requireProjectStart()
       try { this.runtimeStartListener(runtimeEnvironment, runtime.snapshot()) } catch { /* capability binding must never fail a start */ }
       this.startingRuntimes.delete(runtime.runtimeId)
       return runtime.snapshot()
@@ -229,6 +241,8 @@ export class AgentRpcManager {
       // can also leave an unreapable child. The once guard joins all paths.
       notifyRuntimeEnd(runtime?.snapshot())
       throw error
+    } finally {
+      this.pendingProjectStarts.delete(projectStart)
     }
   }
 
@@ -368,6 +382,9 @@ export class AgentRpcManager {
   }
 
   async stopForProjectRoots(roots: string[]): Promise<void> {
+    for (const pending of this.pendingProjectStarts) {
+      if (roots.some((root) => isPathWithin(root, pending.cwd))) pending.cancelled = true
+    }
     const matches = [...this.runtimes.values()].filter((runtime) => roots.some((root) => isPathWithin(root, runtime.snapshot().cwd)))
     await Promise.all(matches.map((runtime) => runtime.stop()))
   }

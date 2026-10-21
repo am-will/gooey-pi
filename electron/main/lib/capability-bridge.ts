@@ -75,8 +75,9 @@ export abstract class CapabilityBridge {
     if (!this.server || !this.port) return {}
     this.pruneClaims()
     const token = randomBytes(32).toString('base64url')
+    const environment = this.environmentEntries(`http://127.0.0.1:${this.port}/v1/call`, token)
     this.claims.set(token, { token, ...scope, expiresAt: Date.now() + TOKEN_TTL_MS, windowStartedAt: Date.now(), requests: 0 })
-    return this.environmentEntries(`http://127.0.0.1:${this.port}/v1/call`, token)
+    return environment
   }
 
   /** Attach a newly discovered session file once; an existing capability scope never changes. */

@@ -39,7 +39,7 @@ import { AgentScheduleBridge, createScheduleScopeResolver } from './schedules/ag
 import { mirrorBundledSkill } from './lib/bundled-skill-mirror'
 import { AgentBrowserBridge } from './browser/agent-bridge'
 import { AgentBrowserService } from './browser/agent-service'
-import { closeProjectBrowserSessions } from './browser/project-cleanup'
+import { stopProjectResources } from './browser/project-cleanup'
 import { AgentCollaborationBridge } from './collaboration/agent-bridge'
 import { configureGooeyPiAgentMessageSigning, loadOrCreateGooeyPiAgentMessageKey } from './collaboration/message-envelope'
 import { bundledResourcePath, extensionInjection, resolveExtensionPath, type ExtensionCapability } from './extension-manifest'
@@ -295,8 +295,9 @@ async function bootstrap(): Promise<void> {
     branch: (cwd) => git.branch(cwd),
     stopProjectProcesses: async (roots) => {
       plugins.evictProjects(roots)
-      await closeProjectBrowserSessions({ roots, sessions: listCatalogSessions, runtimes: agents!.list(), browser: agentBrowser })
-      await Promise.all([agents!.stopForProjectRoots(roots), terminals!.killForProjectRoots(roots)])
+      await stopProjectResources({ roots, sessions: listCatalogSessions, runtimes: agents!.list(), browser: agentBrowser,
+        stopProcesses: () => Promise.all([agents!.stopForProjectRoots(roots), terminals!.killForProjectRoots(roots)]),
+      })
     },
   })
   ompProjects.bindProviders({
@@ -304,8 +305,9 @@ async function bootstrap(): Promise<void> {
     branch: (cwd) => git.branch(cwd),
     stopProjectProcesses: async (roots) => {
       ompPlugins.evictProjects(roots)
-      await closeProjectBrowserSessions({ roots, sessions: () => ompSessions.list(undefined, true), runtimes: ompManager.list(), browser: agentBrowser })
-      await Promise.all([ompManager.stopForProjectRoots(roots), terminals!.killForProjectRoots(roots)])
+      await stopProjectResources({ roots, sessions: () => ompSessions.list(undefined, true), runtimes: ompManager.list(), browser: agentBrowser,
+        stopProcesses: () => Promise.all([ompManager.stopForProjectRoots(roots), terminals!.killForProjectRoots(roots)]),
+      })
     },
   })
   piProjects.bindProviders({
@@ -313,8 +315,9 @@ async function bootstrap(): Promise<void> {
     branch: (cwd) => git.branch(cwd),
     stopProjectProcesses: async (roots) => {
       piPlugins.evictProjects(roots)
-      await closeProjectBrowserSessions({ roots, sessions: () => piSessions.list(undefined, true), runtimes: piManager.list(), browser: agentBrowser })
-      await Promise.all([piManager.stopForProjectRoots(roots), terminals!.killForProjectRoots(roots)])
+      await stopProjectResources({ roots, sessions: () => piSessions.list(undefined, true), runtimes: piManager.list(), browser: agentBrowser,
+        stopProcesses: () => Promise.all([piManager.stopForProjectRoots(roots), terminals!.killForProjectRoots(roots)]),
+      })
     },
   })
   downloads = new BrowserDownloadGuard(isAllowedBrowserUrl, app.getPath('downloads'))

@@ -10,8 +10,6 @@ import {
 } from '../../src/lib/annotation-picker'
 import { sanitizeCapturedElement } from '../../src/lib/browser-annotations'
 
-type AnnotatorWindow = Window & { __primeAnnotator?: { take(): string | null } }
-
 // Runs an injected-picker script the same way webview.executeJavaScript would:
 // as plain page-level code against the (jsdom) document.
 function runScript(source: string): unknown {
