@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useMemo, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, ChevronRight, Copy, Target } from 'lucide-react'
 import type { HarnessId, MessagePart, TranscriptMessage } from '@/types/api'
 import { splitAnnotationBlock } from '@/lib/browser-annotations'
@@ -26,7 +26,7 @@ function imageSource(part: Extract<MessagePart, { type: 'image' }>): string | un
 // unavailable notice can be localised through the hook.
 function ImageAttachment({ part }: { part: Extract<MessagePart, { type: 'image' }> }) {
   const { t } = useI18n()
-  const source = imageSource(part)
+  const source = useMemo(() => imageSource(part), [part.data, part.dataTruncated, part.mimeType])
   return source ? (
     <TranscriptImage source={source} alt={t('transcript.userAttachment')} />
   ) : (
