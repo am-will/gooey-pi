@@ -120,6 +120,15 @@ describe('TerminalDrawer project command handle', () => {
     expect(onExit).toHaveBeenCalledWith(7)
   })
 
+  it('keeps the actual spawned shell name after the terminal exits', async () => {
+    renderDrawer(createHandle())
+    await act(async () => { await Promise.resolve() })
+    expect(container.querySelector('[role="tab"]')?.textContent).toContain('sh 1')
+    act(() => { terminalExitListeners.forEach((listener) => { listener({ terminalId: createdTerminalIds[0], exitCode: 0 }) }) })
+    expect(container.querySelector('[role="tab"]')?.textContent).toContain('sh 1')
+    expect(container.querySelector('[role="tab"]')?.textContent).not.toContain('terminal 1')
+  })
+
   it('reports terminal creation failures without fabricating an exit code', async () => {
     const handle = createHandle()
     renderDrawer(handle)

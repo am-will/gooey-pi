@@ -68,6 +68,10 @@ export interface TerminalDrawerHandle {
   stopCommand(tabId: string): void
 }
 
+function tabLabel(tab: Pick<TerminalTab, 'label' | 'shellName' | 'number'>): string {
+  return tab.label ?? `${tab.shellName} ${tab.number}`
+}
+
 const MAX_TERMINAL_TABS = 8
 
 const terminalTheme = (): ITheme => {
@@ -210,11 +214,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     const bufferedData = new Map<string, string>()
     const bufferedExits = new Map<string, number>()
     let exitAnnounced = false
+    let resolvedShellName = shell?.split('/').at(-1) ?? 'terminal'
     const announceExit = (exitCode: number) => {
       if (exitAnnounced) return
       exitAnnounced = true
       terminal.writeln(`\r\n\x1b[90m${t('terminal.exitNotice', { code: exitCode })}\x1b[0m`)
-      onStateChangeRef.current({ shellName: shell?.split('/').at(-1) ?? 'terminal', connected: false })
+      onStateChangeRef.current({ shellName: resolvedShellName, connected: false })
       onExitRef.current?.(exitCode)
     }
     const inputDisposable = terminal.onData((data) => {
@@ -246,7 +251,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       window.prime.terminal.create({ cwd, shell, command, cols: terminal.cols, rows: terminal.rows }).then(({ terminalId, shell: actualShell }) => {
         if (cancelled) { void window.prime.terminal.kill(terminalId); return }
         terminalIdRef.current = terminalId
-        onStateChangeRef.current({ shellName: actualShell.split('/').at(-1) ?? actualShell, connected: true })
+        resolvedShellName = actualShell.split('/').at(-1) ?? actualShell
+        onStateChangeRef.current({ shellName: resolvedShellName, connected: true })
         const initialOutput = bufferedData.get(terminalId)
         const bindCurrentSession = async () => {
           if (sessionPathRef.current) await window.prime.terminal.bindSession(terminalId, sessionPathRef.current)
@@ -339,7 +345,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId)
     const value = viewRefs.current.get(tabId)?.readSelection()
     if (!tab || !value) return undefined
-    return { tabId, label: `${tab.shellName} ${tab.number}`, text: value.text, truncated: value.truncated }
+    return { tabId, label: tabLabel(tab), text: value.text, truncated: value.truncated }
   }
 
   useImperativeHandle(ref, () => ({
@@ -349,7 +355,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
       const tab = tabsRef.current.find((candidate) => candidate.id === tabId)
       const value = viewRefs.current.get(tabId)?.readSelection()
       if (!tab || !value?.text) return undefined
-      return { tabId, label: tab.label ?? `${tab.shellName} ${tab.number}`, cwd, ...value }
+      return { tabId, label: tabLabel(tab), cwd, ...value }
     },
     runCommand: (command, label, onExit) => {
       if (tabsRef.current.length >= MAX_TERMINAL_TABS) throw new Error(t('terminal.tabLimit', { count: MAX_TERMINAL_TABS }))
@@ -413,7 +419,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
               <button type="button" role="tab" aria-selected={tab.id === activeTabId} onClick={() => setActiveTabId(tab.id)}>
                 <TerminalIcon size={14}/>
 
-                <span>{tab.label ?? `${tab.shellName} ${tab.number}`}</span>
+                <span>{tabLabel(tab)}</span>
                 <span className={`terminal-live-dot ${tab.connected ? 'is-connected' : ''}`}/>
               </button>
               <button type="button" className="terminal-tab__close" aria-label={t('terminal.tab.close', { number: tab.number })} onClick={() => closeTerminal(tab.id)}><X size={11}/></button>
@@ -437,12 +443,12 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerPro
             sessionPath={sessionPath}
             shell={shell}
             command={tab.command}
-            label={tab.label ?? `${tab.shellName} ${tab.number}`}
+            label={tabLabel(tab)}
             visible={visible && tab.id === activeTabId}
             onStateChange={(state) => updateTab(tab.id, state)}
             onSelectionChange={(text, truncated) => {
               if (activeTabIdRef.current !== tab.id) return
-              onSelectionChangeRef.current?.({ tabId: tab.id, label: `${tab.shellName} ${tab.number}`, text, truncated })
+              onSelectionChangeRef.current?.({ tabId: tab.id, label: tabLabel(tab), text, truncated })
             }}
             onError={onError}
             onOpenLink={onOpenLink}
