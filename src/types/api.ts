@@ -533,17 +533,17 @@ export interface AppSettings {
   browserEnabled: boolean
   /** Expose the separately installed TryCUA driver to new sessions through its official CLI. */
   computerUseEnabled: boolean
-  /** Providers hidden from Prime Work's Prime model picker. */
+  /** Providers hidden from GooeyPi's Prime model picker. */
   disabledProviders: string[]
-  /** Models hidden from Prime Work's Prime model picker, stored as provider/model keys. */
+  /** Models hidden from GooeyPi's Prime model picker, stored as provider/model keys. */
   disabledModels: string[]
-  /** Providers hidden from Prime Work's OMP model picker; OMP config is untouched. */
+  /** Providers hidden from GooeyPi's OMP model picker; OMP config is untouched. */
   ompDisabledProviders: string[]
-  /** Models hidden from Prime Work's OMP model picker; OMP config is untouched. */
+  /** Models hidden from GooeyPi's OMP model picker; OMP config is untouched. */
   ompDisabledModels: string[]
-  /** Providers hidden from Prime Work's pi model picker; pi config is untouched. */
+  /** Providers hidden from GooeyPi's pi model picker; pi config is untouched. */
   piDisabledProviders: string[]
-  /** Models hidden from Prime Work's pi model picker; pi config is untouched. */
+  /** Models hidden from GooeyPi's pi model picker; pi config is untouched. */
   piDisabledModels: string[]
   /** Last usable model selected in each harness; blank falls back to the first usable catalog model. */
   lastSelectedModels: Record<HarnessId, string>
