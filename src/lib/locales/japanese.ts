@@ -317,6 +317,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'toast.compactionUnavailableExternal': 'このセッションが GooeyPi の外で実行中の間はコンパクションを利用できません。',
   'mcpPolicy.authSignIn': 'ネットワーク MCP の認証は GooeyPi の外で管理されています。{server} へのサインインは {name} を直接使用してください。',
   'mcpPolicy.authNetwork': 'ネットワーク MCP の認証は GooeyPi の外で管理されています。ネットワーク MCP サーバーの認証は {name} を直接使用してください。',
+  'error.referencedSessionUnavailable': '参照先のチャットはアーカイブ済みか、利用できなくなっています。',
   'error.sessionNotInProject': 'このセッションは利用可能なプロジェクトに含まれていません。',
   'error.sessionRenameFailed': '{name} はこのセッションの名前を変更できませんでした。',
   'error.projectRemoveFailed': 'このプロジェクトを削除できませんでした。',

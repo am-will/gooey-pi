@@ -60,7 +60,7 @@ describe('session lifecycle attention', () => {
 
 
   it('keeps de-escalated notifications cleared without suppressing same-revision escalations', () => {
-    const cleared = 'waiting:7'
+    const cleared = companionClearEntry({ ...session(), status: 'waiting', eventRevision: 7 })
     expect(signatureCleared('idle:7', cleared)).toBe(true)
     expect(signatureCleared('complete:7', cleared)).toBe(true)
     expect(signatureCleared('complete:7', cleared, true)).toBe(false)
@@ -357,4 +357,12 @@ it('keeps storage denial from breaking dismissal reads or writes', () => {
     if (previous) Object.defineProperty(globalThis, 'window', previous)
     else Reflect.deleteProperty(globalThis, 'window')
   }
+})
+
+it('does not trust an unmarked persisted revision from an unknown renderer launch', () => {
+  const restored = readClearedAttention('{"session":"complete:7"}')
+  const fresh: SessionRecord = { ...session(), status: 'complete', unread: true, eventRevision: 7 }
+  expect(signatureCleared(sessionAttentionSignature(fresh), restored.session, true, fresh.updatedAt)).toBe(false)
+  expect(signatureCleared(`complete:${fresh.updatedAt}`, `complete:${fresh.updatedAt}`, true, fresh.updatedAt)).toBe(true)
+  expect(signatureCleared(sessionAttentionSignature(fresh), companionClearEntry(fresh), true, fresh.updatedAt)).toBe(true)
 })

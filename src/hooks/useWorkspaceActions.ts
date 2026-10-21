@@ -1,7 +1,8 @@
+import { compactText } from '@/lib/text'
 import { useRef, useState } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { requestFailureMessage } from '@/app/workspace'
-import { clearComposerDraft } from '@/lib/composer-draft'
+import { clearComposerDraft, composerDraftScope } from '@/lib/composer-draft'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
@@ -10,9 +11,9 @@ import { deliverToStartedSession } from '@/lib/started-session-delivery'
 import { isSystemReport } from '@/lib/system-rows'
 import { formattingLocaleTag, resolveLocale, translate } from '@/lib/i18n'
 import { isUntitledSessionTitle } from '@/lib/session-title'
-import type { DEFAULT_SETTINGS } from '@/lib/data'
-import { type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
-import type { CapabilityMutationInput, ExtensionInstallInput, GitStatus, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
+import type { DEFAULT_SETTINGS } from '@/lib/default-settings'
+import { type OwnedGitStatus, type createSingleFlightAdmission, findProjectForSession, findRuntimeForWorkspace, newSessionProject, projectContainsPath, workspaceCwd } from '@/lib/workspace'
+import type { CapabilityMutationInput, ExtensionInstallInput, McpConnectionInput, McpStateInput, PrimeWorkApi, ProjectRecord, ProjectSortMode, PromptDeliveryIntent, PromptImage, RuntimeInfo, ScheduleInput, SchedulePatch, SessionRecord, TranscriptMessage, WorkspaceView } from '@/types/api'
 import type { useAppSettings } from '@/hooks/useAppSettings'
 import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import type { usePluginSkills } from '@/hooks/usePluginSkills'
@@ -36,7 +37,7 @@ export interface WorkspaceActionsDeps {
   demoTimerRef: MutableRefObject<number[]>
   setProjects: Dispatch<SetStateAction<ProjectRecord[]>>
   setSessions: Dispatch<SetStateAction<SessionRecord[]>>
-  setGitSnapshot: Dispatch<SetStateAction<{ cwd: string | undefined; status: GitStatus }>>
+  setGitSnapshot: Dispatch<SetStateAction<OwnedGitStatus>>
   setView: Dispatch<SetStateAction<WorkspaceView>>
   setPaletteOpen: Dispatch<SetStateAction<boolean>>
   setToast: Dispatch<SetStateAction<string | null>>
@@ -45,6 +46,7 @@ export interface WorkspaceActionsDeps {
   refreshHeartbeats(): Promise<void>
   resetBrowserView(): void
   closeTerminalForSession(sessionPath: string): void
+  sessionHasOpenExtensionUi?(filePath: string): boolean
   clearSessionAttention(session: SessionRecord): void
   reportError(error: unknown): void
 }
@@ -54,12 +56,14 @@ interface StartedSessionIndexInput {
   harness: ProjectRecord['harness']
   sessionFile: string | undefined
   setSessions: Dispatch<SetStateAction<SessionRecord[]>>
+  sessionHasOpenExtensionUi?(filePath: string): boolean
+  activeSessionFile?(): string | undefined
   fallbackTitle?: string
   /** False once the merged catalog would no longer be the one on screen. */
   isCurrent?(): boolean
 }
 
-export async function indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle, isCurrent }: StartedSessionIndexInput): Promise<SessionRecord | undefined> {
+export async function indexStartedSession({ bridge, harness, sessionFile, setSessions, fallbackTitle, isCurrent, sessionHasOpenExtensionUi, activeSessionFile }: StartedSessionIndexInput): Promise<SessionRecord | undefined> {
   if (!sessionFile) return
   // Runtime creation and filesystem watch delivery are separate async paths.
   // Make the created file part of the renderer catalog before prompt admission
@@ -67,7 +71,7 @@ export async function indexStartedSession({ bridge, harness, sessionFile, setSes
   const catalog = await bridge.sessions.list(undefined, true, harness, true)
   const indexedSession = catalog.find((session) => session.filePath === sessionFile)
   if (isCurrent && !isCurrent()) return indexedSession
-  setSessions((current) => mergeSessionCatalog(current, catalog, sessionFile, new Map(), 0).map((session) => (
+  setSessions((current) => mergeSessionCatalog(current, catalog, activeSessionFile ? activeSessionFile() : sessionFile, new Map(), 0, sessionHasOpenExtensionUi).map((session) => (
     fallbackTitle && session.filePath === sessionFile && isUntitledSessionTitle(session.title)
       ? { ...session, title: fallbackTitle }
       : session
@@ -76,8 +80,7 @@ export async function indexStartedSession({ bridge, harness, sessionFile, setSes
 }
 
 export function sessionTitleFromPrompt(prompt: string): string {
-  const oneLine = prompt.replace(/\s+/g, ' ').trim()
-  return oneLine.length > 100 ? `${oneLine.slice(0, 99)}…` : oneLine
+  return compactText(prompt, 100)
 }
 
 interface StartedSessionTitleInput extends StartedSessionIndexInput {
@@ -149,13 +152,6 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     }
     persistPanel({ inspectorOpen: next })
   }
-  const toggleTerminal = async () => {
-    const { settingsState, activeProject, reportError } = getDeps()
-    if (!settingsState.terminalOpen && activeProject?.inferred) {
-      try { await grantProject(activeProject) } catch (error) { reportError(error); return }
-    }
-    persistPanel({ terminalOpen: !settingsState.terminalOpen })
-  }
   const selectProject = async (project: ProjectRecord) => {
     const { bridge, layout, settingsState, sessions, workspace, setSessions, setView, clearSessionAttention, reportError } = getDeps()
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
@@ -196,7 +192,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const project = newSessionProject(requestedProject, workspace.workspaceRef.current.project, activeProject)
     if (!project) return
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
-    clearComposerDraft(`${project.id}:new`)
+    clearComposerDraft(composerDraftScope(project.id))
     workspace.activateWorkspace(project)
     if (!bridge) workspace.setMessages([])
     setView('session'); setPaletteOpen(false)
@@ -244,14 +240,20 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     } catch (error) { reportError(error) }
   }
   const removeProject = async (project: ProjectRecord) => {
-    const { bridge, projects, sessions, workspace, setProjects, setToast, reportError } = getDeps()
+    const { bridge, projects, sessions, workspace, setProjects, setSessions, setToast, clearSessionAttention, resetBrowserView, reportError } = getDeps()
     try {
       if (bridge && !await bridge.projects.remove(project.id, project.harness)) throw new Error(translate(formattingLocaleTag(), 'error.projectRemoveFailed'))
       setProjects((items) => items.filter((item) => item.id !== project.id))
       if (workspace.workspaceRef.current.project?.id === project.id) {
         const fallback = projects.find((item) => item.id !== project.id)
         const session = fallback ? sessions.find((candidate) => !candidate.archived && projectContainsPath(fallback, candidate.projectPath)) : undefined
-        workspace.activateWorkspace(fallback, session)
+        resetBrowserView()
+        if (session) {
+          clearSessionAttention(session)
+          setSessions((items) => items.map((item) => item.filePath === session.filePath ? { ...item, unread: false } : item))
+        }
+        const generation = workspace.activateWorkspace(fallback, session)
+        await workspace.reconcileRuntime(generation)
       }
       setToast(translate(formattingLocaleTag(), 'toast.projectRemoved'))
     } catch (error) { reportError(error) }
@@ -342,7 +344,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             // silently vanishing steer reads as "sent but ignored".
             workspace.setMessages((items) => [
               ...items,
-              { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: translate(formattingLocaleTag(), 'error.steerNotDelivered', { message: requestFailureMessage(error) }) }] },
+              { id: `error-${Date.now()}`, role: 'system', kind: 'error', timestamp: Date.now(), parts: [{ type: 'text', text: translate(formattingLocaleTag(), 'error.steerNotDelivered', { message: requestFailureMessage(error) }) }] },
             ])
           }
           reportError(error)
@@ -475,7 +477,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
             agentName: HARNESS_AGENT_NAMES[activeHarness],
             request: compactRequest || promptRequest,
             runtimeSessions: workspace.runtimeSessionsRef.current,
-            indexSession: () => indexStartedSession({ bridge, harness: activeHarness, sessionFile: startedRuntime.sessionFile, setSessions, isCurrent: catalogIsCurrent }),
+            indexSession: () => indexStartedSession({ bridge, harness: activeHarness, sessionFile: startedRuntime.sessionFile, setSessions, isCurrent: catalogIsCurrent, sessionHasOpenExtensionUi: getDeps().sessionHasOpenExtensionUi, activeSessionFile: () => workspace.workspaceRef.current.sessionFile }),
             titleSession: compactCommand ? undefined : () => titleStartedSession({ bridge, harness: activeHarness, runtimeId: startedRuntime.runtimeId, sessionFile: startedRuntime.sessionFile, prompt, setSessions, isCurrent: catalogIsCurrent }),
             present: () => {
               workspace.attachRuntime(startedRuntime, generation)
@@ -531,7 +533,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
           const finalized = startedPrompt
             ? items.flatMap((item) => item.streaming && item.role === 'assistant' && item.parts.length === 0 ? [] : [{ ...item, streaming: false }])
             : items
-          return isSystemReport(finalized.at(-1)) ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
+          return isSystemReport(finalized.at(-1)) ? finalized : [...finalized, { id: `error-${Date.now()}`, role: 'system', kind: 'error', timestamp: Date.now(), parts: [{ type: 'text', text: failure }] }]
         })
         throw error
       } finally { setSubmitting(false) }
@@ -660,12 +662,14 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     try { await bridge.heartbeats.manage(id, action); await refreshHeartbeats() } catch (error) { reportError(error); throw error }
   }
   const openScheduledSession = (sessionFile: string) => {
-    const { bridge, sessions, settingsState, setSessions, reportError } = getDeps()
+    const { bridge, sessions, settingsState, workspace, setSessions, sessionHasOpenExtensionUi, reportError } = getDeps()
     const known = sessions.find((session) => session.filePath === sessionFile)
     if (known) { void selectSession(known); return }
     if (!bridge) return
-    void bridge.sessions.list(undefined, true, settingsState.settings.activeHarness).then((catalog) => {
-      setSessions(catalog)
+    const harness = settingsState.settings.activeHarness
+    void bridge.sessions.list(undefined, true, harness).then((catalog) => {
+      if (getDeps().settingsState.settings.activeHarness !== harness) return
+      setSessions((current) => mergeSessionCatalog(current, catalog, workspace.workspaceRef.current.sessionFile, new Map(), 0, sessionHasOpenExtensionUi))
       const found = catalog.find((session) => session.filePath === sessionFile)
       if (found) void selectSession(found)
     }).catch(reportError)
@@ -685,7 +689,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
 
   return {
-    grantProject, persistPanel, toggleSidebar, toggleInspector, toggleTerminal,
+    grantProject, toggleSidebar, toggleInspector,
     selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived, setSessionsArchived,
     addProject, removeProject, togglePinProject, setProjectSortMode, sendPrompt, stopRuntime, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability,
     createSchedule, updateSchedule, mutateSchedule, manageHeartbeat, openScheduledSession,

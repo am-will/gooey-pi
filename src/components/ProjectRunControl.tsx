@@ -3,7 +3,9 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { ProjectRecord } from '@/types/api'
 import { useI18n } from '@/lib/i18n'
 
-export type ProjectScriptKind = 'setup' | 'run'
+import type { ProjectScriptKind } from '@/lib/project-scripts'
+import { errorMessage } from '@/lib/errors'
+import { useDismissableLayer } from '@/hooks/useDismissableLayer'
 
 interface ProjectRunControlProps {
   project: ProjectRecord
@@ -32,26 +34,12 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
     setOpen(false)
   }, [project.id, project.scripts?.run, project.scripts?.setup])
 
-  useEffect(() => {
-    if (!open) return
-    const dismiss = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); setOpen(false) }
-    }
-    document.addEventListener('pointerdown', dismiss, true)
-    document.addEventListener('keydown', dismissOnEscape, true)
-    return () => {
-      document.removeEventListener('pointerdown', dismiss, true)
-      document.removeEventListener('keydown', dismissOnEscape, true)
-    }
-  }, [open])
+  useDismissableLayer(open, (target) => target instanceof Node && Boolean(rootRef.current?.contains(target)), () => setOpen(false))
 
   const startScript = (kind: ProjectScriptKind) => {
     setError('')
     void Promise.resolve(onRun(kind)).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : kind === 'setup' ? t('projectRun.startSetupError') : t('projectRun.startRunError'))
+      setError(errorMessage(cause, t(kind === 'setup' ? 'projectRun.startSetupError' : 'projectRun.startRunError')))
       setOpen(true)
     })
   }
@@ -73,7 +61,7 @@ export function ProjectRunControl({ project, activeKind, onRun, onStop, onSave }
       await onSave({ setup, run })
       setOpen(false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('projectRun.saveError'))
+      setError(errorMessage(cause, t('projectRun.saveError')))
     } finally {
       setSaving(false)
     }

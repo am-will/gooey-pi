@@ -118,3 +118,12 @@ describe('new session indexing', () => {
     expect(sessions).toEqual([existing])
   })
 })
+
+it('keeps a renderer-owned waiting question during explicit session indexing', async () => {
+  const waiting: SessionRecord = { ...existing, status: 'waiting', unread: true }
+  let current = [waiting]
+  const bridge = { sessions: { list: async () => [{ ...waiting, status: 'idle' }] } } as unknown as PrimeWorkApi
+  await indexStartedSession({ bridge, harness: 'prime', sessionFile: waiting.filePath, activeSessionFile: () => '/other/session.jsonl', sessionHasOpenExtensionUi: (file) => file === waiting.filePath,
+    setSessions: (next) => { current = typeof next === 'function' ? next(current) : next } })
+  expect(current[0]).toMatchObject({ status: 'waiting', unread: true })
+})

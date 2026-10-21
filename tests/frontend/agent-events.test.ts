@@ -37,8 +37,12 @@ describe('session usage events', () => {
     expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: -1 } })).toBeNull()
     expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: Number.NaN } })).toBeNull()
     expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: '1' } })).toBeNull()
-    expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: 1, tokens: { ...tokens, output: -1 } } })).toBeNull()
-    expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: 1, tokens: { input: 1 } } })).toBeNull()
+  })
+
+  it('retains independently valid cost while discarding an invalid token breakdown', () => {
+    expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: 1, tokens: { ...tokens, output: -1 } } })).toEqual({ cost: 1 })
+    expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: 1, tokens: { input: 1 } } })).toEqual({ cost: 1 })
+    expect(sessionUsageFromEvent({ type: 'session_usage', sessionUsage: { cost: -1, tokens } })).toEqual({ cost: null, tokens })
   })
 
   it('formats cost, treats a zero cost with spent tokens as unavailable pricing, and hides empty sessions', () => {

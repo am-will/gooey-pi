@@ -63,6 +63,7 @@ interface UseWorkspaceRuntimeOptions {
   sessions: SessionRecord[]
   initialMessages: TranscriptMessage[]
   reportError(error: unknown): void
+  onRuntimeSnapshot?(snapshot: RuntimeInfo): void
 }
 
 export function useWorkspaceRuntime({
@@ -73,8 +74,10 @@ export function useWorkspaceRuntime({
   sessions,
   initialMessages,
   reportError: onError,
+  onRuntimeSnapshot,
 }: UseWorkspaceRuntimeOptions) {
   const reportError = useStableCallback(onError)
+  const notifyRuntimeSnapshot = useStableCallback((snapshot: RuntimeInfo) => onRuntimeSnapshot?.(snapshot))
   const [messages, setMessages] = useState(initialMessages)
   const [pendingQueuedPrompts, setPendingQueuedPrompts] = useState<QueuedPrompt[]>([])
   const pendingQueuedPromptsRef = useRef<QueuedPrompt[]>([])
@@ -188,7 +191,8 @@ export function useWorkspaceRuntime({
     runtimeIdRef.current = next?.runtimeId ?? null
     runtimeOwnerRef.current = next ? { runtimeId: next.runtimeId, generation } : null
     setRuntime(next)
-  }, [commitActiveQueue])
+    if (nextRuntime) notifyRuntimeSnapshot(nextRuntime)
+  }, [commitActiveQueue, notifyRuntimeSnapshot])
 
   const replaceActiveProject = useCallback((previousId: string, granted: ProjectRecord) => {
     const selected = workspaceRef.current

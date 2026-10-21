@@ -1,6 +1,8 @@
 import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type { ProjectScripts } from '@/types/api'
 
+export type ProjectScriptKind = 'setup' | 'run'
+
 export class ProjectScriptBusyError extends Error {
   constructor() {
     // The message reaches the user twice over: `ProjectRunControl` prints it in

@@ -360,7 +360,7 @@ describe('first prompt delivery across a workspace switch', () => {
     state.start.resolve(startedRuntime)
 
     await expect(sending).rejects.toThrow('Prime Agent returned a runtime for a different workspace or session.')
-    expect(state.messages().map((message) => message.kind ?? message.role)).toEqual(['notice', 'system'])
+    expect(state.messages().map((message) => message.kind ?? message.role)).toEqual(['notice', 'error'])
   })
 
   it('attaches the started runtime and shows the prompt while its workspace stays selected', async () => {

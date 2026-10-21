@@ -10,7 +10,8 @@ import { useI18n, type MessageKey } from '@/lib/i18n'
 import { APP_SHORTCUT_KEYS } from '@/lib/app-shortcuts'
 import { shortcutLabel } from '@/lib/platform-shortcuts'
 import { BrowserGlobe, IconButton } from './ui'
-import { ProjectRunControl, type ProjectScriptKind } from './ProjectRunControl'
+import { ProjectRunControl } from './ProjectRunControl'
+import type { ProjectScriptKind } from '@/lib/project-scripts'
 import type { MouseEvent } from 'react'
 
 const viewTitles: Record<Exclude<WorkspaceView, 'session'>, MessageKey> = {

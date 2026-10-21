@@ -1,10 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { contextUsageFromEvent, sessionUsageFromEvent } from '@/app/agent-events'
 import { applySessionLifecycleEvent, sessionLifecycleChange } from '@/app/session-attention'
 import { fallbackModelFromRecord } from '@/lib/events/model-fallback'
 import { parseSessionActionSnapshot } from '@/lib/session-actions'
 import type { WorkspaceSnapshot } from '@/app/workspace'
 import type { PrimeWorkApi, RuntimeInfo, SessionActionSnapshot, SessionRecord } from '@/types/api'
+
+const NOOP = () => undefined
 
 interface UseAgentEventsOptions {
   bridge: PrimeWorkApi | null
@@ -33,8 +35,8 @@ export function useAgentEvents({
   workspaceRef,
   setSessions,
   setRuntime,
-  reconcileQueuedPrompts = () => undefined,
-  clearQueuedPromptFlushFailures = () => undefined,
+  reconcileQueuedPrompts = NOOP,
+  clearQueuedPromptFlushFailures = NOOP,
   dropPendingSteers,
   detachRuntime,
   queueAgentEvent,
@@ -45,6 +47,8 @@ export function useAgentEvents({
   refreshGitOnTerminalEvent,
   activeSessionVisible,
 }: UseAgentEventsOptions) {
+  const activeSessionVisibleRef = useRef(activeSessionVisible)
+  useLayoutEffect(() => { activeSessionVisibleRef.current = activeSessionVisible }, [activeSessionVisible])
   useEffect(() => {
     if (!bridge) return
     let gitRefreshTimer: number | null = null
@@ -64,7 +68,7 @@ export function useAgentEvents({
         if (sessionLifecycleChange(event)) {
           // A new chat shows its own runtime's session before it adopts it.
           const shownFile = workspaceRef.current.sessionFile ?? (runtimeIdRef.current === runtimeId ? sessionFile : undefined)
-          const visible = activeSessionVisible && shownFile === sessionFile
+          const visible = activeSessionVisibleRef.current && shownFile === sessionFile
           setSessions((items) => items.map((session) => session.filePath === sessionFile
             ? applySessionLifecycleEvent(session, event, visible)
             : session))
@@ -141,7 +145,6 @@ export function useAgentEvents({
       if (gitRefreshTimer !== null) window.clearTimeout(gitRefreshTimer)
     }
   }, [
-    activeSessionVisible,
     bridge,
     clearExtensionUi,
     clearQueuedPromptFlushFailures,

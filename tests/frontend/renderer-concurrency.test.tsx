@@ -1344,3 +1344,24 @@ it('rehydrates ordinary dialogs idempotently and retires an authoritative empty 
   expect(state.extensionUi).toBeNull()
   expect(command).not.toHaveBeenCalled()
 })
+
+it('keeps the agent subscription and scheduled Git refresh while page visibility changes', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    let deliver!: (payload: { runtimeId: string; event: Record<string, unknown> }) => void
+    const subscribe = vi.fn((listener: typeof deliver) => { deliver = listener; return vi.fn() })
+    const refreshGit = vi.fn(async () => undefined)
+    const options = { bridge: { agent: { onEvent: subscribe } } as unknown as PrimeWorkApi,
+      runtimeIdRef: { current: 'runtime' }, runtimeSessionsRef: { current: new Map([['runtime', session.filePath]]) },
+      workspaceRef: { current: { generation: 0, sessionFile: session.filePath } },
+      setSessions: vi.fn(), setRuntime: vi.fn(), dropPendingSteers: vi.fn(), detachRuntime: vi.fn(), queueAgentEvent: vi.fn(), reconcileTranscriptForEvent: vi.fn(),
+      showExtensionUi: vi.fn(), clearExtensionUi: vi.fn(), refreshGit, refreshGitOnTerminalEvent: true }
+    function Probe({ visible }: { visible: boolean }) { useAgentEvents({ ...options, activeSessionVisible: visible }); return null }
+    await act(async () => root.render(<Probe visible />))
+    act(() => deliver({ runtimeId: 'runtime', event: { type: 'agent_end' } }))
+    await act(async () => root.render(<Probe visible={false} />))
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(161) })
+    expect(refreshGit).toHaveBeenCalledOnce()
+  } finally { vi.useRealTimers() }
+})
