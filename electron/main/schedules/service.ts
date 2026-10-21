@@ -185,11 +185,11 @@ export class AutomationService {
   }
 
   hasActiveSchedules(): boolean {
-    return this.store.snapshot().schedules.some((task) => task.status === 'active')
+    return this.store.getSchedules().some((task) => task.status === 'active')
   }
 
   list(harness?: HarnessId): AutomationScheduleRecord[] {
-    return this.store.snapshot().schedules.filter((task) => harness === undefined || task.harness === harness).map(cloneTask).sort((left, right) => {
+    return this.store.getSchedules().filter((task) => harness === undefined || task.harness === harness).map(cloneTask).sort((left, right) => {
       const next = (left.nextRunAt ?? 'z').localeCompare(right.nextRunAt ?? 'z')
       return next || right.updatedAt.localeCompare(left.updatedAt)
     })
@@ -197,7 +197,7 @@ export class AutomationService {
 
   get(idValue: unknown): AutomationScheduleRecord {
     const id = requireId(idValue, 'schedule id')
-    const task = this.store.snapshot().schedules.find((candidate) => candidate.id === id)
+    const task = this.store.getSchedules().find((candidate) => candidate.id === id)
     if (!task) throw new Error('Scheduled task was not found')
     return cloneTask(task)
   }
@@ -361,7 +361,7 @@ export class AutomationService {
     if (this.closed) return
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
-    const next = this.store.snapshot().schedules
+    const next = this.store.getSchedules()
       .filter((task) => task.status === 'active' && task.nextRunAt)
       .map((task) => Date.parse(task.nextRunAt!))
       .filter(Number.isFinite)
@@ -379,7 +379,7 @@ export class AutomationService {
 
   private async recoverMissed(): Promise<void> {
     const now = this.now()
-    const snapshot = this.store.snapshot().schedules
+    const snapshot = this.store.getSchedules()
     for (const task of snapshot) {
       if (task.status !== 'active' || !task.nextRunAt || Date.parse(task.nextRunAt) >= now.getTime() - DUE_GRACE_MS) continue
       await this.skipMissed(task, now)
@@ -389,7 +389,7 @@ export class AutomationService {
   private async processDue(): Promise<void> {
     if (this.closed) return
     const now = this.now()
-    const due = this.store.snapshot().schedules
+    const due = this.store.getSchedules()
       .filter((task) => task.status === 'active' && task.nextRunAt && Date.parse(task.nextRunAt) <= now.getTime())
       .sort((left, right) => left.nextRunAt!.localeCompare(right.nextRunAt!))
     for (const task of due) {
