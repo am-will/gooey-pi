@@ -470,7 +470,7 @@ export const Composer = memo(function Composer({
                 <span className="composer-queue__text">{queued.text}</span>
                 <span className="composer-queue__actions">
                   <button type="button" className="composer-queue__action" aria-label={t('composer.queue.sendNowDetail', { text: queued.text })} title={t('composer.queue.sendNow')} onClick={() => { void sendQueuedMessageImmediately(queued) }}><ArrowUp size={13} /></button>
-                  <button type="button" className="composer-queue__action" aria-label={t('composer.queue.editDetail', { text: queued.text })} title={t('composer.queue.edit')} onClick={() => { onEditQueuedMessage?.(queued); setValue(queued.text); requestAnimationFrame(() => textareaRef.current?.focus()) }}><Edit3 size={13} /></button>
+                  <button type="button" className="composer-queue__action" aria-label={t('composer.queue.editDetail', { text: queued.text })} title={t('composer.queue.edit')} onClick={() => { onEditQueuedMessage?.(queued); setValue((current) => current.trim() ? `${current.trimEnd()}\n\n${queued.text}` : queued.text); requestAnimationFrame(() => textareaRef.current?.focus()) }}><Edit3 size={13} /></button>
                   <button type="button" className="composer-queue__action composer-queue__action--delete" aria-label={t('composer.queue.deleteDetail', { text: queued.text })} title={t('composer.queue.delete')} onClick={() => onDeleteQueuedMessage?.(queued)}><Trash2 size={13} /></button>
                 </span>
               </div>

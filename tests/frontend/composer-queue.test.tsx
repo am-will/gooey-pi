@@ -123,4 +123,18 @@ describe('composer queue tray', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('Queued message was not sent')
   })
 
+  it('merges an edited queued message with the unsent draft', async () => {
+    const queued = { id: 'queued', text: 'queued text', intent: 'queue' as const }
+    const onEdit = vi.fn()
+    act(() => root.render(<Composer {...queueProps({ queuedMessages: [queued], onEditQueuedMessage: onEdit })} />))
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, 'unsent draft')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label^="Edit queued message"]')?.click())
+    expect(onEdit).toHaveBeenCalledWith(queued)
+    expect(textarea.value).toBe('unsent draft\n\nqueued text')
+  })
+
 })
