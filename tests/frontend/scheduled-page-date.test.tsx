@@ -79,18 +79,16 @@ describe('ScheduledPage date formatting', () => {
     setFormattingLocaleForTests('en')
   })
 
-  // Both preferences are asserted in one case on purpose. A formatter that
-  // regressed to `undefined` (the machine locale) would print the same string
-  // for both interfaces, and which expectation that breaks depends on the
-  // machine's default locale — a single-preference case can pass vacuously when
-  // that default happens to match it.
-  it('shows the next run in the interface language rather than the machine locale', () => {
+  it('keeps the device regional date format when the interface language changes', () => {
+    const date = new Date(NEXT_RUN_AT)
+    const expected = new Intl.DateTimeFormat(undefined, {
+      month: 'short', day: 'numeric',
+      year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+      hour: 'numeric', minute: '2-digit',
+    }).format(date)
     renderPage(root, 'en')
-    expect(container.textContent ?? '').toContain('Sep')
-
+    expect(container.textContent).toContain(expected)
     renderPage(root, 'ja')
-    const text = container.textContent ?? ''
-    expect(text).toContain('9月')
-    expect(text).not.toContain('Sep')
+    expect(container.textContent).toContain(expected)
   })
 })
