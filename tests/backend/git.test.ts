@@ -62,6 +62,13 @@ describe('GitService', () => {
     expect((await listLocalGitBranches(cwd)).some((branch) => branch.name === 'feature/refused')).toBe(false)
   })
 
+  it('keeps branch names unchanged when a tag has the same name', async () => {
+    const cwd = repository('gooeypi-ambiguous-branch-')
+    git(cwd, 'branch', 'release')
+    git(cwd, 'tag', 'release')
+    expect(await listLocalGitBranches(cwd)).toContainEqual({ name: 'release', current: false })
+  })
+
   it('does not execute repository clean filters while inspecting or switching branches', async () => {
     const cwd = repository('prime-work-git-branch-filter-')
     const marker = join(cwd, 'filter-ran')
