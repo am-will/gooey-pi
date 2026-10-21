@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useMemo, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Check,
   ChevronDown,
@@ -75,7 +75,7 @@ function toolPreview(part: Extract<MessagePart, { type: 'toolCall' }>): string {
     const preferred = args.question ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
     if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), 180, '…')
   }
-  return boundText(serialize(raw).replace(/\s+/g, ' ').trim(), 180, '…')
+  return typeof raw === 'string' ? boundText(raw.replace(/\s+/g, ' ').trim(), 180, '…') : ''
 }
 
 function ReasoningPart({ part, streaming = false }: { part: Extract<MessagePart, { type: 'thinking' }>; streaming?: boolean }) {
@@ -111,7 +111,7 @@ export function LiveElapsed({ since }: { since?: string | number }) {
   return <span className="live-elapsed" aria-hidden="true">{formatWorkedDuration(Math.max(0, now - startedAt))}</span>
 }
 
-function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall' }>; next?: MessagePart }) {
+const ToolPart = memo(function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall' }>; next?: MessagePart }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -120,10 +120,13 @@ function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall
   const failed = result?.isError
   const finished = result && !result.streaming
   const kind = classifyTool(part.name)
-  const args = serialize(part.args, true)
-  const output = result?.text ?? ''
-  const visibleOutput = boundText(`${args}${args && output ? '\n\n' : ''}${output}`, 200_000, `\n\n${t('transcript.truncatedOutput')}`)
-  const canExpand = Boolean(visibleOutput)
+  const visibleOutput = useMemo(() => {
+    if (!open) return ''
+    const args = serialize(part.args, true)
+    const output = result?.text ?? ''
+    return boundText(`${args}${args && output ? '\n\n' : ''}${output}`, 200_000, `\n\n${t('transcript.truncatedOutput')}`)
+  }, [open, part.args, result?.text, t])
+  const canExpand = Boolean(result?.text) || (typeof part.args === 'string' ? Boolean(part.args) : part.args !== undefined)
   const state = failed ? 'error' : finished ? 'done' : kind === 'question' ? 'waiting' : 'running'
   const preview = toolPreview(part)
   useEffect(
@@ -165,7 +168,7 @@ function ToolPart({ part, next }: { part: Extract<MessagePart, { type: 'toolCall
       ) : null}
     </div>
   )
-}
+})
 
 function StandaloneToolResult({ part }: { part: Extract<MessagePart, { type: 'toolResult' }> }) {
   return <div className={`activity-line activity-line--result ${part.isError ? 'is-error' : ''}`}><span className="activity-line__icon">{part.isError ? <CircleAlert size={13} /> : <Check size={13} />}</span><span>{boundText(part.text, 2_000, '…')}</span></div>
