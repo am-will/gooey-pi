@@ -92,6 +92,20 @@ describe('PluginService discovery', () => {
     } finally { release() }
   })
 
+  it.each([
+    ['>-\n  A folded\n  description.', 'A folded description.'],
+    ['|-\n  First line\n  Second line', 'First line\nSecond line'],
+    ['A continued\n  description', 'A continued description'],
+    ['"A quoted: description"', 'A quoted: description'],
+  ])('parses skill frontmatter description %s', async (yaml, expected) => {
+    const root = temp()
+    const skill = join(root, 'skills', 'example')
+    mkdirSync(skill, { recursive: true })
+    writeFileSync(join(skill, 'SKILL.md'), `---\nname: Example\ndescription: ${yaml}\n---\n# Example\nBody fallback.\n`)
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir: root })
+    expect((await service.list()).skills.find((item) => item.name === 'Example')?.description).toBe(expected)
+  })
+
   it('reads dynamic bundled capability state on each refreshed catalog', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
