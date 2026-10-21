@@ -26,6 +26,24 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('settles a delayed background steer acceptance without adding another thread’s history', () => {
+    const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
+    let id!: string
+    act(() => root.render(createElement(Probe, { initialSession: session, sessions: [session, other] })))
+    act(() => {
+      id = latest.queuePrompt('accepted in A', 'steer')
+      latest.queuePrompt('queued in A', 'queue')
+      latest.activateWorkspace(project, other)
+      latest.acceptSteer(id)
+    })
+    expect(latest.messages).toEqual([])
+    expect(latest.pendingQueuedPrompts).toEqual([])
+    act(() => latest.activateWorkspace(project, session))
+    expect(latest.pendingQueuedPrompts.map((prompt) => prompt.text)).toEqual(['queued in A'])
+    act(() => latest.acceptSteer(id))
+    expect(latest.messages).toEqual([])
+  })
+
   it('drops only an exited runtime owner’s steers and retains ordinary queued prompts', () => {
     const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
     act(() => root.render(createElement(Probe, { initialSession: session, sessions: [session, other] })))

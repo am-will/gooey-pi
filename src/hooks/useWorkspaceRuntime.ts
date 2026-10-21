@@ -507,8 +507,17 @@ export function useWorkspaceRuntime({
   }, [])
   const acceptSteer = useCallback((id: string) => {
     const prompt = pendingQueuedPromptsRef.current.find((candidate) => candidate.id === id && candidate.intent === 'steer')
-    if (prompt) queueAgentEvent(createSteerAcceptedEvent(prompt))
-  }, [queueAgentEvent])
+    if (prompt) {
+      queueAgentEvent(createSteerAcceptedEvent(prompt))
+      return
+    }
+    for (const prompts of queuedPromptsByOwnerRef.current.values()) {
+      if (prompts.some((candidate) => candidate.id === id && candidate.intent === 'steer')) {
+        removeQueuedPrompt(id)
+        return
+      }
+    }
+  }, [queueAgentEvent, removeQueuedPrompt])
   const reconcileQueuedPrompts = useCallback((snapshot: SessionActionSnapshot) => {
     const localSteers = pendingQueuedPromptsRef.current.filter((prompt) => prompt.intent === 'steer')
     if (!localSteers.length) return
