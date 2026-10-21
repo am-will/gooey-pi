@@ -136,3 +136,19 @@ describe('ChangesPanel status states', () => {
     expect(button('Unstage all').disabled).toBe(false)
   })
 })
+
+
+it('refreshes an unchanged selected file on a new Git snapshot without replacing the diff with a spinner', async () => {
+  const diff = vi.fn(async () => ({ text: '+before' }))
+  Object.defineProperty(window, 'prime', { configurable: true, value: { git: { diff } } })
+  const files = [{ path: 'file.txt', status: 'M', staged: false, additions: 1, deletions: 0 }]
+  await act(async () => root.render(<ChangesPanel cwd="/project" git={{ isRepo: true, files }} onRefreshGit={() => undefined} />))
+  expect(container.querySelector('.diff-view')?.textContent).toContain('+before')
+  let resolve: ((value: { text: string }) => void) | undefined
+  diff.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+  await act(async () => root.render(<ChangesPanel cwd="/project" git={{ isRepo: true, files: [...files] }} onRefreshGit={() => undefined} />))
+  expect(diff).toHaveBeenCalledTimes(2)
+  expect(container.querySelector('.diff-view')?.textContent).toContain('+before')
+  await act(async () => { resolve?.({ text: '+after' }) })
+  expect(container.querySelector('.diff-view')?.textContent).toContain('+after')
+})
