@@ -58,23 +58,23 @@ export class AgentEventForwarder {
       if (this.runtimeExitDelivered) return
     } else if (critical) {
       this.criticalEventCount += 1
-      if (this.criticalEventCount > 32) { this.reportLimit('critical-count', 'Prime Agent lifecycle event rate exceeded the desktop limit'); return }
+      if (this.criticalEventCount > 32) { this.reportLimit('critical-count', 'Agent lifecycle event rate exceeded the desktop limit'); return }
     } else {
       this.eventCount += 1
-      if (this.eventCount > this.limits.maxEvents) { this.reportLimit('count', 'Prime Agent event rate exceeded the desktop limit'); return }
+      if (this.eventCount > this.limits.maxEvents) { this.reportLimit('count', 'Agent event rate exceeded the desktop limit'); return }
     }
 
     const envelope: PrimeEventEnvelope = { runtimeId: this.runtimeId, event }
     const bytes = this.serializedBytes(envelope)
     if (bytes === null || bytes > this.limits.maxEnvelopeBytes) {
-      this.reportLimit('envelope', 'Prime Agent event exceeded the desktop envelope byte limit')
+      this.reportLimit('envelope', 'Agent event exceeded the desktop envelope byte limit')
       return
     }
     if (!isRuntimeExit) {
       const reserve = Math.min(64 * 1024, Math.floor(this.limits.maxWindowBytes / 4))
       const byteLimit = critical ? this.limits.maxWindowBytes : this.limits.maxWindowBytes - reserve
       if (this.windowBytes + bytes > byteLimit) {
-        this.reportLimit('bytes', 'Prime Agent event byte rate exceeded the desktop limit')
+        this.reportLimit('bytes', 'Agent event byte rate exceeded the desktop limit')
         return
       }
     }

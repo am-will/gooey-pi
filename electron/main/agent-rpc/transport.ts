@@ -106,7 +106,7 @@ export class FramedRpcTransport {
       // A child that stops reading stdin must fail the transport rather than
       // pin the write queue (and its byte budget) forever.
       const deadline = setTimeout(() => {
-        const stall = new Error('Prime Agent stopped reading RPC input')
+        const stall = new Error('Agent stopped reading RPC input')
         finish(stall)
         this.onFatalTransportError(stall)
       }, this.writeDeadlineMs)
