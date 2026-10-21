@@ -225,6 +225,15 @@ describe('AgentBrowserService', () => {
     await expect(service.screenshot('/sessions/a.jsonl', { tabId })).resolves.toMatchObject({ mimeType: 'image/jpeg' })
   })
 
+  it.each([
+    ['a', 'KeyA', 65], ['7', 'Digit7', 55], ['?', 'Slash', 191], [':', 'Semicolon', 186], ['+', 'Equal', 187],
+  ])('dispatches a physical key mapping for %s', async (key, code, keyCode) => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    await service.pressKey('/sessions/a.jsonl', { tabId, key })
+    expect(guest.inputEvents[0]).toMatchObject({ key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode })
+  })
+
   it('bounds oversized script responses before parsing them', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId } = await openAttached('/sessions/a.jsonl')
