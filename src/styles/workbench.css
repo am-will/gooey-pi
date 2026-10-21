@@ -46,8 +46,8 @@
 .session-workspace { display: flex; height: 100%; min-height: 0; min-width: 0; }
 .conversation-column { position: relative; display: flex; min-height: 0; min-width: 0; flex: 1 1 auto; flex-direction: column; }
 .conversation-pane { position: relative; min-width: 360px; min-height: 0; flex: 1 1 auto; background: var(--canvas); overflow: hidden; container-type: inline-size; }
-.conversation-bottom-dock, .transcript-changes-pin, .transcript__inner, .composer-wrap { max-width: var(--transcript-measure); margin: 0 auto; }
-.conversation-bottom-dock, .transcript-changes-pin, .composer-wrap { position: absolute; inset: auto 24px 13px; z-index: 10; }
+.conversation-bottom-dock, .transcript__inner, .composer-wrap { max-width: var(--transcript-measure); margin: 0 auto; }
+.conversation-bottom-dock, .composer-wrap { position: absolute; inset: auto 24px 13px; z-index: 10; }
 .conversation-bottom-dock { display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .conversation-bottom-dock > * { pointer-events: auto; }
 .conversation-bottom-dock .composer-wrap { position: relative; inset: auto; width: 100%; margin: 0; }
