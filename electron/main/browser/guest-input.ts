@@ -26,6 +26,21 @@ const PRESS_KEYS: Record<string, CdpKey> = {
   pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
   space: { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
 }
+const PUNCTUATION_KEYS: ReadonlyArray<readonly [string, string, number]> = [
+  ['!', 'Digit1', 49], ['@', 'Digit2', 50], ['#', 'Digit3', 51], ['$', 'Digit4', 52], ['%', 'Digit5', 53],
+  ['^', 'Digit6', 54], ['&', 'Digit7', 55], ['*', 'Digit8', 56], ['(', 'Digit9', 57], [')', 'Digit0', 48],
+  [';:', 'Semicolon', 186], ['=+', 'Equal', 187], [',<', 'Comma', 188], ['-_', 'Minus', 189],
+  ['.>', 'Period', 190], ['/?', 'Slash', 191], ['`~', 'Backquote', 192], ['[{', 'BracketLeft', 219],
+  ['\\|', 'Backslash', 220], [']}', 'BracketRight', 221], ["'\"", 'Quote', 222], [' ', 'Space', 32],
+]
+
+function characterKey(key: string): CdpKey {
+  if (/^[a-z]$/i.test(key)) return { key, code: `Key${key.toUpperCase()}`, keyCode: key.toUpperCase().charCodeAt(0), text: key }
+  if (/^[0-9]$/.test(key)) return { key, code: `Digit${key}`, keyCode: key.charCodeAt(0), text: key }
+  const punctuation = PUNCTUATION_KEYS.find(([characters]) => characters.includes(key))
+  return { key, code: punctuation?.[1] ?? '', keyCode: punctuation?.[2] ?? 0, text: key }
+}
+
 // DevTools protocol modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
 const PRESS_MODIFIER_BITS: Record<string, number> = { alt: 1, control: 2, meta: 4, shift: 8 }
 const GLIDE_MAX_MS = 550
@@ -40,7 +55,7 @@ export class GuestInput {
   async pressKey(guest: WebContents, keyValue: unknown, modifiersValue?: unknown): Promise<void> {
     const rawKey = requireString(keyValue, 'key', { min: 1, max: 24, trim: true })
     const key = rawKey.length === 1
-      ? { key: rawKey, code: '', keyCode: rawKey.toUpperCase().charCodeAt(0), text: rawKey }
+      ? characterKey(rawKey)
       : Object.hasOwn(PRESS_KEYS, rawKey.toLowerCase()) ? PRESS_KEYS[rawKey.toLowerCase()] : undefined
     if (!key) throw new TypeError(`key must be a single character or one of: ${Object.keys(PRESS_KEYS).join(', ')}`)
     const modifiers: string[] = []
