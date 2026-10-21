@@ -152,13 +152,6 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     }
     persistPanel({ inspectorOpen: next })
   }
-  const toggleTerminal = async () => {
-    const { settingsState, activeProject, reportError } = getDeps()
-    if (!settingsState.terminalOpen && activeProject?.inferred) {
-      try { await grantProject(activeProject) } catch (error) { reportError(error); return }
-    }
-    persistPanel({ terminalOpen: !settingsState.terminalOpen })
-  }
   const selectProject = async (project: ProjectRecord) => {
     const { bridge, layout, settingsState, sessions, workspace, setSessions, setView, clearSessionAttention, reportError } = getDeps()
     if (layout.compactLayout) { layout.setSmallestSidebarAllowed(false); settingsState.setSidebarOpen(false) }
@@ -696,7 +689,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   }
 
   return {
-    grantProject, persistPanel, toggleSidebar, toggleInspector, toggleTerminal,
+    grantProject, toggleSidebar, toggleInspector,
     selectProject, selectSession, newSession, navigate, renameSession, setSessionArchived, setSessionsArchived,
     addProject, removeProject, togglePinProject, setProjectSortMode, sendPrompt, stopRuntime, installSkill, installExtension, setMcpSupport, connectMcp, setMcpEnabled, mutateCapability,
     createSchedule, updateSchedule, mutateSchedule, manageHeartbeat, openScheduledSession,
