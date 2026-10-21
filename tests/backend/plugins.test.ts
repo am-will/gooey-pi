@@ -48,6 +48,18 @@ describe('OMP project package actions', () => {
 })
 
 describe('PluginService discovery', () => {
+  it('discovers OMP stdio definitions with omitted transport and git sources ending in a slash', async () => {
+    const root = temp()
+    writeFileSync(join(root, 'mcp.json'), JSON.stringify({ mcpServers: { files: { command: 'node', args: ['server.js'] } } }))
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ packages: ['git:https://example.test/owner/tools.git/'] }))
+    const service = new PluginService(null, async (path) => resolve(path), { agentDir: root, harness: 'omp' })
+    const catalog = await service.list()
+    expect(catalog.skills.find((skill) => skill.kind === 'mcp' && skill.name === 'files')).toBeDefined()
+    // OMP owns its plugin package catalog; Prime's settings package display still normalizes repository names.
+    const prime = new PluginService(null, async (path) => resolve(path), { agentDir: root })
+    expect((await prime.list()).skills.find((skill) => skill.kind === 'package')?.name).toBe('tools')
+  })
+
   it('reads dynamic bundled capability state on each refreshed catalog', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')

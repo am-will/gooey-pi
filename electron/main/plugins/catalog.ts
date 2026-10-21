@@ -73,7 +73,7 @@ async function markdownMetadata(path: string): Promise<{ name?: string; descript
 }
 
 function normalizedPackageSlug(source: string): string {
-  let value = source.trim().replace(/^(?:npm:|git:)/i, '').replace(/[?#].*$/, '').replace(/\.git$/i, '')
+  let value = source.trim().replace(/^(?:npm:|git:)/i, '').replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '')
   value = value.replace(/\/+$/, '').slice(value.lastIndexOf('/') + 1).replace(/@[^@/]+$/, '')
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'package'
 }
@@ -339,7 +339,7 @@ function addMcpSettingsMetadata(
         kind: 'mcp', location, enabled, source: origin, ...definitionIdentity,
         availability: { available: false, detail: NETWORK_MCP_UNAVAILABLE_DETAIL },
       })
-    } else if (definition && (definition.type === 'stdio' || harness === 'pi' || harness === 'prime') && typeof definition.command === 'string') {
+    } else if (definition && (definition.type === 'stdio' || definition.type === undefined || harness === 'pi' || harness === 'prime') && typeof definition.command === 'string') {
       const command = basename(definition.command).slice(0, 120)
       const availability = harness === 'prime'
         ? { available: false as const, detail: PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL }
