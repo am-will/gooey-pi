@@ -1,5 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, screen, session, shell, webContents } from 'electron'
-import type { BrowserWindowConstructorOptions, Input, WebContents } from 'electron'
+import { app, BrowserWindow, dialog, protocol, safeStorage, screen, session, shell, webContents } from 'electron'
 import { join, resolve } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -8,9 +7,10 @@ import { boundedErrorMessage } from './validation'
 import { isAllowedBrowserUrl } from '../../src/lib/browser-url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
-import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
+import { BROWSER_PARTITION, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
+import { loadInitialRenderer, mainWindowChromeOptions, isMacWindowCloseShortcut, popupApplicationMenu, resolvedWindowTheme, setTitleBarTheme } from './main-window'
 import { mainWindowBounds } from './window-bounds'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
@@ -98,21 +98,6 @@ function appIconPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(app.getAppPath(), 'assets', 'icon.png')
 }
 
-interface InitialRendererWindow {
-  loadURL(url: string): Promise<unknown>
-  isDestroyed(): boolean
-  destroy(): void
-}
-
-export async function loadInitialRenderer(window: InitialRendererWindow, rendererUrl: string): Promise<void> {
-  try {
-    await window.loadURL(rendererUrl)
-  } catch (error) {
-    if (!window.isDestroyed()) window.destroy()
-    throw error
-  }
-}
-
 function pendingShutdownPrompt(): ShutdownPrompt | null {
   const runtimes = [...(agents?.list() ?? []), ...(ompAgents?.list() ?? []), ...(piAgents?.list() ?? [])]
   return shutdownPrompt(activeShutdownWork(runtimes, automation?.hasActiveSchedules() ?? false))
@@ -149,72 +134,6 @@ function applyInterfaceZoom(scale: number): void {
     const contents = window.webContents
     if (!contents.isDestroyed()) contents.setZoomFactor(scale / 100)
   }
-}
-
-type ResolvedTheme = Exclude<ThemeMode, 'system'>
-
-function windowsTitleBarOverlay(theme: ResolvedTheme): { color: string; symbolColor: string; height: number } {
-  return theme === 'dark'
-    ? { color: '#171716', symbolColor: '#f1f1ee', height: 32 }
-    : { color: '#ffffff', symbolColor: '#20201e', height: 32 }
-}
-
-function resolvedWindowTheme(theme: ThemeMode | undefined): ResolvedTheme {
-  if (theme === 'dark') return 'dark'
-  if (theme === 'system' && nativeTheme.shouldUseDarkColors) return 'dark'
-  return 'light'
-}
-
-export function mainWindowChromeOptions(platform: NodeJS.Platform = process.platform, theme: ResolvedTheme = 'light'): BrowserWindowConstructorOptions {
-  if (platform === 'darwin') return {
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 18 },
-    vibrancy: 'sidebar',
-    visualEffectState: 'active',
-  }
-  if (platform === 'win32') return {
-    // The native caption controls share a dedicated menu row. GooeyPi's own
-    // 52px toolbar remains a separate application surface below it.
-    titleBarStyle: 'hidden',
-    titleBarOverlay: windowsTitleBarOverlay(theme),
-    autoHideMenuBar: true,
-  }
-  if (platform === 'linux') return {
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { height: 52 },
-    autoHideMenuBar: true,
-  }
-  return { titleBarStyle: 'default' }
-}
-
-export function isMacWindowCloseShortcut(
-  input: Pick<Input, 'type' | 'key' | 'shift' | 'control' | 'alt' | 'meta'>,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform === 'darwin'
-    && input.type === 'keyDown'
-    && input.key.toLowerCase() === 'q'
-    && input.meta
-    && !input.shift
-    && !input.control
-    && !input.alt
-}
-
-export function popupApplicationMenu(sender: WebContents, menuName: ApplicationMenuName, x: number, y: number): boolean {
-  const window = BrowserWindow.fromWebContents(sender)
-  const applicationMenu = Menu.getApplicationMenu()
-  const menuItem = applicationMenu?.items.find((item) => item.label.replaceAll('&', '').toLowerCase() === menuName)
-  if (!window || window.isDestroyed() || !menuItem?.submenu) return false
-  const zoom = sender.getZoomFactor()
-  menuItem.submenu.popup({ window, x: Math.round(x * zoom), y: Math.round(y * zoom) })
-  return true
-}
-
-export function setTitleBarTheme(sender: WebContents, theme: ResolvedTheme): boolean {
-  const window = BrowserWindow.fromWebContents(sender)
-  if (process.platform !== 'win32' || !window || window.isDestroyed()) return false
-  window.setTitleBarOverlay(windowsTitleBarOverlay(theme))
-  return true
 }
 
 async function createWindow(): Promise<BrowserWindow | null> {
