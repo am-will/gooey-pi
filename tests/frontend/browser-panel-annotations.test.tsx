@@ -3,6 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useBrowserPreviewState } from '../../src/hooks/useBrowserPreviewState'
 import { BrowserPanel } from '../../src/components/inspector/BrowserPanel'
 import { useBrowserAnnotations } from '../../src/hooks/useBrowserAnnotations'
 import type { BrowserAnnotationsApi } from '../../src/hooks/useBrowserAnnotations'
@@ -334,4 +335,24 @@ it('reconciles SPA route annotations without stopping the picker and ignores sub
   webviewUrl = 'https://example.com/'
   await act(async () => { webviewElement().dispatchEvent(Object.assign(new Event('did-navigate-in-page'), { isMainFrame: false })) })
   expect(latestApi.annotations[0].stale).toBe(true)
+})
+
+
+it('restores Preview URL and recent pages across panel unmount without reassigning src while navigating', async () => {
+  function PersistentHarness({ show }: { show: boolean }) {
+    const preview = useBrowserPreviewState()
+    const annotations = useBrowserAnnotations()
+    return show ? <BrowserPanel home="https://example.com/" annotations={annotations} previewLocation={preview.location} onOpenExternal={() => undefined} /> : null
+  }
+  await act(async () => root.render(<PersistentHarness show />))
+  await makeDomReady()
+  webviewUrl = 'https://example.com/dev'
+  await act(async () => { webviewElement().dispatchEvent(new Event('did-navigate')) })
+  expect(webviewElement().getAttribute('src')).toBe('https://example.com/')
+  await act(async () => root.render(<PersistentHarness show={false} />))
+  await act(async () => root.render(<PersistentHarness show />))
+  expect(webviewElement().getAttribute('src')).toBe('https://example.com/dev')
+  const history = container.querySelector<HTMLButtonElement>('button[aria-label="Browser history"]')!
+  await act(async () => history.click())
+  expect(container.querySelector('.browser-history')?.textContent).toContain('https://example.com/dev')
 })

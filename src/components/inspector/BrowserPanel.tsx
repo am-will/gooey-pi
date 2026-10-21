@@ -1,3 +1,4 @@
+import type { PreviewLocationStore } from '@/hooks/useBrowserPreviewState'
 import { normalizeBrowserAddress } from '@/lib/browser-address'
 import { isAllowedBrowserUrl } from '@/lib/browser-url'
 import { ArrowLeft, ArrowRight, Bot, ExternalLink, History, MessageCirclePlus, RefreshCw, ShieldCheck, X } from 'lucide-react'
@@ -42,6 +43,7 @@ function runInPage(view: WebviewElement, code: string): Promise<unknown> {
 }
 
 interface BrowserPanelProps {
+  previewLocation?: PreviewLocationStore
   navigationRequest?: { id: number; url: string }
   onNavigationRequestHandled?(id: number): void
   platform?: NodeJS.Platform
@@ -79,15 +81,19 @@ function agentTabLabel(tab: AgentBrowserTabRecord, fallback: string): string {
   return fallback
 }
 
-export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
+export function BrowserPanel({ previewLocation, home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
   const { t } = useI18n()
   const webviewRef = useRef<WebviewElement | null>(null)
+  const [initialLocation] = useState(() => previewLocation?.snapshot())
+  const previewLocationRef = useRef(previewLocation)
+  previewLocationRef.current = previewLocation
   const [initialRequest] = useState(() => {
     if (!navigationRequest) return null
     const url = normalizeBrowserAddress(navigationRequest.url)
     return isAllowedBrowserUrl(url) ? { id: navigationRequest.id, url } : null
   })
-  const initialUrl = initialRequest?.url ?? (isAllowedBrowserUrl(home) ? home : 'about:blank')
+  const initialUrl = initialRequest?.url ?? initialLocation?.url ?? (isAllowedBrowserUrl(home) ? home : 'about:blank')
+  const initialSrcRef = useRef(isAllowedBrowserUrl(initialUrl) ? initialUrl : 'about:blank')
   const [address, setAddress] = useState(initialUrl)
   const [currentUrl, setCurrentUrl] = useState(initialUrl)
   const [loading, setLoading] = useState(false)
@@ -99,7 +105,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   const [annotationText, setAnnotationText] = useState('')
   const [notice, setNotice] = useState<'capacity' | 'invalid-url' | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [history, setHistory] = useState<string[]>(() => [initialUrl])
+  const [history, setHistory] = useState<string[]>(() => initialLocation?.history.length ? [...initialLocation.history] : [initialUrl])
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
   const noticeTimerRef = useRef<number | null>(null)
@@ -196,6 +202,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     const sync = () => {
       try {
         const url = view.getURL() || home
+        previewLocationRef.current?.record(url)
         setCurrentUrl(url)
         setAddress(url)
         setCanBack(view.canGoBack())
@@ -362,7 +369,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     ref: (node: WebviewElement | null) => {
       webviewRef.current = node
     },
-    src: initialUrl,
+    src: initialSrcRef.current,
     className: 'browser-webview',
     partition: BROWSER_PARTITION,
     webpreferences: 'contextIsolation=yes,sandbox=yes,nodeIntegration=no',
@@ -444,7 +451,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         <div className="browser-history">
           <div>
             <strong>{t('inspector.browser.recentPages')}</strong>
-            <button type="button" onClick={() => setHistory([])}>
+            <button type="button" onClick={() => { setHistory([]); previewLocationRef.current?.clearHistory() }}>
               {t('inspector.browser.clear')}
             </button>
           </div>
