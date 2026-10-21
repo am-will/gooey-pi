@@ -564,6 +564,7 @@ export class AutomationService {
 
   private async markRunStarted(taskId: string, runId: string, expectedRevision: number, startedAt: string): Promise<boolean> {
     return this.store.update((state) => {
+      if (this.closed) return false
       const task = state.schedules.find((candidate) => candidate.id === taskId)
       if (!task) return false
       const run = task.runs.find((candidate) => candidate.id === runId)

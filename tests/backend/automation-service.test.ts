@@ -100,6 +100,35 @@ describe('AutomationService', () => {
     } finally { release(); await service.stop() }
   })
 
+  it('does not start a queued run after shutdown wins its persisted running transition', async () => {
+    const stateStore = store()
+    const run = vi.fn(async () => ({}))
+    const service = new AutomationService(stateStore, {
+      validateTarget: async () => undefined, validateExecution: async () => undefined, run,
+      now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const task = await service.create({ prompt: 'Review', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    let entered!: () => void
+    let release!: () => void
+    const admission = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const update = stateStore.update.bind(stateStore)
+    let writes = 0
+    vi.spyOn(stateStore, 'update').mockImplementation(async (mutator) => {
+      if (++writes === 2) { entered(); await gate }
+      return update(mutator)
+    })
+    try {
+      await service.runNow(task.id)
+      await admission
+      const stopping = service.stop()
+      release()
+      await stopping
+      expect(run).not.toHaveBeenCalled()
+      expect(service.get(task.id).runs[0]).toMatchObject({ status: 'queued' })
+    } finally { release(); await service.stop() }
+  })
+
   it('does not reconcile this process own active runs when startup is called twice', async () => {
     let finish!: () => void
     const service = new AutomationService(store(), {
