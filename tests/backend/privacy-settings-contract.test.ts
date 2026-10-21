@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ session: { fromPartition: vi.fn(), defaultSession: {} } }))
 
 import { SettingsService } from '../../electron/main/settings-schedules'
-import { JsonStateStore } from '../../electron/main/store'
+import { defaultSettings, JsonStateStore } from '../../electron/main/store'
+import { DEFAULT_SETTINGS } from '../../src/lib/default-settings'
 import { HARNESS_IDS, type HarnessId } from '../../src/types/api'
 
 const DIRECT_REFERENCE_ROOTS = ['assets/extensions', 'electron', 'src'] as const
@@ -36,6 +37,10 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe('removed legacy preferences', () => {
+  it('shares persisted and renderer defaults apart from the OS shell', () => {
+    expect(defaultSettings()).toEqual({ ...DEFAULT_SETTINGS, terminalShell: defaultSettings().terminalShell })
+  })
+
   it.each(HARNESS_TELEMETRY_CASES)('drops inert fields on load and rejects new writes for $harness', async ({ harness, telemetry }) => {
     const statePath = temporaryStatePath()
     writeFileSync(statePath, JSON.stringify({ version: 4, settings: { activeHarness: harness, telemetry, enabledHarnesses: [harness] } }))

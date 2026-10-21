@@ -1,3 +1,4 @@
+import { DEFAULT_SETTINGS } from '../../src/lib/default-settings'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
@@ -101,55 +102,7 @@ export function defaultSettings(): AppSettings {
   const defaultShell = process.platform === 'win32'
     ? (process.env.ComSpec && isAbsolute(process.env.ComSpec) ? process.env.ComSpec : 'C:\\Windows\\System32\\cmd.exe')
     : (process.env.SHELL?.startsWith('/') ? process.env.SHELL : '/bin/zsh')
-  return {
-    theme: 'system',
-    locale: 'system',
-    interfaceFontScale: 110,
-    projectSortMode: 'recent',
-    sidebarOpen: true,
-    inspectorOpen: true,
-    showFileChangesPopup: true,
-    checkoutStrategy: 'worktree',
-    keepRunningInBackground: false,
-    launchAtLogin: false,
-    terminalOpen: false,
-    defaultInspectorTab: 'summary',
-    browserHome: 'https://www.google.com/',
-    browserAskForDownloads: true,
-    terminalShell: defaultShell,
-    reduceMotion: false,
-    showReasoningSummaries: true,
-    showToolCalls: true,
-    messageEnterAction: 'queue',
-    runtimePaths: { prime: '', omp: '', pi: '' },
-    askUserEnabled: false,
-  askUserTimeoutMs: 120_000,
-    browserEnabled: true,
-    computerUseEnabled: false,
-    disabledProviders: [],
-    disabledModels: [],
-    ompDisabledProviders: [],
-    ompDisabledModels: [],
-    piDisabledProviders: [],
-    piDisabledModels: [],
-    lastSelectedModels: { prime: '', omp: '', pi: '' },
-    activeHarness: 'omp',
-    ompApprovalMode: 'inherit',
-    petEnabled: true,
-    petId: 'orb',
-    petSize: 75,
-    voiceTranscriptionProvider: 'openai-live',
-    voiceOpenAiLiveTranscriptionModel: 'gpt-live-transcribe',
-    voiceOpenAiTranscriptionModel: 'gpt-4o-transcribe',
-    voiceGroqTranscriptionModel: 'whisper-large-v3-turbo',
-    voiceDeepgramTranscriptionModel: 'nova-3',
-    voiceSelfHostedUrl: '',
-    voiceSelfHostedModel: '',
-    voiceLocalWhisperExecutable: '',
-    voiceLocalWhisperModel: '',
-    voiceRealtimeModel: 'gpt-realtime-2.1',
-    voiceRealtimeVoice: 'marin',
-  }
+  return { ...structuredClone(DEFAULT_SETTINGS), terminalShell: defaultShell }
 }
 
 function defaultState(): DesktopState {
