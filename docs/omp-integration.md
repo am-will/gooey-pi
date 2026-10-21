@@ -120,5 +120,18 @@ Same rules as `docs/security.md`, applied to the second harness: argv arrays onl
   rather than forwards `/mcp reauth`, so authentication must be run in OMP itself;
   OMP keeps ownership of profile-scoped credentials.
 - Prime heartbeat RPC tools on OMP; OMP schedules use the local extension bridge instead.
-- Host tools / host URI schemes, subagent transcript streaming, native OMP relay-room UI, and handoff. GooeyPi-owned top-level session collaboration is documented separately in `docs/session-collaboration.md`.
+- Host tools / host URI schemes, native OMP relay-room UI, and handoff. GooeyPi-owned top-level session collaboration is documented separately in `docs/session-collaboration.md`.
 - Importing sessions across harnesses (`--from-claude`/`--from-codex` style).
+
+
+## Read-only child history (OMP 18.12.2)
+
+The child inspector uses the released [persisted-agent layout](https://github.com/can1357/oh-my-pi/blob/v18.12.2/packages/coding-agent/src/registry/persisted-agents.ts): a parent `session.jsonl` owns `session/<child>.jsonl`, and nesting follows a child transcript's matching directory. Only descendants discovered from a parent authorized by the OMP session service are readable. Advisor artifacts and unrelated directories are excluded.
+
+The renderer receives opaque child IDs and cursors scoped to its parent session and renderer. It cannot supply a child filesystem path. Main checks canonical containment, rejects symlinks and non-regular files, and compares file identity when opening. Reads grant no collaboration broker rights, and expose no child prompt, steering, resume, or tool execution controls. Replacing a parent invalidates its child IDs; replacing or shrinking a child resets the displayed history.
+
+Roster refreshes query the running parent's released `get_subagents` command for metadata only, including while its turn runs. Persisted files remain discoverable after the live registry drops completed children or the parent exits. Historical status is unknown when the harness provides no live status. The app does not infer successful completion merely from a transcript existing.
+
+History reads stay local and bounded, rather than calling the released `get_subagent_messages` implementation that reads the entire remaining file. Each request reads at most 1 MiB and renders at most 200 complete JSONL records through the existing transcript normalizer. Newest history loads first, older pages load on demand, and only the viewed child polls for appended records. A record exceeding the byte window is skipped with an explicit truncation flag. System prompt snapshots remain hidden; thinking summaries and tool calls/results already exposed in the transcript remain readable. A tool result across a page boundary renders independently so its output remains visible. Complete child history is available through paging within these limits.
+
+Prime and Pi return an explicit unavailable capability. Prime 0.10 has different durable child membership and transcript paths, so it requires its own verified adapter. This inspector neither subscribes to full OMP child event snapshots nor launches child runtimes to read history.
