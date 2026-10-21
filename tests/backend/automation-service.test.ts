@@ -163,6 +163,20 @@ describe('AutomationService', () => {
     await service.stop()
   })
 
+  it('does not rewrite unchanged task state on startup', async () => {
+    const stateStore = store()
+    const service = new AutomationService(stateStore, {
+      validatePrompt: assertNoMcpAuthenticationCommand, validateTarget: async () => undefined,
+      validateExecution: async () => undefined, run: async () => ({}), now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    await service.create({ prompt: 'Allowed', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const writes = vi.spyOn(stateStore, 'update')
+    try {
+      await service.start()
+      expect(writes).not.toHaveBeenCalled()
+    } finally { writes.mockRestore(); await service.stop() }
+  })
+
   it('keeps OMP and pi schedules isolated and routes validation and runs by harness', async () => {
     const validateTarget = vi.fn(async () => undefined)
     const validateExecution = vi.fn(async () => undefined)

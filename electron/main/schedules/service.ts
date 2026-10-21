@@ -146,35 +146,42 @@ export class AutomationService {
     try { await operation } finally { if (this.initialization === operation) this.initialization = null }
   }
 
+  private promptBlockReason(task: AutomationScheduleRecord): string | undefined {
+    try { this.options.validatePrompt?.(task.prompt, task.harness) }
+    catch (error) { if (error instanceof TypeError) return error.message; throw error }
+    return undefined
+  }
+
   private async blockInvalidActivePrompts(): Promise<void> {
-    if (!this.options.validatePrompt) return
+    const invalid = this.store.getSchedules().filter((task) => task.status === 'active' && this.promptBlockReason(task) !== undefined)
+    if (invalid.length === 0) return
+    const revisions = new Map(invalid.map((task) => [task.id, task.revision]))
     const updatedAt = this.now().toISOString()
     await this.store.update((state) => {
       for (const task of state.schedules) {
-        if (task.status !== 'active') continue
-        try { this.options.validatePrompt!(task.prompt, task.harness) }
-        catch (error) {
-          if (!(error instanceof TypeError)) throw error
-          task.status = 'blocked'
-          task.blockedReason = error.message
-          task.nextRunAt = undefined
-          task.revision += 1
-          task.updatedAt = updatedAt
-        }
+        if (this.closed || task.status !== 'active' || revisions.get(task.id) !== task.revision) continue
+        const reason = this.promptBlockReason(task)
+        if (reason === undefined) continue
+        task.status = 'blocked'
+        task.blockedReason = reason
+        task.nextRunAt = undefined
+        task.revision += 1
+        task.updatedAt = updatedAt
       }
     })
   }
 
-  /**
-   * Runs persisted as queued/running belong to a previous process; they will
-   * never resume, so surface them as interrupted instead of forever-pending.
-   */
+  /** Only records present before startup can belong to the previous process. */
   private async reconcileInterruptedRuns(): Promise<void> {
+    const unfinished = new Set(this.store.getSchedules().flatMap((task) => task.runs
+      .filter((run) => run.status === 'queued' || run.status === 'running').map((run) => run.id)))
+    if (unfinished.size === 0) return
     const finishedAt = this.now().toISOString()
     await this.store.update((state) => {
+      if (this.closed) return
       for (const task of state.schedules) {
         for (const run of task.runs) {
-          if (run.status !== 'queued' && run.status !== 'running') continue
+          if (!unfinished.has(run.id) || (run.status !== 'queued' && run.status !== 'running')) continue
           run.status = 'interrupted'
           run.finishedAt = finishedAt
           run.error = 'GooeyPi quit before this run could finish.'
