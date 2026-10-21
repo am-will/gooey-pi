@@ -26,6 +26,16 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('keeps queue and prompt identity when there are no flush failures to clear', () => {
+    act(() => root.render(createElement(Probe)))
+    act(() => latest.queuePrompt('queue me', 'queue'))
+    const queue = latest.pendingQueuedPrompts
+    const prompt = queue[0]
+    act(() => latest.clearQueuedPromptFlushFailures())
+    expect(latest.pendingQueuedPrompts).toBe(queue)
+    expect(latest.pendingQueuedPrompts[0]).toBe(prompt)
+  })
+
   it('detaches a background runtime without clearing the active runtime owner', () => {
     const other = { ...session, id: 'other', filePath: '/sessions/b.jsonl' }
     act(() => root.render(createElement(Probe, { initialSession: session, sessions: [session, other] })))

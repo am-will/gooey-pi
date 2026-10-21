@@ -490,7 +490,11 @@ export function useWorkspaceRuntime({
       : prompt)
   }, [updateQueuedPrompts])
   const clearQueuedPromptFlushFailures = useCallback(() => {
-    updateQueuedPrompts(({ flushAttemptFailed: _failed, ...prompt }) => prompt)
+    updateQueuedPrompts((prompt) => {
+      if (!prompt.flushAttemptFailed) return prompt
+      const { flushAttemptFailed: _failed, ...cleared } = prompt
+      return cleared
+    })
   }, [updateQueuedPrompts])
   const dropPendingSteers = useCallback((runtimeId?: string) => {
     const sessionFile = runtimeId ? runtimeSessionsRef.current.get(runtimeId) : undefined
