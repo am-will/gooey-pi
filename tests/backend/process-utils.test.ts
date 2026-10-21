@@ -58,6 +58,27 @@ describe('Windows Git executable resolution', () => {
     expect(resolveGitExecutable('/repo', {}, { platform: 'darwin' })).toBe('git')
   })
 })
+describe('child PATH precedence', () => {
+  it('preserves user shims and the active nvm selection before system fallbacks', () => {
+    const env = executableChildEnvironment('/opt/agent/bin/omp', {
+      HOME: '/home/ada', PATH: '/home/ada/.pyenv/shims:/home/ada/.cargo/bin:/usr/bin:/bin', NVM_BIN: '/home/ada/.nvm/versions/node/v20/bin',
+    }, 'linux')
+    const paths = env.PATH!.split(':')
+    expect(paths.slice(0, 4)).toEqual(['/opt/agent/bin', '/home/ada/.pyenv/shims', '/home/ada/.cargo/bin', '/home/ada/.nvm/versions/node/v20/bin'])
+    expect(paths.indexOf('/usr/bin')).toBeGreaterThan(paths.indexOf('/home/ada/.cargo/bin'))
+  })
+
+  it.each(['data', ''])('rejects injected relative candidate directories with XDG_DATA_HOME=%s', (dataHome) => {
+    const env = executableChildEnvironment('/opt/pi/bin/pi', {
+      HOME: '/home/ada', PATH: '/usr/bin:user-rel', PNPM_HOME: '.pnpm', NVM_BIN: 'node_modules/.bin', BUN_INSTALL_BIN: 'bb',
+      NPM_CONFIG_PREFIX: 'npm', BUN_INSTALL: 'bun', VOLTA_HOME: 'volta', XDG_DATA_HOME: dataHome,
+    }, 'linux')
+    const paths = env.PATH!.split(':')
+    expect(paths.filter((path) => !path.startsWith('/'))).toEqual(['user-rel'])
+    expect(paths).toContain('/home/ada/.local/share/pnpm')
+  })
+})
+
 describe('runProcess resource bounds', () => {
   it('runs a pnpm CLI under a Finder-style minimal PATH', async () => {
     const home = temp()

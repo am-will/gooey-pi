@@ -42,6 +42,8 @@ export function processOutcome(result: ProcessResult, output: string): ProcessOu
 export const PROCESS_CONCURRENCY_LIMIT = 8
 export const PROCESS_QUEUE_LIMIT = 64
 
+const POSIX_SYSTEM_PATH_DIRS = new Set(['/opt/homebrew/bin', '/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
+
 const PROCESS_INPUT_LIMIT = 4 * 1024 * 1024
 const activeChildren = new Set<ChildProcess>()
 const processAdmission = createAdmissionQueue({
@@ -203,7 +205,8 @@ export function safeChildEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.Proc
  * Makes an absolute executable's own directory available to `/usr/bin/env`
  * shebangs without evaluating a shell profile. Finder-launched macOS apps get
  * a minimal PATH, while npm-installed Pi-family CLIs commonly use
- * `#!/usr/bin/env node` with `node` beside the CLI shim.
+ * `#!/usr/bin/env node` with `node` beside the CLI shim. Fallbacks precede
+ * system directories while preserving the user's earlier PATH selections.
  */
 export function executableChildEnvironment(
   executable: string,
@@ -218,11 +221,17 @@ export function executableChildEnvironment(
   const separator = platform === 'win32' ? ';' : delimiter
   const homeValue = platform === 'win32' ? result.USERPROFILE : result.HOME
   const home = homeValue && isAbsolutePathForPlatform(homeValue, platform) ? homeValue : homedir()
+  const inherited = (result[pathKey] ?? '').split(separator)
+  const systemIndex = inherited.findIndex((directory) => POSIX_SYSTEM_PATH_DIRS.has(directory))
+  const insertAt = platform === 'win32' ? 0 : systemIndex === -1 ? inherited.length : systemIndex
+  const nvmBin = result.NVM_BIN && isAbsolutePathForPlatform(result.NVM_BIN, platform) ? [result.NVM_BIN] : []
   const directories = [
     executableDirectory,
+    ...inherited.slice(0, insertAt),
+    ...nvmBin,
     ...versionManagerRuntimeDirs(result, platform, home),
     ...sharedHarnessCandidateDirs(result, platform, home),
-    ...(result[pathKey] ?? '').split(separator),
+    ...inherited.slice(insertAt),
   ]
   const seen = new Set<string>()
   result[pathKey] = directories.filter((directory) => {
@@ -399,7 +408,7 @@ function sharedHarnessCandidateDirs(
 ): string[] {
   const pathApi = platform === 'win32' ? win32 : posix
   const fromRoot = (root: string | undefined, ...segments: string[]) => root ? pathApi.join(root, ...segments) : ''
-  const compact = (values: Array<string | undefined>): string[] => values.filter((value): value is string => Boolean(value))
+  const compact = (values: Array<string | undefined>): string[] => values.filter((value): value is string => Boolean(value && pathApi.isAbsolute(value)))
   const environmentDirs = [
     env.NVM_BIN,
     env.BUN_INSTALL_BIN,
@@ -421,7 +430,7 @@ function sharedHarnessCandidateDirs(
       win32.join(home, '.volta', 'bin'),
     ])
   }
-  const dataHome = env.XDG_DATA_HOME ?? posix.join(home, '.local', 'share')
+  const dataHome = env.XDG_DATA_HOME && posix.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : posix.join(home, '.local', 'share')
   return compact([
     ...environmentDirs,
     posix.join(home, '.local', 'bin'),
