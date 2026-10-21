@@ -124,6 +124,15 @@
         "**/node_modules/zeromq/build/darwin/${arch}/node/*-Release/addon.node"
       ],
       "files": [
+        "out/**/*",
+        "package.json",
+        "!**/node_modules/prime-agent/docs/**",
+        "!**/node_modules/prime-agent/dist/bundle/**",
+        "!**/node_modules/prime-agent/dist/modes/**",
+        "!**/node_modules/prime-agent/**/*.map",
+        "!**/node_modules/prime-agent/**/*.d.ts",
+        "!**/node_modules/@earendil-works/pi-tui/**",
+        "!**/node_modules/koffi/**",
         "!**/node_modules/zeromq/build/linux/**",
         "!**/node_modules/zeromq/build/win32/**",
         "!**/node_modules/extract-zip/index.linux-*.node",
@@ -147,6 +156,15 @@
         "**/node_modules/zeromq/build/linux/${arch}/node/*-Release/addon.node"
       ],
       "files": [
+        "out/**/*",
+        "package.json",
+        "!**/node_modules/prime-agent/docs/**",
+        "!**/node_modules/prime-agent/dist/bundle/**",
+        "!**/node_modules/prime-agent/dist/modes/**",
+        "!**/node_modules/prime-agent/**/*.map",
+        "!**/node_modules/prime-agent/**/*.d.ts",
+        "!**/node_modules/@earendil-works/pi-tui/**",
+        "!**/node_modules/koffi/**",
         "!**/node_modules/zeromq/build/darwin/**",
         "!**/node_modules/zeromq/build/win32/**",
         "!**/node_modules/extract-zip/index.darwin-*.node",
@@ -172,6 +190,15 @@
         "**/node_modules/zeromq/build/win32/${arch}/node/*-Release/addon.node"
       ],
       "files": [
+        "out/**/*",
+        "package.json",
+        "!**/node_modules/prime-agent/docs/**",
+        "!**/node_modules/prime-agent/dist/bundle/**",
+        "!**/node_modules/prime-agent/dist/modes/**",
+        "!**/node_modules/prime-agent/**/*.map",
+        "!**/node_modules/prime-agent/**/*.d.ts",
+        "!**/node_modules/@earendil-works/pi-tui/**",
+        "!**/node_modules/koffi/**",
         "!**/node_modules/zeromq/build/darwin/**",
         "!**/node_modules/zeromq/build/linux/**",
         "!**/node_modules/extract-zip/index.darwin-*.node",

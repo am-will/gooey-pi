@@ -1661,28 +1661,31 @@ describe('post-package verification helpers', () => {
 
   test('excludes other platform native build trees and declares zeromq directly', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-    // electron-builder appends each platform's `files` to the root `files`, so
-    // the platform lists hold only their platform-specific exclusions.
+    // Builder normalization creates separate root FileSets and platform matchers.
+    // Each platform needs the positive allowlist or its matcher defaults to **/*.
     expect(packageJson.build.mac.files).toEqual([
+      ...packageJson.build.files,
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.linux-*.node',
       '!**/node_modules/extract-zip/index.win32-*.node',
     ])
     expect(packageJson.build.linux.files).toEqual([
+      ...packageJson.build.files,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/win32/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
       '!**/node_modules/extract-zip/index.win32-*.node',
     ])
     expect(packageJson.build.win.files).toEqual([
+      ...packageJson.build.files,
       '!**/node_modules/zeromq/build/darwin/**',
       '!**/node_modules/zeromq/build/linux/**',
       '!**/node_modules/extract-zip/index.darwin-*.node',
       '!**/node_modules/extract-zip/index.linux-*.node',
     ])
     for (const platform of ['mac', 'linux', 'win']) {
-      expect(packageJson.build[platform].files.filter((pattern: string) => packageJson.build.files.includes(pattern))).toEqual([])
+      expect(packageJson.build[platform].files.slice(0, packageJson.build.files.length)).toEqual(packageJson.build.files)
     }
     // Pin the app to the zeromq range prime-agent uses so the packaged addon
     // and the agent's runtime expectations cannot drift apart silently.
