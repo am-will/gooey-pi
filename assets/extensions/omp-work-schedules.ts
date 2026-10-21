@@ -97,7 +97,7 @@ const BRIDGE_URL = process.env.PRIME_WORK_SCHEDULE_URL
 const BRIDGE_TOKEN = process.env.PRIME_WORK_SCHEDULE_TOKEN
 
 async function call(method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
-  if (!BRIDGE_URL || !BRIDGE_TOKEN) throw new Error('GooeyPi scheduling is not available in this OMP runtime')
+  if (!BRIDGE_URL || !BRIDGE_TOKEN) throw new Error('GooeyPi scheduling is not available in this runtime')
   let response: Response
   try {
     response = await fetch(BRIDGE_URL, {

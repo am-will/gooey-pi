@@ -1,3 +1,4 @@
+import { getModels, getProviders, supportsFastMode } from 'prime-agent-ai'
 import { describe, expect, it } from 'vitest'
 import piWorkFastMode, { type PiFastModeExtensionApi } from '../../assets/extensions/pi-work-fast-mode'
 
@@ -31,6 +32,15 @@ describe('Pi fast-mode compatibility extension', () => {
     expect(extension.provider({ payload }, { model: supportedModel })).toEqual({ ...payload, service_tier: 'priority' })
     await extension.command('default')
     expect(extension.provider({ payload }, { model: supportedModel })).toEqual({ ...payload, service_tier: 'default' })
+  })
+
+  it('matches the pinned Prime catalog fast-mode support for every provider model', () => {
+    const extension = loadExtension()
+    const models = getProviders().flatMap((provider) => getModels(provider))
+    expect(models.length).toBeGreaterThan(0)
+    for (const model of models) {
+      expect(extension.provider({ payload: {} }, { model }) !== undefined, `${model.provider}/${model.id}`).toBe(supportsFastMode(model))
+    }
   })
 
   it('leaves unsupported models and malformed payloads untouched', async () => {
