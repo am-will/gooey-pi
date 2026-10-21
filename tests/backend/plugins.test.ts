@@ -60,6 +60,38 @@ describe('PluginService discovery', () => {
     expect((await prime.list()).skills.find((skill) => skill.kind === 'package')?.name).toBe('tools')
   })
 
+  it('starts a fresh post-mutation discovery and prevents an older scan from replacing reveal grants', async () => {
+    const root = temp()
+    const oldPath = join(root, 'old.md')
+    const newPath = join(root, 'new.md')
+    writeFileSync(oldPath, 'old'); writeFileSync(newPath, 'new')
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ packages: ['npm:tools'] }))
+    let release!: () => void
+    let entered!: () => void
+    const admission = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let discoveries = 0
+    const service = new PluginService(null, async (path) => resolve(path), {
+      agentDir: root,
+      discover: async () => {
+        const first = ++discoveries === 1
+        if (first) { entered(); await gate }
+        return { skills: [{ id: 'tools', name: 'Tools', description: '', kind: 'skill', location: 'user', enabled: !first, path: realpathSync(first ? oldPath : newPath) }], warnings: [] }
+      },
+    })
+    const older = service.list()
+    await admission
+    try {
+      await service.mutateCapability({ kind: 'package', action: 'disable', source: 'npm:tools', name: 'tools', scope: 'user' })
+      expect((await service.list()).skills[0].path).toBe(realpathSync(newPath))
+      release()
+      await older
+      expect(discoveries).toBe(2)
+      expect(service.authorizeReveal(newPath)).toBe(realpathSync(newPath))
+      expect(() => service.authorizeReveal(oldPath)).toThrow('not discovered')
+    } finally { release() }
+  })
+
   it('reads dynamic bundled capability state on each refreshed catalog', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')

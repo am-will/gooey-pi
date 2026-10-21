@@ -98,6 +98,7 @@ export class PluginService {
   private lastProjectPath: string | undefined
   private readonly knownPathsByOwner = new Map<string, Set<string>>()
   private settingsMutation = Promise.resolve()
+  private catalogRevision = 0
   private readonly discoveryInFlight = createSingleFlight<string, PluginCatalog>()
   private readonly agentDir: string
   private readonly discoverCatalog: PluginDiscovery
@@ -121,7 +122,7 @@ export class PluginService {
   }
 
   private queueSettingsMutation(mutate: () => Promise<ProcessOutcome>): Promise<ProcessOutcome> {
-    const operation = this.settingsMutation.then(mutate)
+    const operation = this.settingsMutation.then(mutate).finally(() => { this.catalogRevision += 1 })
     this.settingsMutation = operation.then(() => undefined, () => undefined)
     return operation
   }
@@ -134,10 +135,11 @@ export class PluginService {
 
   private listCanonical(safeProjectPath?: string): Promise<PluginCatalog> {
     const key = safeProjectPath ? `project:${safeProjectPath}` : 'user'
-    return this.discoveryInFlight.run(key, () => discoveryQueue.run(() => this.discover(safeProjectPath, key)))
+    const revision = this.catalogRevision
+    return this.discoveryInFlight.run(`${key}:${revision}`, () => discoveryQueue.run(() => this.discover(safeProjectPath, key, revision)))
   }
 
-  private async discover(safeProjectPath: string | undefined, ownerKey: string): Promise<PluginCatalog> {
+  private async discover(safeProjectPath: string | undefined, ownerKey: string, revision: number): Promise<PluginCatalog> {
     if (safeProjectPath) this.lastProjectPath = safeProjectPath
     const result = await this.discoverCatalog(this.agentDir, safeProjectPath, resolveExecutable(this.agentPath), this.harness)
     const builtInSkills = await this.builtInSkills()
@@ -167,6 +169,7 @@ export class PluginService {
       })
     const knownPaths = combined.flatMap((item) => item.path ? [item.path] : []).slice(0, MAX_KNOWN_PATHS_PER_OWNER)
     // Delete-then-set keeps insertion order as LRU order for owner eviction.
+    if (revision !== this.catalogRevision) return { skills: combined, warnings: result.warnings }
     this.knownPathsByOwner.delete(ownerKey)
     this.knownPathsByOwner.set(ownerKey, new Set(knownPaths))
     while (this.knownPathsByOwner.size > MAX_KNOWN_PATH_OWNERS) {
@@ -225,7 +228,10 @@ export class PluginService {
       ? await this.authorizeProject(input.projectPath!)
       : undefined
     if (safeProjectPath) this.lastProjectPath = safeProjectPath
-    if (this.harness === 'omp') return await installOmpExtension(input, this.agentDir, safeProjectPath)
+    if (this.harness === 'omp') {
+      try { return await installOmpExtension(input, this.agentDir, safeProjectPath) }
+      finally { this.catalogRevision += 1 }
+    }
 
     const agentPath = resolveExecutable(this.agentPath)
     if (!agentPath) return { ok: false, reason: 'blocked', output: `${HARNESSES[this.harness].agentName} executable was not found` }
