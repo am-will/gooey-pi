@@ -169,6 +169,20 @@ export function useWorkspaceRuntime({
     setRuntime(next)
   }, [])
 
+  const replaceActiveProject = useCallback((previousId: string, granted: ProjectRecord) => {
+    const selected = workspaceRef.current
+    if (selected.project?.id !== previousId || selected.project.harness !== granted.harness) return
+    workspaceRef.current = { ...selected, project: granted, cwd: workspaceCwd(granted, selected.session) }
+    setActiveProjectId(granted.id)
+    const owner = activeQueuedPromptOwnerRef.current
+    if (owner === queuedPromptOwner(selected.project, undefined, undefined, selected.generation)) {
+      const nextOwner = queuedPromptOwner(granted, undefined, undefined, selected.generation)!
+      queuedPromptsByOwnerRef.current.delete(owner)
+      if (pendingQueuedPromptsRef.current.length) queuedPromptsByOwnerRef.current.set(nextOwner, pendingQueuedPromptsRef.current)
+      activeQueuedPromptOwnerRef.current = nextOwner
+    }
+  }, [])
+
   const activateWorkspace = useCallback((project?: ProjectRecord, session?: SessionRecord, nextRuntime?: RuntimeInfo) => {
     pendingAgentEventsRef.current = []
     promptAdmissionRevisionRef.current = 0
@@ -636,6 +650,7 @@ export function useWorkspaceRuntime({
     runtimeOwnerRef,
     workspaceRef,
     activateWorkspace,
+    replaceActiveProject,
     attachRuntime,
     reconcileRuntime,
     prepareForPrompt,
