@@ -40,16 +40,17 @@ owns the `hermetic-e2e` gate.
 
 ## pstack
 
-This repository vendors [pstack](https://github.com/cursor/plugins/tree/main/pstack) under `.agents/skills/pstack/` so Cloud Agents can run `/poteto-mode` and the rest of the skill set. Subagents live in `.cursor/agents/`. Per-role model overrides live in `.cursor/rules/pstack-models.mdc`.
+This repository vendors [pstack](https://github.com/cursor/plugins/tree/main/pstack) under `.agents/skills/pstack/` so Cloud Agents can run `/poteto-mode` and the rest of the skill set. Subagents live in `.cursor/agents/`.
 
-pstack skills read `~/.cursor/rules/pstack-models.mdc`. Cloud Agents do not inherit that user-level path. If it is missing, copy the workspace rule before running a pstack skill:
+All skill delegations inherit the current chat/session model by omitting the
+`model` argument. [The delegation rule](.cursor/rules/pstack-models.mdc) applies
+across roles. Use `/setup-pstack` only to reset inheritance or record a model
+choice the user explicitly requests; do not detect or assign role defaults.
 
-```
-mkdir -p ~/.cursor/rules
-cp .cursor/rules/pstack-models.mdc ~/.cursor/rules/pstack-models.mdc
-```
-
-Re-run `/setup-pstack` to change role models. Only write Task `model` slugs that are available in the current session.
+After editing skills or agent instructions, run
+`python3 .agents/scripts/audit-model-routing.py --self-test` to check the
+[repository routing policy](.agents/scripts/audit-model-routing.py), including
+skill references, helpers, and agent prompts.
 
 ## Architecture and boundaries
 
