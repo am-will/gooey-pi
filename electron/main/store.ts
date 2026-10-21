@@ -8,7 +8,7 @@ import { THEME_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS
 import { renameWithWindowsRetry } from './lib/durable-write'
 import { MAX_CATALOG_PROVIDERS } from './model-catalog'
 import { normalizeScheduleRunHistory } from './schedules/retention'
-import { errorCode, isProviderId, isModelKey, isOneOf, isRecord } from './validation'
+import { errorMessage, errorCode, isProviderId, isModelKey, isOneOf, isRecord } from './validation'
 
 export interface FolderIdentity {
   dev: string
@@ -622,7 +622,7 @@ export class JsonStateStore {
         await this.publishWindowsLegacyTombstone({ ...pending, status: 'complete' })
       } catch (error) {
         if (error instanceof StateCompatibilityError || error instanceof StateMigrationError) throw error
-        throw this.migrationError(`The Windows desktop-state migration was interrupted: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
+        throw this.migrationError(`The Windows desktop-state migration was interrupted: ${errorMessage(error)}`, this.verifiedBackupFile(backupPath))
       }
     }, 'GooeyPi could not complete the Windows desktop-state migration')
   }
@@ -652,7 +652,7 @@ export class JsonStateStore {
         this.state = recovered.state
       } catch (error) {
         if (error instanceof StateCompatibilityError) throw error
-        throw this.migrationError(`The pending Windows migration backup at ${backupPath} could not be read safely: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
+        throw this.migrationError(`The pending Windows migration backup at ${backupPath} could not be read safely: ${errorMessage(error)}`, this.verifiedBackupFile(backupPath))
       }
     } else if (tombstone.reason !== 'fresh') {
       throw this.migrationError('The pending Windows compatibility marker has no recovery backup')
@@ -665,7 +665,7 @@ export class JsonStateStore {
       const verifiedBackup = tombstone.backupFile
         ? this.verifiedBackupFile(join(dirname(this.legacyFilePath!), tombstone.backupFile))
         : undefined
-      throw this.migrationError(`The interrupted Windows migration could not publish recovered v4 state: ${this.errorMessage(error)}`, verifiedBackup)
+      throw this.migrationError(`The interrupted Windows migration could not publish recovered v4 state: ${errorMessage(error)}`, verifiedBackup)
     }
   }
 
@@ -683,7 +683,7 @@ export class JsonStateStore {
   ): void {
     this.scheduleInitializationOperation(async () => {
       if (preservationFailure) {
-        throw this.migrationError(`The unreadable ${sourceKind} state could not be preserved before recovery: ${this.errorMessage(preservationFailure)}`)
+        throw this.migrationError(`The unreadable ${sourceKind} state could not be preserved before recovery: ${errorMessage(preservationFailure)}`)
       }
       if (sourceKind === 'current') {
         await this.recoverWindowsAfterCorruptCurrent(recoveryPath)
@@ -696,7 +696,7 @@ export class JsonStateStore {
   private scheduleInitializationOperation(operation: () => Promise<void>, failurePrefix: string): void {
     const initialization = operation().catch((failure: unknown) => {
       if (failure instanceof StateCompatibilityError || failure instanceof StateMigrationError) throw failure
-      if (this.legacyFilePath) throw this.migrationError(`${failurePrefix}: ${this.errorMessage(failure)}`)
+      if (this.legacyFilePath) throw this.migrationError(`${failurePrefix}: ${errorMessage(failure)}`)
       throw failure
     })
     this.readyPromise = initialization
@@ -713,7 +713,7 @@ export class JsonStateStore {
       await this.fileSystem.rename(this.legacyFilePath, backupPath)
     } catch (error) {
       if (errorCode(error) === 'ENOENT' && !this.pathExists(backupPath)) return
-      throw this.migrationError(`Legacy desktop state could not be retired before startup: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
+      throw this.migrationError(`Legacy desktop state could not be retired before startup: ${errorMessage(error)}`, this.verifiedBackupFile(backupPath))
     }
     try {
       await this.syncParentDirectory(this.legacyFilePath, true)
@@ -721,14 +721,14 @@ export class JsonStateStore {
       try {
         await this.fileSystem.rename(backupPath, this.legacyFilePath)
       } catch (rollbackRenameError) {
-        throw this.migrationError(`Legacy desktop state retirement was not durable: ${this.errorMessage(retirementSyncError)}; rollback rename failed: ${this.errorMessage(rollbackRenameError)}`, this.verifiedBackupFile(backupPath))
+        throw this.migrationError(`Legacy desktop state retirement was not durable: ${errorMessage(retirementSyncError)}; rollback rename failed: ${errorMessage(rollbackRenameError)}`, this.verifiedBackupFile(backupPath))
       }
       try {
         await this.syncParentDirectory(this.legacyFilePath, true)
       } catch (rollbackSyncError) {
-        throw this.migrationError(`Legacy desktop state retirement was not durable: ${this.errorMessage(retirementSyncError)}; the legacy filename was restored, but rollback directory sync failed: ${this.errorMessage(rollbackSyncError)}`)
+        throw this.migrationError(`Legacy desktop state retirement was not durable: ${errorMessage(retirementSyncError)}; the legacy filename was restored, but rollback directory sync failed: ${errorMessage(rollbackSyncError)}`)
       }
-      throw this.migrationError(`Legacy desktop state retirement was not durable: ${this.errorMessage(retirementSyncError)}; the legacy filename was restored and synchronized for a safe retry`)
+      throw this.migrationError(`Legacy desktop state retirement was not durable: ${errorMessage(retirementSyncError)}; the legacy filename was restored and synchronized for a safe retry`)
     }
   }
 
@@ -754,7 +754,7 @@ export class JsonStateStore {
     try {
       serializedLegacy = JSON.parse(readFileSync(this.legacyFilePath, 'utf8'))
     } catch (error) {
-      throw this.migrationError(`The current v4 state was corrupt and the legacy state is unreadable; both were preserved for explicit recovery: ${this.errorMessage(error)}.${recoveryDetail}`, corruptBackupPath)
+      throw this.migrationError(`The current v4 state was corrupt and the legacy state is unreadable; both were preserved for explicit recovery: ${errorMessage(error)}.${recoveryDetail}`, corruptBackupPath)
     }
 
     const tombstone = parseWindowsLegacyTombstone(serializedLegacy)
@@ -774,7 +774,7 @@ export class JsonStateStore {
     } catch (error) {
       const classification = error instanceof StateCompatibilityError
         ? error.message
-        : `the legacy state is not a supported schema: ${this.errorMessage(error)}`
+        : `the legacy state is not a supported schema: ${errorMessage(error)}`
       throw this.migrationError(`The current v4 state was corrupt and ${classification}. Both files were preserved for explicit recovery.${recoveryDetail}`, corruptBackupPath)
     }
     throw this.migrationError(`The current v4 state was corrupt and an unmarked legacy state was also present. Automatic import was refused because it may have been recreated by a downgraded binary; both files were preserved for explicit recovery.${recoveryDetail}`, corruptBackupPath)
@@ -817,7 +817,7 @@ export class JsonStateStore {
       await this.fileSystem.rename(this.legacyFilePath, backupPath)
     } catch (renameError) {
       const verifiedBackup = this.verifiedBackupFile(backupPath)
-      throw this.migrationError(`Quarantine rename failed for a legacy state recreated by a downgraded binary: ${this.errorMessage(renameError)}`, verifiedBackup)
+      throw this.migrationError(`Quarantine rename failed for a legacy state recreated by a downgraded binary: ${errorMessage(renameError)}`, verifiedBackup)
     }
     try {
       await this.syncExistingFile(backupPath)
@@ -831,15 +831,15 @@ export class JsonStateStore {
           : this.pathExists(this.legacyFilePath)
             ? 'the legacy filename exists despite the reported rollback failure'
             : 'neither the backup nor legacy filename could be verified'
-        throw this.migrationError(`Quarantine backup sync failed: ${this.errorMessage(syncError)}; rollback rename failed: ${this.errorMessage(rollbackError)}; ${location}`, verifiedBackup)
+        throw this.migrationError(`Quarantine backup sync failed: ${errorMessage(syncError)}; rollback rename failed: ${errorMessage(rollbackError)}; ${location}`, verifiedBackup)
       }
-      throw this.migrationError(`Quarantine backup sync failed: ${this.errorMessage(syncError)}; the legacy filename was restored for a safe retry`)
+      throw this.migrationError(`Quarantine backup sync failed: ${errorMessage(syncError)}; the legacy filename was restored for a safe retry`)
     }
     const marker = this.windowsLegacyTombstone('complete', basename(backupPath), 'quarantine')
     try {
       await this.publishWindowsLegacyTombstone(marker)
     } catch (error) {
-      throw this.migrationError(`The downgraded legacy state was quarantined, but its zero-authority marker could not be published: ${this.errorMessage(error)}`, this.verifiedBackupFile(backupPath))
+      throw this.migrationError(`The downgraded legacy state was quarantined, but its zero-authority marker could not be published: ${errorMessage(error)}`, this.verifiedBackupFile(backupPath))
     }
   }
 
@@ -863,10 +863,14 @@ export class JsonStateStore {
       await this.writeDurableFile(temp, serialized, 'wx')
       await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
     } finally {
-      await this.fileSystem.unlink(temp).catch((error: unknown) => {
-        if (errorCode(error) !== 'ENOENT') throw error
-      })
+      await this.unlinkIfExists(temp)
     }
+  }
+
+  private async unlinkIfExists(path: string): Promise<void> {
+    await this.fileSystem.unlink(path).catch((error: unknown) => {
+      if (errorCode(error) !== 'ENOENT') throw error
+    })
   }
 
   private async writeDurableFile(path: string, data: string | Uint8Array, flags: string): Promise<void> {
@@ -882,9 +886,7 @@ export class JsonStateStore {
       completed = true
     } finally {
       if (!completed) {
-        await this.fileSystem.unlink(path).catch((error: unknown) => {
-          if (errorCode(error) !== 'ENOENT') throw error
-        })
+        await this.unlinkIfExists(path)
       }
     }
   }
@@ -922,10 +924,6 @@ export class JsonStateStore {
     )
   }
 
-  private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
-  }
-
   private async persist(state: DesktopState, requireDirectorySync = false): Promise<void> {
     // The write cap matches the read cap so a saved file is always loadable on the next launch.
     const serialized = `${JSON.stringify(state, null, 2)}\n`
@@ -935,21 +933,13 @@ export class JsonStateStore {
     }
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
     try {
-      const file = await this.fileSystem.open(temp, 'w', 0o600)
-      try {
-        await file.writeFile(serialized, { encoding: 'utf8' })
-        await file.sync()
-      } finally {
-        await file.close()
-      }
+      await this.writeDurableFile(temp, serialized, 'w')
 
       await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.filePath, this.platform)
 
       await this.syncParentDirectory(this.filePath, requireDirectorySync)
     } finally {
-      await this.fileSystem.unlink(temp).catch((error: unknown) => {
-        if (errorCode(error) !== 'ENOENT') throw error
-      })
+      await this.unlinkIfExists(temp)
     }
   }
 
