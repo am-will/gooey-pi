@@ -63,6 +63,22 @@ describe('GitService', () => {
     expect(worktrees[0]).toMatchObject({ path: realpathSync(linked), branch: 'linked', current: true })
   })
 
+  it('uses protected global excludes when checking branch switch cleanliness', async () => {
+    const cwd = repository('gooeypi-git-switch-global-ignore-')
+    const home = mkdtempSync(join(tmpdir(), 'gooeypi-git-ignore-home-')); dirs.push(home)
+    writeFileSync(join(home, '.gitignore_global'), '.DS_Store\n')
+    writeFileSync(join(home, '.gitconfig'), '[core]\n excludesFile = ~/.gitignore_global\n')
+    git(cwd, 'branch', 'next')
+    writeFileSync(join(cwd, '.DS_Store'), 'Finder metadata')
+    const oldHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      expect(await inspectGitWorktreeClean(cwd)).toEqual({ kind: 'clean' })
+      expect(await switchGitBranch(cwd, 'next')).toEqual({ kind: 'applied' })
+      expect(readFileSync(join(cwd, '.DS_Store'), 'utf8')).toBe('Finder metadata')
+    } finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome }
+  })
+
   it('lists local branches and switches without consulting remotes', async () => {
     const cwd = repository('prime-work-git-branches-')
     git(cwd, 'branch', 'feature/local')
