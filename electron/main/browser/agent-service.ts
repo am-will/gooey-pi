@@ -7,7 +7,7 @@ import { ACTION_TIMEOUT_MS, guardGuestCall, QUEUE_RELEASE_GRACE_MS, releaseQueue
 
 /** The user's own Preview webview, adoptable by the active thread's agent. */
 export const PREVIEW_TAB_ID = 'preview'
-import { cursorMarkerScript, elementAtPointScript, evaluateScript, pageInfoScript, readPageScript, refPointScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
+import { AGENT_WORLD_ID, cursorMarkerScript, elementAtPointScript, evaluateScript, pageInfoScript, readPageScript, refPointScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
 
 /**
  * Toolbar navigation and post-attach restoration are fire-and-forget because
@@ -449,12 +449,12 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       const info = await this.pageInfo(guest)
       // Show the agent its own pointer in the capture so it can calibrate.
-      if (tab.pointer) await guardGuestCall(guest, guest.executeJavaScript(cursorMarkerScript(tab.pointer.x, tab.pointer.y)), this.actionTimeoutMs).catch(() => undefined)
+      if (tab.pointer) await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: cursorMarkerScript(tab.pointer.x, tab.pointer.y) }]), this.actionTimeoutMs).catch(() => undefined)
       let image: Electron.NativeImage
       try {
         image = await guardGuestCall(guest, guest.capturePage(undefined, { stayHidden: true, stayAwake: true }), this.actionTimeoutMs)
       } finally {
-        if (tab.pointer) void guardGuestCall(guest, guest.executeJavaScript(removeCursorMarkerScript()), this.actionTimeoutMs).catch(() => undefined)
+        if (tab.pointer) void guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: removeCursorMarkerScript() }]), this.actionTimeoutMs).catch(() => undefined)
       }
       const size = image.getSize()
       if (!size.width || !size.height) throw new Error('The browser tab has no visible content to capture yet')
@@ -664,7 +664,7 @@ export class AgentBrowserService {
   }
 
   private async runPageScript(guest: WebContents, script: string, label: string): Promise<Record<string, unknown>> {
-    return parseScriptJson(await guardGuestCall(guest, guest.executeJavaScript(script), this.actionTimeoutMs), label)
+    return parseScriptJson(await guardGuestCall(guest, guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD_ID, [{ code: script }]), this.actionTimeoutMs), label)
   }
   private emitActivity(tab: TabState): void {
     const event: AgentBrowserActivityEvent = { sessionFile: tab.sessionKey, tabId: tab.tabId }

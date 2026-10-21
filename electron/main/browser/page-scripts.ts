@@ -6,6 +6,8 @@
  * intentionally accepts agent-authored JavaScript as a function body.
  */
 
+export const AGENT_WORLD_ID = 1001
+
 const INTERACTIVE_SELECTOR = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="switch"], [contenteditable="true"], [onclick]'
 
 function boundedInt(value: number, minimum: number, maximum: number, label: string): number {
