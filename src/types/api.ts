@@ -423,6 +423,8 @@ export interface GitFileChange {
   deletions: number
 }
 export interface GitStatus {
+  /** Absolute repository root against which file paths are relative. */
+  root?: string
   isRepo: boolean
   branch?: string
   upstream?: string
