@@ -1,3 +1,4 @@
+import { DEVICE_TIME_ZONE, defaultForm, formFromSchedule, timingFromForm, targetFromForm, executionFromForm, validTimeZone, rruleParts, isAuthorized, type Frequency, type ScheduleForm } from '@/lib/schedule-form'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -29,12 +30,10 @@ import type {
   PrimeModelDescriptor,
   PrimeThinkingLevel,
   ProjectRecord,
-  ScheduleExecution,
   ScheduleInput,
   SchedulePatch,
   SchedulePreview,
   ScheduleRunRecord,
-  ScheduleTarget,
   ScheduleTiming,
   SessionRecord,
 } from '@/types/api'
@@ -50,27 +49,7 @@ import { CREATED_BY_KEYS, DEFINITION_STATUS_KEYS, EXECUTION_SPEED_KEYS, EXECUTIO
 import { EmptyState, Modal, Segmented } from '@/components/ui'
 
 type ScheduleFilter = 'active' | 'paused' | 'attention' | 'all'
-type Frequency = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'advanced'
 type EditorMode = 'create' | 'edit'
-
-type ScheduleForm = {
-  title: string
-  prompt: string
-  targetKind: 'project' | 'session'
-  projectId: string
-  sessionId: string
-  timingKind: 'once' | 'recurring'
-  date: string
-  time: string
-  timeZone: string
-  frequency: Frequency
-  interval: string
-  weekdays: string[]
-  advancedRrule: string
-  model: string
-  thinking: 'auto' | PrimeThinkingLevel
-  fast: boolean
-}
 
 interface ScheduledPageProps {
   harness: HarnessId
@@ -102,7 +81,7 @@ interface ScheduledPageProps {
 // the component instead of calling useI18n() outside a component body.
 type Translate = ReturnType<typeof useI18n>['t']
 
-const DEVICE_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
 const WEEKDAYS = [
   { value: 'MO', label: 'schedule.weekday.short.monday', long: 'schedule.weekday.monday' },
   { value: 'TU', label: 'schedule.weekday.short.tuesday', long: 'schedule.weekday.tuesday' },
@@ -112,7 +91,7 @@ const WEEKDAYS = [
   { value: 'SA', label: 'schedule.weekday.short.saturday', long: 'schedule.weekday.saturday' },
   { value: 'SU', label: 'schedule.weekday.short.sunday', long: 'schedule.weekday.sunday' },
 ] as const satisfies ReadonlyArray<{ value: string; label: MessageKey; long: MessageKey }>
-const DAY_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'] as const
+
 const THINKING_LEVELS: readonly PrimeThinkingLevel[] = PRIME_THINKING_LEVELS
 const THINKING_LEVEL_KEYS = {
   off: 'schedule.thinking.off',
@@ -153,143 +132,6 @@ const CADENCE_INTERVAL_KEYS: Record<CadenceUnit, MessageKey> = {
   week: 'schedule.timing.everyWeeks',
   month: 'schedule.timing.everyMonths',
   cycle: 'schedule.timing.everyCycles',
-}
-
-const pad = (value: number) => String(value).padStart(2, '0')
-
-function localParts(value: Date) {
-  return {
-    date: `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`,
-    time: `${pad(value.getHours())}:${pad(value.getMinutes())}`,
-  }
-}
-
-function defaultStart() {
-  const value = new Date(Date.now() + 60 * 60 * 1000)
-  value.setMinutes(0, 0, 0)
-  return localParts(value)
-}
-
-function isAuthorized(project: ProjectRecord) {
-  return !project.inferred
-}
-
-function projectForSession(session: SessionRecord, projects: ProjectRecord[]) {
-  return projects.find((project) => project.path === session.projectPath)
-}
-
-function defaultScheduleModel(models: PrimeModelDescriptor[], lastSelectedModel: string): string {
-  return models.find((model) => model.key === lastSelectedModel && model.enabled !== false && model.available)?.key
-    ?? models.find((model) => model.enabled !== false && model.available)?.key
-    ?? ''
-}
-
-function defaultForm(projects: ProjectRecord[], sessions: SessionRecord[], models: PrimeModelDescriptor[], lastSelectedModel: string, initialProjectId?: string, initialSessionId?: string): ScheduleForm {
-  const authorizedProjects = projects.filter(isAuthorized)
-  const initialSession = sessions.find((session) => session.id === initialSessionId && !session.archived)
-  const sessionProject = initialSession ? projectForSession(initialSession, authorizedProjects) : undefined
-  const selectedProject = sessionProject
-    ?? authorizedProjects.find((project) => project.id === initialProjectId)
-    ?? authorizedProjects[0]
-  const start = defaultStart()
-  return {
-    title: '',
-    prompt: '',
-    targetKind: initialSession && sessionProject ? 'session' : 'project',
-    projectId: selectedProject?.id ?? '',
-    sessionId: initialSession && sessionProject ? initialSession.id : '',
-    timingKind: 'recurring',
-    date: start.date,
-    time: start.time,
-    timeZone: DEVICE_TIME_ZONE,
-    frequency: 'daily',
-    interval: '1',
-    weekdays: [DAY_CODES[new Date().getDay()]],
-    advancedRrule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: defaultScheduleModel(models, lastSelectedModel),
-    thinking: 'auto',
-    fast: false,
-  }
-}
-
-function rruleParts(rrule: string) {
-  return new Map(rrule.replace(/^RRULE:/i, '').split(';').map((part) => {
-    const [key, ...value] = part.split('=')
-    return [key.toUpperCase(), value.join('=')]
-  }))
-}
-
-function formFromSchedule(item: AutomationScheduleRecord, models: PrimeModelDescriptor[], lastSelectedModel: string): ScheduleForm {
-  const start = item.timing.kind === 'once'
-    ? localParts(new Date(item.timing.at))
-    : { date: item.timing.dtstartLocal.slice(0, 10), time: item.timing.dtstartLocal.slice(11, 16) }
-  const parts = item.timing.kind === 'rrule' ? rruleParts(item.timing.rrule) : new Map<string, string>()
-  const rawFrequency = parts.get('FREQ')?.toLowerCase()
-  const frequency = rawFrequency === 'hourly' || rawFrequency === 'daily' || rawFrequency === 'weekly' || rawFrequency === 'monthly'
-    ? rawFrequency
-    : 'advanced'
-  return {
-    title: item.title,
-    prompt: item.prompt,
-    targetKind: item.target.kind,
-    projectId: item.target.projectId,
-    sessionId: item.target.kind === 'session' ? item.target.sessionId : '',
-    timingKind: item.timing.kind === 'once' ? 'once' : 'recurring',
-    date: start.date,
-    time: start.time,
-    timeZone: item.timing.kind === 'rrule' ? item.timing.timeZone : DEVICE_TIME_ZONE,
-    frequency,
-    interval: parts.get('INTERVAL') ?? '1',
-    weekdays: parts.get('BYDAY')?.split(',').filter(Boolean) ?? [DAY_CODES[new Date().getDay()]],
-    advancedRrule: item.timing.kind === 'rrule' ? item.timing.rrule : 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
-    model: item.execution.model === 'auto' ? defaultScheduleModel(models, lastSelectedModel) : item.execution.model,
-    thinking: item.execution.thinking,
-    fast: item.execution.speed === 'fast',
-  }
-}
-
-function validTimeZone(timeZone: string) {
-  try {
-    new Intl.DateTimeFormat(undefined, { timeZone }).format()
-    return true
-  } catch {
-    return false
-  }
-}
-
-function timingFromForm(form: ScheduleForm): ScheduleTiming | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date) || !/^\d{2}:\d{2}$/.test(form.time)) return null
-  if (form.timingKind === 'once') {
-    const at = new Date(`${form.date}T${form.time}:00`)
-    return Number.isNaN(at.getTime()) ? null : { kind: 'once', at: at.toISOString() }
-  }
-  if (!validTimeZone(form.timeZone.trim())) return null
-  let rrule = form.advancedRrule.trim().replace(/^RRULE:/i, '')
-  if (form.frequency !== 'advanced') {
-    const interval = Math.max(1, Number.parseInt(form.interval, 10) || 1)
-    rrule = `FREQ=${form.frequency.toUpperCase()};INTERVAL=${interval}`
-    if (form.frequency === 'weekly') {
-      if (!form.weekdays.length) return null
-      rrule += `;BYDAY=${form.weekdays.join(',')}`
-    }
-  }
-  if (!/(^|;)FREQ=[A-Z]+/i.test(rrule)) return null
-  return {
-    kind: 'rrule',
-    dtstartLocal: `${form.date}T${form.time}:00`,
-    timeZone: form.timeZone.trim(),
-    rrule,
-  }
-}
-
-function targetFromForm(form: ScheduleForm): ScheduleTarget {
-  return form.targetKind === 'session'
-    ? { kind: 'session', projectId: form.projectId, sessionId: form.sessionId }
-    : { kind: 'project', projectId: form.projectId }
-}
-
-function executionFromForm(form: ScheduleForm): ScheduleExecution {
-  return { model: form.model, thinking: form.thinking, speed: form.fast ? 'fast' : 'normal' }
 }
 
 // Date order, month names, and clock style follow the device's regional format.
