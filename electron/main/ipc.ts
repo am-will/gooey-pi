@@ -435,7 +435,6 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('plugins:connect-mcp', (_event, input, harness) => pluginsFor(requireHarness(harness)).connectMcp(input))
   handle('plugins:set-mcp-enabled', (_event, input, harness) => pluginsFor(requireHarness(harness)).setMcpEnabled(input))
   handle('plugins:mutate-capability', (_event, input, harness) => pluginsFor(requireHarness(harness)).mutateCapability(input))
-  handle('plugins:refresh', (_event, harness) => pluginsFor(requireHarness(harness)).refresh())
 
   handle('settings:get', () => services.settings.get())
   handle('settings:update', async (_event, patch) => {
@@ -468,7 +467,6 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('heartbeats:manage', (_event, id, action) => services.heartbeats.manage(id, action))
 
   handle('schedules:list', (_event, harness) => services.schedules.list(requireHarness(harness)))
-  handle('schedules:get', (_event, id) => services.schedules.get(id))
   handle('schedules:preview', (_event, timing, count) => services.schedules.preview(timing, count))
   handle('schedules:create', (_event, input, harness) => services.schedules.create(input, 'user', requireHarness(harness)))
   handle('schedules:update', (_event, id, patch) => services.schedules.update(id, patch))

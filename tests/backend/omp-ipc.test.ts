@@ -336,16 +336,12 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.plugins.connectMcp).toHaveBeenCalledWith({ name: 'docs' })
     await harness.invoke('plugins:set-mcp-enabled', { name: 'docs', scope: 'user', enabled: false }, 'omp')
     expect(harness.services.omp.plugins.setMcpEnabled).toHaveBeenCalledWith({ name: 'docs', scope: 'user', enabled: false })
-    await harness.invoke('plugins:refresh', 'omp')
-    expect(harness.services.omp.plugins.refresh).toHaveBeenCalledOnce()
     await harness.invoke('plugins:list', '/repo', 'pi')
     expect(harness.services.pi.plugins.list).toHaveBeenCalledWith('/repo')
     await harness.invoke('plugins:install', 'npm:example', 'pi')
     expect(harness.services.pi.plugins.install).toHaveBeenCalledWith('npm:example')
     await harness.invoke('plugins:connect-mcp', { name: 'docs' }, 'pi')
     expect(harness.services.pi.plugins.connectMcp).toHaveBeenCalledWith({ name: 'docs' })
-    await harness.invoke('plugins:refresh', 'pi')
-    expect(harness.services.pi.plugins.refresh).toHaveBeenCalledOnce()
 
     await expect(async () => harness.invoke('plugins:list', undefined, 'OMP')).rejects.toThrow('Invalid harness')
   })
@@ -402,6 +398,10 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
     await expect(harness.invoke('providers:catalog', true, 'pi')).resolves.toMatchObject({ from: 'pi' })
     expect(harness.services.pi.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
+  })
+
+  it('does not register removed preload channels', () => {
+    for (const channel of ['plugins:refresh', 'schedules:get']) expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith(channel, expect.any(Function))
   })
 
   it('does not register MCP-specific authentication or credential cleanup channels', () => {
