@@ -225,10 +225,10 @@ export class RpcRuntime {
     const response = await this.request(command, 60_000)
     if (command.type === 'abort') this.pendingUi.clear()
     if (command.type === 'get_state') this.updateFromState(response.data)
-    if (response.success === true && ['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
+    if (['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
       await this.refreshState()
       void this.refreshContextUsage()
-    } else if (response.success === true && command.type === 'prompt') {
+    } else if (command.type === 'prompt') {
       // get_state discovers the new session file promptly. Its mid-stream
       // context snapshot does not include the active assistant message, so a
       // usage refresh waits for message/tool boundaries below.
@@ -289,7 +289,6 @@ export class RpcRuntime {
 
   private async performStop(): Promise<boolean> {
     this.disposeCompactionWatchdog()
-    this.chunks.dispose()
     if (this.info.isStreaming || this.info.isCompacting || this.retryPending) {
       try { await this.request({ type: 'abort' }, 5_000) } catch { /* close stdin and escalate below */ }
     }
