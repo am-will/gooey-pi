@@ -632,7 +632,7 @@ export const englishCatalog = {
 
   // palette-modals
   'palette.title': 'Command palette',
-  'palette.searchPlaceholder': 'Search commands, projects, and sessions',
+  'palette.searchPlaceholder': 'Search commands',
   'palette.close': 'Close command palette',
   'palette.commands': 'Commands',
   'palette.newSession': 'New session',
@@ -643,8 +643,8 @@ export const englishCatalog = {
   'palette.openScheduledDetail': 'Manage recurring work',
   'palette.openCapabilitiesDetail': 'Extend the active harness',
   'palette.openSettingsDetail': 'Configure GooeyPi',
-  'palette.toggleBrowser': 'Toggle browser',
-  'palette.toggleBrowserDetail': 'Open the in-app browser',
+  'palette.openBrowser': 'Open browser',
+  'palette.openBrowserDetail': 'Open the in-app browser',
   'palette.toggleTerminal': 'Toggle terminal',
   'palette.toggleTerminalDetail': 'Open a project shell',
   'palette.toggleSidebar': 'Toggle sidebar',

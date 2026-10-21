@@ -33,7 +33,7 @@ afterEach(async () => {
 const noop = () => undefined
 
 function palette(open: boolean, platform: NodeJS.Platform = 'darwin') {
-  return <CommandPalette open={open} platform={platform} onClose={noop} onNavigate={noop} onNewSession={noop} onToggleSidebar={noop} onToggleTerminal={noop} onOpenBrowser={noop} />
+  return open ? <CommandPalette platform={platform} onClose={noop} onNavigate={noop} onNewSession={noop} onToggleSidebar={noop} onToggleTerminal={noop} onOpenBrowser={noop} /> : null
 }
 
 describe('app shell overlay refcount', () => {
@@ -72,6 +72,15 @@ describe('app shell overlay refcount', () => {
     await act(async () => { root.render(palette(false)) })
     expect(shell.inert).toBe(false)
     expect(shell.hasAttribute('aria-hidden')).toBe(false)
+  })
+
+  it('handles palette Escape exactly once through its focus trap', async () => {
+    const onClose = vi.fn()
+    await act(async () => { root.render(<CommandPalette onClose={onClose} onNavigate={noop} onNewSession={noop} onToggleSidebar={noop} onToggleTerminal={noop} onOpenBrowser={noop} />) })
+    const input = document.querySelector<HTMLInputElement>('.command-palette input')
+    if (!input) throw new Error('Palette input missing')
+    await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('shows Windows shortcut names in the command palette on Windows', async () => {

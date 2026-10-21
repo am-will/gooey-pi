@@ -609,7 +609,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
 
   // palette-modals
   'palette.title': 'コマンドパレット',
-  'palette.searchPlaceholder': 'コマンド、プロジェクト、セッションを検索',
+  'palette.searchPlaceholder': 'コマンドを検索',
   'palette.close': 'コマンドパレットを閉じる',
   'palette.commands': 'コマンド',
   'palette.newSession': '新しいセッション',
@@ -620,8 +620,8 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'palette.openScheduledDetail': '繰り返しの作業を管理',
   'palette.openCapabilitiesDetail': '使用中のハーネスを拡張',
   'palette.openSettingsDetail': 'GooeyPi を設定',
-  'palette.toggleBrowser': 'ブラウザの表示を切り替え',
-  'palette.toggleBrowserDetail': 'アプリ内ブラウザを開く',
+  'palette.openBrowser': 'ブラウザを開く',
+  'palette.openBrowserDetail': 'アプリ内ブラウザを開く',
   'palette.toggleTerminal': 'ターミナルの表示を切り替え',
   'palette.toggleTerminalDetail': 'プロジェクトのシェルを開く',
   'palette.toggleSidebar': 'サイドバーの表示を切り替え',

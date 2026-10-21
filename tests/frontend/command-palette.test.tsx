@@ -89,7 +89,7 @@ const expectedOrder = [
   'Open Activity',
   'Open Scheduled',
   'Open Capabilities',
-  'Toggle browser',
+  'Open browser',
   'Toggle terminal',
   'Toggle sidebar',
   'Open Settings',
