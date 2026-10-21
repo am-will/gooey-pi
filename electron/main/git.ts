@@ -428,6 +428,12 @@ export function resolveGitRepositoryRoot(cwd: string): Promise<string> {
   return inspectRepositoryRoot(cwd)
 }
 
+/** A granted subfolder cannot authorize operations on an ungranted repository ancestor. */
+export async function authorizedRepositoryRoot(value: string, authorize: (cwd: string) => Promise<string>): Promise<string> {
+  const cwd = await authorize(value)
+  return authorize(await resolveGitRepositoryRoot(cwd))
+}
+
 /** Caller must authorize cwd before invoking this privileged fixed-argv helper. */
 export async function listGitWorktrees(cwd: string): Promise<GitWorktree[]> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
@@ -560,7 +566,7 @@ export class GitService {
     options?: { readOnly?: boolean },
   ): Promise<RepositoryContext> {
     const authorizer = options?.readOnly ? this.authorizeReadOnlyCwd : this.authorizeCwd
-    const cwd = await this.repositoryCwd(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }), authorizer)
+    const cwd = await authorizedRepositoryRoot(requireString(cwdValue, 'cwd', { min: 1, max: 4096 }), authorizer)
     const config = await repositoryConfig(cwd)
     const overrides = filterOverridesFromConfig(config)
     overrides.push(...await globalExcludesOverride(cwd, config))
@@ -570,7 +576,7 @@ export class GitService {
 
   async branch(cwd: string): Promise<string | undefined> {
     try {
-      const safeCwd = await this.repositoryCwd(cwd, this.authorizeReadOnlyCwd)
+      const safeCwd = await authorizedRepositoryRoot(cwd, this.authorizeReadOnlyCwd)
       const result = await runGit(safeCwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
       if (result.code === 0 && !result.timedOut && !result.outputExceeded) return result.stdout.trim() || undefined
       const detached = await runGit(safeCwd, ['rev-parse', '--verify', '--short', 'HEAD'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
@@ -707,18 +713,6 @@ export class GitService {
     const output = stripAnsi(`${result.stdout}${result.stderr}`).trim()
     if (result.code !== 0) return { ok: false, reason: 'exit', output: output || processError('Git commit', result).message }
     return { ok: true, output: output || 'Commit created.' }
-  }
-
-  private async repositoryCwd(
-    value: string,
-    authorizer: (cwd: string) => Promise<string> = this.authorizeCwd,
-  ): Promise<string> {
-    const cwd = await authorizer(value)
-    const result = await runGit(cwd, ['rev-parse', '--show-toplevel'], { timeoutMs: 5_000, maxBytes: 64 * 1024 })
-    requireProcessSuccess('Git repository root inspection', result)
-    const repositoryRoot = result.stdout.trim()
-    if (!repositoryRoot) throw new Error('Git repository root inspection returned no path')
-    return authorizer(repositoryRoot)
   }
 
   private validPaths(value: unknown): string[] {

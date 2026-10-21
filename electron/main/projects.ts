@@ -3,7 +3,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { dialog, type BrowserWindow } from 'electron'
 import { sortProjects } from '../../src/lib/project-order'
 import type { GitWorktree, HarnessId, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
-import { listGitWorktrees } from './git'
+import { authorizedRepositoryRoot, listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
 import { mapLimit } from './lib/async'
 import { absorbLinkedWorktreeProjects } from './projects/worktrees'
@@ -289,20 +289,20 @@ export class ProjectService {
 
   async resolveCheckoutProject(idValue: unknown): Promise<ProjectRecord> {
     const id = requireId(idValue, 'project id')
-    const project = (await this.list()).find((record) => record.id === id && !record.inferred && !record.readOnly)
-    if (!project) throw new TypeError('Project is not explicitly granted to this harness')
-    const primaryFolder = await this.authorizeCwd(project.primaryFolder)
-    return { ...project, primaryFolder }
-  }
-
-  async refreshCheckoutProject(idValue: unknown): Promise<ProjectRecord> {
-    return this.resolveCheckoutProject(idValue)
+    const { sessions, canonicalSessionPaths, persisted } = await this.refreshAuthorization()
+    const entry = persisted.find(({ project }) => project.id === id)
+    if (!entry) throw new TypeError('Project is not explicitly granted to this harness')
+    const primaryFolder = await this.authorizeCwd(entry.project.primaryFolder)
+    const stats = aggregateSessionProjectStats(sessions, canonicalSessionPaths)
+    let sessionCount = 0
+    for (const folder of entry.folders) sessionCount += stats.get(folder)?.count ?? 0
+    return persistedProjectRecord({ ...entry.project, primaryFolder }, sessionCount, await this.branchProvider(primaryFolder))
   }
 
   async adoptCheckoutWorktree(idValue: unknown, parentCwdValue: unknown, pathValue: unknown): Promise<ProjectRecord> {
     const id = requireId(idValue, 'project id')
     const project = await this.resolveCheckoutProject(id)
-    const parentCwd = await this.authorizeCwd(requireString(parentCwdValue, 'cwd', { min: 1, max: 4096 }))
+    const parentCwd = await authorizedRepositoryRoot(requireString(parentCwdValue, 'cwd', { min: 1, max: 4096 }), (cwd) => this.authorizeCwd(cwd))
     if (resolve(project.primaryFolder) !== parentCwd) throw new TypeError('worktree parent project is not an authorized grant')
     const requested = resolve(requireString(pathValue, 'worktree path', { min: 1, max: 4096 }))
     const linked = (await listGitWorktrees(parentCwd)).find((worktree) => resolve(worktree.path) === requested)
