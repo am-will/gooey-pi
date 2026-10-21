@@ -57,8 +57,7 @@ export function boundInnerText(value: string | null | undefined, maxLength: numb
 const NAMESPACE = '__primeAnnotator'
 
 // Idempotent bootstrap: defines window.__primeAnnotator once and touches no
-// other page global. stop() removes every listener and the hover overlay;
-// destroy() additionally clears markers and deletes the namespace.
+// other page global. stop() clears picker listeners; setMarkers([]) clears marker listeners.
 const ENSURE_SCRIPT = `(function () {
   if (window.${NAMESPACE}) return;
   var buildSelectorPath = ${buildSelectorPath.toString()};
@@ -175,12 +174,6 @@ const ENSURE_SCRIPT = `(function () {
       window.addEventListener('resize', state.reposition);
       return state.markers.length;
     },
-    destroy: function () {
-      ns.stop();
-      ns.setMarkers([]);
-      state.pending = [];
-      delete window.${NAMESPACE};
-    }
   };
   window.${NAMESPACE} = ns;
 })();`
@@ -211,9 +204,4 @@ export function annotationMarkersScript(markers: AnnotationMarker[]): string {
     index: Number.isFinite(marker.index) ? Math.floor(marker.index) : 0,
   }))
   return `${ENSURE_SCRIPT}\nwindow.${NAMESPACE}.setMarkers(${embedJson(safe)});`
-}
-
-/** Removes every listener, overlay, and the namespace itself from the page. */
-export function annotationTeardownScript(): string {
-  return `window.${NAMESPACE} ? (window.${NAMESPACE}.destroy(), true) : false`
 }

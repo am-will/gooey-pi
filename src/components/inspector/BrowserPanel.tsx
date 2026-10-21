@@ -1,3 +1,6 @@
+import type { PreviewLocationStore } from '@/hooks/useBrowserPreviewState'
+import { normalizeBrowserAddress } from '@/lib/browser-address'
+import { isAllowedBrowserUrl } from '@/lib/browser-url'
 import { ArrowLeft, ArrowRight, Bot, ExternalLink, History, MessageCirclePlus, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { annotationMarkersScript, annotationPickerScript, annotationTakeScript } from '@/lib/annotation-picker'
@@ -39,17 +42,8 @@ function runInPage(view: WebviewElement, code: string): Promise<unknown> {
   }
 }
 
-function normalizeUrl(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) return 'about:blank'
-  if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) || trimmed.startsWith('about:')) return trimmed
-  if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(trimmed)) return `http://${trimmed}`
-  if (trimmed.includes('.') && !trimmed.includes(' ')) return `https://${trimmed}`
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
-}
-
-
 interface BrowserPanelProps {
+  previewLocation?: PreviewLocationStore
   navigationRequest?: { id: number; url: string }
   onNavigationRequestHandled?(id: number): void
   platform?: NodeJS.Platform
@@ -87,11 +81,21 @@ function agentTabLabel(tab: AgentBrowserTabRecord, fallback: string): string {
   return fallback
 }
 
-export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
+export function BrowserPanel({ previewLocation, home, navigationRequest, onNavigationRequestHandled, onOpenExternal, annotations, agentTabs = [], activeAgentTabId = null, previewSelected = true, onSelectAgentTab, onCloseAgentTab, onShowPreview, onAgentSlotRect, agentSessionKey, onPreviewContext, previewPointerEvent = null, onNavigateAgentTab, pollIntervalMs = 350, platform = detectRendererPlatform() }: BrowserPanelProps) {
   const { t } = useI18n()
   const webviewRef = useRef<WebviewElement | null>(null)
-  const [address, setAddress] = useState(home)
-  const [currentUrl, setCurrentUrl] = useState(home)
+  const [initialLocation] = useState(() => previewLocation?.snapshot())
+  const previewLocationRef = useRef(previewLocation)
+  previewLocationRef.current = previewLocation
+  const [initialRequest] = useState(() => {
+    if (!navigationRequest) return null
+    const url = normalizeBrowserAddress(navigationRequest.url)
+    return isAllowedBrowserUrl(url) ? { id: navigationRequest.id, url } : null
+  })
+  const initialUrl = initialRequest?.url ?? initialLocation?.url ?? (isAllowedBrowserUrl(home) ? home : 'about:blank')
+  const initialSrcRef = useRef(isAllowedBrowserUrl(initialUrl) ? initialUrl : 'about:blank')
+  const [address, setAddress] = useState(initialUrl)
+  const [currentUrl, setCurrentUrl] = useState(initialUrl)
   const [loading, setLoading] = useState(false)
   const [canBack, setCanBack] = useState(false)
   const [canForward, setCanForward] = useState(false)
@@ -99,9 +103,9 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   const [domReady, setDomReady] = useState(false)
   const [pendingElement, setPendingElement] = useState<BrowserAnnotationElement | null>(null)
   const [annotationText, setAnnotationText] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<'capacity' | 'invalid-url' | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [history, setHistory] = useState<string[]>(() => [home])
+  const [history, setHistory] = useState<string[]>(() => initialLocation?.history.length ? [...initialLocation.history] : [initialUrl])
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
   const noticeTimerRef = useRef<number | null>(null)
@@ -127,7 +131,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   // Bind the Preview guest to the active thread so its agent can adopt it as
   // the "preview" tab; clear the binding when the panel goes away.
   useEffect(() => {
-    if (previewWebContentsId === null || !agentSessionKey) return
+    if (previewWebContentsId === null || !agentSessionKey) {
+      onPreviewContextRef.current?.(null, null)
+      return
+    }
     onPreviewContextRef.current?.(previewWebContentsId, agentSessionKey)
   }, [previewWebContentsId, agentSessionKey])
   useEffect(() => () => { onPreviewContextRef.current?.(null, null) }, [])
@@ -174,14 +181,14 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     }
   }, [showAgentTab])
 
-  const showNotice = (text: string) => {
+  const showNotice = useCallback((text: 'capacity' | 'invalid-url') => {
     setNotice(text)
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
     noticeTimerRef.current = window.setTimeout(() => {
       noticeTimerRef.current = null
-      setNotice('')
+      setNotice(null)
     }, 5_000)
-  }
+  }, [])
   useEffect(
     () => () => {
       if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current)
@@ -195,6 +202,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     const sync = () => {
       try {
         const url = view.getURL() || home
+        previewLocationRef.current?.record(url)
         setCurrentUrl(url)
         setAddress(url)
         setCanBack(view.canGoBack())
@@ -223,6 +231,11 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         /* webview not ready */
       }
     }
+    const didNavigateInPage = (event: Event) => {
+      if ('isMainFrame' in event && event.isMainFrame === false) return
+      sync()
+      try { annotationsRef.current.handleNavigation(view.getURL()) } catch { /* guest not ready */ }
+    }
     // dom-ready is the earliest point at which executeJavaScript is legal;
     // it fires again for every subsequent document, so markers re-apply.
     const onDomReady = () => {
@@ -234,13 +247,13 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     view.addEventListener('did-start-loading', didStart)
     view.addEventListener('did-stop-loading', didStop)
     view.addEventListener('did-navigate', didNavigate)
-    view.addEventListener('did-navigate-in-page', sync)
+    view.addEventListener('did-navigate-in-page', didNavigateInPage)
     return () => {
       view.removeEventListener('dom-ready', onDomReady)
       view.removeEventListener('did-start-loading', didStart)
       view.removeEventListener('did-stop-loading', didStop)
       view.removeEventListener('did-navigate', didNavigate)
-      view.removeEventListener('did-navigate-in-page', sync)
+      view.removeEventListener('did-navigate-in-page', didNavigateInPage)
     }
   }, [home])
 
@@ -293,18 +306,27 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
   }, [markerSignature, loading, domReady])
 
   const navigate = useCallback((value: string) => {
-    const url = normalizeUrl(value)
+    const url = normalizeBrowserAddress(value)
+    if (!isAllowedBrowserUrl(url)) {
+      showNotice('invalid-url')
+      return
+    }
     setAddress(url)
     setCurrentUrl(url)
     void webviewRef.current?.loadURL(url).catch((error: unknown) => {
       if (!String(error).includes('ERR_ABORTED')) console.error('Browser navigation failed', error)
     })
-  }, [])
+  }, [showNotice])
   useEffect(() => {
-    if (!navigationRequest || !domReady) return
+    if (!navigationRequest) return
+    if (navigationRequest.id === initialRequest?.id) {
+      onNavigationRequestHandled?.(navigationRequest.id)
+      return
+    }
+    if (!domReady) return
     navigate(navigationRequest.url)
     onNavigationRequestHandled?.(navigationRequest.id)
-  }, [domReady, navigate, navigationRequest, onNavigationRequestHandled])
+  }, [domReady, initialRequest, navigate, navigationRequest, onNavigationRequestHandled])
 
   const toggleAnnotation = () => {
     if (picking) {
@@ -317,10 +339,10 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       return
     }
     if (annotationsRef.current.atCapacity) {
-      showNotice(t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }))
+      showNotice('capacity')
       return
     }
-    setNotice('')
+    setNotice(null)
     setPicking(true)
   }
 
@@ -336,7 +358,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
       /* webview not ready */
     }
     if (!annotationsRef.current.add({ comment: annotationText, element: pendingElement, pageUrl, pageTitle })) {
-      showNotice(t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }))
+      showNotice('capacity')
       return
     }
     setPendingElement(null)
@@ -347,7 +369,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
     ref: (node: WebviewElement | null) => {
       webviewRef.current = node
     },
-    src: home,
+    src: initialSrcRef.current,
     className: 'browser-webview',
     partition: BROWSER_PARTITION,
     webpreferences: 'contextIsolation=yes,sandbox=yes,nodeIntegration=no',
@@ -429,7 +451,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         <div className="browser-history">
           <div>
             <strong>{t('inspector.browser.recentPages')}</strong>
-            <button type="button" onClick={() => setHistory([])}>
+            <button type="button" onClick={() => { setHistory([]); previewLocationRef.current?.clearHistory() }}>
               {t('inspector.browser.clear')}
             </button>
           </div>
@@ -523,7 +545,7 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
         ) : null}
         {notice ? (
           <p className="annotation-notice" role="alert">
-            {notice}
+            {notice === 'capacity' ? t('inspector.browser.capacity', { max: MAX_BROWSER_ANNOTATIONS }) : t('inspector.browser.invalidUrl')}
           </p>
         ) : null}
         <AgentCursorOverlay pointerEvent={previewPointerEvent} />
@@ -546,7 +568,9 @@ export function BrowserPanel({ home, navigationRequest, onNavigationRequestHandl
               onSubmit={(event) => {
                 event.preventDefault()
                 agentAddressEditingRef.current = false
-                onNavigateAgentTab?.(activeAgentTab.tabId, 'url', normalizeUrl(agentAddress))
+                const url = normalizeBrowserAddress(agentAddress)
+                if (isAllowedBrowserUrl(url)) onNavigateAgentTab?.(activeAgentTab.tabId, 'url', url)
+                else showNotice('invalid-url')
               }}
             >
               <Bot size={12} aria-hidden />

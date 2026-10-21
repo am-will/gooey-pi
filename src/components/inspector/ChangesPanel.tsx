@@ -1,5 +1,5 @@
 import { ArrowDownToLine, File, FileCode2, GitBranch, LoaderCircle, RefreshCw, Sparkles, Undo2 } from 'lucide-react'
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { GitStatus } from '@/types/api'
@@ -51,11 +51,14 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
   const [scope, setScope] = useState<'unstaged' | 'staged'>('unstaged')
   const [selectedPath, setSelectedPath] = useState<string | undefined>(git.files[0]?.path)
   const [diff, setDiff] = useState('')
+  const diffSelectionRef = useRef('')
   const [loading, setLoading] = useState(false)
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
   const [confirmUndo, setConfirmUndo] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
+  const mutationPendingRef = useRef(false)
+  const [mutating, setMutating] = useState(false)
   const visibleFiles = git.files.filter((file) => scope === 'staged' ? file.staged : !file.staged)
   const activeSelectedPath = visibleFiles.some((file) => file.path === selectedPath) ? selectedPath : undefined
 
@@ -77,13 +80,17 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
       return
     }
     let cancelled = false
-    setLoading(true)
+    const selection = JSON.stringify([cwd, activeSelectedPath, scope])
+    if (diffSelectionRef.current !== selection) setLoading(true)
+    diffSelectionRef.current = selection
     window.prime.git.diff(cwd, activeSelectedPath, scope === 'staged').then((value) => { if (!cancelled) setDiff(value.text) }).catch(() => { if (!cancelled) setDiff(t('inspector.changes.loadFailed')) }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [cwd, activeSelectedPath, scope])
+  }, [cwd, activeSelectedPath, scope, git])
 
   const mutate = async (kind: 'stage' | 'unstage' | 'restore', paths: string[]): Promise<boolean> => {
-    if (readOnly || !cwd || !window.prime) return false
+    if (readOnly || mutationPendingRef.current || !cwd || !window.prime) return false
+    mutationPendingRef.current = true
+    setMutating(true)
     setActionError('')
     try {
       const ok = kind === 'stage'
@@ -97,6 +104,9 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
     } catch (error) {
       setActionError(errorMessage(error))
       return false
+    } finally {
+      mutationPendingRef.current = false
+      setMutating(false)
     }
   }
 
@@ -106,13 +116,18 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
   }
 
   const commit = async () => {
-    if (readOnly || !cwd || !commitMessage.trim() || !window.prime) return
+    if (readOnly || mutationPendingRef.current || !cwd || !commitMessage.trim() || !window.prime) return
+    mutationPendingRef.current = true
+    setMutating(true)
     setActionError('')
     try {
       const result = await window.prime.git.commit(cwd, commitMessage.trim())
       if (!result.ok) throw new Error(result.output || t('inspector.changes.commitFailed'))
       setCommitOpen(false); setCommitMessage(''); await onRefreshGit()
-    } catch (error) { setActionError(errorMessage(error)) }
+    } catch (error) { setActionError(errorMessage(error)) } finally {
+      mutationPendingRef.current = false
+      setMutating(false)
+    }
   }
 
   if (!git.isRepo) return <EmptyState icon={<GitBranch size={24} />} title={t('inspector.changes.noRepo.title')}>{t('inspector.changes.noRepo.body')}</EmptyState>
@@ -130,21 +145,21 @@ export function ChangesPanel({ cwd, git, readOnly = false, onGrantProject, onRef
         <IconButton label={t('inspector.changes.refresh')} onClick={() => void onRefreshGit()}><RefreshCw size={14} /></IconButton>
       </div>
       {readOnly ? <div className="changes-read-only" role="note"><span>{t('inspector.changes.readOnly')}</span>{onGrantProject ? <button type="button" className="button button--compact" onClick={() => void onGrantProject()}>{t('inspector.changes.addProject')}</button> : null}</div> : null}
-      <div className="changes-scopes"><Segmented value={scope} label={t('inspector.changes.diffScope')} options={[{ value: 'unstaged', label: t(DIFF_SCOPE_LABEL_KEYS.unstaged) }, { value: 'staged', label: t(DIFF_SCOPE_LABEL_KEYS.staged) }]} onChange={(value) => { setActionError(''); setScope(value as 'unstaged' | 'staged') }} /><button type="button" className="button button--compact" disabled={readOnly || !git.files.some((file) => file.staged)} onClick={() => setCommitOpen(true)}>{t('inspector.changes.commit')}</button></div>
+      <div className="changes-scopes"><Segmented value={scope} label={t('inspector.changes.diffScope')} options={[{ value: 'unstaged', label: t(DIFF_SCOPE_LABEL_KEYS.unstaged) }, { value: 'staged', label: t(DIFF_SCOPE_LABEL_KEYS.staged) }]} onChange={(value) => { setActionError(''); setScope(value as 'unstaged' | 'staged') }} /><button type="button" className="button button--compact" disabled={readOnly || mutating || !git.files.some((file) => file.staged)} onClick={() => setCommitOpen(true)}>{t('inspector.changes.commit')}</button></div>
       {actionError ? <p className="changes-error" role="alert">{actionError}</p> : null}
       <div className="changes-body">
         <div className="file-changes scroll-area">
-          <div className="file-changes__header"><span>{t('inspector.changes.changedFiles', { count: visibleFiles.length })}</span>{visibleFiles.length ? <button type="button" disabled={readOnly} onClick={() => void mutate(scope === 'staged' ? 'unstage' : 'stage', visibleFiles.map((file) => file.path))}>{scope === 'staged' ? t('inspector.changes.unstageAll') : t('inspector.changes.stageAll')}</button> : null}</div>
+          <div className="file-changes__header"><span>{t('inspector.changes.changedFiles', { count: visibleFiles.length })}</span>{visibleFiles.length ? <button type="button" disabled={readOnly || mutating} onClick={() => void mutate(scope === 'staged' ? 'unstage' : 'stage', visibleFiles.map((file) => file.path))}>{scope === 'staged' ? t('inspector.changes.unstageAll') : t('inspector.changes.stageAll')}</button> : null}</div>
           {visibleFiles.map((file) => <button type="button" key={file.path} className={selectedPath === file.path ? 'is-selected' : ''} onClick={() => setSelectedPath(file.path)}><File size={13} /><span title={file.path}>{file.path}</span><small className="additions">+{file.additions}</small><small className="deletions">−{file.deletions}</small><span className="file-status">{file.status}</span></button>)}
           {visibleFiles.length === 0 ? <p className="file-changes__empty">{t(DIFF_SCOPE_EMPTY_KEYS[scope])}</p> : null}
         </div>
         <div className="diff-pane scroll-area">
-          {selectedPath ? <div className="diff-header"><div><FileCode2 size={13} /><span>{selectedPath}</span></div><div>{scope === 'unstaged' ? <button type="button" disabled={readOnly} onClick={() => void mutate('stage', [selectedPath])}><ArrowDownToLine size={12} /> {t('inspector.changes.stage')}</button> : <button type="button" disabled={readOnly} onClick={() => void mutate('unstage', [selectedPath])}><Undo2 size={12} /> {t('inspector.changes.unstage')}</button>}<button type="button" className="danger-action" disabled={readOnly} onClick={() => setConfirmUndo(selectedPath)}><Undo2 size={12} /> {t('inspector.changes.undoChanges')}</button></div></div> : null}
+          {selectedPath ? <div className="diff-header"><div><FileCode2 size={13} /><span>{selectedPath}</span></div><div>{scope === 'unstaged' ? <button type="button" disabled={readOnly || mutating} onClick={() => void mutate('stage', [selectedPath])}><ArrowDownToLine size={12} /> {t('inspector.changes.stage')}</button> : <button type="button" disabled={readOnly || mutating} onClick={() => void mutate('unstage', [selectedPath])}><Undo2 size={12} /> {t('inspector.changes.unstage')}</button>}<button type="button" className="danger-action" disabled={readOnly || mutating} onClick={() => setConfirmUndo(selectedPath)}><Undo2 size={12} /> {t('inspector.changes.undoChanges')}</button></div></div> : null}
           {loading ? <div className="diff-loading"><LoaderCircle className="spin" size={15} /> {t('inspector.changes.loadingDiff')}</div> : <DiffView text={diff} />}
         </div>
       </div>
-      {commitOpen ? <Modal title={t('inspector.changes.commitModal.title')} onClose={() => setCommitOpen(false)} footer={<><button className="button" type="button" onClick={() => setCommitOpen(false)}>{t('common.cancel')}</button><button className="button button--primary" type="button" disabled={readOnly || !commitMessage.trim()} onClick={() => void commit()}>{t('inspector.changes.commitAction')}</button></>}><label className="field"><span>{t('inspector.changes.commitMessage')}</span><div className="commit-message-input"><input autoFocus value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder={t('inspector.changes.commitPlaceholder')} /><button type="button" className="button button--compact" onClick={fillCommitSummary} title={t('inspector.changes.generateSummaryTitle')}><Sparkles size={13} /> {t('inspector.changes.generateSummary')}</button></div></label><p className="muted-copy">{renderWithCode(t('inspector.changes.commitNote'), 'branch', git.branch ?? '')}</p></Modal> : null}
-      {confirmUndo ? <Modal title={t('inspector.changes.undoModal.title')} onClose={() => setConfirmUndo(null)} footer={<><button className="button" type="button" onClick={() => setConfirmUndo(null)}>{t('common.cancel')}</button><button className="button button--danger" type="button" disabled={readOnly} onClick={() => { const path = confirmUndo; void mutate('restore', [path]).then((ok) => { if (ok) setConfirmUndo(null) }) }}>{t('inspector.changes.undoChanges')}</button></>}><p>{renderWithCode(t('inspector.changes.undoBody'), 'path', confirmUndo)}</p></Modal> : null}
+      {commitOpen ? <Modal title={t('inspector.changes.commitModal.title')} onClose={() => setCommitOpen(false)} footer={<><button className="button" type="button" onClick={() => setCommitOpen(false)}>{t('common.cancel')}</button><button className="button button--primary" type="button" disabled={readOnly || mutating || !commitMessage.trim()} onClick={() => void commit()}>{t('inspector.changes.commitAction')}</button></>}><label className="field"><span>{t('inspector.changes.commitMessage')}</span><div className="commit-message-input"><input autoFocus value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder={t('inspector.changes.commitPlaceholder')} /><button type="button" className="button button--compact" onClick={fillCommitSummary} title={t('inspector.changes.generateSummaryTitle')}><Sparkles size={13} /> {t('inspector.changes.generateSummary')}</button></div></label><p className="muted-copy">{renderWithCode(t('inspector.changes.commitNote'), 'branch', git.branch ?? '')}</p></Modal> : null}
+      {confirmUndo ? <Modal title={t('inspector.changes.undoModal.title')} onClose={() => setConfirmUndo(null)} footer={<><button className="button" type="button" onClick={() => setConfirmUndo(null)}>{t('common.cancel')}</button><button className="button button--danger" type="button" disabled={readOnly || mutating} onClick={() => { const path = confirmUndo; void mutate('restore', [path]).then((ok) => { if (ok) setConfirmUndo(null) }) }}>{t('inspector.changes.undoChanges')}</button></>}><p>{renderWithCode(t('inspector.changes.undoBody'), 'path', confirmUndo)}</p></Modal> : null}
     </div>
   )
 }

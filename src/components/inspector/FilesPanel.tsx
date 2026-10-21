@@ -58,67 +58,30 @@ export function buildTreeFromEntries(
   const rootNodes: FileTreeNode[] = []
   const nodeMap = new Map<string, FileTreeNode>()
 
-  const getOrCreateDir = (dirPath: string): FileTreeNode => {
-    const normalized = dirPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
-    let node = nodeMap.get(normalized)
-    if (node) return node
-
+  const getOrCreateNode = (path: string, type: FileTreeNode['type']): FileTreeNode => {
+    const normalized = path.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
+    const existing = nodeMap.get(normalized)
+    if (existing) { existing.type = type; return existing }
     const lastSlash = normalized.lastIndexOf('/')
     const parentPath = lastSlash === -1 ? '' : normalized.slice(0, lastSlash)
-    const name = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1)
-    const depth = baseDepth + (normalized ? normalized.split('/').length - 1 : 0)
-
-    node = {
+    const node: FileTreeNode = {
       id: `${root}\0${normalized}`,
-      name,
+      name: lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1),
       path: normalized,
       fullPath: `${root}/${normalized}`,
       root,
-      type: 'directory',
+      type,
       children: [],
-      depth,
+      depth: baseDepth + normalized.split('/').length - 1,
     }
     nodeMap.set(normalized, node)
-
-    if (parentPath) {
-      getOrCreateDir(parentPath).children.push(node)
-    } else {
-      rootNodes.push(node)
-    }
+    if (parentPath) getOrCreateNode(parentPath, 'directory').children.push(node)
+    else rootNodes.push(node)
     return node
   }
 
   for (const entry of entries) {
-    if (!entry.path) continue
-    const normalized = entry.path.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/')
-    if (!normalized) continue
-    const lastSlash = normalized.lastIndexOf('/')
-    const parentPath = lastSlash === -1 ? '' : normalized.slice(0, lastSlash)
-    const name = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1)
-    const depth = baseDepth + (lastSlash === -1 ? 0 : normalized.split('/').length - 1)
-
-    let node = nodeMap.get(normalized)
-    if (node) {
-      node.type = entry.type
-    } else {
-      node = {
-        id: `${root}\0${normalized}`,
-        name,
-        path: normalized,
-        fullPath: `${root}/${normalized}`,
-        root,
-        type: entry.type,
-        children: [],
-        depth,
-      }
-      nodeMap.set(normalized, node)
-
-      if (parentPath) {
-        getOrCreateDir(parentPath).children.push(node)
-      } else {
-        rootNodes.push(node)
-      }
-    }
+    if (entry.path.replace(/\//g, '')) getOrCreateNode(entry.path, entry.type)
   }
 
   const sortNodes = (nodes: FileTreeNode[]) => {
@@ -220,6 +183,12 @@ export function collectDirectoryIds(nodes: FileTreeNode[]): Set<string> {
   return ids
 }
 
+function FileStatus({ status }: { status?: string }) {
+  if (!status) return null
+  const variant = status === 'M' ? 'modified' : status === 'A' ? 'added' : status === 'D' ? 'deleted' : ''
+  return <small className={`file-tree__status ${variant ? `file-tree__status--${variant}` : ''}`}>{status}</small>
+}
+
 export function FilesPanel({
   project,
   git,
@@ -255,14 +224,15 @@ export function FilesPanel({
     setSkipped(0)
     setTruncated(false)
     setVisibleLimit(1_000)
-    if (!project || !window.prime) return
+    const bridge = window.prime
+    if (!project || !bridge) return
     setLoading(true)
     try {
       const roots = project.folders.length ? project.folders : [project.primaryFolder]
       const groups = await Promise.all(
         roots.map(async (root) => ({
           root,
-          listing: await window.prime.projects.listFiles(root, project.harness, recursive ? undefined : 'children'),
+          listing: await bridge.projects.listFiles(root, project.harness, recursive ? undefined : 'children'),
         })),
       )
       if (loadToken.current !== token) return
@@ -286,10 +256,10 @@ export function FilesPanel({
     }
   }, [project?.id, project?.primaryFolder, project?.folders.join('\0'), project?.harness, isSearching])
 
-  const changed = useMemo(
-    () => new Map(git.files.map((file) => [file.path, file.status])),
-    [git.files],
-  )
+  const changed = useMemo(() => {
+    const root = (git.root ?? project?.primaryFolder ?? '').replaceAll('\\', '/').replace(/\/+$/, '')
+    return new Map(git.files.map((file) => [`${root}/${file.path.replaceAll('\\', '/')}`, file.status]))
+  }, [git.files, git.root, project?.primaryFolder])
 
   const filteredTree = useMemo(() => filterFileTree(treeRoots, query), [treeRoots, query])
   const visibleNodes = useMemo(
@@ -309,11 +279,12 @@ export function FilesPanel({
       else next.delete(id)
       return next
     })
-    if (!opening || node.children.length > 0 || recursiveListing.current || loadedDirectories.current.has(id) || loadingDirectories.current.has(id) || !window.prime || !project) return
+    const bridge = window.prime
+    if (!opening || node.children.length > 0 || recursiveListing.current || loadedDirectories.current.has(id) || loadingDirectories.current.has(id) || !bridge || !project) return
     const token = loadToken.current
     loadingDirectories.current.add(id)
     try {
-      const listing = await window.prime.projects.listFiles(node.fullPath, project.harness, 'children')
+      const listing = await bridge.projects.listFiles(node.fullPath, project.harness, 'children')
       if (loadToken.current !== token) return
       const prefix = node.path ? `${node.path}/` : ''
       const entries = listing.entries.map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }))
@@ -409,8 +380,7 @@ export function FilesPanel({
           ? displayedNodes.map((node) => {
               const isDirectory = node.type === 'directory'
               const isExpanded = isSearching || expandedIds.has(node.id)
-              const status =
-                node.root === project.primaryFolder ? changed.get(node.path) : undefined
+              const status = changed.get(node.fullPath.replaceAll('\\', '/'))
 
               if (isDirectory) {
                 return (
@@ -438,21 +408,7 @@ export function FilesPanel({
                       {isExpanded ? <FolderOpen size={13} /> : <Folder size={13} />}
                     </span>
                     <span className="file-tree__name">{node.name}</span>
-                    {status ? (
-                      <small
-                        className={`file-tree__status ${
-                          status === 'M'
-                            ? 'file-tree__status--modified'
-                            : status === 'A'
-                              ? 'file-tree__status--added'
-                              : status === 'D'
-                                ? 'file-tree__status--deleted'
-                                : ''
-                        }`}
-                      >
-                        {status}
-                      </small>
-                    ) : null}
+                    <FileStatus status={status} />
                   </button>
                 )
               }
@@ -469,21 +425,7 @@ export function FilesPanel({
                   <span className="file-tree__expander-placeholder" />
                   <span className="file-tree__icon">{getFileIcon(node.name)}</span>
                   <span className="file-tree__name">{node.name}</span>
-                  {status ? (
-                    <small
-                      className={`file-tree__status ${
-                        status === 'M'
-                          ? 'file-tree__status--modified'
-                          : status === 'A'
-                            ? 'file-tree__status--added'
-                            : status === 'D'
-                              ? 'file-tree__status--deleted'
-                              : ''
-                      }`}
-                    >
-                      {status}
-                    </small>
-                  ) : null}
+                  <FileStatus status={status} />
                 </button>
               )
             })
@@ -501,11 +443,11 @@ export function FilesPanel({
           </button>
         ) : null}
 
-        {!loading && !error && treeRoots.length > 0 && visibleNodes.length === 0 ? (
+        {!loading && !error && !truncated && treeRoots.length > 0 && visibleNodes.length === 0 ? (
           <p>{query.trim() ? t('inspector.files.noMatch', { query }) : t('inspector.files.none')}</p>
         ) : null}
 
-        {!loading && !error && treeRoots.length === 0 ? <p>{t('inspector.files.none')}</p> : null}
+        {!loading && !error && !truncated && treeRoots.length === 0 ? <p>{t('inspector.files.none')}</p> : null}
       </div>
     </div>
   )

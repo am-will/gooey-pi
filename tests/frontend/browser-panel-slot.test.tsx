@@ -226,3 +226,18 @@ describe('BrowserPanel agent slot measurement', () => {
     expect(latestObserver().disconnect).toHaveBeenCalledOnce()
   })
 })
+
+
+it('revokes Preview adoption when the selected thread has no session file', async () => {
+  const onPreviewContext = vi.fn()
+  const renderOwner = async (agentSessionKey?: string) => {
+    await act(async () => root.render(<BrowserPanel home="https://example.com/" onOpenExternal={() => undefined} annotations={annotations} agentSessionKey={agentSessionKey} onPreviewContext={onPreviewContext} />))
+  }
+  await renderOwner('/sessions/a.jsonl')
+  const view = container.querySelector('webview')!
+  Object.assign(view, { getWebContentsId: () => 42 })
+  await act(async () => view.dispatchEvent(new Event('dom-ready')))
+  expect(onPreviewContext).toHaveBeenLastCalledWith(42, '/sessions/a.jsonl')
+  await renderOwner()
+  expect(onPreviewContext).toHaveBeenLastCalledWith(null, null)
+})
