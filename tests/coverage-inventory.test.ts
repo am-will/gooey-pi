@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   COVERAGE_FAMILIES,
+  REQUIRED_SAFETY_COVERAGE,
+  safetyCoverageThresholds,
   COVERAGE_RUNTIME_EXTENSIONS,
   COVERAGE_TECHNICAL_EXCLUSIONS,
   createCoverageInventory,
@@ -21,6 +23,8 @@ const VITEST_ENTRYPOINT = resolve(PROJECT_ROOT, 'node_modules/vitest/vitest.mjs'
 
 const REQUIRED_SAFETY_MODULES = [
   'electron/main/ipc.ts',
+  'electron/main/agent-rpc/manager.ts',
+  'electron/main/subagents.ts',
   'electron/main/lib/capability-bridge.ts',
   'electron/main/browser/agent-bridge.ts',
   'electron/main/collaboration/agent-bridge.ts',
@@ -91,6 +95,7 @@ describe('safety-critical coverage inventory', () => {
       functions: 70,
       lines: 75,
       ...familyCoverageThresholds(),
+      ...safetyCoverageThresholds(REQUIRED_SAFETY_COVERAGE, inventory),
     })
     const familyThresholds = familyCoverageThresholds()
     expect(Object.keys(familyThresholds).sort()).toEqual(COVERAGE_FAMILIES.map(({ root }) => `${root}/**`).sort())
@@ -103,6 +108,25 @@ describe('safety-critical coverage inventory', () => {
       }
     }
     expect(inventory.includedFiles).toEqual(expect.arrayContaining([...REQUIRED_SAFETY_MODULES]))
+  })
+
+  it('classifies every required authority with a measured floor or retained worker proof', () => {
+    const inventory = createCoverageInventory(PROJECT_ROOT)
+    expect(REQUIRED_SAFETY_COVERAGE.map(({ file }) => file).sort()).toEqual([...REQUIRED_SAFETY_MODULES].sort())
+    const compensated = REQUIRED_SAFETY_COVERAGE.filter((module) => module.kind === 'worker-compensated')
+    expect(compensated.map(({ file }) => file)).toEqual(['electron/main/schedules/recurrence-worker.ts'])
+    for (const module of compensated) {
+      expect(module.reason.length).toBeGreaterThan(40)
+      expect(module.compensatingVerification.length).toBeGreaterThanOrEqual(2)
+      for (const verification of module.compensatingVerification) expect(existsSync(resolve(PROJECT_ROOT, verification)), verification).toBe(true)
+      expect(inventory.includedFiles).toContain(module.file)
+      expect(inventory.excludedFiles).not.toContain(module.file)
+    }
+    const floors = safetyCoverageThresholds(REQUIRED_SAFETY_COVERAGE, inventory)
+    expect(Object.keys(floors)).toHaveLength(REQUIRED_SAFETY_MODULES.length - compensated.length)
+    expect(floors['electron/preload/index.ts']).toEqual({ statements: 100, branches: 100, functions: 100, lines: 100 })
+    expect(floors['electron/main/agent-rpc/manager.ts']).toBeDefined()
+    expect(floors['electron/main/subagents.ts']).toBeDefined()
   })
 
   it('automatically includes every shipped extension and every new runtime file in a covered family', () => {

@@ -22,8 +22,24 @@ Technical exclusions can name only one exact discovered file. Each entry must in
 
 [`vitest.config.ts`](../vitest.config.ts) defines the global thresholds.
 [`coverage-inventory.ts`](../scripts/release/coverage-inventory.ts) defines each
-family's thresholds. These files are the source of truth for the current
+family's thresholds and `REQUIRED_SAFETY_COVERAGE` records exact-file safety
+floors or an explicit worker classification. These files are the source of truth for the current
 values. Update a floor only from coverage measured at the commit under review.
+
+The safety registry includes the RPC manager and bounded child-history reader.
+The `c8ef035` passing source report supplies the measured baseline. File floors
+reserve five percentage points for branches and two for the other metrics;
+family floors reserve two, while stronger existing floors remain in force.
+Exact-file floors overlap family and global gates; matching a file never removes
+it from an aggregate. Structural tests keep every required module classified,
+and a real nested coverage fixture proves that overlap behavior.
+
+`recurrence-worker.ts` is the sole worker-compensated safety module. Its real
+Worker execution runs outside the parent Vitest V8 collection. The source
+remains included and contributes its reported zero to the denominator. The
+registry links the actual worker fixture and bounded evaluation/recovery tests.
+Packaged ASAR Worker loading is verified separately and recorded in release
+evidence; a parent-process coverage percentage does not establish that behavior.
 
 Renderer components and pages under `src/components` and `src/pages` are outside
 the coverage inventory. Their component tests and Electron scenarios still run,
