@@ -113,6 +113,11 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
  * stable identity (created once) and dispatches against the latest render's
  * dependencies, mirroring useStableCallback/useSidebarActions semantics.
  */
+function ownsRuntime(workspace: WorkspaceActionsDeps['workspace'], runtimeId: string, generation: number): boolean {
+  const owner = workspace.runtimeOwnerRef.current
+  return workspace.runtimeIdRef.current === runtimeId && owner?.runtimeId === runtimeId && owner.generation === generation
+}
+
 export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   const grantProject = async (project: ProjectRecord): Promise<ProjectRecord> => {
     const { bridge, workspace, setProjects, gitRequestRef, setGitSnapshot, reportError } = getDeps()
@@ -305,12 +310,9 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     }
     const currentWorkspace = workspace.workspaceRef.current
     const currentRuntime = workspace.runtime
-    const currentOwner = workspace.runtimeOwnerRef.current
     const ownsStreamingRuntime = Boolean(
       bridge && currentRuntime && (currentRuntime.isStreaming || submissionAdmissionRef.current.active)
-      && workspace.runtimeIdRef.current === currentRuntime.runtimeId
-      && currentOwner?.runtimeId === currentRuntime.runtimeId
-      && currentOwner.generation === currentWorkspace.generation,
+      && ownsRuntime(workspace, currentRuntime.runtimeId, currentWorkspace.generation),
     )
     const completeQueuedFlush = () => {
       if (queuedFlushPromptId) workspace.removeQueuedPrompt(queuedFlushPromptId)
@@ -420,9 +422,8 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         if (!selected.cwd) throw new Error('The selected workspace has no working directory.')
         const liveRuntimes = (await bridge.agent.list()).filter((candidate) => candidate.harness === activeHarness)
         if (!stillDeliverable()) return
-        const owner = workspace.runtimeOwnerRef.current
         const tracked = workspace.runtimeIdRef.current ? liveRuntimes.find((item) => item.runtimeId === workspace.runtimeIdRef.current) : undefined
-        const belongsHere = Boolean(tracked && owner?.runtimeId === tracked.runtimeId && owner.generation === generation && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
+        const belongsHere = Boolean(tracked && ownsRuntime(workspace, tracked.runtimeId, generation) && tracked.cwd === selected.cwd && (!selected.sessionFile || tracked.sessionFile === selected.sessionFile))
         const activeRuntime = belongsHere ? tracked : findRuntimeForWorkspace(liveRuntimes, selected.cwd, selected.sessionFile)
         const selectedSession = selected.sessionFile ? sessions.find((session) => session.filePath === selected.sessionFile) : undefined
         if (compactCommand && !activeRuntime) {
@@ -559,14 +560,11 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     const stoppedOwnerGeneration = stoppedOwner?.generation
     try {
       await bridge.agent.command(stoppedRuntimeId, { type: 'abort' } satisfies AgentRpcCommand)
-      const currentOwner = workspace.runtimeOwnerRef.current
       if (
         workspace.workspaceRef.current.generation !== stoppedGeneration
-        || workspace.runtimeIdRef.current !== stoppedRuntimeId
+        || !ownsRuntime(workspace, stoppedRuntimeId, stoppedGeneration)
         || stoppedOwnerRuntimeId !== stoppedRuntimeId
         || stoppedOwnerGeneration !== stoppedGeneration
-        || currentOwner?.runtimeId !== stoppedOwnerRuntimeId
-        || currentOwner?.generation !== stoppedOwnerGeneration
       ) return
       workspace.setRuntime((current) => current?.runtimeId === stoppedRuntimeId ? { ...current, isStreaming: false } : current)
       workspace.setMessages((items) => items.map((item) => item.streaming ? { ...item, streaming: false } : item))
