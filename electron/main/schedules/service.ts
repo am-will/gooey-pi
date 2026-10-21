@@ -269,10 +269,10 @@ export class AutomationService {
         target,
         timing,
         execution,
-        status: 'active',
-        blockedReason: undefined,
+        status: task.status,
+        blockedReason: task.blockedReason,
         updatedAt: now.toISOString(),
-        nextRunAt,
+        nextRunAt: task.status === 'active' ? nextRunAt : undefined,
       }
       Object.assign(task, updated)
     })

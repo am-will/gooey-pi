@@ -55,6 +55,18 @@ describe('AutomationService', () => {
     expect(service.list()).toEqual([])
   })
 
+  it('keeps an edited paused schedule paused until explicitly resumed', async () => {
+    const service = new AutomationService(store(), {
+      validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run: async () => ({}), now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const created = await service.create({ prompt: 'Review', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const paused = await service.pause(created.id)
+    const updated = await service.update(created.id, { revision: paused.revision, title: 'Revised' })
+    expect(updated).toMatchObject({ status: 'paused', nextRunAt: undefined, title: 'Revised' })
+    await service.stop()
+  })
+
   it('rejects forbidden prompts on create, update, resume, and run now before validation or persistence', async () => {
     const stateStore = store()
     const legacy = new AutomationService(stateStore, {
