@@ -117,7 +117,7 @@ nvm install && nvm use
 npm run toolchain:bootstrap
 ```
 
-The bootstrap command installs the repository-pinned npm from its verified local archive and checks the selected toolchain. See the [validation guide](docs/validation.md#reproducible-setup) for details.
+The bootstrap command installs the repository-pinned npm from its verified local archive into the invoked npm's configured global prefix, with install-time lifecycle scripts disabled. It then checks the selected toolchain. See the [validation guide](docs/validation.md#reproducible-setup) for details.
 
 ```bash
 npm ci
