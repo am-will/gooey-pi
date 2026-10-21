@@ -29,7 +29,7 @@ describe('runtime capability retirement polling', () => {
     vi.useFakeTimers()
     try {
       const manager = new AgentRpcManager(null, async (cwd) => cwd, async (path) => path)
-      const info = { runtimeId: 'busy-retirement', harness: 'prime', cwd: '/tmp', isStreaming: true, isCompacting: false } satisfies RuntimeInfo
+      const info: RuntimeInfo = { runtimeId: 'busy-retirement', harness: 'prime', cwd: '/tmp', isStreaming: true, isCompacting: false }
       const stop = vi.fn(async () => true)
       const runtime = { runtimeId: info.runtimeId, snapshot: () => info, stop }
       const internals = manager as unknown as { runtimes: Map<string, unknown>; runtimeEnvironmentRevisions: Map<string, number> }
