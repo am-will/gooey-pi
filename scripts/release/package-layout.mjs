@@ -48,6 +48,8 @@ export function assertArchitectureCoverage(appArchitectures, nativeArchitectures
 
 export function assertAsarLayout(entries) {
   const normalized = new Set(entries.map((entry) => entry.replaceAll('\\', '/').replace(/^\//, '')))
+  const unexpected = [...normalized].find((entry) => entry !== 'package.json' && entry !== 'out' && !entry.startsWith('out/') && entry !== 'node_modules' && !entry.startsWith('node_modules/'))
+  if (unexpected) throw new Error(`Unexpected top-level ASAR path: ${unexpected}`)
   const required = [
     'out/main/index.js',
     'out/preload/index.js',

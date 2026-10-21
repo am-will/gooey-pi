@@ -27,7 +27,7 @@ async function archiveEntries(extraFiles: string[] = []) {
   }
   const archive = join(directory, 'app.asar')
   await createPackage(source, archive)
-  return { entries: listPackage(archive), bytes: (await stat(archive)).size }
+  return { entries: listPackage(archive, { isPack: false }), bytes: (await stat(archive)).size }
 }
 
 afterEach(async () => {
