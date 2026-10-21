@@ -72,7 +72,10 @@ function toolPreview(part: Extract<MessagePart, { type: 'toolCall' }>): string {
   const raw = part.args
   if (raw && typeof raw === 'object') {
     const args = raw as Record<string, unknown>
-    const preferred = args.question ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
+    const questions = Array.isArray(args.questions) ? args.questions.flatMap((question: unknown) =>
+      question && typeof question === 'object' && 'question' in question && typeof question.question === 'string' ? [question.question] : [],
+    ) : []
+    const preferred = args.question ?? (questions.length ? questions.join(' · ') : undefined) ?? args.command ?? args.code ?? args.query ?? args.url ?? args.path ?? args.cwd
     if (typeof preferred === 'string') return boundText(preferred.replace(/\s+/g, ' ').trim(), 180, '…')
   }
   return typeof raw === 'string' ? boundText(raw.replace(/\s+/g, ' ').trim(), 180, '…') : ''
