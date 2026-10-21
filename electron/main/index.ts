@@ -4,6 +4,7 @@ import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { isAllowedBrowserUrl } from '../../src/lib/browser-url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type ApplicationMenuName, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent, type RuntimeInfo, type ThemeMode } from '../../src/types/api'
@@ -142,10 +143,6 @@ function resolveRendererUrl(): string {
   return parsed.href
 }
 
-function isAllowedBrowserUrl(raw: string): boolean {
-  if (raw === 'about:blank') return true
-  try { const url = new URL(raw); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password } catch { return false }
-}
 
 export function hardenRenderer(window: BrowserWindow, trustedUrl: () => string = () => trustedRendererUrl): void {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))

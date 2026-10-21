@@ -1,4 +1,6 @@
 import type { WebContents } from 'electron'
+import { isAllowedBrowserUrl } from '../../../src/lib/browser-url'
+import { PREVIEW_TAB_ID } from '../../../src/types/api'
 import { randomBytes } from 'node:crypto'
 import type { AgentBrowserActivityEvent, AgentBrowserPointerEvent, AgentBrowserState, AgentBrowserTabRecord } from '../../../src/types/api'
 import { GuestInput } from './guest-input'
@@ -8,8 +10,6 @@ import { canonicalSessionPath } from '../session-paths'
 import { requireString } from '../validation'
 import { ACTION_TIMEOUT_MS, guardGuestCall, guardGuestDeadline, QUEUE_RELEASE_GRACE_MS, releaseQueueEventually } from './guest-call-guard'
 
-/** The user's own Preview webview, adoptable by the active thread's agent. */
-export const PREVIEW_TAB_ID = 'preview'
 import { AGENT_WORLD_ID, cursorMarkerScript, evaluateScript, readPageScript, removeCursorMarkerScript, scrollByScript } from './page-scripts'
 
 /**
@@ -64,14 +64,6 @@ export interface AgentBrowserServiceOptions {
   loadTimeoutMs?: number
   /** Deadline for a single guest call; also bounds the per-tab queue release. */
   actionTimeoutMs?: number
-}
-
-function isAllowedTabUrl(raw: string): boolean {
-  if (raw === 'about:blank') return true
-  try {
-    const url = new URL(raw)
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
-  } catch { return false }
 }
 
 
@@ -188,7 +180,7 @@ export class AgentBrowserService {
     else if (action === 'reload') guest.reload()
     else if (action === 'url') {
       const url = requireString(urlValue, 'url', { min: 1, max: 2048, trim: true })
-      if (!isAllowedTabUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
+      if (!isAllowedBrowserUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
       guest.loadURL(url).catch((error: unknown) => logNavigationFailure(url, error))
     } else throw new TypeError('action must be back, forward, reload, or url')
     return true
@@ -316,7 +308,7 @@ export class AgentBrowserService {
   async openTab(sessionKey: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     this.requireOpen()
     const url = params.url === undefined ? 'about:blank' : requireString(params.url, 'url', { min: 1, max: 2048, trim: true })
-    if (!isAllowedTabUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
+    if (!isAllowedBrowserUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
     const sessionTabs = [...this.tabs.values()].filter((tab) => tab.sessionKey === sessionKey)
     if (sessionTabs.length >= MAX_TABS_PER_SESSION) throw new Error(`This thread already has ${MAX_TABS_PER_SESSION} browser tabs. Close one with browser_tabs before opening another.`)
     if (this.tabs.size >= MAX_TABS_TOTAL) throw new Error('GooeyPi has too many open agent browser tabs. Close unused tabs first.')
@@ -396,7 +388,7 @@ export class AgentBrowserService {
     return this.withTab(sessionKey, params, async (tab, guest) => {
       if (params.url !== undefined) {
         const url = requireString(params.url, 'url', { min: 1, max: 2048, trim: true })
-        if (!isAllowedTabUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
+        if (!isAllowedBrowserUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
         await this.loadAndSettle(guest, url)
       } else {
         const action = requireString(params.action, 'action', { min: 1, max: 16, trim: true })
