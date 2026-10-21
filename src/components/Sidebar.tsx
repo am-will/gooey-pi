@@ -197,7 +197,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
   const [sessionMenu, setSessionMenu] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<SessionRecord | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [archiveTarget, setArchiveTarget] = useState<SessionRecord | null>(null)
+  const [archiveRunningTarget, setArchiveRunningTarget] = useState<SessionRecord | null>(null)
   const [removeTarget, setRemoveTarget] = useState<ProjectRecord | null>(null)
   const [confirmUpdate, setConfirmUpdate] = useState(false)
   const { activeSessions, sessionsByProject } = useMemo(() => indexSidebarSessions(projects, sessions), [projects, sessions])
@@ -243,15 +243,12 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
     document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
     return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
   }, [sessionMenu])
-  useEffect(() => {
-    if (!archiveTarget) return
-    const dismiss = (event: PointerEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest('[data-archive-confirming="true"]')) setArchiveTarget(null)
-    }
-    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setArchiveTarget(null) } }
-    document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
-  }, [archiveTarget])
+  // Archiving stops a live agent, so running work confirms first. Idle chats
+  // archive on a single click because Settings can restore them again.
+  const archiveSession = (session: SessionRecord) => {
+    if (session.status === 'running' || session.status === 'waiting') setArchiveRunningTarget(session)
+    else void onArchiveSession(session)
+  }
   const normalized = query.trim().toLowerCase()
   const visibleProjects = useMemo(() => sortProjects(projects.filter((project) => !normalized || project.name.toLowerCase().includes(normalized) || (sessionsByProject.get(project.id) ?? []).some((session) => `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized))), projectSortMode), [projects, sessionsByProject, normalized, projectSortMode])
 
@@ -349,16 +346,10 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                       </button>
                       <IconButton
                         size="small"
-                        className={`session-row__archive ${archiveTarget?.id === session.id ? 'is-confirming' : ''}`}
-                        label={archiveTarget?.id === session.id ? `Confirm archive ${session.title}` : `Archive ${session.title}`}
-                        data-archive-confirming={archiveTarget?.id === session.id}
-                        onClick={() => {
-                          setSessionMenu(null)
-                          if (archiveTarget?.id !== session.id) { setArchiveTarget(session); return }
-                          setArchiveTarget(null)
-                          void onArchiveSession(session)
-                        }}
-                      >{archiveTarget?.id === session.id ? <Check size={13} /> : <Archive size={13}/>}</IconButton>
+                        className="session-row__archive"
+                        label={`Archive ${session.title}`}
+                        onClick={() => { setSessionMenu(null); archiveSession(session) }}
+                      ><Archive size={13}/></IconButton>
                       <IconButton size="small" className="session-row__more" label={`Session options for ${session.title}`} onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><MoreHorizontal size={13}/></IconButton>
                       {sessionMenu === session.id ? <div className="session-row__menu" aria-label="Session options"><button type="button" onClick={() => { void copySessionUuid(session.id); setSessionMenu(null) }}><Copy size={12}/> Copy session UUID</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> Rename</button></div> : null}
                     </div>
@@ -393,6 +384,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
       </div>
       {renameTarget ? <Modal title="Rename session" onClose={() => setRenameTarget(null)} footer={<><button type="button" className="button" onClick={() => setRenameTarget(null)}>Cancel</button><button type="button" className="button button--primary" disabled={!renameValue.trim()} onClick={() => { const target = renameTarget; const title = renameValue.trim(); setRenameTarget(null); void onRenameSession(target, title) }}>Rename</button></>}><label className="field"><span>Session name</span><input autoFocus value={renameValue} maxLength={200} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && renameValue.trim()) { event.preventDefault(); const target = renameTarget; const title = renameValue.trim(); setRenameTarget(null); void onRenameSession(target, title) } }}/></label></Modal> : null}
       {removeTarget ? <Modal title="Remove project" onClose={() => setRemoveTarget(null)} footer={<><button type="button" className="button" onClick={() => setRemoveTarget(null)}>Cancel</button><button type="button" className="button button--danger" onClick={() => { const target = removeTarget; setRemoveTarget(null); onRemoveProject(target) }}>Remove</button></>}><p>Remove “{removeTarget.name}” from {HARNESS_PRODUCT_NAMES[activeHarness]}? The folder and saved sessions will not be deleted.</p></Modal> : null}
+      {archiveRunningTarget ? <Modal title={t('archive.running.title')} onClose={() => setArchiveRunningTarget(null)} footer={<><button type="button" className="button" onClick={() => setArchiveRunningTarget(null)}>{t('common.cancel')}</button><button type="button" className="button button--danger" onClick={() => { const target = archiveRunningTarget; setArchiveRunningTarget(null); void onArchiveSession(target) }}>{t('archive.running.confirm')}</button></>}><p>{t('archive.running.body', { title: archiveRunningTarget.title })}</p></Modal> : null}
       {confirmUpdate ? <Modal title={updateConfirm.title} onClose={() => setConfirmUpdate(false)} footer={<><button type="button" className="button" onClick={() => setConfirmUpdate(false)}>No</button><button type="button" className="button button--primary" onClick={() => { setConfirmUpdate(false); void onUpdateAction?.() }}>Yes</button></>}><p>{updateConfirm.body}</p></Modal> : null}
     </aside>
   )

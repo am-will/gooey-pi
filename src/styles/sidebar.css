@@ -62,7 +62,6 @@
 .session-row-wrap > .session-row { padding-right: 55px; }
 .session-row__archive, .session-row__more { position: absolute; top: 4px; }
 .session-row__archive { right: 30px; color: var(--text-tertiary); }
-.session-row__archive.is-confirming { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
 .session-row__more { right: 3px; }
 .session-row__menu { position: absolute; z-index: 120; top: 33px; right: 2px; width: 132px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); box-shadow: var(--shadow-popover); }
 .session-row__menu button { width: 100%; min-height: 29px; display: flex; align-items: center; gap: 7px; padding: 0 7px; border-radius: 5px; color: var(--text-secondary); background: transparent; text-align: left; }

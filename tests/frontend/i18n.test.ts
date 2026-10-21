@@ -25,4 +25,12 @@ describe('i18n', () => {
     expect(translate('zh-CN', 'appearance.language.available', { count: 2 })).toBe('支持 2 种语言')
     expect(translate('zh-CN', 'common.reload')).toBe('Reload GooeyPi')
   })
+
+  it('names the archive controls in both languages', () => {
+    expect(translate('en', 'archive.doneToast')).toBe('Archived. Find it in Settings › Archived chats.')
+    expect(translate('zh-CN', 'archive.doneToast')).toBe('已归档。可在「设置 › 已归档的聊天」里找到。')
+    expect(translate('zh-CN', 'archive.restoredToast')).toBe('会话已恢复。')
+    expect(translate('zh-CN', 'archive.running.body', { title: '重构登录页' })).toContain('「重构登录页」还在工作中')
+    expect(translate('zh-CN', 'common.cancel')).toBe('取消')
+  })
 })

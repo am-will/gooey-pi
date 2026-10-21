@@ -1,12 +1,13 @@
-import { ArrowLeft, AudioLines, Bot, Boxes, ChevronRight, Info, LockKeyhole, PawPrint, Settings2, Sun, Terminal } from 'lucide-react'
+import { Archive, ArrowLeft, AudioLines, Bot, Boxes, ChevronRight, Info, LockKeyhole, PawPrint, Settings2, Sun, Terminal } from 'lucide-react'
 import { useEffect, useState, type ComponentType } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { detectRendererPlatform } from '@/lib/platform-shortcuts'
 import { BrowserGlobe, Modal } from '@/components/ui'
-import type { AppMeta, AppSettings, PrimeModelCatalog, PrimeWorkApi } from '@/types/api'
+import type { AppMeta, AppSettings, PrimeModelCatalog, PrimeWorkApi, ProjectRecord, SessionRecord } from '@/types/api'
 import { AboutSettings } from './settings/AboutSettings'
 import { AgentSettings } from './settings/AgentSettings'
+import { ArchivedChatsSettings } from './settings/ArchivedChatsSettings'
 import { AppearanceSettings } from './settings/AppearanceSettings'
 import { BrowserSettings } from './settings/BrowserSettings'
 import type { SettingsSection, SettingsUpdate } from './settings/contracts'
@@ -26,6 +27,7 @@ const sections: Array<{ id: SettingsSection; label: MessageKey; icon: ComponentT
   { id: 'pets', label: 'settings.pets', icon: PawPrint },
   { id: 'browser', label: 'settings.browser', icon: BrowserGlobe },
   { id: 'terminal', label: 'settings.terminal', icon: Terminal },
+  { id: 'archived', label: 'settings.archived', icon: Archive },
   { id: 'privacy', label: 'settings.privacy', icon: LockKeyhole },
   { id: 'about', label: 'settings.about', icon: Info },
 ]
@@ -49,12 +51,16 @@ interface SettingsPageProps {
   onSetAllProvidersDisabled(): Promise<void>
   onSetModelEnabled(modelKey: string, enabled: boolean): Promise<void>
   onStartProviderOAuth(providerId: string): Promise<void>
+  /** Archived chats of the active harness; the catalog already returns them. */
+  archivedSessions: SessionRecord[]
+  projects: ProjectRecord[]
+  onRestoreSession(session: SessionRecord): Promise<void> | void
   initialSection?: SettingsSection
   /** Re-applies initialSection for repeated navigation requests to the same section. */
   initialSectionRequestId?: number
 }
 
-export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onClose, onUpdate, onResetBrowser, onOpenDocs, onRefreshProviders, onRefreshHarnesses, onSaveProviderApiKey, onLogoutProvider, onSetProviderEnabled, onSetAllProvidersEnabled, onSetAllProvidersDisabled, onSetModelEnabled, onStartProviderOAuth, initialSection = 'general', initialSectionRequestId = 0 }: SettingsPageProps) {
+export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onClose, onUpdate, onResetBrowser, onOpenDocs, onRefreshProviders, onRefreshHarnesses, onSaveProviderApiKey, onLogoutProvider, onSetProviderEnabled, onSetAllProvidersEnabled, onSetAllProvidersDisabled, onSetModelEnabled, onStartProviderOAuth, archivedSessions, projects, onRestoreSession, initialSection = 'general', initialSectionRequestId = 0 }: SettingsPageProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -87,6 +93,7 @@ export function SettingsPage({ settings, meta, providerCatalog, voice, pets, onC
       case 'pets': return <PetsSettings settings={settings} onUpdate={onUpdate} pets={pets} />
       case 'browser': return <BrowserSettings settings={settings} onUpdate={onUpdate} onRequestReset={() => { setResetError(''); setConfirmReset(true) }} />
       case 'terminal': return <TerminalSettings settings={settings} onUpdate={onUpdate} platform={platform} />
+      case 'archived': return <ArchivedChatsSettings archived={archivedSessions} projects={projects} onRestore={onRestoreSession} />
       case 'privacy': return <PrivacySettings settings={settings} onUpdate={onUpdate} />
       case 'about': return <AboutSettings meta={meta} onOpenDocs={onOpenDocs} />
     }
