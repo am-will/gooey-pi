@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseMcpCommand } from '../../src/lib/slash-commands'
+import { parseMcpCommand } from '../../src/lib/prompt-commands'
 
 describe('Prime MCP slash command routing', () => {
   it('opens Capabilities for the bare command', () => {

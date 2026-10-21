@@ -1,7 +1,7 @@
 import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
 import { appendCapabilityRouting } from '@/lib/capability-mentions'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
-import { interceptedCommandName } from '@/lib/slash-commands'
+import { interceptedCommandName } from '@/lib/prompt-commands'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
 import type { BrowserAnnotation, HarnessId, SessionRecord, SkillRecord, TerminalPromptContext } from '@/types/api'
 
