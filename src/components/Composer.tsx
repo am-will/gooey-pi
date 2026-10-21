@@ -187,6 +187,7 @@ export const Composer = memo(function Composer({
   const menuId = useId()
   const menuRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
   const acceptedMentionRef = useRef<{ start: number; text: string } | null>(null)
   const submittingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -345,7 +346,7 @@ export const Composer = memo(function Composer({
       }
     } finally {
       submittingRef.current = false
-      if (mountedRef.current) textareaRef.current?.focus()
+      if (mountedRef.current && wrapRef.current?.contains(document.activeElement)) textareaRef.current?.focus()
     }
   }
 
@@ -460,7 +461,7 @@ export const Composer = memo(function Composer({
   }
 
   return (
-    <div className="composer-wrap" data-draft-scope={draftKey ?? 'default'}>
+    <div ref={wrapRef} className="composer-wrap" data-draft-scope={draftKey ?? 'default'}>
       {queuedMessages.length || harnessQueuedMessageCount ? (
         <section className="composer-queue" aria-label={t('composer.queue.label')} aria-live="polite">
           <div className="composer-queue__header">

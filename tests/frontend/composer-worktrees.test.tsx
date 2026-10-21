@@ -67,6 +67,25 @@ describe('composer worktree picker', () => {
     expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('private first draft')
   })
 
+  it('does not steal focus after a pending send when the user moved elsewhere', async () => {
+    let complete!: () => void
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    act(() => root.render(<Composer {...props({ onSend })} />))
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, 'send me')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    input.focus()
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.click())
+    const elsewhere = document.createElement('button')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    await act(async () => complete())
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+  })
+
   it('does not expose an automatic model choice before the catalog loads', () => {
     act(() => root.render(<Composer {...props()} />))
 
