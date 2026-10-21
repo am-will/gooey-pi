@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { activityNotificationSignature, sessionShowsCompanionNotification } from '../../src/app/session-attention'
+import { DEFAULT_SETTINGS } from '../../src/lib/data'
 import { createWorkspaceActions, type WorkspaceActionsDeps } from '../../src/hooks/useWorkspaceActions'
 import { ActivityPage } from '../../src/pages/ActivityPage'
 import type { ProjectRecord, SessionRecord } from '../../src/types/api'
@@ -123,6 +124,7 @@ describe('archived activity cleanup', () => {
     const setSessions = vi.fn((update: (items: SessionRecord[]) => SessionRecord[]) => { sessions = update(sessions) })
     const actions = createWorkspaceActions(() => ({
       bridge: { sessions: { archive } },
+      settingsState: { settings: DEFAULT_SETTINGS },
       workspace: { workspaceRef: { current: { session: undefined } } },
       setSessions,
       setToast,
@@ -137,7 +139,28 @@ describe('archived activity cleanup', () => {
     expect(clearSessionAttention).toHaveBeenCalledWith(activeSession)
     expect(closeTerminalForSession).toHaveBeenCalledWith(activeSession.filePath)
     expect(sessions[0]).toMatchObject({ id: activeSession.id, archived: true, unread: false })
-    expect(setToast).toHaveBeenCalledWith('Session archived.')
+    expect(setToast).toHaveBeenCalledWith('Archived. Find it in Settings › Archived chats.')
+  })
+
+  it('toasts in the language the app is set to', async () => {
+    const archive = vi.fn(async () => true)
+    const setToast = vi.fn()
+    const actions = createWorkspaceActions(() => ({
+      bridge: { sessions: { archive } },
+      settingsState: { settings: { ...DEFAULT_SETTINGS, locale: 'zh-CN' as const } },
+      workspace: { workspaceRef: { current: { session: undefined } } },
+      setSessions: vi.fn(),
+      setToast,
+      closeTerminalForSession: vi.fn(),
+      clearSessionAttention: vi.fn(),
+      reportError: vi.fn(),
+    } as unknown as WorkspaceActionsDeps))
+
+    await actions.setSessionArchived(activeSession, true)
+    expect(setToast).toHaveBeenCalledWith('已归档。可在「设置 › 已归档的聊天」里找到。')
+
+    await actions.setSessionArchived(activeSession, false)
+    expect(setToast).toHaveBeenLastCalledWith('会话已恢复。')
   })
 
   it('recreates the browser host when archiving the open session', async () => {
@@ -149,7 +172,7 @@ describe('archived activity cleanup', () => {
       initialized: true,
       activeProject: project,
       layout: { compactLayout: false },
-      settingsState: {},
+      settingsState: { settings: DEFAULT_SETTINGS },
       workspace: { workspaceRef: { current: { project, session: activeSession } }, activateWorkspace },
       setSessions: vi.fn(),
       setView: vi.fn(),

@@ -1229,6 +1229,17 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('heading', { name: 'You’re all caught up' })).toBeVisible()
   })
 
+  /** Idle chats archive on one click; a chat that is still working confirms first. */
+  async function archiveThread(title: string) {
+    const row = page.locator('.session-row-wrap').filter({ hasText: title })
+    await row.getByTitle(`Archive ${title}`).click()
+    const dialog = page.getByRole('dialog')
+    if (await dialog.waitFor({ state: 'visible', timeout: 500 }).then(() => true).catch(() => false)) {
+      await dialog.getByRole('button', { name: 'Archive', exact: true }).click()
+    }
+    await expect(row).toHaveCount(0)
+  }
+
   test('removes archived chats from Activity and clears their notifications', async () => {
     const primaryFile = join(fixtureSessionFile, '..', 'primary.jsonl')
     appendFileSync(primaryFile, `${JSON.stringify({
@@ -1241,9 +1252,7 @@ test.describe('Prime Work desktop smoke', () => {
     const activityCount = page.locator('.sidebar__primary button[title="Activity"] .nav-count')
     await expect(activityCount).toHaveText('1')
 
-    await primaryRow.getByTitle('Archive Primary workspace fixture').click()
-    await primaryRow.getByTitle('Confirm archive Primary workspace fixture').click()
-    await expect(primaryRow).toHaveCount(0)
+    await archiveThread('Primary workspace fixture')
     await expect(activityCount).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => {
       const cleared = JSON.parse(window.localStorage.getItem('prime-work.cleared-session-attention') ?? '{}') as Record<string, string>
@@ -1254,6 +1263,17 @@ test.describe('Prime Work desktop smoke', () => {
     await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible()
     await expect(page.getByText('Primary workspace fixture', { exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Archived', exact: true })).toHaveCount(0)
+
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await page.locator('.settings-nav button').filter({ hasText: 'Archived chats' }).click()
+    await expect(page.getByRole('heading', { name: 'Archived chats' })).toBeVisible()
+    const archivedRow = page.locator('.settings-group .settings-row').filter({ hasText: 'Primary workspace fixture' })
+    await expect(archivedRow).toHaveCount(1)
+    await archivedRow.getByRole('button', { name: 'Restore' }).click()
+    await expect(archivedRow).toHaveCount(0)
+    await expect(page.locator('.settings-empty')).toHaveText('Nothing archived yet. Use the archive control on a chat in the sidebar to hide it without deleting it.')
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await expect(primaryRow).toHaveCount(1)
   })
 
   test('destroys an open session browser guest when its thread is archived', async () => {
@@ -1273,10 +1293,8 @@ test.describe('Prime Work desktop smoke', () => {
     const guestId = await preview.evaluate((node) => (node as HTMLElement & { getWebContentsId(): number }).getWebContentsId())
     expect(await app!.evaluate(({ webContents }, id) => Boolean(webContents.fromId(id)), guestId)).toBe(true)
 
-    await sessionRow.getByTitle('Archive Hermetic desktop fixture').click()
-    await sessionRow.getByTitle('Confirm archive Hermetic desktop fixture').click()
+    await archiveThread('Hermetic desktop fixture')
 
-    await expect(sessionRow).toHaveCount(0)
     await expect.poll(() => app!.evaluate(({ webContents }, id) => {
       const guest = webContents.fromId(id)
       return guest === undefined || guest.isDestroyed()
@@ -1300,10 +1318,7 @@ test.describe('Prime Work desktop smoke', () => {
     expect(serverPid).toBeGreaterThan(0)
 
     try {
-      await sessionRow.getByTitle('Archive Hermetic desktop fixture').click()
-      await sessionRow.getByTitle('Confirm archive Hermetic desktop fixture').click()
-
-      await expect(sessionRow).toHaveCount(0)
+      await archiveThread('Hermetic desktop fixture')
       await expect(page.locator('.terminal-drawer')).toHaveCount(0)
       await expect.poll(() => {
         try { process.kill(serverPid, 0); return false } catch { return true }

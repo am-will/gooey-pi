@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from '../../src/components/Sidebar'
+import { I18nProvider } from '../../src/lib/i18n'
 import { sessionAttentionSignature } from '../../src/app/session-attention'
 import type { ProjectRecord, SessionRecord } from '../../src/types/api'
 
@@ -270,46 +271,81 @@ describe('sidebar project context menu', () => {
   })
 })
 
-describe('sidebar archive confirmation', () => {
-  it('requires a second click and cancels when clicking elsewhere', async () => {
+describe('sidebar archive', () => {
+  const archiveProps = (onArchiveSession: (session: SessionRecord) => Promise<void>) => ({
+    projects: [project],
+    sessions: [session],
+    activeView: 'session' as const,
+    onSelectProject: noop,
+    onSelectSession: noop,
+    onNavigate: noop,
+    onNewSession: noop,
+    onAddProject: noop,
+    onRemoveProject: noop,
+    onClose: noop,
+    onOpenPalette: noop,
+    onRenameSession: async () => undefined,
+    onArchiveSession,
+  })
+
+  it('archives an idle chat with a single click', async () => {
     const onArchiveSession = vi.fn(async () => undefined)
-    await act(async () => {
-      root.render(
-        <Sidebar
-          projects={[project]}
-          sessions={[session]}
-          activeView="session"
-          onSelectProject={noop}
-          onSelectSession={noop}
-          onNavigate={noop}
-          onNewSession={noop}
-          onAddProject={noop}
-          onRemoveProject={noop}
-          onClose={noop}
-          onOpenPalette={noop}
-          onRenameSession={async () => undefined}
-          onArchiveSession={onArchiveSession}
-        />,
-      )
-    })
+    await act(async () => { root.render(<Sidebar {...archiveProps(onArchiveSession)} />) })
 
     const archive = container.querySelector('[aria-label="Archive Session"]')
     expect(archive).not.toBeNull()
     expect(archive?.getAttribute('title')).toBe('Archive Session')
     await press(archive!)
-    expect(onArchiveSession).not.toHaveBeenCalled()
-    expect(container.querySelector('[aria-label="Confirm archive Session"]')).not.toBeNull()
 
-    await act(async () => document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
-    expect(container.querySelector('[aria-label="Confirm archive Session"]')).toBeNull()
-    expect(container.querySelector('[aria-label="Archive Session"]')).not.toBeNull()
-
-    const restarted = container.querySelector('[aria-label="Archive Session"]')
-    await press(restarted!)
-    const confirm = container.querySelector('[aria-label="Confirm archive Session"]')
-    await press(confirm!)
     expect(onArchiveSession).toHaveBeenCalledOnce()
     expect(onArchiveSession).toHaveBeenCalledWith(session)
+    expect(container.querySelector('[aria-label="Confirm archive Session"]')).toBeNull()
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('confirms before archiving a chat that is still working', async () => {
+    const onArchiveSession = vi.fn(async () => undefined)
+    await act(async () => {
+      root.render(<Sidebar {...archiveProps(onArchiveSession)} sessions={[{ ...session, status: 'running' as const }]} />)
+    })
+
+    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    expect(onArchiveSession).not.toHaveBeenCalled()
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('is still working')
+    const modalButton = (name: string) => [...document.body.querySelectorAll<HTMLButtonElement>('.modal__footer button')].find((button) => button.textContent === name)!
+    await press(modalButton('Cancel'))
+    expect(onArchiveSession).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+
+    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    await press(modalButton('Archive'))
+    expect(onArchiveSession).toHaveBeenCalledOnce()
+    expect(onArchiveSession).toHaveBeenCalledWith({ ...session, status: 'running' })
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('localises the confirmation for a chat that is still working', async () => {
+    const onArchiveSession = vi.fn(async () => undefined)
+    await act(async () => {
+      root.render(
+        <I18nProvider preference="zh-CN">
+          <Sidebar {...archiveProps(onArchiveSession)} sessions={[{ ...session, status: 'running' as const }]} />
+        </I18nProvider>,
+      )
+    })
+
+    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('归档进行中的聊天')
+    expect(dialog?.textContent).toContain('「Session」还在工作中')
+    expect(dialog?.textContent).toContain('设置 › 已归档的聊天')
+
+    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('.modal__footer button')].find((button) => button.textContent === '归档')!
+    await press(confirm)
+    expect(onArchiveSession).toHaveBeenCalledOnce()
+    expect(onArchiveSession).toHaveBeenCalledWith({ ...session, status: 'running' })
   })
 })
 

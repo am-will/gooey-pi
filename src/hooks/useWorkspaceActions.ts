@@ -4,6 +4,7 @@ import { requestFailureMessage } from '@/app/workspace'
 import { clearComposerDraft } from '@/lib/composer-draft'
 import { errorMessage } from '@/lib/errors'
 import { HARNESS_AGENT_NAMES } from '@/lib/harness'
+import { resolveLocale, translate } from '@/lib/i18n'
 import { parseSessionActionSnapshot, streamingBehaviorForIntent } from '@/lib/session-actions'
 import { parseCompactCommand, parseMcpCommand } from '@/lib/slash-commands'
 import { deliverToStartedSession } from '@/lib/started-session-delivery'
@@ -211,7 +212,7 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     } catch (error) { reportError(error) }
   }
   const setSessionArchived = async (session: SessionRecord, archived: boolean) => {
-    const { bridge, workspace, setSessions, setToast, resetBrowserView, closeTerminalForSession, clearSessionAttention, reportError } = getDeps()
+    const { bridge, workspace, settingsState, setSessions, setToast, resetBrowserView, closeTerminalForSession, clearSessionAttention, reportError } = getDeps()
     if (!bridge) return
     try {
       await bridge.sessions.archive(session.filePath, archived)
@@ -224,7 +225,8 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
         resetBrowserView()
         newSession()
       }
-      setToast(archived ? 'Session archived.' : 'Session restored.')
+      const locale = resolveLocale(settingsState.settings.locale)
+      setToast(archived ? translate(locale, 'archive.doneToast') : translate(locale, 'archive.restoredToast'))
     } catch (error) { reportError(error) }
   }
   const addProject = async () => {
