@@ -1,6 +1,7 @@
 import { ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type { ApplicationMenuName, AppMeta, HarnessId, SessionChangeEvent, ThemeMode } from '../../src/types/api'
 import type { AgentRpcManager } from './agent-rpc'
+import { assertRendererCommand } from './agent-rpc/command-schema'
 import type { GitService } from './git'
 import type { CuaDriverService } from './cua-driver'
 import type { ModelCatalogProvider } from './model-catalog'
@@ -280,7 +281,10 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     const { harness: _harness, ...startOptions } = options
     return agentsFor(harness).start(startOptions)
   })
-  handle('agent:command', (_event, runtimeId, command) => agentsForRuntime(runtimeId).command(runtimeId, command))
+  handle('agent:command', (_event, runtimeId, command) => {
+    assertRendererCommand(command)
+    return agentsForRuntime(runtimeId).command(runtimeId, command)
+  })
   handle('agent:stop', (_event, runtimeId) => agentsForRuntime(runtimeId).stop(runtimeId))
   let childService: Promise<import('./subagents').OmpChildService> | undefined
   let loadedChildService: import('./subagents').OmpChildService | undefined

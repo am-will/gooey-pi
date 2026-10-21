@@ -1,8 +1,5 @@
 import type { Readable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
-import { SESSION_FILE_RECORD_LIMIT_BYTES } from './jsonl-limits'
-
-const MAX_UNFRAMED_BYTES = SESSION_FILE_RECORD_LIMIT_BYTES
 
 class FragmentedLineBuffer {
   private fragments: string[] = []
@@ -62,7 +59,7 @@ function asBuffer(chunk: Buffer | string): Buffer {
 }
 
 /** Strict JSONL parser: only LF is a delimiter; U+2028/U+2029 stay inside JSON strings. */
-export async function* strictJsonLines(stream: Readable, maxUnframedBytes = MAX_UNFRAMED_BYTES): AsyncGenerator<string> {
+export async function* strictJsonLines(stream: Readable, maxUnframedBytes: number): AsyncGenerator<string> {
   const decoder = new StringDecoder('utf8')
   const buffer = new FragmentedLineBuffer(maxUnframedBytes, 'JSONL')
   for await (const raw of stream) {
@@ -78,7 +75,7 @@ export class StrictJsonlDecoder {
   private readonly decoder = new StringDecoder('utf8')
   private readonly buffer: FragmentedLineBuffer
 
-  constructor(private readonly onLine: (line: string) => void, maxUnframedBytes = MAX_UNFRAMED_BYTES) {
+  constructor(private readonly onLine: (line: string) => void, maxUnframedBytes: number) {
     this.buffer = new FragmentedLineBuffer(maxUnframedBytes, 'RPC')
   }
 

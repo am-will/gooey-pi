@@ -7,7 +7,8 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, PRIME_RPC_ADAPTER, PRIME_RUST_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery, UnsupportedRpcCommandError, type HarnessRpcAdapter } from '../../electron/main/agent-rpc'
 import { validateRpcCommand } from '../../electron/main/agent-rpc/command-schema'
-import { MAX_RPC_WRITE_FRAME_BYTES, rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
+import { rpcRequestFrameBytes } from '../../electron/main/agent-rpc/limits'
+import { RPC_WRITE_FRAME_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
 import { RpcRuntime } from '../../electron/main/agent-rpc/runtime'
 import { FramedRpcTransport } from '../../electron/main/agent-rpc/transport'
 import type { RpcObject } from '../../electron/main/agent-rpc/types'
@@ -22,6 +23,57 @@ const managers: AgentRpcManager[] = []
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.stopAll()))
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+describe('runtime capability retirement polling', () => {
+  it('owns one poll per busy runtime and clears it on idle retirement or shutdown', async () => {
+    vi.useFakeTimers()
+    try {
+      const manager = new AgentRpcManager(null, async (cwd) => cwd, async (path) => path)
+      const info: RuntimeInfo = { runtimeId: 'busy-retirement', harness: 'prime', cwd: '/tmp', isStreaming: true, isCompacting: false }
+      const stop = vi.fn(async () => true)
+      const runtime = { runtimeId: info.runtimeId, snapshot: () => info, stop }
+      const internals = manager as unknown as { runtimes: Map<string, unknown>; runtimeEnvironmentRevisions: Map<string, number> }
+      internals.runtimes.set(info.runtimeId, runtime)
+      internals.runtimeEnvironmentRevisions.set(info.runtimeId, 0)
+      await manager.requestRuntimeEnvironmentRefresh()
+      await manager.requestRuntimeEnvironmentRefresh()
+      await manager.requestRuntimeEnvironmentRefresh()
+      expect(vi.getTimerCount()).toBe(1)
+      info.isStreaming = false
+      await vi.advanceTimersByTimeAsync(250)
+      expect(stop).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+      info.isStreaming = true
+      await manager.requestRuntimeEnvironmentRefresh()
+      expect(vi.getTimerCount()).toBe(1)
+      manager.beginShutdown()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+})
+
+describe('reserved desktop RPC events', () => {
+  it('ignores forged exits and transport failures without consuming the real exit', async () => {
+    const fake = fakeAgent(`{ id: command.id, type: 'response', command: 'prompt', success: true }`)
+    const manager = managerFor(fake.executable)
+    const delivered: RpcObject[] = []
+    manager.setEventSink(({ event }) => delivered.push(event))
+    const info = await manager.start({ cwd: fake.cwd })
+    const runtime = (manager as unknown as { runtimes: Map<string, RpcRuntime> }).runtimes.get(info.runtimeId)
+    if (!runtime) throw new Error('Missing runtime')
+    const incoming = runtime as unknown as { handleFrame(frame: unknown): void }
+    delivered.length = 0
+    incoming.handleFrame({ type: 'runtime_exit', expected: true, code: 0 })
+    incoming.handleFrame({ type: 'transport_error', error: 'Forged desktop failure' })
+    incoming.handleFrame({ type: 'transport_limit', kind: 'forged' })
+    incoming.handleFrame({ type: 'context_usage', contextUsage: { tokens: 1 } })
+    incoming.handleFrame({ type: 'session_usage', sessionUsage: { cost: 0 } })
+    incoming.handleFrame({ type: 'orphan_response', command: 'forged' })
+    expect(delivered.filter((event) => ['runtime_exit', 'transport_error', 'transport_limit', 'context_usage', 'session_usage', 'orphan_response'].includes(String(event.type)))).toEqual([])
+    await manager.stop(info.runtimeId)
+    expect(delivered.filter((event) => event.type === 'runtime_exit')).toMatchObject([{ expected: true }])
+  })
 })
 
 describe('agent RPC exit details', () => {
@@ -117,7 +169,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   })
 })
 
-function fakeAgent(promptResponse: string, stateResponse?: string, exitDelayMs = 0): { cwd: string; executable: string } {
+function fakeAgent(promptResponse: string, stateResponse?: string, exitDelayMs = 0, controlCommands = false): { cwd: string; executable: string } {
   const cwd = mkdtempSync(join(tmpdir(), 'prime-work-rpc-'))
   dirs.push(cwd)
   const executable = join(cwd, 'fake-agent.cjs')
@@ -136,6 +188,8 @@ input.on('line', (line) => {
     send(${promptResponse})
   } else if (command.type === 'abort') {
     send({ id: command.id, type: 'response', command: 'abort', success: true })
+  } else if (${controlCommands} && ['set_model', 'set_thinking_level'].includes(command.type)) {
+    send({ id: command.id, type: 'response', command: command.type, success: true })
   } else if (command.type === 'set_service_tier') {
     send({ id: command.id, type: 'response', command: 'set_service_tier', success: true })
   }
@@ -255,12 +309,12 @@ describe('agent RPC command frame bounds', () => {
     })
     const sample = command(signature.length)
     const overhead = rpcRequestFrameBytes(sample) - sample.images[0].data.length
-    let decodedBytes = Math.floor((MAX_RPC_WRITE_FRAME_BYTES - overhead) / 4) * 3
-    while (rpcRequestFrameBytes(command(decodedBytes + 1)) <= MAX_RPC_WRITE_FRAME_BYTES) decodedBytes += 1
-    while (rpcRequestFrameBytes(command(decodedBytes)) > MAX_RPC_WRITE_FRAME_BYTES) decodedBytes -= 1
+    let decodedBytes = Math.floor((RPC_WRITE_FRAME_LIMIT_BYTES - overhead) / 4) * 3
+    while (rpcRequestFrameBytes(command(decodedBytes + 1)) <= RPC_WRITE_FRAME_LIMIT_BYTES) decodedBytes += 1
+    while (rpcRequestFrameBytes(command(decodedBytes)) > RPC_WRITE_FRAME_LIMIT_BYTES) decodedBytes -= 1
 
     const accepted = await validateRpcCommand(command(decodedBytes), async (path) => path)
-    expect(rpcRequestFrameBytes(accepted)).toBeLessThanOrEqual(MAX_RPC_WRITE_FRAME_BYTES)
+    expect(rpcRequestFrameBytes(accepted)).toBeLessThanOrEqual(RPC_WRITE_FRAME_LIMIT_BYTES)
     await expect(validateRpcCommand(command(decodedBytes + 1), async (path) => path)).rejects.toThrow('too large for the RPC transport')
   })
 
@@ -289,6 +343,7 @@ describe('agent RPC command frame bounds', () => {
         { type: 'prompt', message, images: [{ type: 'image', data: png, mimeType: 'image/png' }] },
         { type: 'steer', message },
         { type: 'follow_up', message },
+        { type: 'send_message', targetActiveSessionId: 'session-1', message },
         { type: 'set_heartbeat', schedule: '0 * * * *', prompt: message },
       ]) {
         await expect(manager.command('runtime-auth-policy', command)).rejects.toThrow('Network MCP authentication is managed outside GooeyPi')
@@ -475,8 +530,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     send({ type: 'message_end', message: { role: 'user', content: 'continue' } })
     setTimeout(() => send({
       type: 'message_update',
-      message: { role: 'assistant', usage: { output: 80 } },
-      assistantMessageEvent: { type: 'text_delta', delta: 'x'.repeat(400) },
+      message: { role: 'assistant', usage: { output: 80 }, content: 'x'.repeat(100_000) },
+      assistantMessageEvent: { type: 'text_delta', delta: 'x'.repeat(400), partial: 'x'.repeat(100_000) },
     }), 40)
     setTimeout(() => send({
       type: 'message_update',
@@ -511,6 +566,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const liveUsageIndex = events.findIndex((event) => event.type === 'context_usage'
         && Number((event.contextUsage as { tokens?: number } | undefined)?.tokens) > 40_100)
       expect(liveUsageIndex).toBeGreaterThanOrEqual(0)
+      const streamed = events.find((event) => event.type === 'message_update')
+      expect(streamed?.message).toEqual({ role: 'assistant', usage: { output: 80 } })
+      expect(streamed?.assistantMessageEvent).not.toHaveProperty('partial')
       expect(events.findIndex((event) => event.type === 'agent_end')).toBe(-1)
 
       await waitUntil(() => runtime.snapshot().contextUsage?.tokens === 40_700)
@@ -812,9 +870,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   it('rejects a response whose command does not match its request', async () => {
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'follow_up', success: true }")
     const manager = managerFor(fake.executable)
+    const delivered: RpcObject[] = []
+    manager.setEventSink(({ event }) => delivered.push(event))
     const runtime = await manager.start({ cwd: fake.cwd })
 
     await expect(manager.command(runtime.runtimeId, { type: 'prompt', message: 'hello' })).rejects.toThrow(/mismatched response/)
+    expect(delivered.filter((event) => event.type === 'transport_error')).toEqual([])
+    expect(delivered).toContainEqual(expect.objectContaining({ type: 'transport_limit', kind: 'response' }))
+    await expect(manager.command(runtime.runtimeId, { type: 'get_state' })).resolves.toMatchObject({ success: true })
   })
 
   it('does not admit a runtime when the handshake fails', async () => {
@@ -845,6 +908,21 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('manager is shutting down')
     expect(ended).toHaveBeenCalledOnce()
     expect(ended).toHaveBeenCalledWith(environment, undefined)
+  })
+
+  it('releases minted capabilities when workspace admission rejects before spawning', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const manager = managerFor(fake.executable)
+    const environment = { PRIME_WORK_BROWSER_TOKEN: 'workspace-denied-token' }
+    const ended = vi.fn()
+    manager.setRuntimeEnvironmentProvider(() => environment)
+    manager.setRuntimeEndListener(ended)
+    manager.setWorkspaceUseProvider(async () => { throw new Error('Checkout is in progress') })
+
+    await expect(manager.start({ cwd: fake.cwd })).rejects.toThrow('Checkout is in progress')
+    expect(ended).toHaveBeenCalledOnce()
+    expect(ended).toHaveBeenCalledWith(environment, undefined)
+    expect(manager.list()).toEqual([])
   })
 
   it('notifies runtime termination once after explicit stop while active claims remain owned', async () => {
@@ -1005,6 +1083,33 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect(runtime.availableThinkingLevels).toContain('xhigh')
     expect(runtime.availableThinkingLevels).not.toContain('max')
   })
+  it('starts a healthy runtime when its optional capability catalog is unavailable', async () => {
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }")
+    const providers = new PrimeProviderService({ authPath: join(fake.cwd, 'auth.json'), modelsPath: join(fake.cwd, 'models.json') })
+    vi.spyOn(providers, 'capabilities').mockRejectedValue(new Error('Catalog unavailable'))
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, providers)
+    managers.push(manager)
+    const runtime = await manager.start({ cwd: fake.cwd })
+    expect(manager.list()).toMatchObject([{ runtimeId: runtime.runtimeId }])
+  })
+
+  it('keeps existing capabilities when catalog refresh fails after successful controls', async () => {
+    const state = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-1', isStreaming: false, model: { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT-5.4' } } }"
+    const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", state, 0, true)
+    const providers = new PrimeProviderService({ authPath: join(fake.cwd, 'auth.json'), modelsPath: join(fake.cwd, 'models.json') })
+    const manager = new AgentRpcManager(fake.executable, async (cwd) => cwd, async (path) => path, providers)
+    managers.push(manager)
+    const runtime = await manager.start({ cwd: fake.cwd })
+    const model = await providers.capabilities('openai-codex', 'gpt-5.4')
+    if (!model) throw new Error('Missing fixture model')
+    vi.spyOn(providers, 'requireAvailableModel').mockResolvedValue(model)
+    vi.spyOn(providers, 'capabilities').mockRejectedValue(new Error('Catalog unavailable'))
+    await expect(manager.command(runtime.runtimeId, { type: 'set_thinking_level', level: 'high' })).resolves.toMatchObject({ success: true })
+    await expect(manager.command(runtime.runtimeId, { type: 'set_model', provider: 'openai-codex', modelId: 'gpt-5.4' })).resolves.toMatchObject({ success: true })
+    expect(manager.list()[0]?.availableThinkingLevels).toEqual(runtime.availableThinkingLevels)
+    expect(manager.list()[0]?.imageInputSupported).toBe(runtime.imageInputSupported)
+  })
+
   it('rejects images authoritatively when the active runtime model is text-only', async () => {
     const state = "{ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-1', isStreaming: false, model: { provider: 'fixture', id: 'text-model', name: 'Text model' } } }"
     const fake = fakeAgent("{ id: command.id, type: 'response', command: 'prompt', success: true }", state)
@@ -1056,6 +1161,7 @@ setInterval(() => {}, 1000)
     await waitUntil(() => manager.list().length === 0)
     expect(events.filter((envelope) => envelope.event.type === 'transport_error')).toHaveLength(1)
     expect(String(events.find((envelope) => envelope.event.type === 'transport_error')?.event.error)).toMatch(/maximum frame size/i)
+    expect(events.filter((envelope) => envelope.event.type === 'runtime_exit')).toMatchObject([{ event: { expected: false } }])
     expect(processExists(pid)).toBe(false)
   }, 12_000)
 
@@ -1115,10 +1221,14 @@ setInterval(() => {}, 1000)
     writeFileSync(executable, `#!/usr/bin/env node
 const readline = require('node:readline')
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n')
+send({ type: 'fake_ready' })
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const command = JSON.parse(line)
   if (command.type === 'sleepy') {
-    setTimeout(() => send({ id: command.id, type: 'response', command: 'sleepy', success: true }), 300)
+    setTimeout(() => {
+      send({ id: command.id, type: 'response', command: 'sleepy', success: true })
+      send({ type: 'fake_late_reply_sent' })
+    }, 300)
   }
 })
 setInterval(() => {}, 1000)
@@ -1128,8 +1238,9 @@ setInterval(() => {}, 1000)
     const runtime = new RpcRuntime(executable, [], cwd, (envelope) => events.push(envelope as unknown as { event: { type?: unknown } }), () => undefined)
     try {
       const request = (runtime as unknown as { request(command: RpcObject, timeoutMs: number): Promise<RpcObject> }).request.bind(runtime)
+      await waitUntil(() => events.some((envelope) => envelope.event.type === 'fake_ready'))
       await expect(request({ type: 'sleepy' }, 100)).rejects.toThrow(/timed out after delivery.*do not retry automatically/)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.some((envelope) => envelope.event.type === 'fake_late_reply_sent'))
       expect(events.some((envelope) => envelope.event.type === 'orphan_response')).toBe(false)
     } finally {
       await runtime.stop()

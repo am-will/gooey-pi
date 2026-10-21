@@ -889,7 +889,8 @@ describe('OMP RPC chunked frames', () => {
     expect(reconstructed.view.chunks.sweepTimer).toBeNull()
     expect(reconstructed.timing.activeTimers()).toHaveLength(0)
     expect(reconstructed.events).toContainEqual(expect.objectContaining({
-      type: 'transport_error',
+      type: 'transport_limit',
+      kind: 'frame',
       error: expect.stringMatching(/malformed chunked frame/i),
     }))
 
@@ -901,7 +902,8 @@ describe('OMP RPC chunked frames', () => {
     expect(raw.view.chunks.sweepTimer).toBeNull()
     expect(raw.timing.activeTimers()).toHaveLength(0)
     expect(raw.events).toContainEqual(expect.objectContaining({
-      type: 'transport_error',
+      type: 'transport_limit',
+      kind: 'frame',
       error: expect.stringMatching(/malformed JSON/i),
     }))
   })
@@ -978,5 +980,46 @@ describe('main-owned OMP child metadata', () => {
     expect(await manager.readOmpSubagents(sessionFile)).toEqual({ subagents })
     expect(await manager.readOmpSubagents('/tmp/unrelated-parent.jsonl')).toBeUndefined()
     await expect(manager.command(runtime.runtimeId, { type: 'get_subagents' })).rejects.toThrow()
+  })
+})
+
+describe('OMP pending dialog recovery', () => {
+  it('retains unanswered dialogs across turn boundaries, resolves responses/cancels, and clears on abort/exit', async () => {
+    const fake = fakeOmpAgent()
+    const manager = ompManager(fake.executable)
+    const info = await manager.start({ cwd: fake.cwd })
+    const runtime = (manager as unknown as { runtimes: Map<string, RpcRuntime> }).runtimes.get(info.runtimeId)
+    if (!runtime) throw new Error('Missing runtime')
+    const incoming = runtime as unknown as { handleFrame(frame: unknown): void }
+    const request = (id: string) => ({ type: 'extension_ui_request', method: 'confirm', id, title: 'Approve', message: 'Read a file?' })
+    incoming.handleFrame(request('approval'))
+    incoming.handleFrame({ type: 'agent_end' })
+    expect(runtime.snapshot().pendingExtensionUi).toMatchObject([{ id: 'approval' }])
+    await manager.command(info.runtimeId, { type: 'extension_ui_response', id: 'approval', confirmed: true })
+    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    incoming.handleFrame(request('cancelled'))
+    incoming.handleFrame({ type: 'extension_ui_request', method: 'cancel', targetId: 'cancelled' })
+    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    incoming.handleFrame(request('aborted'))
+    await manager.command(info.runtimeId, { type: 'abort' })
+    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    incoming.handleFrame(request('exit'))
+    await manager.stop(info.runtimeId)
+    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+  })
+
+  it('keeps the dialog if writing its response fails', async () => {
+    const fake = fakeOmpAgent()
+    const manager = ompManager(fake.executable)
+    const info = await manager.start({ cwd: fake.cwd })
+    const runtime = (manager as unknown as { runtimes: Map<string, RpcRuntime> }).runtimes.get(info.runtimeId)
+    if (!runtime) throw new Error('Missing runtime')
+    const access = runtime as unknown as { handleFrame(frame: unknown): void; transport: { enqueue(line: string): { done: Promise<void>; cancel(): 'cancelled' | 'flushed' } } }
+    access.handleFrame({ type: 'extension_ui_request', method: 'input', id: 'input', title: 'Answer' })
+    const write = vi.spyOn(access.transport, 'enqueue').mockReturnValue({ done: Promise.reject(new Error('Write failed')), cancel: () => 'cancelled' })
+    try {
+      await expect(manager.command(info.runtimeId, { type: 'extension_ui_response', id: 'input', value: 'Answer' })).rejects.toThrow('Write failed')
+      expect(runtime.snapshot().pendingExtensionUi).toMatchObject([{ id: 'input' }])
+    } finally { write.mockRestore() }
   })
 })

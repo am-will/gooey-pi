@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { PrimeContextUsage, PrimeEventEnvelope, PrimeModelDescriptor, PrimeServiceTier, RuntimeInfo, SessionActionSnapshot } from '../../../src/types/api'
@@ -7,9 +8,10 @@ import { canonicalSessionPath } from '../session-paths'
 import { errorMessage, isRecord } from '../validation'
 import { redactedStderrTail } from '../lib/process-detail'
 import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAssemblyTiming } from './chunk-assembly'
-import { AgentEventForwarder } from './events'
+import { AgentEventForwarder, isDesktopReservedEvent, slimForwardedEvent } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
+import { PendingExtensionUi } from './pending-extension-ui'
 import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, reportsCompactionOutcome, settledCompactionEnd, type CompactAnswer, type ManualCompaction } from './manual-compaction'
 import { FramedRpcTransport, isBrokenPipe, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
@@ -49,6 +51,7 @@ interface ContextUsageRefreshRequest {
 
 export class RpcRuntime {
   readonly runtimeId = randomUUID()
+  private readonly pendingUi = new PendingExtensionUi()
   private readonly pending = new Map<string, PendingRequest>()
   private readonly uncertainDeliveries = new Set<string>()
   private pendingBytes = 0
@@ -59,13 +62,14 @@ export class RpcRuntime {
   private stopPromise: Promise<boolean> | null = null
   private readonly eventForwarder: AgentEventForwarder
   private stopped = false
+  private exitRequested = false
   private info: RuntimeInfo
   private requestedServiceTier: PrimeServiceTier = 'default'
   private contextUsageRefresh: Promise<void> | null = null
   private contextUsageRefreshRequest: ContextUsageRefreshRequest | null = null
   private readonly contextUsage = new ContextUsageProjection()
   private contextUsageEmitTimer: NodeJS.Timeout | null = null
-  private lastContextUsageEmitAt = 0
+  private lastContextUsageEmitAt = Number.NEGATIVE_INFINITY
   private continuationPending = false
   // Provider auto-retry backoff: agent_end has fired but the agent will
   // continue the same turn, so the runtime must keep reporting busy. Kept
@@ -77,12 +81,9 @@ export class RpcRuntime {
   // agent_start a get_state that still reports the run is stale.
   private runEndedAt: number | null = null
   private runEndRefreshTimer: NodeJS.Timeout | null = null
-  // Compaction watchdog: some Prime Agent event paths buffer compaction_start
-  // until the surrounding RPC command settles, so the desktop would learn
-  // about a compaction only after it finished. get_state responses are never
-  // buffered, so polling the compacting flag while the runtime is active lets
-  // the desktop synthesize the missing lifecycle events; real events take
-  // precedence and duplicates are swallowed.
+  // Poll get_state while active to reveal compaction before buffered lifecycle
+  // events arrive. Real lifecycle events override polling and suppress
+  // duplicate synthesized events.
   private readonly watchdogTimings: CompactionWatchdogTimings
   private compactionEpisode: 'none' | 'real' | 'synthetic' = 'none'
   // OMP ends carry no reason, so the end reports the one its start announced.
@@ -116,9 +117,7 @@ export class RpcRuntime {
     }, chunkAssemblyTiming)
     this.info = { runtimeId: this.runtimeId, harness: this.adapter.id, cwd, isStreaming: false, isCompacting: false, sessionActions: emptySessionActionSnapshot(), ...(this.adapter.buildServiceTierCommand ? {} : { fastModeAvailable: false }) }
     this.eventForwarder = new AgentEventForwarder(this.runtimeId, onEvent)
-    // Every harness child is spawned with the authorized cwd as its working
-    // directory. Adapters that declare spawnsInCwd (pi has no --cwd flag and
-    // buckets its sessions by the process working directory) depend on this.
+    // Every harness runs in the authorized cwd; Pi has no --cwd flag.
     const invocation = prepareExecutableSpawn(executable, args, safeChildEnvironment(extraEnvironment))
     this.child = spawn(invocation.file, invocation.args, { cwd, env: invocation.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' })
     this.transport = new FramedRpcTransport(
@@ -137,7 +136,7 @@ export class RpcRuntime {
       this.disposeContextUsage()
       const detail = code !== 0 && code !== null && !this.stopped && !this.receivedFrame ? redactedStderrTail(this.transport.stderrTail()) : ''
       this.fail(new Error(`${this.adapter.agentName} RPC exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`))
-      this.emit({ type: 'runtime_exit', code, signal, expected: this.stopped })
+      this.emit({ type: 'runtime_exit', code, signal, expected: this.exitRequested && !this.transportFailed })
       this.onExit(this)
     })
     this.scheduleCompactionPoll()
@@ -145,7 +144,8 @@ export class RpcRuntime {
 
   /** Frozen shallow copy: nested state is replaced wholesale on update, and the IPC boundary clones for the renderer. */
   snapshot(): RuntimeInfo {
-    return Object.freeze(this.continuationPending || this.retryPending ? { ...this.info, isStreaming: true } : { ...this.info })
+    const pendingExtensionUi = this.pendingUi.list()
+    return Object.freeze({ ...this.info, ...(this.continuationPending || this.retryPending ? { isStreaming: true } : {}), ...(pendingExtensionUi.length ? { pendingExtensionUi } : {}) })
   }
 
   async handshake(): Promise<RuntimeInfo> {
@@ -174,9 +174,13 @@ export class RpcRuntime {
     this.info.fastModeSupported = Boolean(this.adapter.buildServiceTierCommand) && (model?.fastModeSupported ?? false)
     this.info.imageInputSupported = model ? model.input.includes('image') : undefined
     if (!this.info.fastModeSupported) {
-      this.requestedServiceTier = 'default'
-      this.info.serviceTier = 'default'
+      this.resetServiceTier()
     }
+  }
+
+  private resetServiceTier(): void {
+    this.requestedServiceTier = 'default'
+    this.info.serviceTier = 'default'
   }
 
   async setServiceTier(serviceTier: 'default' | 'priority', probe = false): Promise<boolean> {
@@ -184,15 +188,13 @@ export class RpcRuntime {
     if (!buildServiceTierCommand) {
       // The harness has no service-tier command at all; nothing goes on the
       // wire, and a direct request fails with a per-harness error.
-      this.requestedServiceTier = 'default'
-      this.info.serviceTier = 'default'
+      this.resetServiceTier()
       this.info.fastModeAvailable = false
       if (probe) return false
       throw new Error(`Service tier is not supported by the ${this.adapter.agentName} harness`)
     }
     if (serviceTier === 'priority' && !this.info.fastModeSupported) {
-      this.requestedServiceTier = 'default'
-      this.info.serviceTier = 'default'
+      this.resetServiceTier()
       return false
     }
     try {
@@ -215,15 +217,17 @@ export class RpcRuntime {
     this.lastActivityAt = Date.now()
     if (command.type === 'extension_ui_response') {
       await this.transport.enqueue(`${JSON.stringify(command)}\n`).done
+      this.pendingUi.resolve(command.id)
       return { type: 'response', command: 'extension_ui_response', success: true }
     }
     if (command.type === 'compact') return this.compact(command)
     const response = await this.request(command, 60_000)
+    if (command.type === 'abort') this.pendingUi.clear()
     if (command.type === 'get_state') this.updateFromState(response.data)
-    if (response.success === true && ['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
+    if (['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
       await this.refreshState()
       void this.refreshContextUsage()
-    } else if (response.success === true && command.type === 'prompt') {
+    } else if (command.type === 'prompt') {
       // get_state discovers the new session file promptly. Its mid-stream
       // context snapshot does not include the active assistant message, so a
       // usage refresh waits for message/tool boundaries below.
@@ -272,6 +276,7 @@ export class RpcRuntime {
   }
 
   stop(): Promise<boolean> {
+    this.exitRequested = true
     if (!this.stopPromise) {
       // Stop accepting partial frames before the abort round-trip: the child
       // may keep writing while that request is in flight.
@@ -283,7 +288,6 @@ export class RpcRuntime {
 
   private async performStop(): Promise<boolean> {
     this.disposeCompactionWatchdog()
-    this.chunks.dispose()
     if (this.info.isStreaming || this.info.isCompacting || this.retryPending) {
       try { await this.request({ type: 'abort' }, 5_000) } catch { /* close stdin and escalate below */ }
     }
@@ -406,10 +410,8 @@ export class RpcRuntime {
     return new Promise((resolveRequest, reject) => {
       let write: QueuedRpcWrite | null = null
       const timer = setTimeout(() => {
-        const pending = this.pending.get(id)
+        const pending = this.takePending(id)
         if (!pending) return
-        this.pendingBytes -= pending.bytes
-        this.pending.delete(id)
         if (write?.cancel() !== 'flushed') {
           // The line never reached the child: the command cannot execute, so
           // a retry is safe.
@@ -425,11 +427,8 @@ export class RpcRuntime {
       timer.unref()
       this.pending.set(id, { resolve: resolveRequest, reject, timer, bytes, command: commandType })
       const failWrite = (error: unknown) => {
-        const pending = this.pending.get(id)
+        const pending = this.takePending(id)
         if (!pending) return
-        clearTimeout(pending.timer)
-        this.pendingBytes -= pending.bytes
-        this.pending.delete(id)
         pending.reject(error instanceof Error ? error : new Error(errorMessage(error)))
       }
       write = this.transport.enqueue(line)
@@ -441,18 +440,18 @@ export class RpcRuntime {
     let value: unknown
     try { value = JSON.parse(line) } catch {
       this.chunks.dispose()
-      this.emit({ type: 'transport_error', error: `${this.adapter.agentName} emitted malformed JSON` })
+      this.emit({ type: 'transport_limit', kind: 'frame', error: `${this.adapter.agentName} emitted malformed JSON` })
       return
     }
     this.handleFrame(value)
   }
 
   private handleFrame(raw: unknown): void {
-    if (!isRecord(raw) || typeof raw.type !== 'string') return
+    if (!isRecord(raw) || typeof raw.type !== 'string' || isDesktopReservedEvent(raw)) return
     this.receivedFrame = true
     if (raw.type !== 'response') this.lastActivityAt = Date.now()
     if (raw.type === 'response' && typeof raw.id === 'string') {
-      const pending = this.pending.get(raw.id)
+      const pending = this.takePending(raw.id)
       if (!pending) {
         // A late answer to a request that timed out after its write flushed
         // is consumed, not surfaced as an orphan.
@@ -460,12 +459,9 @@ export class RpcRuntime {
         this.emit({ type: 'orphan_response', command: raw.command })
         return
       }
-      clearTimeout(pending.timer)
-      this.pendingBytes -= pending.bytes
-      this.pending.delete(raw.id)
       if (raw.command !== pending.command) {
         pending.reject(new Error(`${this.adapter.agentName} returned a mismatched response for ${pending.command}`))
-        this.emit({ type: 'transport_error', error: `${this.adapter.agentName} returned a mismatched RPC response` })
+        this.emit({ type: 'transport_limit', kind: 'response', error: `${this.adapter.agentName} returned a mismatched RPC response` })
         return
       }
       if (raw.success !== true) {
@@ -495,6 +491,7 @@ export class RpcRuntime {
       this.manualCompaction.end = value
       if (!reportsCompactionOutcome(value)) return
     }
+    this.pendingUi.track(value)
     const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)
@@ -542,7 +539,7 @@ export class RpcRuntime {
       this.compactionEpisode = 'none'
     } else if (value.type === 'auto_retry_start') this.retryPending = true
     else if (value.type === 'auto_retry_end') this.retryPending = false
-    this.emit(value)
+    this.emit(slimForwardedEvent(value))
     if (value.type === 'agent_end' && this.adapter.sessionActionEvents === false) this.endRunActions()
     if (contextUsageMoved) this.publishLiveContextUsage(value.type === 'message_end')
     if (value.type === 'message_end'
@@ -615,7 +612,7 @@ export class RpcRuntime {
     this.info.contextUsage = usage
     if (!changed) return
 
-    const elapsed = Date.now() - this.lastContextUsageEmitAt
+    const elapsed = performance.now() - this.lastContextUsageEmitAt
     if (immediate || elapsed >= 100) {
       this.emitContextUsageNow()
       return
@@ -635,7 +632,7 @@ export class RpcRuntime {
     }
     const usage = this.info.contextUsage
     if (!usage || this.stopped) return
-    this.lastContextUsageEmitAt = Date.now()
+    this.lastContextUsageEmitAt = performance.now()
     this.emit({ type: 'context_usage', contextUsage: usage })
   }
 
@@ -653,6 +650,7 @@ export class RpcRuntime {
     if (typeof raw.sessionId === 'string') {
       if (this.info.sessionId !== undefined && raw.sessionId !== this.info.sessionId) {
         this.contextUsage.reset()
+        this.pendingUi.clear()
         delete this.info.contextUsage
         delete this.info.sessionUsage
       }
@@ -723,6 +721,15 @@ export class RpcRuntime {
 
   private emit(event: RpcObject): void { this.eventForwarder.emit(event) }
 
+  private takePending(id: string): PendingRequest | undefined {
+    const pending = this.pending.get(id)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.pending.delete(id)
+    this.pendingBytes -= pending.bytes
+    return pending
+  }
+
   private rememberUncertainDelivery(id: string): void {
     this.uncertainDeliveries.add(id)
     if (this.uncertainDeliveries.size <= 64) return
@@ -731,6 +738,7 @@ export class RpcRuntime {
   }
 
   private fail(error: Error): void {
+    this.pendingUi.clear()
     this.chunks.close()
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
     this.pending.clear()

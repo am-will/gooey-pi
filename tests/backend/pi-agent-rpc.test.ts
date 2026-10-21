@@ -90,9 +90,8 @@ function piManager(executable: string, options: { providers?: ProviderCatalog } 
 describe('pi RPC adapter argv', () => {
   const baseInput = { cwd: '/work/project', environment: {} as NodeJS.ProcessEnv }
 
-  it('builds the base argv without a --cwd flag and declares spawnsInCwd instead', () => {
+  it('builds the base argv without a --cwd flag', () => {
     expect(PI_RPC_ADAPTER.buildStartArgs(baseInput)).toEqual(['--mode', 'rpc'])
-    expect(PI_RPC_ADAPTER.spawnsInCwd).toBe(true)
   })
 
   it('resumes with --session, never the interactive --resume selector', () => {

@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
+import { SESSION_FILE_RECORD_LIMIT_BYTES } from '../../electron/main/jsonl-limits'
 import { StrictJsonlDecoder, strictJsonLines } from '../../electron/main/jsonl'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
-async function collect(stream: Readable, maxUnframedBytes?: number): Promise<string[]> {
+async function collect(stream: Readable, maxUnframedBytes = SESSION_FILE_RECORD_LIMIT_BYTES): Promise<string[]> {
   const lines: string[] = []
   for await (const line of strictJsonLines(stream, maxUnframedBytes)) lines.push(line)
   return lines
@@ -17,7 +18,7 @@ async function collect(stream: Readable, maxUnframedBytes?: number): Promise<str
 describe('StrictJsonlDecoder', () => {
   it('frames only on LF across UTF-8 chunks', () => {
     const lines: string[] = []
-    const decoder = new StrictJsonlDecoder((line) => lines.push(line))
+    const decoder = new StrictJsonlDecoder((line) => lines.push(line), SESSION_FILE_RECORD_LIMIT_BYTES)
     const input = Buffer.from('{"text":"a\u2028b"}\n{"ok":true}\r\n')
     decoder.push(input.subarray(0, 8))
     decoder.push(input.subarray(8, 17))
@@ -50,7 +51,7 @@ describe('StrictJsonlDecoder', () => {
 
   it('replaces an incomplete trailing UTF-8 sequence at end of input', () => {
     const lines: string[] = []
-    const decoder = new StrictJsonlDecoder((line) => lines.push(line))
+    const decoder = new StrictJsonlDecoder((line) => lines.push(line), SESSION_FILE_RECORD_LIMIT_BYTES)
     decoder.push(Buffer.from('{"ok":true}\n"a'))
     decoder.push(Buffer.from([0xe2, 0x82])) // first two bytes of a three-byte sequence
     decoder.end()
@@ -59,7 +60,7 @@ describe('StrictJsonlDecoder', () => {
 
   it('reassembles a multi-byte character split across chunk boundaries', () => {
     const lines: string[] = []
-    const decoder = new StrictJsonlDecoder((line) => lines.push(line))
+    const decoder = new StrictJsonlDecoder((line) => lines.push(line), SESSION_FILE_RECORD_LIMIT_BYTES)
     const euro = Buffer.from('{"text":"€"}\n')
     const splitAt = euro.indexOf(0xe2) + 1
     decoder.push(euro.subarray(0, splitAt))
@@ -70,7 +71,7 @@ describe('StrictJsonlDecoder', () => {
 
   it('drops blank framed lines instead of forwarding empty records', () => {
     const lines: string[] = []
-    const decoder = new StrictJsonlDecoder((line) => lines.push(line))
+    const decoder = new StrictJsonlDecoder((line) => lines.push(line), SESSION_FILE_RECORD_LIMIT_BYTES)
     decoder.push('{"a":1}\n\n\r\n{"b":2}\n')
     decoder.end()
     expect(lines).toEqual(['{"a":1}', '{"b":2}'])
@@ -133,7 +134,7 @@ describe('strictJsonLines', () => {
     // event on some Node versions; the caller-visible contract is teardown.
     stream.on('error', () => undefined)
     const lines: string[] = []
-    for await (const line of strictJsonLines(stream)) {
+    for await (const line of strictJsonLines(stream, SESSION_FILE_RECORD_LIMIT_BYTES)) {
       lines.push(line)
       break
     }
