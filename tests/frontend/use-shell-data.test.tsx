@@ -151,3 +151,29 @@ it.each([undefined, { ...project, inferred: true }])('does not enumerate checkou
   expect(checkouts.checkoutCatalog).toBeUndefined()
   expect(checkouts.checkoutsLoading).toBe(false)
 })
+
+it('replaces an invalidated initial Git request when a new session keeps the same cwd', async () => {
+  const first = deferred<GitStatus>()
+  const replacement = deferred<GitStatus>()
+  const status = vi.fn().mockImplementationOnce(() => first.promise).mockImplementationOnce(() => replacement.promise)
+  const bridge = { git: { status } } as unknown as PrimeWorkApi
+  const workspaceRef = { current: { cwd: '/project', generation: 0 } }
+  const reportError = vi.fn()
+  let git!: ReturnType<typeof useGitStatus>
+  function Probe() {
+    const options = { bridge, cwd: '/project', workspaceRef, workspaceGeneration: workspaceRef.current.generation, locallyOwnedSession: false, reportError }
+    git = useGitStatus(options)
+    return null
+  }
+  await act(async () => { root.render(<Probe />) })
+  expect(status).toHaveBeenCalledTimes(1)
+  workspaceRef.current = { cwd: '/project', generation: 1 }
+  await act(async () => { root.render(<Probe />) })
+  expect(status).toHaveBeenCalledTimes(2)
+  await act(async () => { first.resolve({ isRepo: true, branch: 'stale', files: [] }); await first.promise })
+  expect(git.git.isRepo).toBe(false)
+  const current: GitStatus = { isRepo: true, branch: 'current', files: [{ path: 'changed.txt', status: 'M', staged: false, additions: 1, deletions: 0 }] }
+  await act(async () => { replacement.resolve(current); await replacement.promise })
+  expect(git.git).toBe(current)
+  expect(reportError).not.toHaveBeenCalled()
+})
