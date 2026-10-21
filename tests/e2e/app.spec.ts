@@ -2314,6 +2314,15 @@ test.describe('Prime Work desktop smoke', () => {
     await page.locator('.terminal-drawer:not([hidden])').getByLabel('Close terminal', { exact: true }).click()
   })
 
+  test('opens a terminal for new chats when the terminal setting is enabled', async () => {
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click()
+    await page.getByRole('checkbox', { name: /Open terminal with new sessions/ }).check()
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await page.getByRole('button', { name: /^New session/ }).first().click()
+    await expect(page.locator('.terminal-drawer:not([hidden]) .terminal-live-dot.is-connected')).toBeVisible()
+  })
+
   test('keeps the same PTY and panel sizes while visiting full-page views', async () => {
     await page.getByLabel(/Toggle terminal/).click()
     const drawer = page.locator('.terminal-drawer:not([hidden])')
