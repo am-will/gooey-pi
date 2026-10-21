@@ -8,7 +8,7 @@ interface RegisteredTool {
   label: string
   description: string
   parameters: unknown
-  execute(toolCallId: string, params: unknown): Promise<{
+  execute(toolCallId: string, params: unknown, signal?: AbortSignal): Promise<{
     content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>
     details: Record<string, unknown>
   }>
@@ -70,6 +70,7 @@ function fakeService() {
 const bridges: AgentBrowserBridge[] = []
 afterEach(async () => {
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
   await Promise.all(bridges.splice(0).map((bridge) => bridge.stop()))
 })
 
@@ -100,6 +101,23 @@ describe('omp-work-browser extension', () => {
       '<untrusted-terminal-content>', '</untrusted-terminal-content>',
     ])
     expect(result.content[0].text).toContain('&lt;/untrusted-terminal-content&gt;')
+  })
+
+  it('forwards cancellation to the broker fetch', async () => {
+    const { tool } = await fixture()
+    let seenSignal: AbortSignal | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const signal = init?.signal
+      if (!signal) throw new Error('No request signal')
+      seenSignal = signal
+      return new Promise<Response>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+    })
+    const controller = new AbortController()
+    const pending = tool('browser_read_page').execute('cancelled-call', {}, controller.signal)
+    const assertion = expect(pending).rejects.toThrow(/cancelled/)
+    controller.abort(new Error('cancelled'))
+    await assertion
+    expect(seenSignal?.aborted).toBe(true)
   })
 
   it('registers no tools when the broker environment is missing', async () => {
