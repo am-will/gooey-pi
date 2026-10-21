@@ -33,7 +33,9 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     executableName: (platform) => platform === 'win32' ? 'prime-agent.exe' : 'prime-agent',
     binaryEnvVar: 'PRIME_AGENT_BINARY',
     bundledResourceDirs: [['agent'], ['agent', 'bin']],
-    candidateDirs: (platform, home, env) => platform === 'win32' ? [] : [
+    candidateDirs: (platform, home, env) => platform === 'win32' ? [
+      win32.join(env.PRIME_AGENT_RUST_PREFIX || win32.join(home, '.local'), 'share', 'prime-agent'),
+    ] : [
       join(env.XDG_DATA_HOME ?? join(home, '.local', 'share'), 'prime-agent-node', 'current', 'bin'),
     ],
     windowsNpmShim: { shim: 'prime-agent.cmd', entrypoint: ['prime-agent', 'dist', 'bundle', 'cli.js'] },
