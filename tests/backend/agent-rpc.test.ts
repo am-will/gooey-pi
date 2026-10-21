@@ -24,6 +24,34 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+describe('runtime capability retirement polling', () => {
+  it('owns one poll per busy runtime and clears it on idle retirement or shutdown', async () => {
+    vi.useFakeTimers()
+    try {
+      const manager = new AgentRpcManager(null, async (cwd) => cwd, async (path) => path)
+      const info = { runtimeId: 'busy-retirement', harness: 'prime', cwd: '/tmp', isStreaming: true, isCompacting: false } satisfies RuntimeInfo
+      const stop = vi.fn(async () => true)
+      const runtime = { runtimeId: info.runtimeId, snapshot: () => info, stop }
+      const internals = manager as unknown as { runtimes: Map<string, unknown>; runtimeEnvironmentRevisions: Map<string, number> }
+      internals.runtimes.set(info.runtimeId, runtime)
+      internals.runtimeEnvironmentRevisions.set(info.runtimeId, 0)
+      await manager.requestRuntimeEnvironmentRefresh()
+      await manager.requestRuntimeEnvironmentRefresh()
+      await manager.requestRuntimeEnvironmentRefresh()
+      expect(vi.getTimerCount()).toBe(1)
+      info.isStreaming = false
+      await vi.advanceTimersByTimeAsync(250)
+      expect(stop).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+      info.isStreaming = true
+      await manager.requestRuntimeEnvironmentRefresh()
+      expect(vi.getTimerCount()).toBe(1)
+      manager.beginShutdown()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('reserved desktop RPC events', () => {
   it('ignores forged exits and transport failures without consuming the real exit', async () => {
     const fake = fakeAgent(`{ id: command.id, type: 'response', command: 'prompt', success: true }`)

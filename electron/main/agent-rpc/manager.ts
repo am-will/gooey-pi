@@ -3,7 +3,7 @@ import { assertNoMcpAuthenticationCommand } from '../../../src/lib/mcp-policy'
 import { isRuntimeIdle, parseSessionActionSnapshot, streamingBehaviorForIntent } from '../../../src/lib/session-actions'
 import { resolveExecutable, type ExecutableSource } from '../process-utils'
 import { canonicalSessionPath } from '../session-paths'
-import { isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
+import { errorMessage, isPathWithin, isRecord, rejectUnknownKeys, requireId, requireRecord, requireString } from '../validation'
 import { isThinkingLevel, validateRpcCommand } from './command-schema'
 import { PRIME_RPC_ADAPTER, type HarnessRpcAdapter, type StartRecovery } from './harness-adapter'
 import { RpcRuntime } from './runtime'
@@ -32,6 +32,7 @@ export interface RuntimeEnvironmentScope {
 export class AgentRpcManager {
   private readonly runtimes = new Map<string, RpcRuntime>()
   private readonly startingRuntimes = new Set<string>()
+  private readonly retirementPolls = new Map<string, NodeJS.Timeout>()
   private readonly retiringRuntimes = new Set<string>()
   private readonly runtimeEnvironmentRevisions = new Map<string, number>()
   private runtimeEnvironmentRevision = 0
@@ -95,7 +96,11 @@ export class AgentRpcManager {
 
   setStartRecovery(recover: StartRecovery): void { this.recoverStart = recover }
 
-  beginShutdown(): void { this.closed = true }
+  beginShutdown(): void {
+    this.closed = true
+    for (const timer of this.retirementPolls.values()) clearTimeout(timer)
+    this.retirementPolls.clear()
+  }
 
   async start(raw: unknown): Promise<RuntimeInfo> {
     return this.startRecovering(raw, true)
@@ -190,6 +195,7 @@ export class AgentRpcManager {
             this.startingRuntimes.delete(closed.runtimeId)
             this.runtimes.delete(closed.runtimeId)
             this.retiringRuntimes.delete(closed.runtimeId)
+            this.cancelRetirementPoll(closed.runtimeId)
             this.runtimeEnvironmentRevisions.delete(closed.runtimeId)
             notifyRuntimeEnd(closed.snapshot())
           },
@@ -386,14 +392,29 @@ export class AgentRpcManager {
 
   private async retireWhenIdle(runtime: RpcRuntime): Promise<void> {
     const wantedRevision = this.runtimeEnvironmentRevision
-    if (!this.runtimes.has(runtime.runtimeId)
-      || (this.runtimeEnvironmentRevisions.get(runtime.runtimeId) ?? wantedRevision) >= wantedRevision) return
+    if (this.closed || !this.runtimes.has(runtime.runtimeId)
+      || (this.runtimeEnvironmentRevisions.get(runtime.runtimeId) ?? wantedRevision) >= wantedRevision) {
+      this.cancelRetirementPoll(runtime.runtimeId)
+      return
+    }
     if (this.isIdle(runtime)) {
+      this.cancelRetirementPoll(runtime.runtimeId)
       await runtime.stop()
       return
     }
-    const timer = setTimeout(() => { void this.retireWhenIdle(runtime) }, 250)
+    if (this.retirementPolls.has(runtime.runtimeId)) return
+    const timer = setTimeout(() => {
+      this.retirementPolls.delete(runtime.runtimeId)
+      void this.retireWhenIdle(runtime).catch((error) => console.error('[agent-rpc] Runtime retirement failed:', errorMessage(error)))
+    }, 250)
+    this.retirementPolls.set(runtime.runtimeId, timer)
     timer.unref()
+  }
+
+  private cancelRetirementPoll(runtimeId: string): void {
+    const timer = this.retirementPolls.get(runtimeId)
+    if (timer) clearTimeout(timer)
+    this.retirementPolls.delete(runtimeId)
   }
 
   private async retireForCheckout(runtime: RpcRuntime): Promise<boolean> {
