@@ -116,7 +116,7 @@ jobs:
       - run: npm run release:preflight:toolchain
       - run: npm exec -- vitest run tests/backend/store-windows-migration.test.ts
       - run: npm exec -- vitest run tests/backend/windows-git-resolution.test.ts
-      - run: npm exec -- vitest run tests/backend/process-utils.test.ts -t "Windows Git executable resolution"
+      - run: node node_modules/vitest/vitest.mjs run tests/backend/process-utils.test.ts -t "Windows Git executable resolution"
 
   packaging-smoke:
     if: github.event_name == 'pull_request'
