@@ -8,9 +8,11 @@ export type { ChildSession, ChildRoster, ChildHistoryOptions, ChildHistoryPage }
  */
 export const BROWSER_PARTITION = 'persist:prime-work-browser'
 
-export type ThemeMode = 'system' | 'light' | 'dark'
+export const THEME_MODES = ['system', 'light', 'dark'] as const
+export type ThemeMode = (typeof THEME_MODES)[number]
 export type WorkspaceView = 'session' | 'projects' | 'activity' | 'scheduled' | 'plugins' | 'settings'
-export type InspectorTab = 'summary' | 'changes' | 'browser' | 'files'
+export const INSPECTOR_TABS = ['summary', 'changes', 'browser', 'files'] as const
+export type InspectorTab = (typeof INSPECTOR_TABS)[number]
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'complete' | 'failed' | 'unknown'
 
 export const HARNESS_IDS = ['omp', 'prime', 'pi'] as const
@@ -448,7 +450,8 @@ export interface TerminalSelectionContext { tabId: string; label: string; text: 
 export interface TerminalPromptContext extends TerminalSelectionContext { cwd?: string }
 export interface TerminalActiveContext { label: string; content: string; truncated: boolean }
 
-export type MessageEnterAction = 'queue' | 'steer'
+export const MESSAGE_ENTER_ACTIONS = ['queue', 'steer'] as const
+export type MessageEnterAction = (typeof MESSAGE_ENTER_ACTIONS)[number]
 export type PromptDeliveryIntent = 'queue' | 'steer'
 
 export interface PetDefinition {
@@ -517,13 +520,6 @@ export interface AppSettings {
   messageEnterAction: MessageEnterAction
   /** Optional absolute executable overrides; blank keeps automatic discovery. */
   runtimePaths: Record<HarnessId, string>
-  /** Legacy visibility preference retained for state compatibility; executable detection is authoritative. */
-  enabledHarnesses: HarnessId[]
-  /**
-   * Legacy diagnostics preference retained for persisted-state compatibility.
-   * The Privacy UI deliberately ignores this field; any reporting use needs separate review.
-   */
-  telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
   /** Visible time allowed for app-owned questionnaires; 0 waits until answered. Harness deadlines are unchanged. */
@@ -634,8 +630,10 @@ export interface VoiceToolResult {
   task?: VoiceTaskStarted
 }
 
-export type ScheduleDefinitionStatus = 'active' | 'paused' | 'completed' | 'blocked'
-export type ScheduleRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted' | 'cancelled'
+export const SCHEDULE_DEFINITION_STATUSES = ['active', 'paused', 'completed', 'blocked'] as const
+export type ScheduleDefinitionStatus = (typeof SCHEDULE_DEFINITION_STATUSES)[number]
+export const SCHEDULE_RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'skipped', 'interrupted', 'cancelled'] as const
+export type ScheduleRunStatus = (typeof SCHEDULE_RUN_STATUSES)[number]
 export type ScheduleCreatedBy = 'user' | 'agent'
 
 export type ScheduleTarget =

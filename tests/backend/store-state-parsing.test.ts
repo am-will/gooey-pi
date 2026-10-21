@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings, JsonStateStore } from '../../electron/main/store'
 import type { DesktopState } from '../../electron/main/store'
 
+import { SCHEDULE_DEFINITION_STATUSES, SCHEDULE_RUN_STATUSES } from '../../src/types/api'
+
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
@@ -173,7 +175,6 @@ describe('persisted settings parsing', () => {
       settings: { runtimePaths: { prime: '/usr/local/bin/prime', omp: 'omp', pi: '/'.padEnd(4_097, 'x') }, enabledHarnesses: ['omp', 'omp', 'ollama'], activeHarness: 'ollama' },
     })
     expect(settings.runtimePaths).toEqual({ prime: '/usr/local/bin/prime', omp: '', pi: '' })
-    expect(settings.enabledHarnesses).toEqual(['omp'])
     expect(settings.activeHarness).toBe('omp')
   })
 
@@ -210,6 +211,18 @@ describe('persisted settings parsing', () => {
     expect(settings.ompDisabledModels).toEqual([])
     expect(settings.piDisabledProviders).toEqual([])
     expect(settings.piDisabledModels).toEqual(['openai/gpt-5'])
+  })
+
+  it('keeps disabled-provider lists up to the provider catalog cap for every harness', () => {
+    const ids = Array.from({ length: 257 }, (_, index) => `p${index}`)
+    const { settings } = loadState({
+      version: 4,
+      settings: { disabledProviders: ids.slice(0, 129), ompDisabledProviders: ids, piDisabledProviders: ids },
+    })
+    expect(settings.disabledProviders).toEqual(ids.slice(0, 129))
+    expect(settings.ompDisabledProviders).toEqual(ids.slice(0, 256))
+    expect(settings.piDisabledProviders).toEqual(ids.slice(0, 256))
+    expect(loadState({ version: 4, settings: { disabledProviders: ids } }).settings.disabledProviders).toEqual(ids.slice(0, 256))
   })
 
   it('keeps valid per-harness model preferences and clears malformed entries', () => {
@@ -342,6 +355,14 @@ describe('persisted schedule parsing', () => {
     expect(schedules[0].runs[1]).toMatchObject({ startedAt: undefined, finishedAt: undefined, sessionId: undefined, sessionFile: undefined, error: undefined, skippedCount: undefined })
     expect(schedules[0].runs[2]).toMatchObject({ status: 'cancelled', finishedAt: '2026-01-01T09:00:03.000Z', error: 'Task changed' })
     expect(loadState({ version: 3, schedules: [{ ...validSchedule, runs: 'none' }] }).schedules[0].runs).toEqual([])
+  })
+
+  it('retains every shared schedule and run status on reload', () => {
+    for (const status of SCHEDULE_DEFINITION_STATUSES) {
+      const { schedules } = loadState({ version: 4, schedules: [{ ...validSchedule, status, runs: SCHEDULE_RUN_STATUSES.map((runStatus, index) => ({ ...validRun, id: `run-${index}`, status: runStatus })) }] })
+      expect(schedules[0].status).toBe(status)
+      expect(schedules[0].runs.map((run) => run.status)).toEqual([...SCHEDULE_RUN_STATUSES])
+    }
   })
 
   it('caps stored schedules', () => {

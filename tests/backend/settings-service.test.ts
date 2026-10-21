@@ -1,3 +1,4 @@
+import { THEME_MODES, LOCALE_PREFERENCES, INTERFACE_FONT_SCALES, PROJECT_SORT_MODES, CHECKOUT_STRATEGIES, INSPECTOR_TABS, MESSAGE_ENTER_ACTIONS, HARNESS_IDS, OMP_APPROVAL_MODES } from '../../src/types/api'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,6 +18,30 @@ function makeService(validateShell: (shell: unknown) => string = () => '/bin/zsh
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 describe('SettingsService.update', () => {
+  it('round-trips every accepted non-voice enum value through disk', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gooeypi-settings-enums-'))
+    dirs.push(dir)
+    const path = join(dir, 'state.json')
+    const service = new SettingsService(new JsonStateStore(path), () => '/bin/zsh')
+    const fields = {
+      theme: THEME_MODES,
+      locale: LOCALE_PREFERENCES,
+      interfaceFontScale: INTERFACE_FONT_SCALES,
+      projectSortMode: PROJECT_SORT_MODES,
+      checkoutStrategy: CHECKOUT_STRATEGIES,
+      defaultInspectorTab: INSPECTOR_TABS,
+      messageEnterAction: MESSAGE_ENTER_ACTIONS,
+      activeHarness: HARNESS_IDS,
+      ompApprovalMode: OMP_APPROVAL_MODES
+    }
+    for (const [field, values] of Object.entries(fields)) {
+      for (const value of values) {
+        await service.update({ [field]: value })
+        expect(new JsonStateStore(path).getSettings()).toMatchObject({ [field]: value })
+      }
+    }
+  })
+
   it('applies every field of a full valid patch', async () => {
     const service = makeService()
     const next = await service.update({
@@ -40,8 +65,6 @@ describe('SettingsService.update', () => {
       showToolCalls: false,
       messageEnterAction: 'steer',
       runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' },
-      enabledHarnesses: ['prime', 'omp', 'prime'],
-      telemetry: false,
       askUserEnabled: false,
       disabledProviders: ['openai', 'openai', 'google'],
       disabledModels: ['openai/gpt-5.6', 'openai/gpt-5.6'],
@@ -72,8 +95,8 @@ describe('SettingsService.update', () => {
       defaultInspectorTab: 'changes', browserHome: 'https://example.test/',
       browserAskForDownloads: false, terminalShell: '/bin/zsh', reduceMotion: true,
       showReasoningSummaries: false, showToolCalls: false, messageEnterAction: 'steer',
-      runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' }, enabledHarnesses: ['prime', 'omp'],
-      telemetry: false, askUserEnabled: false, disabledProviders: ['openai', 'google'], disabledModels: ['openai/gpt-5.6'], ompDisabledProviders: ['anthropic'],
+      runtimePaths: { prime: '/opt/prime-agent', omp: '/opt/omp', pi: '/opt/pi' },
+      askUserEnabled: false, disabledProviders: ['openai', 'google'], disabledModels: ['openai/gpt-5.6'], ompDisabledProviders: ['anthropic'],
       ompDisabledModels: ['anthropic/claude-sonnet-4'], piDisabledModels: ['openai/gpt-5.6-codex'],
       lastSelectedModels: { prime: 'openai/gpt-5.6-sol', omp: 'anthropic/claude-opus', pi: '' },
       activeHarness: 'omp', ompApprovalMode: 'always-ask', petEnabled: true, petId: 'codex/rocky', petSize: 65,
@@ -113,15 +136,13 @@ describe('SettingsService.update', () => {
     await expect(service.update({ messageEnterAction: 'send' })).rejects.toThrow(/Invalid message Enter action/)
     await expect(service.update({ runtimePaths: { prime: 'relative/prime-agent', omp: '', pi: '' } })).rejects.toThrow(/must be absolute/)
     await expect(service.update({ runtimePaths: { prime: '/opt/prime-agent', omp: '', pi: '', extra: '/tmp/evil' } })).rejects.toThrow(/not supported/)
-    await expect(service.update({ enabledHarnesses: [] })).rejects.toThrow(/At least one harness/)
-    await expect(service.update({ enabledHarnesses: ['prime', 'codex'] })).rejects.toThrow(/is invalid/)
     await expect(service.update({ sidebarOpen: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ keepRunningInBackground: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ launchAtLogin: 1 })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ askUserEnabled: 'yes' })).rejects.toThrow(/must be a boolean/)
     await expect(service.update({ browserHome: 'javascript:alert(1)' })).rejects.toThrow(/scheme/)
     await expect(service.update({ disabledProviders: ['../evil'] })).rejects.toThrow(/provider ID/)
-    await expect(service.update({ disabledProviders: Array.from({ length: 129 }, () => 'p') })).rejects.toThrow(/bounded/)
+    await expect(service.update({ disabledProviders: Array.from({ length: 257 }, () => 'p') })).rejects.toThrow(/bounded/)
     await expect(service.update({ disabledModels: ['../evil'] })).rejects.toThrow(/model key/)
     await expect(service.update({ disabledModels: Array.from({ length: 5_001 }, () => 'openai/gpt') })).rejects.toThrow(/bounded/)
     await expect(service.update({ ompDisabledProviders: ['../evil'] })).rejects.toThrow(/provider ID/)
@@ -161,24 +182,20 @@ describe('SettingsService.update', () => {
     await expect(service.update({ voiceSelfHostedUrl: 'https://speech.example.test/v1' })).resolves.toMatchObject({ voiceSelfHostedUrl: 'https://speech.example.test/v1' })
   })
 
+  it('accepts disabled-provider lists up to the provider catalog cap for every harness', async () => {
+    const service = makeService()
+    const ids = Array.from({ length: 256 }, (_, index) => `p${index}`)
+    for (const key of ['disabledProviders', 'ompDisabledProviders', 'piDisabledProviders'] as const) {
+      await expect(service.update({ [key]: ids.slice(0, 129) })).resolves.toMatchObject({ [key]: ids.slice(0, 129) })
+      await expect(service.update({ [key]: ids })).resolves.toMatchObject({ [key]: ids })
+    }
+  })
+
   it('accepts the pi harness and dedupes piDisabledProviders', async () => {
     const service = makeService()
     const next = await service.update({ activeHarness: 'pi', piDisabledProviders: ['openai', 'openai', 'anthropic'] })
     expect(next.activeHarness).toBe('pi')
     expect(next.piDisabledProviders).toEqual(['openai', 'anthropic'])
-  })
-
-  it('keeps the active harness independent from the legacy enabled set', async () => {
-    const service = makeService()
-    const onlyPi = await service.update({ enabledHarnesses: ['pi'] })
-    expect(onlyPi.enabledHarnesses).toEqual(['pi'])
-    expect(onlyPi.activeHarness).toBe('omp')
-
-    const stillPi = await service.update({ enabledHarnesses: ['prime', 'pi'] })
-    expect(stillPi.activeHarness).toBe('omp')
-
-    const fallback = await service.update({ enabledHarnesses: ['prime'] })
-    expect(fallback.activeHarness).toBe('omp')
   })
 
   it('routes terminalShell through the injected shell validator', async () => {
@@ -198,6 +215,40 @@ describe('SettingsService.update', () => {
     const next = await service.update({ keepRunningInBackground: true })
     expect(onDidUpdate).toHaveBeenCalledWith(before, next)
     expect(next.keepRunningInBackground).toBe(true)
+  })
+
+  it('preserves unrelated settings after a refused login item', async () => {
+    const service = makeService(undefined, () => { throw new Error('login item refused') })
+    await expect(service.update({ launchAtLogin: true, keepRunningInBackground: true, locale: 'ja' })).rejects.toThrow('login item refused')
+    expect(service.get()).toMatchObject({ launchAtLogin: false, keepRunningInBackground: true, locale: 'ja' })
+  })
+
+  it('serializes lifecycle failures before accepting a newer login-item request', async () => {
+    let rejectFirst: (reason: Error) => void = () => undefined
+    let enteredFirst: () => void = () => undefined
+    const entered = new Promise<void>((resolve) => { enteredFirst = resolve })
+    const failed = new Promise<void>((_, reject) => { rejectFirst = reject })
+    const onDidUpdate = vi.fn().mockImplementationOnce(() => { enteredFirst(); return failed }).mockResolvedValue(undefined)
+    const service = makeService(undefined, onDidUpdate)
+    const first = service.update({ launchAtLogin: true })
+    const firstFailure = expect(first).rejects.toThrow('first login item refused')
+    await entered
+    const second = service.update({ launchAtLogin: true, theme: 'dark' })
+    expect(onDidUpdate).toHaveBeenCalledTimes(1)
+    rejectFirst(new Error('first login item refused'))
+    await firstFailure
+    await expect(second).resolves.toMatchObject({ launchAtLogin: true, theme: 'dark' })
+    expect(service.get()).toMatchObject({ launchAtLogin: true, theme: 'dark' })
+    expect(onDidUpdate).toHaveBeenCalledTimes(2)
+  })
+
+  it('reverts the saved patch when a lifecycle integration rejects it', async () => {
+    const onDidUpdate = vi.fn(() => { throw new Error('macOS needs your approval') })
+    const service = makeService(undefined, onDidUpdate)
+
+    await expect(service.update({ launchAtLogin: true })).rejects.toThrow(/approval/)
+    expect(onDidUpdate).toHaveBeenCalledOnce()
+    expect(service.get().launchAtLogin).toBe(false)
   })
 })
 

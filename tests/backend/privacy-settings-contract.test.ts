@@ -7,6 +7,7 @@ vi.mock('electron', () => ({ session: { fromPartition: vi.fn(), defaultSession: 
 
 import { SettingsService } from '../../electron/main/settings-schedules'
 import { defaultSettings, JsonStateStore } from '../../electron/main/store'
+import { DEFAULT_SETTINGS } from '../../src/lib/default-settings'
 import { HARNESS_IDS, type HarnessId } from '../../src/types/api'
 
 const DIRECT_REFERENCE_ROOTS = ['assets/extensions', 'electron', 'src'] as const
@@ -35,35 +36,26 @@ function sourceFiles(directory: string): string[] {
   })
 }
 
-describe('legacy telemetry compatibility contract', () => {
-  it('keeps the legacy preference default-off', () => {
-    expect(defaultSettings().telemetry).toBe(false)
+describe('removed legacy preferences', () => {
+  it('shares persisted and renderer defaults apart from the OS shell', () => {
+    expect(defaultSettings()).toEqual({ ...DEFAULT_SETTINGS, terminalShell: defaultSettings().terminalShell })
   })
 
-  it.each(HARNESS_IDS)('defaults an absent legacy preference off for selected agent $harness', (harness) => {
+  it.each(HARNESS_TELEMETRY_CASES)('drops inert fields on load and rejects new writes for $harness', async ({ harness, telemetry }) => {
     const statePath = temporaryStatePath()
-    writeFileSync(statePath, JSON.stringify({ version: 4, settings: { activeHarness: harness } }))
-
-    expect(new JsonStateStore(statePath).snapshot().settings).toMatchObject({ activeHarness: harness, telemetry: false })
-  })
-
-  it.each(HARNESS_TELEMETRY_CASES)('parses telemetry=$telemetry for selected agent $harness', ({ harness, telemetry }) => {
-    const statePath = temporaryStatePath()
-    writeFileSync(statePath, JSON.stringify({ version: 4, settings: { activeHarness: harness, telemetry } }))
-
-    expect(new JsonStateStore(statePath).snapshot().settings).toMatchObject({ activeHarness: harness, telemetry })
-  })
-
-  it.each(HARNESS_TELEMETRY_CASES)('durably persists telemetry=$telemetry for selected agent $harness', async ({ harness, telemetry }) => {
-    const statePath = temporaryStatePath()
+    writeFileSync(statePath, JSON.stringify({ version: 4, settings: { activeHarness: harness, telemetry, enabledHarnesses: [harness] } }))
     const store = new JsonStateStore(statePath)
-    const settings = new SettingsService(store, () => '/bin/zsh')
-    await settings.update({ activeHarness: harness, telemetry })
+    expect(store.getSettings()).toMatchObject({ activeHarness: harness })
+    expect(store.getSettings()).not.toHaveProperty('telemetry')
+    expect(store.getSettings()).not.toHaveProperty('enabledHarnesses')
+    const service = new SettingsService(store, () => '/bin/zsh')
+    await expect(service.update({ telemetry })).rejects.toThrow('not supported')
+    await expect(service.update({ enabledHarnesses: [harness] })).rejects.toThrow('not supported')
+    await service.update({ activeHarness: harness })
     await store.beginShutdown()
-
-    const persisted = JSON.parse(readFileSync(statePath, 'utf8')) as { settings: { activeHarness: HarnessId; telemetry: boolean } }
-    expect(persisted.settings).toMatchObject({ activeHarness: harness, telemetry })
-    expect(new JsonStateStore(statePath).snapshot().settings).toMatchObject({ activeHarness: harness, telemetry })
+    const saved = JSON.parse(readFileSync(statePath, 'utf8'))
+    expect(saved.settings).not.toHaveProperty('telemetry')
+    expect(saved.settings).not.toHaveProperty('enabledHarnesses')
   })
 
   it('matches the reviewed direct telemetry source-reference allowlist', () => {
@@ -83,12 +75,6 @@ describe('legacy telemetry compatibility contract', () => {
     expect(references).toStrictEqual([
       // The Rust Prime model-catalog probe sets PRIME_AGENT_TELEMETRY=0 for that internal process only.
       { file: 'electron/main/providers-prime-rust.ts', source: "// started, so it must not report usage or mark Rust's telemetry notice shown." },
-      { file: 'electron/main/settings-schedules.ts', source: "telemetry: (value) => requireBoolean(value, 'telemetry')," },
-      { file: 'electron/main/store.ts', source: 'telemetry: false,' },
-      { file: 'electron/main/store.ts', source: "telemetry: typeof value.telemetry === 'boolean' ? value.telemetry : defaults.telemetry," },
-      { file: 'src/lib/data.ts', source: 'telemetry: false,' },
-      { file: 'src/pages/settings/contracts.ts', source: "telemetry: 'privacy'," },
-      { file: 'src/types/api.ts', source: 'telemetry: boolean' },
     ])
   })
 })
