@@ -18,6 +18,7 @@ import {
 } from './metadata'
 import {
   boundedString,
+  systemNotice,
   createTranscriptReader,
   MAX_PART_TEXT_CHARS,
   textFromContent,
@@ -215,14 +216,5 @@ export function branchSummaryTranscriptDialect(): TranscriptDialect {
 
 /** Fallbacks and branch summaries are neutral notices: they never render as failures. */
 function noticeRow(entry: JsonRecord, safeId: string, text: string): TranscriptMessage {
-  const timestamp = typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
-  return {
-    id: safeId,
-    role: 'system',
-    kind: 'notice',
-    timestamp,
-    startedAt: timestamp,
-    completedAt: timestamp,
-    parts: [{ type: 'text', text: boundedString(text, MAX_PART_TEXT_CHARS) }],
-  }
+  return { ...systemNotice(entry, safeId, [{ type: 'text', text: boundedString(text, MAX_PART_TEXT_CHARS) }]), kind: 'notice' }
 }

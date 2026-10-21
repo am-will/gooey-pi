@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import type { TranscriptMessage } from '../../../src/types/api'
+import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
 import { SESSION_FILE_MAX_BYTES, SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { strictJsonLines } from '../jsonl'
 import { isRecord } from '../validation'
@@ -31,6 +31,15 @@ export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS, { i
     if (text.length > max) return boundedString(text, max)
   }
   return text
+}
+
+export function boundedEntryTimestamp(entry: JsonRecord): string | undefined {
+  return typeof entry.timestamp === 'string' ? boundedString(entry.timestamp, 128) : undefined
+}
+
+export function systemNotice(entry: JsonRecord, id: string, parts: MessagePart[]): TranscriptMessage {
+  const timestamp = boundedEntryTimestamp(entry)
+  return { id, role: 'system', timestamp, startedAt: timestamp, completedAt: timestamp, parts }
 }
 
 export function validTimestamp(value: unknown, fallback: string): string {
