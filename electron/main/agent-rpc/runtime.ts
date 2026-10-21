@@ -11,6 +11,7 @@ import { DEFAULT_RPC_CHUNK_ASSEMBLY_TIMING, RpcChunkAssembler, type RpcChunkAsse
 import { AgentEventForwarder, isDesktopReservedEvent } from './events'
 import { PRIME_RPC_ADAPTER, parseContextUsage, parseSessionUsage, type HarnessRpcAdapter } from './harness-adapter'
 import { ContextUsageProjection } from './context-usage'
+import { PendingExtensionUi } from './pending-extension-ui'
 import { isCompactRefusal, isManualCompactionReason, manualCompactionStart, reportsCompactionOutcome, settledCompactionEnd, type CompactAnswer, type ManualCompaction } from './manual-compaction'
 import { FramedRpcTransport, isBrokenPipe, type QueuedRpcWrite } from './transport'
 import { boundedErrorDetail } from './limits'
@@ -50,6 +51,7 @@ interface ContextUsageRefreshRequest {
 
 export class RpcRuntime {
   readonly runtimeId = randomUUID()
+  private readonly pendingUi = new PendingExtensionUi()
   private readonly pending = new Map<string, PendingRequest>()
   private readonly uncertainDeliveries = new Set<string>()
   private pendingBytes = 0
@@ -147,7 +149,8 @@ export class RpcRuntime {
 
   /** Frozen shallow copy: nested state is replaced wholesale on update, and the IPC boundary clones for the renderer. */
   snapshot(): RuntimeInfo {
-    return Object.freeze(this.continuationPending || this.retryPending ? { ...this.info, isStreaming: true } : { ...this.info })
+    const pendingExtensionUi = this.pendingUi.list()
+    return Object.freeze({ ...this.info, ...(this.continuationPending || this.retryPending ? { isStreaming: true } : {}), ...(pendingExtensionUi.length ? { pendingExtensionUi } : {}) })
   }
 
   async handshake(): Promise<RuntimeInfo> {
@@ -217,10 +220,12 @@ export class RpcRuntime {
     this.lastActivityAt = Date.now()
     if (command.type === 'extension_ui_response') {
       await this.transport.enqueue(`${JSON.stringify(command)}\n`).done
+      this.pendingUi.resolve(command.id)
       return { type: 'response', command: 'extension_ui_response', success: true }
     }
     if (command.type === 'compact') return this.compact(command)
     const response = await this.request(command, 60_000)
+    if (command.type === 'abort') this.pendingUi.clear()
     if (command.type === 'get_state') this.updateFromState(response.data)
     if (response.success === true && ['set_model', 'cycle_model', 'set_thinking_level', 'cycle_thinking_level'].includes(String(command.type))) {
       await this.refreshState()
@@ -498,6 +503,7 @@ export class RpcRuntime {
       this.manualCompaction.end = value
       if (!reportsCompactionOutcome(value)) return
     }
+    this.pendingUi.track(value)
     const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)
@@ -656,6 +662,7 @@ export class RpcRuntime {
     if (typeof raw.sessionId === 'string') {
       if (this.info.sessionId !== undefined && raw.sessionId !== this.info.sessionId) {
         this.contextUsage.reset()
+        this.pendingUi.clear()
         delete this.info.contextUsage
         delete this.info.sessionUsage
       }
@@ -734,6 +741,7 @@ export class RpcRuntime {
   }
 
   private fail(error: Error): void {
+    this.pendingUi.clear()
     this.chunks.close()
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
     this.pending.clear()
