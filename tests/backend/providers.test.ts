@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
+import type { OAuthLoginCallbacks, OAuthProviderInterface } from 'prime-agent-ai/oauth'
 import { AuthStorage } from 'prime-agent'
 import { MAX_CATALOG_PROVIDERS, PrimeProviderService, resolveAvailableModelKeys } from '../../electron/main/providers'
 import type { PrimeImplementation, PrimeModelCatalog } from '../../src/types/api'
@@ -69,6 +69,13 @@ function serviceWithRegistryModels(models: unknown[], options: { executableModel
   internals.registry.getProviderDisplayName = (id) => id
   internals.registry.getError = () => undefined
   return providerService
+}
+
+function oauthProviderFor(providerService: PrimeProviderService, id: string): OAuthProviderInterface {
+  const storage = (providerService as unknown as { authStorage: Pick<AuthStorage, 'getOAuthProviders'> }).authStorage
+  const provider = storage.getOAuthProviders().find((candidate) => candidate.id === id)
+  if (!provider) throw new Error('Missing OAuth provider')
+  return provider
 }
 
 function expectRelationalIntegrity(catalog: PrimeModelCatalog): void {
@@ -333,15 +340,12 @@ describe('Prime provider adapter', () => {
   it('always allows retrying a provider login after cancel, even when login hangs', async () => {
     const providerService = service()
     const internals = providerService as unknown as {
-      authStorage: { login(providerId: string, options: unknown): Promise<void> }
       flows: Map<string, { timer: NodeJS.Timeout }>
     }
-    // A login that ignores the abort signal and never settles.
-    internals.authStorage.login = () => new Promise<void>(() => undefined)
-
     const catalog = await providerService.catalog(true)
     const oauthProvider = catalog.providers.find((provider) => provider.authMethod === 'oauth')
     expect(oauthProvider).toBeDefined()
+    vi.spyOn(oauthProviderFor(providerService, oauthProvider!.id), 'login').mockImplementation(() => new Promise(() => undefined))
 
     const first = await providerService.startOAuth(oauthProvider!.id)
     await expect(providerService.startOAuth(oauthProvider!.id)).rejects.toThrow(/already active/)
@@ -388,9 +392,12 @@ describe('Prime provider adapter', () => {
     providerService.setEventSink(events)
     let callbacks!: OAuthLoginCallbacks
     let finish!: () => void
-    const internals = providerService as unknown as { authStorage: { login(providerId: string, value: OAuthLoginCallbacks): Promise<void> } }
-    internals.authStorage.login = async (_provider, value) => { callbacks = value; await new Promise<void>((resolve) => { finish = resolve }) }
     const provider = (await providerService.catalog()).providers.find((candidate) => candidate.authMethod === 'oauth')!
+    vi.spyOn(oauthProviderFor(providerService, provider.id), 'login').mockImplementation(async (value) => {
+      callbacks = value
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { access: 'late-access', refresh: 'late-refresh', expires: Date.now() + 60_000 }
+    })
     const { flowId } = await providerService.startOAuth(provider.id)
     providerService.cancelOAuth(flowId)
     events.mockClear()
@@ -401,6 +408,25 @@ describe('Prime provider adapter', () => {
     await Promise.resolve()
     expect(openExternal).not.toHaveBeenCalled()
     expect(events).not.toHaveBeenCalled()
+  })
+
+  it('does not let a cancelled provider overwrite credentials saved by its newer flow', async () => {
+    const { providerService, authPath } = serviceWithAuthPath()
+    const providerId = (await providerService.catalog()).providers.find((candidate) => candidate.authMethod === 'oauth')!.id
+    const descriptor = oauthProviderFor(providerService, providerId)
+    let finishOlder!: (credentials: Awaited<ReturnType<OAuthProviderInterface['login']>>) => void
+    vi.spyOn(descriptor, 'login').mockImplementationOnce(() => new Promise((resolve) => { finishOlder = resolve }))
+      .mockResolvedValue({ access: 'new-access', refresh: 'new-refresh', expires: Date.now() + 60_000 })
+    const events = vi.fn()
+    providerService.setEventSink(events)
+    const older = await providerService.startOAuth(providerId)
+    providerService.cancelOAuth(older.flowId)
+    const newer = await providerService.startOAuth(providerId)
+    await vi.waitFor(() => expect(events).toHaveBeenCalledWith(expect.objectContaining({ flowId: newer.flowId, type: 'complete' })))
+    finishOlder({ access: 'stale-access', refresh: 'stale-refresh', expires: Date.now() + 60_000 })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(JSON.parse(readFileSync(authPath, 'utf8'))[providerId].access).toBe('new-access')
+    providerService.cancelAll()
   })
 
   it('rejects OAuth for providers that do not own an OAuth flow', async () => {

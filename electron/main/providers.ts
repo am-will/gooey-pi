@@ -436,8 +436,12 @@ export class PrimeProviderService {
           options: prompt.options.slice(0, 100).map((option) => ({ id: option.id.slice(0, 500), label: option.label.slice(0, 500) })),
         }),
       }
-      await this.authStorage.login(flow.providerId, callbacks)
+      const storage = this.authStorage
+      const provider = storage.getOAuthProviders().find((candidate) => candidate.id === flow.providerId)
+      if (!provider) throw new Error(`Unknown OAuth provider: ${flow.providerId}`)
+      const credentials = await provider.login(callbacks)
       if (!live()) return
+      storage.set(flow.providerId, { type: 'oauth', ...credentials })
       this.invalidate()
       this.emit(flow, { type: 'complete' })
     } catch (error) {

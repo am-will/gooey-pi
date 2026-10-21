@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { OAuthLoginCallbacks } from 'prime-agent-ai/oauth'
+import type { OAuthLoginCallbacks, OAuthProviderInterface } from 'prime-agent-ai/oauth'
 import type { ProviderAuthEvent } from '../../src/types/api'
 import { PrimeProviderService } from '../../electron/main/providers'
 
@@ -64,11 +64,16 @@ async function oauthFixture() {
   provider.setEventSink((event) => events.push(event))
   vi.spyOn(provider, 'catalog').mockResolvedValue({ primeVersion: 'test', refreshedAt: '', models: [], providers: [{ id: 'test-oauth', name: 'Test', authMethod: 'oauth', configured: false, modelCount: 0, availableModelCount: 0, enabled: true }] })
   let callbacks: OAuthLoginCallbacks | undefined
-  const internals = provider as unknown as { authStorage: { login(id: string, callbacks: OAuthLoginCallbacks): Promise<void> } }
-  internals.authStorage.login = async (_id, value) => {
-    callbacks = value
-    await new Promise<void>((_resolve, reject) => { value.signal?.addEventListener('abort', () => reject(value.signal?.reason), { once: true }) })
-  }
+  const internals = provider as unknown as { authStorage: { getOAuthProviders(): OAuthProviderInterface[] } }
+  vi.spyOn(internals.authStorage, 'getOAuthProviders').mockReturnValue([{
+    id: 'test-oauth', name: 'Test',
+    login: async (value) => {
+      callbacks = value
+      return new Promise<never>((_resolve, reject) => { value.signal?.addEventListener('abort', () => reject(value.signal?.reason), { once: true }) })
+    },
+    refreshToken: async (credentials) => credentials,
+    getApiKey: (credentials) => credentials.access,
+  }])
   const { flowId } = await provider.startOAuth('test-oauth')
   if (!callbacks) throw new Error('Login did not receive callbacks')
   return { provider, callbacks, flowId, events, openExternal }
