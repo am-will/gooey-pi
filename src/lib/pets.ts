@@ -7,7 +7,7 @@ export const DEFAULT_PET_ID = 'orb'
 export const ORB_PET: PetDefinition = { id: 'orb', petId: 'orb', displayName: 'Orb', description: 'A fluid voice orb that shifts with GooeyPi activity.', source: 'built-in', kind: 'orb' }
 
 // Renderer fallback used before or without pets.list(); main reads the GooeyPi entry from assets/pets/gooey-pi/pet.json.
-export const BUILT_IN_PETS: readonly PetDefinition[] = [
+export const BUILT_IN_PETS: PetDefinition[] = [
   ORB_PET,
   { id: 'gooey-pi', petId: 'gooey-pi', displayName: 'GooeyPi', description: 'A friendly purple jelly pet shaped like the mathematical pi symbol.', source: 'built-in', kind: 'spritesheet' },
 ]
