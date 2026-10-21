@@ -33,6 +33,12 @@ describe('isolated recurrence evaluation', () => {
     expect(await evaluator().next({ ...daily, dtstartLocal: '1970-01-01T00:00:00', rrule: 'FREQ=MINUTELY;COUNT=100000' }, new Date('2030-01-01T00:00:00Z'))).toBeNull()
   })
 
+  it('enforces the default 500ms compute budget in the real worker', async () => {
+    const service = evaluator()
+    await service.next(daily, new Date('2030-01-01T00:00:00Z'))
+    await expect(service.preview(impossible, 1, new Date('2030-01-01T00:00:00Z'))).rejects.toThrow('500ms time budget')
+  })
+
   it('keeps the event loop responsive during a rule that never produces a candidate', async () => {
     const service = evaluator({ computeTimeoutMs: 100 })
     // Warm startup separately so the assertion proves a running RRULE, not module loading.
