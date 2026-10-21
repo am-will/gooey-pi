@@ -18,6 +18,20 @@ describe('cuaDriverExecutableCandidates', () => {
 })
 
 describe('CuaDriverService', () => {
+  it('coalesces probes, caches briefly, and forces a fresh enable check', async () => {
+    let now = 0
+    const probe = vi.fn(async () => '0.19.0')
+    const service = new CuaDriverService({ platform: 'linux', environment: { CUA_DRIVER_PATH: '/opt/cua' }, home: '/home/test', access: async () => {}, probe, now: () => now })
+    await Promise.all([service.status(), service.status()])
+    await service.status()
+    expect(probe).toHaveBeenCalledTimes(1)
+    now = 5_001
+    await service.status()
+    expect(probe).toHaveBeenCalledTimes(2)
+    await service.requireAvailable()
+    expect(probe).toHaveBeenCalledTimes(3)
+  })
+
   it('reports an actionable unavailable state when no runnable driver is found', async () => {
     const service = new CuaDriverService({
       platform: 'linux', home: '/home/test', environment: { PATH: '/missing' },
