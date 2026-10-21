@@ -26,6 +26,20 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace runtime ownership', () => {
+  it('does not restart history when the error callback changes and reports to the latest callback', async () => {
+    let fail!: (error: unknown) => void
+    const read = vi.fn(() => new Promise<TranscriptMessage[]>((_resolve, reject) => { fail = reject }))
+    const bridge = { sessions: { read } } as unknown as PrimeWorkApi
+    const first = vi.fn()
+    const next = vi.fn()
+    act(() => root.render(createElement(Probe, { bridge, initialSession: session, sessions: [session], reportError: first })))
+    act(() => root.render(createElement(Probe, { bridge, initialSession: session, sessions: [session], reportError: next })))
+    expect(read).toHaveBeenCalledOnce()
+    await act(async () => fail(new Error('History read failed')))
+    expect(first).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ message: 'History read failed' }))
+  })
+
   it('records the started runtime session before its catalog record arrives', () => {
     act(() => root.render(createElement(Probe)))
     act(() => latest.attachRuntime(runtime, 0))

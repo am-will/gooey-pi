@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useStableCallback } from './useStableCallback'
 import {
   AGENT_EVENT_FLUSH_CHUNK,
   admitAgentEvent,
@@ -68,8 +69,9 @@ export function useWorkspaceRuntime({
   initialSession,
   sessions,
   initialMessages,
-  reportError,
+  reportError: onError,
 }: UseWorkspaceRuntimeOptions) {
+  const reportError = useStableCallback(onError)
   const [messages, setMessages] = useState(initialMessages)
   const [pendingQueuedPrompts, setPendingQueuedPrompts] = useState<QueuedPrompt[]>([])
   const pendingQueuedPromptsRef = useRef<QueuedPrompt[]>([])
