@@ -497,7 +497,6 @@ export class ProjectService {
 
       roots.push(...(persisted ? persistedPaths : inferredPath ? [inferredPath] : []))
       if (roots.length) {
-        for (const root of roots) this.removalRoots.add(root)
         await this.stopProjectProcesses([...new Set(roots)])
       }
       return await this.store.update((state) => {
