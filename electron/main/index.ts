@@ -22,6 +22,7 @@ import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-disco
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
+import { extensionHarnessRuntimeEnvironment } from './capability-runtime'
 import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
@@ -470,40 +471,6 @@ export function startupFailureDialog(error: unknown): StartupFailureDialog | nul
     return { title: 'GooeyPi update required', detail: boundedErrorMessage(error, 2_048) }
   }
   return null
-}
-
-/** Filesystem locations of the three shared capability extensions injected into extension-based harnesses. */
-export interface CapabilityExtensionPaths {
-  schedule: string
-  browser: string
-  askUser: string
-}
-
-/**
- * Runtime environment for the extension-injected harnesses (OMP and pi, which
- * share pi's ancestral extension API): the capability-broker variables from
- * the schedule bridge and lazily enabled browser bridge minus the Prime-only
- * --skill paths, plus the three PRIME_WORK_*_EXTENSION_PATH variables the harness adapters turn
- * into --extension argv. Both harnesses must receive the identical surface.
- */
-export function extensionRuntimeEnvironment(
-  scheduleBridgeEnvironment: NodeJS.ProcessEnv,
-  browserBridgeEnvironment: () => NodeJS.ProcessEnv,
-  extensionPaths: CapabilityExtensionPaths,
-  askUserEnabled = true,
-  browserEnabled = true,
-): NodeJS.ProcessEnv {
-  const { PRIME_WORK_SCHEDULE_SKILL_PATH: _scheduleSkill, ...scheduleEnvironment } = scheduleBridgeEnvironment
-  const browserEnvironment = browserEnabled ? browserBridgeEnvironment() : {}
-  const { PRIME_WORK_BROWSER_SKILL_PATH: _browserSkill, ...runtimeBrowserEnvironment } = browserEnvironment
-  return {
-    ...scheduleEnvironment,
-    ...runtimeBrowserEnvironment,
-    PRIME_WORK_SCHEDULE_EXTENSION_PATH: extensionPaths.schedule,
-    PRIME_WORK_BROWSER_EXTENSION_PATH: browserEnabled ? extensionPaths.browser : undefined,
-    PRIME_WORK_ASK_USER_EXTENSION_PATH: askUserEnabled ? extensionPaths.askUser : undefined,
-    GOOEYPI_MANAGES_ASK_USER: '1',
-  }
 }
 
 export async function settleShutdown(
@@ -967,16 +934,14 @@ async function bootstrap(): Promise<void> {
   // OMP runtimes get the same capability-scoped brokers through OMP-flavored
   // extensions. OMP has no --skill flag, so their tool descriptions carry the
   // app-specific usage guidance while OMP's own skills stay discovery-based.
-  const capabilityExtensionPaths: CapabilityExtensionPaths = {
+  const capabilityExtensionPaths = {
     schedule: ompScheduleExtensionPath,
     browser: ompBrowserExtensionPath,
     askUser: ompAskUserExtensionPath,
   }
-  ompManager.setRuntimeEnvironmentProvider((scope) => ({
-    ...extensionRuntimeEnvironment(ompScheduleBridge.environmentFor(scope), () => browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
-    ...collaborationBridge.environmentFor({ ...scope, harness: 'omp' }),
-    GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
-    GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
+  ompManager.setRuntimeEnvironmentProvider((scope) => extensionHarnessRuntimeEnvironment(scope, {
+    harness: 'omp', settings: stateStore.getSettings(), extensionPaths: capabilityExtensionPaths,
+    scheduleBridge: ompScheduleBridge, browserBridge, collaborationBridge, cuaDriver, computerUseSkillPath,
   }))
   ompManager.setRuntimeStartListener((environment, info) => {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
@@ -985,12 +950,10 @@ async function bootstrap(): Promise<void> {
   ompManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, ompScheduleBridge))
   // Pi runtimes receive the identical capability surface: pi's extension API
   // is the ancestor of OMP's, so the omp-work-* files are shared by design.
-  piManager.setRuntimeEnvironmentProvider((scope) => ({
-    ...extensionRuntimeEnvironment(piScheduleBridge.environmentFor(scope), () => browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
-    ...collaborationBridge.environmentFor({ ...scope, harness: 'pi' }),
-    GOOEYPI_PI_FAST_MODE_EXTENSION_PATH: piFastModeExtensionPath,
-    GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
-    GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
+  piManager.setRuntimeEnvironmentProvider((scope) => extensionHarnessRuntimeEnvironment(scope, {
+    harness: 'pi', settings: stateStore.getSettings(), extensionPaths: capabilityExtensionPaths,
+    scheduleBridge: piScheduleBridge, browserBridge, collaborationBridge, cuaDriver, computerUseSkillPath,
+    piFastModeExtensionPath,
   }))
   piManager.setRuntimeStartListener((environment, info) => {
     browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
