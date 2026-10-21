@@ -151,25 +151,26 @@ export class AgentRpcManager {
     const runtimeEnvironmentRevision = this.runtimeEnvironmentRevision
     const runtimeEnvironment = this.runtimeEnvironmentProvider({ cwd, sessionPath, interactive, implementation: adapter.implementation })
     let runtime: RpcRuntime | undefined
-    let workspaceUse!: WorkspaceUseLease
+    let workspaceUse: WorkspaceUseLease | undefined
+    let environmentEnded = false
+    const notifyRuntimeEnd = (info?: RuntimeInfo): void => {
+      if (environmentEnded) return
+      environmentEnded = true
+      workspaceUse?.release()
+      try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
+    }
+    try {
     workspaceUse = await this.beginWorkspaceUse(
       cwd,
       { kind: 'agent', harness: this.adapter.id, runtimeId: `starting-${Date.now()}` },
       async () => {
         if (!runtime) return false
         const retired = await this.retireForCheckout(runtime)
-        if (retired) workspaceUse.release()
+        if (retired) workspaceUse?.release()
         return retired
       },
     )
-    let environmentEnded = false
-    const notifyRuntimeEnd = (info?: RuntimeInfo): void => {
-      if (environmentEnded) return
-      environmentEnded = true
-      workspaceUse.release()
-      try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
-    }
-    try {
+      this.requireOpen()
       const args = adapter.buildStartArgs({
         cwd,
         sessionPath,
