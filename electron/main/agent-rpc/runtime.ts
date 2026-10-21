@@ -145,7 +145,7 @@ export class RpcRuntime {
   /** Frozen shallow copy: nested state is replaced wholesale on update, and the IPC boundary clones for the renderer. */
   snapshot(): RuntimeInfo {
     const { pendingExtensionUi, pendingExtensionUiGroups } = this.pendingUi.snapshot()
-    return Object.freeze({ ...this.info, ...(this.continuationPending || this.retryPending ? { isStreaming: true } : {}), ...(pendingExtensionUi.length ? { pendingExtensionUi } : {}), ...(pendingExtensionUiGroups.length ? { pendingExtensionUiGroups } : {}) })
+    return Object.freeze({ ...this.info, ...(this.continuationPending || this.retryPending ? { isStreaming: true } : {}), pendingExtensionUi, pendingExtensionUiGroups })
   }
 
   async handshake(): Promise<RuntimeInfo> {
