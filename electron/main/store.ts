@@ -1,11 +1,11 @@
+import { DurableStateFile, nodeFileSystem, type JsonStateStoreFileSystem } from './store/durable-file'
+export type { JsonStateStoreFileHandle, JsonStateStoreFileSystem } from './store/durable-file'
 import { CURRENT_DESKTOP_STATE_FILENAME, LEGACY_DESKTOP_STATE_FILENAME, CURRENT_DESKTOP_STATE_VERSION, StateCompatibilityError, StateMigrationError, MAX_STATE_FILE_BYTES, defaultState, parseState, capUnboundedCollections, type DesktopState, type PersistedProject } from './store/state-schema'
 export { CURRENT_DESKTOP_STATE_FILENAME, LEGACY_DESKTOP_STATE_FILENAME, StateCompatibilityError, UnsupportedStateVersionError, StateMigrationError, MAX_SCHEDULED_TASKS } from './store/state-schema'
 export type { DesktopState, FolderIdentity, PersistedProject } from './store/state-schema'
 export { defaultSettings } from './store/settings-schema'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
-import { open, rename, unlink } from 'node:fs/promises'
-import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { AppSettings, AutomationScheduleRecord } from '../../src/types/api'
 import { renameWithWindowsRetry } from './lib/durable-write'
@@ -45,24 +45,6 @@ function parseWindowsLegacyTombstone(value: unknown): WindowsLegacyTombstone | n
 }
 
 
-export interface JsonStateStoreFileHandle {
-  writeFile(data: string | Uint8Array, options: { encoding: 'utf8' }): Promise<void>
-  sync(): Promise<void>
-  close(): Promise<void>
-}
-
-export interface JsonStateStoreFileSystem {
-  open(path: string, flags: string, mode?: number): Promise<JsonStateStoreFileHandle>
-  rename(oldPath: string, newPath: string): Promise<void>
-  unlink(path: string): Promise<void>
-}
-
-const nodeFileSystem: JsonStateStoreFileSystem = {
-  open: (path, flags, mode) => open(path, flags, mode) as Promise<FileHandle>,
-  rename,
-  unlink,
-}
-
 export class JsonStateStore {
   private state: DesktopState = defaultState()
   private queue: Promise<void> = Promise.resolve()
@@ -70,6 +52,7 @@ export class JsonStateStore {
   private incompatibility: StateCompatibilityError | null = null
   private initializationFailure: Error | null = null
   private closed = false
+  private readonly durable: DurableStateFile
 
   constructor(
     private readonly filePath: string,
@@ -77,6 +60,7 @@ export class JsonStateStore {
     private readonly legacyFilePath?: string,
     private readonly platform: NodeJS.Platform = process.platform,
   ) {
+    this.durable = new DurableStateFile(filePath, fileSystem, platform)
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
     let sourcePath = filePath
     let sourceKind: 'current' | 'legacy' = 'current'
@@ -225,7 +209,7 @@ export class JsonStateStore {
       capUnboundedCollections(draft)
       // Detach before persisting: callers never hold live state, and an uncloneable result aborts the write.
       const detached = structuredClone(result)
-      await this.persist(draft)
+      await this.durable.persist(draft)
       this.state = draft
       return detached
     })
@@ -244,14 +228,14 @@ export class JsonStateStore {
 
   private scheduleInitialization(persistState: boolean, retireLegacy: boolean, failurePrefix: string): void {
     this.scheduleInitializationOperation(async () => {
-      if (persistState) await this.persist(this.state, true)
+      if (persistState) await this.durable.persist(this.state, true)
       if (retireLegacy) await this.retireLegacyState()
     }, failurePrefix)
   }
 
   private scheduleFreshInitialization(): void {
     this.scheduleInitializationOperation(
-      () => this.persist(this.state),
+      () => this.durable.persist(this.state),
       'GooeyPi desktop state could not be initialized',
     )
   }
@@ -266,7 +250,7 @@ export class JsonStateStore {
   private async initializeWindowsFreshState(): Promise<void> {
     const pending = this.windowsLegacyTombstone('pending', null, 'fresh')
     await this.publishWindowsLegacyTombstone(pending)
-    await this.persist(this.state)
+    await this.durable.persist(this.state)
     await this.publishWindowsLegacyTombstone({ ...pending, status: 'complete' })
   }
 
@@ -275,9 +259,9 @@ export class JsonStateStore {
     const pending = this.windowsLegacyTombstone('pending', basename(backupPath), 'migration')
     this.scheduleInitializationOperation(async () => {
       try {
-        await this.writeDurableFile(backupPath, rawLegacyState, 'wx')
+        await this.durable.writeDurableFile(backupPath, rawLegacyState, 'wx')
         await this.publishWindowsLegacyTombstone(pending)
-        await this.persist(this.state)
+        await this.durable.persist(this.state)
         await this.publishWindowsLegacyTombstone({ ...pending, status: 'complete' })
       } catch (error) {
         if (error instanceof StateCompatibilityError || error instanceof StateMigrationError) throw error
@@ -317,7 +301,7 @@ export class JsonStateStore {
       throw this.migrationError('The pending Windows compatibility marker has no recovery backup')
     }
     try {
-      await this.persist(this.state)
+      await this.durable.persist(this.state)
       await this.publishWindowsLegacyTombstone({ ...tombstone, status: 'complete' })
     } catch (error) {
       if (error instanceof StateCompatibilityError || error instanceof StateMigrationError) throw error
@@ -375,7 +359,7 @@ export class JsonStateStore {
       throw this.migrationError(`Legacy desktop state could not be retired before startup: ${errorMessage(error)}`, this.verifiedBackupFile(backupPath))
     }
     try {
-      await this.syncParentDirectory(this.legacyFilePath, true)
+      await this.durable.syncParentDirectory(this.legacyFilePath, true)
     } catch (retirementSyncError) {
       try {
         await this.fileSystem.rename(backupPath, this.legacyFilePath)
@@ -383,7 +367,7 @@ export class JsonStateStore {
         throw this.migrationError(`Legacy desktop state retirement was not durable: ${errorMessage(retirementSyncError)}; rollback rename failed: ${errorMessage(rollbackRenameError)}`, this.verifiedBackupFile(backupPath))
       }
       try {
-        await this.syncParentDirectory(this.legacyFilePath, true)
+        await this.durable.syncParentDirectory(this.legacyFilePath, true)
       } catch (rollbackSyncError) {
         throw this.migrationError(`Legacy desktop state retirement was not durable: ${errorMessage(retirementSyncError)}; the legacy filename was restored, but rollback directory sync failed: ${errorMessage(rollbackSyncError)}`)
       }
@@ -479,7 +463,7 @@ export class JsonStateStore {
       throw this.migrationError(`Quarantine rename failed for a legacy state recreated by a downgraded binary: ${errorMessage(renameError)}`, verifiedBackup)
     }
     try {
-      await this.syncExistingFile(backupPath)
+      await this.durable.syncExistingFile(backupPath)
     } catch (syncError) {
       try {
         await this.fileSystem.rename(backupPath, this.legacyFilePath)
@@ -519,40 +503,11 @@ export class JsonStateStore {
       [WINDOWS_LEGACY_TOMBSTONE_KEY]: marker,
     }, null, 2)}\n`
     try {
-      await this.writeDurableFile(temp, serialized, 'wx')
+      await this.durable.writeDurableFile(temp, serialized, 'wx')
       await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.legacyFilePath, this.platform)
     } finally {
-      await this.unlinkIfExists(temp)
+      await this.durable.unlinkIfExists(temp)
     }
-  }
-
-  private async unlinkIfExists(path: string): Promise<void> {
-    await this.fileSystem.unlink(path).catch((error: unknown) => {
-      if (errorCode(error) !== 'ENOENT') throw error
-    })
-  }
-
-  private async writeDurableFile(path: string, data: string | Uint8Array, flags: string): Promise<void> {
-    let completed = false
-    try {
-      const file = await this.fileSystem.open(path, flags, 0o600)
-      try {
-        await file.writeFile(data, { encoding: 'utf8' })
-        await file.sync()
-      } finally {
-        await file.close()
-      }
-      completed = true
-    } finally {
-      if (!completed) {
-        await this.unlinkIfExists(path)
-      }
-    }
-  }
-
-  private async syncExistingFile(path: string): Promise<void> {
-    const file = await this.fileSystem.open(path, 'r+')
-    try { await file.sync() } finally { await file.close() }
   }
 
   private nextLegacyBackupPath(): string {
@@ -583,39 +538,7 @@ export class JsonStateStore {
     )
   }
 
-  private async persist(state: DesktopState, requireDirectorySync = false): Promise<void> {
-    // The write cap matches the read cap so a saved file is always loadable on the next launch.
-    const serialized = `${JSON.stringify(state, null, 2)}\n`
-    const bytes = Buffer.byteLength(serialized, 'utf8')
-    if (bytes > MAX_STATE_FILE_BYTES) {
-      throw new Error(`Desktop state would be ${bytes} bytes, exceeding the ${MAX_STATE_FILE_BYTES}-byte safe size limit; the change was not saved`)
-    }
-    const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
-    try {
-      await this.writeDurableFile(temp, serialized, 'w')
 
-      await renameWithWindowsRetry((from, to) => this.fileSystem.rename(from, to), temp, this.filePath, this.platform)
-
-      await this.syncParentDirectory(this.filePath, requireDirectorySync)
-    } finally {
-      await this.unlinkIfExists(temp)
-    }
-  }
-
-  private async syncParentDirectory(path: string, required = false): Promise<void> {
-    if (this.platform === 'win32') return
-    try {
-      const directory = await this.fileSystem.open(dirname(path), 'r')
-      try { await directory.sync() } finally { await directory.close() }
-    } catch (error) {
-      if (required) {
-        throw new Error(`Desktop state directory could not be synchronized: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      // Ordinary updates retain the pre-v4 best-effort behavior on filesystems
-      // that cannot open or sync directory handles. Authority migration passes
-      // `required` and fails readiness instead of claiming false durability.
-    }
-  }
 }
 
 /** Opens the versioned authority file and durably completes any one-way legacy migration. */
