@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -2145,6 +2146,28 @@ test.describe('Prime Work desktop smoke', () => {
     await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).inspectorOpen)).toBe(false)
   })
 
+  test('restores the Preview URL after switching inspector tabs and full-page views', async () => {
+    const server = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>Preview retention fixture</title><p>Retained location</p>') })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Fixture server has no port')
+    const url = `http://127.0.0.1:${address.port}/nested?keep=1`
+    try {
+      await page.getByRole('tab', { name: 'Browser' }).click()
+      await page.getByRole('textbox', { name: 'Browser address', exact: true }).fill(url)
+      await page.getByRole('textbox', { name: 'Browser address', exact: true }).press('Enter')
+      const guest = page.locator('webview[partition="persist:prime-work-browser"]')
+      const guestUrl = () => guest.evaluate((node) => (node as HTMLElement & { getURL(): string }).getURL())
+      await expect.poll(guestUrl).toBe(url)
+      await page.getByRole('tab', { name: 'Files', exact: true }).click()
+      await page.getByRole('tab', { name: 'Browser', exact: true }).click()
+      await expect.poll(guestUrl).toBe(url)
+      await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+      await page.getByRole('button', { name: 'Back to session' }).click()
+      await expect.poll(guestUrl).toBe(url)
+    } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())) }
+  })
+
   test('attaches an isolated browser guest without navigation errors', async () => {
     await page.getByRole('button', { name: /^New session/ }).first().click()
     await page.getByRole('tab', { name: 'Browser' }).click()
@@ -2293,6 +2316,27 @@ test.describe('Prime Work desktop smoke', () => {
     await page.locator('.terminal-drawer:not([hidden])').getByLabel('Close terminal', { exact: true }).click()
     await page.locator('.session-row').filter({ hasText: 'Hermetic desktop fixture' }).click()
     await page.locator('.terminal-drawer:not([hidden])').getByLabel('Close terminal', { exact: true }).click()
+  })
+
+  test('keeps the same PTY and panel sizes while visiting full-page views', async () => {
+    await page.getByLabel(/Toggle terminal/).click()
+    const drawer = page.locator('.terminal-drawer:not([hidden])')
+    await expect(drawer.locator('.terminal-live-dot.is-connected')).toBeVisible()
+    const input = drawer.locator('.terminal-surface:not([hidden]) .xterm-helper-textarea')
+    await input.click()
+    await page.keyboard.type('echo retained-pty-output')
+    await page.keyboard.press('Enter')
+    await expect(drawer.locator('.xterm-rows')).toContainText('retained-pty-output')
+    await drawer.locator('.xterm').evaluate((element) => { element.setAttribute('data-retained-pty', 'original') })
+    const sizes = await page.evaluate(() => ({ inspector: localStorage.getItem('prime-work.inspector-width'), terminal: localStorage.getItem('prime-work.terminal-height') }))
+    await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+    await expect(page.locator('.session-workspace')).toHaveAttribute('hidden', '')
+    await expect(page.locator('.terminal-drawer')).toHaveAttribute('hidden', '')
+    await expect(page.locator('.xterm[data-retained-pty="original"]')).toHaveCount(1)
+    await page.getByRole('button', { name: 'Back to session' }).click()
+    await expect(drawer.locator('.xterm[data-retained-pty="original"]')).toBeVisible()
+    await expect(drawer.locator('.xterm-rows')).toContainText('retained-pty-output')
+    expect(await page.evaluate(() => ({ inspector: localStorage.getItem('prime-work.inspector-width'), terminal: localStorage.getItem('prime-work.terminal-height') }))).toEqual(sizes)
   })
 
   test('opens independent terminal tabs inside the conversation column', async () => {

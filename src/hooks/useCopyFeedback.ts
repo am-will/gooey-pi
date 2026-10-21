@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { writeClipboardText } from '@/lib/clipboard'
 
 export interface CopyFeedback {
@@ -13,10 +13,12 @@ export interface CopyFeedback {
  * success restarts the reset timer, and the pending timer is cleared on
  * unmount. A copy that settles after unmount leaves state untouched.
  */
-export function useCopyFeedback(resetMs = 1_500): CopyFeedback {
+export function useCopyFeedback(resetMs = 1_500, onError?: (error: unknown) => void): CopyFeedback {
   const [copied, setCopied] = useState(false)
   const resetTimerRef = useRef<number | null>(null)
   const mountedRef = useRef(false)
+  const onErrorRef = useRef(onError)
+  useLayoutEffect(() => { onErrorRef.current = onError }, [onError])
 
   useEffect(() => {
     mountedRef.current = true
@@ -29,15 +31,18 @@ export function useCopyFeedback(resetMs = 1_500): CopyFeedback {
 
   const copy = useCallback(async (text: string) => {
     let succeeded = true
+    let failure: unknown
     try {
       await writeClipboardText(text)
-    } catch {
+    } catch (error) {
       succeeded = false
+      failure = error
     }
     if (!mountedRef.current) return
     if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
     resetTimerRef.current = null
     setCopied(succeeded)
+    if (!succeeded) onErrorRef.current?.(failure)
     if (succeeded) {
       resetTimerRef.current = window.setTimeout(() => {
         resetTimerRef.current = null

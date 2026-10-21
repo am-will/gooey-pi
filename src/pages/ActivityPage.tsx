@@ -56,11 +56,11 @@ export const ActivityPage = memo(function ActivityPage({ sessions, projects, cle
   const normalized = query.trim().toLowerCase()
   const clearable = useMemo(() => sessions.filter((session) => {
     const signature = activityNotificationSignature(session)
-    return Boolean(signature && !signatureCleared(signature, clearedActivity[session.id], session.unread))
+    return Boolean(signature && !signatureCleared(signature, clearedActivity[session.id], session.unread, session.updatedAt))
   }), [clearedActivity, sessions])
   const visible = useMemo(() => sessions.filter((session) => {
     const signature = activityNotificationSignature(session)
-    const statusMatches = !session.archived && (!signature || !signatureCleared(signature, clearedActivity[session.id], session.unread)) && (
+    const statusMatches = !session.archived && (!signature || !signatureCleared(signature, clearedActivity[session.id], session.unread, session.updatedAt)) && (
       filter === 'all'
       || filter === 'attention' && (session.unread || session.status === 'waiting' || session.status === 'failed')
       || filter === 'running' && session.status === 'running'

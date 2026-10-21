@@ -311,7 +311,9 @@ describe('inactive harness event isolation', () => {
         bridge,
         runtimeIdRef: { current: ompRuntime.runtimeId },
         runtimeSessionsRef,
-        runtimeOwnerRef: { current: { runtimeId: ompRuntime.runtimeId, generation: 1 } },
+
+          dropPendingSteers: vi.fn(),
+          detachRuntime: vi.fn(),
         workspaceRef: { current: { generation: 1, sessionFile: ompSession.filePath, cwd: '/omp' } },
         setSessions,
         setRuntime,
@@ -359,7 +361,9 @@ describe('provider fallback runtime state', () => {
         bridge,
         runtimeIdRef: { current: primeRuntime.runtimeId },
         runtimeSessionsRef: { current: new Map() },
-        runtimeOwnerRef: { current: null },
+
+          dropPendingSteers: vi.fn(),
+          detachRuntime: vi.fn(),
         workspaceRef: { current: { generation: 0, sessionFile: primeSession.filePath, cwd: '/prime' } },
         setSessions: vi.fn(),
         setRuntime,
@@ -920,4 +924,22 @@ describe('harness settings surfaces', () => {
     await click(toggles[0])
     expect(onSetEnabled).toHaveBeenCalledWith('openai-codex', false)
   })
+})
+
+it('drops an exiting owner steer queue before detaching its runtime', async () => {
+  let deliver!: (payload: { runtimeId: string; event: Record<string, unknown> }) => void
+  const bridge = { agent: { onEvent: (listener: typeof deliver) => { deliver = listener; return () => undefined } } } as unknown as PrimeWorkApi
+  const calls: string[] = []
+  const dropPendingSteers = (id?: string) => { calls.push(`drop:${id}`) }
+  const detachRuntime = (id: string) => { calls.push(`detach:${id}`) }
+  function AgentEventsProbe() {
+    useAgentEvents({ bridge, runtimeIdRef: { current: 'active' }, runtimeSessionsRef: { current: new Map() }, workspaceRef: { current: { generation: 0 } },
+      dropPendingSteers, detachRuntime, setSessions: vi.fn(), setRuntime: vi.fn(), queueAgentEvent: vi.fn(), reconcileTranscriptForEvent: vi.fn(),
+      showExtensionUi: vi.fn(), clearExtensionUi: vi.fn(), refreshGit: async () => undefined, refreshGitOnTerminalEvent: false, activeSessionVisible: true })
+    return <Probe />
+  }
+  await act(async () => root.render(<AgentEventsProbe />))
+  act(() => deliver({ runtimeId: 'background', event: { type: 'runtime_exit' } }))
+  act(() => deliver({ runtimeId: 'active', event: { type: 'runtime_exit' } }))
+  expect(calls).toEqual(['drop:background', 'detach:background', 'drop:active', 'detach:active'])
 })

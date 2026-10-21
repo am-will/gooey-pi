@@ -31,8 +31,8 @@ afterEach(async () => {
   vi.useRealTimers()
 })
 
-function Probe({ resetMs }: { resetMs?: number }) {
-  feedback = useCopyFeedback(resetMs)
+function Probe({ resetMs, onError }: { resetMs?: number; onError?(error: unknown): void }) {
+  feedback = useCopyFeedback(resetMs, onError)
   return <span data-testid="state">{feedback.copied ? 'copied' : 'idle'}</span>
 }
 
@@ -123,6 +123,33 @@ describe('useCopyFeedback', () => {
     finish()
     await pending
     expect(vi.getTimerCount()).toBe(0)
+    root = createRoot(container)
+  })
+
+  it('reports a rejection to the latest committed callback without replacing copy', async () => {
+    const first = vi.fn()
+    const latest = vi.fn()
+    await act(async () => { root.render(<Probe onError={first} />) })
+    const originalCopy = feedback.copy
+    await act(async () => { root.render(<Probe onError={latest} />) })
+    expect(feedback.copy).toBe(originalCopy)
+    const failure = new Error('denied')
+    clipboard.writeClipboardText.mockRejectedValueOnce(failure)
+    await copy('hello')
+    expect(first).not.toHaveBeenCalled()
+    expect(latest).toHaveBeenCalledExactlyOnceWith(failure)
+  })
+
+  it('does not report a clipboard rejection after unmount', async () => {
+    let reject!: (error: unknown) => void
+    clipboard.writeClipboardText.mockImplementationOnce(() => new Promise<void>((_done, fail) => { reject = fail }))
+    const onError = vi.fn()
+    await act(async () => { root.render(<Probe onError={onError} />) })
+    const pending = feedback.copy('slow')
+    await act(async () => root.unmount())
+    reject(new Error('denied'))
+    await pending
+    expect(onError).not.toHaveBeenCalled()
     root = createRoot(container)
   })
 

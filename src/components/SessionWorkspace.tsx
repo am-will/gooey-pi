@@ -3,12 +3,13 @@ import type { usePanelLayout } from '@/hooks/usePanelLayout'
 import { useComposerDockHeight } from '@/hooks/useComposerDockHeight'
 
 /** The conversation and its one companion pane share a responsive workspace. */
-export function SessionWorkspace({ layout, childPane, children }: {
+export function SessionWorkspace({ layout, childPane, children, hidden = false }: {
   layout: Pick<ReturnType<typeof usePanelLayout>, 'workspaceRowRef' | 'inspectorWidth' | 'terminalHeight'>
+  hidden?: boolean
   childPane: ReactNode
   children: ReactNode
 }) {
-  return <div ref={layout.workspaceRowRef} className="session-workspace" style={{ '--inspector-width': `${layout.inspectorWidth}px`, '--terminal-height': `${layout.terminalHeight}px` } as CSSProperties}>
+  return <div ref={layout.workspaceRowRef} className="session-workspace" hidden={hidden} style={{ '--inspector-width': `${layout.inspectorWidth}px`, '--terminal-height': `${layout.terminalHeight}px` } as CSSProperties}>
     {children}{childPane}
   </div>
 }

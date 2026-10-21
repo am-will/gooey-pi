@@ -197,9 +197,9 @@ describe('/compact dispatch', () => {
   it('rejects image attachments', async () => {
     const fixtureState = fixture({ runtime: runtime() })
 
-    await fixtureState.actions.sendPrompt('/compact', [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }])
+    await expect(fixtureState.actions.sendPrompt('/compact', [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }])).rejects.toThrow('/compact does not accept attachments.')
 
-    expect(fixtureState.reportError).toHaveBeenCalledWith('/compact does not accept attachments. Remove the attachment and try again.')
+    expect(fixtureState.reportError).toHaveBeenCalledWith(expect.objectContaining({ message: '/compact does not accept attachments. Remove the attachment and try again.' }))
     expect(fixtureState.command).not.toHaveBeenCalled()
     expect(fixtureState.start).not.toHaveBeenCalled()
   })

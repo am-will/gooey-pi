@@ -110,18 +110,20 @@ export async function titleStartedSession({ bridge, harness, runtimeId, sessionF
  */
 export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
   const grantProject = async (project: ProjectRecord): Promise<ProjectRecord> => {
-    const { bridge, workspace, setProjects, gitRequestRef, setGitSnapshot } = getDeps()
+    const { bridge, workspace, setProjects, gitRequestRef, setGitSnapshot, reportError } = getDeps()
     if (!bridge || !project.inferred) return project
     const granted = await bridge.projects.grantInferred(project.primaryFolder, project.harness)
     setProjects((items) => items.map((item) => item.id === project.id ? granted : item))
     const selected = workspace.workspaceRef.current
     if (selected.project?.id !== project.id) return granted
-    workspace.workspaceRef.current = { ...selected, project: granted, cwd: workspaceCwd(granted, selected.session) }
+    workspace.replaceActiveProject(project.id, granted)
     const requestId = ++gitRequestRef.current
     const cwd = workspaceCwd(granted, selected.session)
     if (!cwd) return granted
-    const nextGit = await bridge.git.status(cwd)
-    if (gitRequestRef.current === requestId && workspace.workspaceRef.current.generation === selected.generation && workspace.workspaceRef.current.cwd === cwd) setGitSnapshot({ cwd, status: nextGit })
+    const ownsRefresh = () => gitRequestRef.current === requestId && workspace.workspaceRef.current.generation === selected.generation && workspace.workspaceRef.current.cwd === cwd
+    void bridge.git.status(cwd).then((nextGit) => {
+      if (ownsRefresh()) setGitSnapshot({ cwd, status: nextGit })
+    }).catch((error: unknown) => { if (ownsRefresh()) reportError(error) })
     return granted
   }
   const persistPanel = (patch: Partial<typeof DEFAULT_SETTINGS>) => { void getDeps().settingsState.updateSettings(patch) }
@@ -292,8 +294,9 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
       return
     }
     if (compactCommand && images.length > 0) {
-      reportError(translate(formattingLocaleTag(), 'error.compactAttachments'))
-      return
+      const error = new Error(translate(formattingLocaleTag(), 'error.compactAttachments'))
+      reportError(error)
+      throw error
     }
     const currentWorkspace = workspace.workspaceRef.current
     const currentRuntime = workspace.runtime

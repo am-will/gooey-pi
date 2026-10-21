@@ -99,3 +99,22 @@ describe('selectProject workspace resume', () => {
     expect(activateWorkspace).toHaveBeenCalledWith(project)
   })
 })
+
+it('adopts an inferred project immediately while Git refresh remains pending', async () => {
+  const inferred = { ...project, id: 'inferred', inferred: true }
+  const workspaceRef = { current: { project: inferred, session: undefined, generation: 1, cwd: project.path } }
+  const replaceActiveProject = vi.fn()
+  let resolveGit!: (value: { isRepo: boolean; files: [] }) => void
+  const git = new Promise<{ isRepo: boolean; files: [] }>((resolve) => { resolveGit = resolve })
+  const setGitSnapshot = vi.fn()
+  const reportError = vi.fn()
+  const actions = createWorkspaceActions(() => ({ bridge: { projects: { grantInferred: async () => project }, git: { status: () => git } }, workspace: { workspaceRef, replaceActiveProject },
+    setProjects: vi.fn(), gitRequestRef: { current: 0 }, setGitSnapshot, reportError } as unknown as WorkspaceActionsDeps))
+  await expect(actions.grantProject(inferred)).resolves.toBe(project)
+  expect(replaceActiveProject).toHaveBeenCalledWith('inferred', project)
+  expect(setGitSnapshot).not.toHaveBeenCalled()
+  resolveGit({ isRepo: false, files: [] })
+  await git
+  expect(setGitSnapshot).toHaveBeenCalledWith({ cwd: project.path, status: { isRepo: false, files: [] } })
+  expect(reportError).not.toHaveBeenCalled()
+})
