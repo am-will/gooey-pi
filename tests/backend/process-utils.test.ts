@@ -153,6 +153,25 @@ setTimeout(() => update(-1), 250)
     expect(state.max).toBeLessThanOrEqual(PROCESS_CONCURRENCY_LIMIT)
   }, 15_000)
 
+  it.skipIf(process.platform === 'win32').each([500, 5_000])('releases inherited pipes after direct exit without reporting a timeout (%s ms)', async (timeoutMs) => {
+    const dir = temp()
+    const pidPath = join(dir, 'escaped.pid')
+    const started = Date.now()
+    try {
+      const result = await runProcess(process.execPath, ['-e', `
+const { spawn } = require('node:child_process')
+const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { detached: true, stdio: 'inherit' })
+require('node:fs').writeFileSync(process.argv.at(-1), String(child.pid))
+child.unref()
+console.log('done')
+`, pidPath], { timeoutMs })
+      expect(result).toMatchObject({ code: 0, timedOut: false, stdout: 'done\n' })
+      expect(Date.now() - started).toBeLessThan(3_500)
+    } finally {
+      try { process.kill(Number(readFileSync(pidPath, 'utf8')), 'SIGKILL') } catch { /* child already exited */ }
+    }
+  })
+
   it('closes queued admission and still terminates every active child during shutdown', async () => {
     const dir = temp()
     const active = Array.from({ length: PROCESS_CONCURRENCY_LIMIT }, (_, index) => runProcess(process.execPath, ['-e', `

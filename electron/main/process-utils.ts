@@ -586,8 +586,9 @@ export function runProcess(file: string, args: readonly string[], options: {
     let outputExceeded = false
     let settled = false
     let limitKillTimer: NodeJS.Timeout | undefined
+    let drainTimer: NodeJS.Timeout | undefined
     const timer = setTimeout(() => {
-      timedOut = true
+      if (child.exitCode === null && child.signalCode === null) timedOut = true
       terminateChild(child, 'SIGTERM')
       limitKillTimer ??= setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) terminateChild(child, 'SIGKILL')
@@ -624,6 +625,7 @@ export function runProcess(file: string, args: readonly string[], options: {
       activeChildren.delete(child)
       clearTimeout(timer)
       if (limitKillTimer) clearTimeout(limitKillTimer)
+      if (drainTimer) clearTimeout(drainTimer)
     }
     const fail = (error: Error): void => {
       if (settled) return
@@ -641,6 +643,16 @@ export function runProcess(file: string, args: readonly string[], options: {
     }
     child.stdout?.on('error', failPipe)
     child.stderr?.on('error', failPipe)
+    // A descendant may retain inherited pipes after the direct child exits.
+    child.once('exit', () => {
+      drainTimer = setTimeout(() => setImmediate(() => {
+        if (settled) return
+        terminateChild(child, 'SIGTERM')
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+      }), 1_500)
+      drainTimer.unref()
+    })
     child.once('close', (code, signal) => {
       if (settled) return
       settled = true
