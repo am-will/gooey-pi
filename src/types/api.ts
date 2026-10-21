@@ -168,6 +168,8 @@ export type MessagePart =
       firstKeptEntryId?: string
       summary?: string
       error?: string
+      /** App-generated fallback, translated only when displayed. */
+      errorKind?: 'incomplete'
       customInstructions?: string
       willRetry?: boolean
     }

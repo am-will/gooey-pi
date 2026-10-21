@@ -225,7 +225,7 @@ function CompactionPart({ part }: { part: CompactionPartValue }) {
       : tone === 'skipped'
         ? <><Info size={12} /> {t('transcript.state.skipped')}</>
         : <><CircleAlert size={12} /> {t(tone === 'cancelled' ? 'transcript.state.cancelled' : 'transcript.state.needsAttention')}</>
-  const details = part.error || part.summary
+  const details = part.errorKind === 'incomplete' ? t('transcript.compactionIncomplete') : part.error || part.summary
   const tokenLabel = part.tokensBefore === undefined ? '' : t('transcript.compaction.tokensBefore', { count: part.tokensBefore.toLocaleString() })
   // No harness records the trigger with a completed compaction in its session file, so a reloaded row may name none.
   const reasonLabel = part.reason ? t(COMPACTION_REASON_KEYS[part.reason]) : undefined

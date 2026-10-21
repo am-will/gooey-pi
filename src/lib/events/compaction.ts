@@ -1,14 +1,9 @@
-import { formattingLocaleTag, translate } from '@/lib/i18n'
 import type { MessagePart, TranscriptMessage } from '@/types/api'
 import { isCompactionReason } from '@/lib/compaction-reason'
 import { nextTranscriptId, withPartId } from './ids'
 import { record, string } from './parse'
 
 /** Compaction policy: parsing, dedupe, and transcript application. */
-
-// Compaction runs while agent events stream in, outside React, so its fallback
-// error copy comes from the interface locale mirror like the other reducers.
-const compactionIncomplete = () => translate(formattingLocaleTag(), 'transcript.compactionIncomplete')
 
 type CompactionPart = Extract<MessagePart, { type: 'compaction' }>
 
@@ -67,12 +62,14 @@ function compactionOutcomePart(message: Record<string, unknown>): CompactionPart
   if (message.customType !== 'compaction_outcome') return undefined
   const details = record(message.details)
   const outcome = compactionOutcome(details?.outcome) ?? 'failed'
+  const content = string(message.content)
   return {
     type: 'compaction',
     status: outcome === 'cancelled' ? 'cancelled' : 'failed',
     reason: compactionReason(details?.reason),
     outcome,
-    error: string(message.content) ?? compactionIncomplete(),
+    error: content ?? 'Context compaction did not complete.',
+    errorKind: content ? undefined : 'incomplete',
   }
 }
 

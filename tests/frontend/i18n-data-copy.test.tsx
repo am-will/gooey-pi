@@ -3,6 +3,7 @@ import { loadLocale } from '../../src/lib/i18n'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { applyCompactionEvent } from '../../src/lib/events/compaction'
 import { fallbackNoticeText } from '../../src/lib/events/model-fallback'
 import { I18nProvider, translate, type MessageKey } from '../../src/lib/i18n'
 import { PI_MCP_ADAPTER_REQUIRED_DETAIL } from '../../src/lib/mcp-policy'
@@ -82,6 +83,21 @@ describe('copy that arrives as data', () => {
       root = createRoot(container)
     })
     afterEach(() => { act(() => root.unmount()); container.remove() })
+
+    it('retranslates an app compaction fallback when the interface language changes', async () => {
+      const event = { type: 'custom_message', customType: 'compaction_outcome', details: { outcome: 'failed' } }
+      const message = applyCompactionEvent([], event)?.[0]
+      if (!message) throw new Error('Expected the compaction notice')
+      expect(message.parts[0]).toMatchObject({ errorKind: 'incomplete' })
+      await act(async () => { root.render(<I18nProvider preference="ja"><ActivityMessage message={message} /></I18nProvider>) })
+      await act(async () => { container.querySelector<HTMLButtonElement>('.activity-tool__summary')!.click() })
+      expect(container.textContent).toContain(translate('ja', 'transcript.compactionIncomplete'))
+      await act(async () => { root.render(<I18nProvider preference="en"><ActivityMessage message={message} /></I18nProvider>) })
+      expect(container.textContent).toContain('Context compaction did not complete.')
+      expect(container.textContent).not.toContain(translate('ja', 'transcript.compactionIncomplete'))
+      const harnessNotice = applyCompactionEvent([], { ...event, content: 'Harness-owned detail' })?.[0]
+      expect(harnessNotice?.parts[0]).toMatchObject({ error: 'Harness-owned detail', errorKind: undefined })
+    })
 
     it('shows the notice in the interface language on the row the transcript renders', async () => {
       const text = fallbackNoticeText('Sonnet 4', 'Opus 4')
