@@ -1395,4 +1395,21 @@ export const englishCatalog = {
   'children.assistant': 'Child agent',
   'children.thinking': 'Thinking summary',
 
+  'children.ompOnly': 'Child chat history is available with OMP.',
+  'children.loading': 'Loading child history…',
+  'children.unavailable': 'Child history could not be loaded.',
+  'children.roster': 'Child agents',
+  'children.rosterLimited': 'Some children are outside the roster limit.',
+  'children.history': 'Child conversation',
+  'children.readOnly': 'Read-only history',
+  'children.close': 'Close child history',
+  'children.earlier': 'Load earlier messages',
+  'children.task': 'Task',
+  'children.empty': 'No messages have been recorded yet.',
+  'children.historyLimited': 'Some history is outside the display limits.',
+
+  'children.latest': 'Back to latest messages',
+
+  'children.retry': 'Retry',
+
 } as const satisfies Record<string, Message>
