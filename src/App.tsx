@@ -1,3 +1,4 @@
+import { useNativeHeartbeats } from '@/hooks/useNativeHeartbeats'
 import { useBrowserPreviewState } from '@/hooks/useBrowserPreviewState'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from '@/components/Sidebar'
@@ -40,7 +41,7 @@ import { useStableCallback } from '@/hooks/useStableCallback'
 import { useToast } from '@/hooks/useToast'
 import { useWorkspaceActions } from '@/hooks/useWorkspaceActions'
 import { useWorkspaceRuntime } from '@/hooks/useWorkspaceRuntime'
-import { HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type GitStatus, type HarnessId, type NativeHeartbeatRecord, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
+import { HARNESS_IDS, type CheckoutAction, type CheckoutCatalog, type GitStatus, type HarnessId, type PrimeWorkApi, type PrimeModelDescriptor, type PrimeProviderDescriptor, type ProjectRecord, type AutomationScheduleRecord, type QueuedPrompt, type ScheduleTiming, type SessionRecord, type TerminalSelectionContext, type TranscriptMessage, type VoiceTaskStarted, type WorkspaceView } from '@/types/api'
 
 const Transcript = lazy(() => import('@/components/Transcript').then((module) => ({ default: module.Transcript })))
 const Inspector = lazy(() => import('@/components/Inspector').then((module) => ({ default: module.Inspector })))
@@ -97,7 +98,6 @@ export default function App() {
   const [clearedAttention, setClearedAttention] = useState<Record<string, string>>(() => readClearedAttention())
   const [clearedActivity, setClearedActivity] = useState<Record<string, string>>(() => readClearedActivity())
   const [schedules, setSchedules] = useState<AutomationScheduleRecord[]>(() => bridge ? [] : SAMPLE_SCHEDULES)
-  const [heartbeats, setHeartbeats] = useState<NativeHeartbeatRecord[]>([])
   const [scheduleFocusId, setScheduleFocusId] = useState<string | null>(null)
   const [scheduleError, setScheduleError] = useState('')
   const [gitSnapshot, setGitSnapshot] = useState(() => ({ cwd: bridge ? undefined : SAMPLE_PROJECTS[0]?.primaryFolder, status: bridge ? { isRepo: false, files: [] } as GitStatus : SAMPLE_GIT }))
@@ -242,6 +242,7 @@ export default function App() {
   const sidebarVisible = settingsState.sidebarOpen && !layout.sidebarSuppressed
   const childHistory = useChildWorkspace({ bridge, parent: activeSession, harness: activeHarness, visible: view === 'session', rosterVisible: sidebarVisible, compact: layout.compactLayout, setSidebarOpen: settingsState.setSidebarOpen })
   const inspectorVisible = settingsState.inspectorOpen && !layout.inspectorSuppressed && !childHistory.isOpen
+  const { heartbeats, refreshHeartbeats } = useNativeHeartbeats({ bridge, harness: activeHarness, visible: view === 'scheduled' || view === 'session' && inspectorVisible && settingsState.inspectorTab === 'summary', reportError })
   const extension = useExtensionUi({
     bridge, askUserTimeoutMs: settingsState.settings.askUserTimeoutMs, activeRuntimeId: workspace.runtime?.runtimeId, runtimeSessionsRef: workspace.runtimeSessionsRef,
     setSessions, setRuntime: workspace.setRuntime, reportError,
@@ -366,22 +367,6 @@ export default function App() {
     if (!bridge) return
     return bridge.schedules.onChanged(() => { void refreshSchedules() })
   }, [bridge, refreshSchedules])
-  const refreshHeartbeats = useCallback(async () => {
-    if (!bridge) return
-    try { setHeartbeats(await bridge.heartbeats.list()) } catch (error) { reportError(error) }
-  }, [bridge, reportError])
-  useEffect(() => {
-    if (!bridge) return
-    void refreshHeartbeats()
-    // Prime Agent emits this event for both /heartbeat and rlm_heartbeat
-    // mutations. The 30s poll remains a recovery path for jobs created by a
-    // resident daemon outside this renderer, but normal changes are immediate.
-    const unsubscribe = bridge.agent.onEvent(({ event }) => {
-      if (event.type === 'heartbeats_changed') void refreshHeartbeats()
-    })
-    const interval = window.setInterval(() => { void refreshHeartbeats() }, 30_000)
-    return () => { unsubscribe(); window.clearInterval(interval) }
-  }, [bridge, refreshHeartbeats])
   const patchProjectScripts = useCallback((projectId: string, scripts: NonNullable<ProjectRecord['scripts']>) => {
     setProjects((current) => current.map((project) => project.id === projectId ? { ...project, scripts } : project))
   }, [])
@@ -699,7 +684,7 @@ export default function App() {
 
   const page = view === 'projects' ? <ProjectsPage harness={activeHarness} projects={projects} sortMode={settingsState.settings.projectSortMode} onAdd={() => void addProject()} onOpen={selectProject} onRemove={(project) => void removeProject(project)} onTogglePin={(project) => void togglePinProject(project)} />
     : view === 'activity' ? <ActivityPage sessions={sessions} projects={projects} clearedActivity={clearedActivity} onOpen={selectSession} onClear={clearActivity} />
-    : view === 'scheduled' ? <ScheduledPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} schedules={schedules} nativeHeartbeats={activeHarness === 'prime' ? heartbeats : []} projects={projects} sessions={sessions} models={provider.catalog?.models ?? EMPTY_MODELS} lastSelectedModel={provider.model} error={scheduleError} initialProjectId={activeProject?.id} initialSessionId={activeSession?.id} selectedScheduleId={scheduleFocusId} onCreate={createSchedule} onUpdate={updateSchedule} onPause={(id: string) => mutateSchedule(() => bridge!.schedules.pause(id))} onResume={(id: string) => mutateSchedule(() => bridge!.schedules.resume(id))} onDelete={(id: string) => mutateSchedule(() => bridge!.schedules.delete(id))} onRunNow={(id: string) => mutateSchedule(() => bridge!.schedules.runNow(id))} onPreview={async (timing: ScheduleTiming) => bridge ? bridge.schedules.preview(timing, 3) : { timing, occurrences: [] }} onArchiveSessions={(targets) => setSessionsArchived(targets, true)} onOpenSession={openScheduledSession} onManageHeartbeat={manageHeartbeat} />
+    : view === 'scheduled' ? <ScheduledPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} schedules={schedules} nativeHeartbeats={heartbeats} projects={projects} sessions={sessions} models={provider.catalog?.models ?? EMPTY_MODELS} lastSelectedModel={provider.model} error={scheduleError} initialProjectId={activeProject?.id} initialSessionId={activeSession?.id} selectedScheduleId={scheduleFocusId} onCreate={createSchedule} onUpdate={updateSchedule} onPause={(id: string) => mutateSchedule(() => bridge!.schedules.pause(id))} onResume={(id: string) => mutateSchedule(() => bridge!.schedules.resume(id))} onDelete={(id: string) => mutateSchedule(() => bridge!.schedules.delete(id))} onRunNow={(id: string) => mutateSchedule(() => bridge!.schedules.runNow(id))} onPreview={async (timing: ScheduleTiming) => bridge ? bridge.schedules.preview(timing, 3) : { timing, occurrences: [] }} onArchiveSessions={(targets) => setSessionsArchived(targets, true)} onOpenSession={openScheduledSession} onManageHeartbeat={manageHeartbeat} />
     : view === 'plugins' ? <PluginsPage harness={activeHarness} primeImplementation={meta?.harnesses.prime.implementation} skills={pluginSkills.skills} warnings={pluginSkills.warnings} loading={pluginSkills.loading} activeProjectPath={activeProject?.primaryFolder} askUserTimeoutMs={settingsState.settings.askUserTimeoutMs} onSetAskUserTimeoutMs={(askUserTimeoutMs) => settingsState.updateSettings({ askUserTimeoutMs })} askUserEnabled={settingsState.settings.askUserEnabled} onSetAskUserEnabled={(enabled) => settingsState.updateSettings({ askUserEnabled: enabled })} browserEnabled={settingsState.settings.browserEnabled} onSetBrowserEnabled={(enabled) => settingsState.updateSettings({ browserEnabled: enabled })} computerUseEnabled={settingsState.settings.computerUseEnabled} onSetComputerUseEnabled={(enabled) => settingsState.updateSettings({ computerUseEnabled: enabled })} onOpenExternal={openExternal} onRefresh={pluginSkills.refresh} onInstall={installSkill} onInstallExtension={installExtension} onSetMcpSupport={setMcpSupport} onConnectMcp={connectMcp} onSetMcpEnabled={setMcpEnabled} onMutateCapability={mutateCapability} />
     : view === 'settings' ? <SettingsPage initialSection={settingsSectionRequest.section} initialSectionRequestId={settingsSectionRequest.id} settings={settingsState.settings} meta={meta} providerCatalog={provider.catalog} voice={bridge?.voice ?? null} pets={bridge?.pets ?? null} onClose={() => navigate('session')} onUpdate={settingsState.updateSettings} onRefreshHarnesses={refreshDetectedHarnesses} onRefreshProviders={() => provider.refresh(true)} onSaveProviderApiKey={provider.saveApiKey} onLogoutProvider={provider.logout} onSetProviderEnabled={provider.setEnabled} onSetAllProvidersEnabled={provider.setAllEnabled} onSetAllProvidersDisabled={provider.setAllDisabled} onSetModelEnabled={provider.setModelEnabled} onStartProviderOAuth={provider.startOAuth} archivedSessions={sessions.filter((session) => session.archived)} projects={projects} onRestoreSession={(session: SessionRecord) => setSessionArchived(session, false)} onResetBrowser={async () => {
         if (!bridge) throw new Error('Browser data can only be cleared in the desktop app.')
