@@ -213,6 +213,18 @@ describe('AgentBrowserService', () => {
     expect(service.state().tabs[0]).toMatchObject({ canGoBack: true, canGoForward: true })
   })
 
+  it('captures screenshots when optional cursor injection throws synchronously', async () => {
+    const { service, openAttached } = fixture()
+    const { guest, tabId } = await openAttached('/sessions/a.jsonl')
+    await service.click('/sessions/a.jsonl', { tabId, x: 10, y: 10 })
+    const execute = guest.executeJavaScriptInIsolatedWorld.bind(guest)
+    vi.spyOn(guest, 'executeJavaScriptInIsolatedWorld').mockImplementation((world, scripts) => {
+      if (scripts.some((script) => script.code.includes('__primeWorkAgentCursorMarker'))) throw new Error('Cursor unavailable')
+      return execute(world, scripts)
+    })
+    await expect(service.screenshot('/sessions/a.jsonl', { tabId })).resolves.toMatchObject({ mimeType: 'image/jpeg' })
+  })
+
   it('bounds oversized script responses before parsing them', async () => {
     const { service, openAttached } = fixture()
     const { guest, tabId } = await openAttached('/sessions/a.jsonl')
