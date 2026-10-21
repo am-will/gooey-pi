@@ -573,6 +573,7 @@ export class AgentBrowserService {
     } else {
       const activeId = this.activeBySession.get(sessionKey)
       const active = activeId === PREVIEW_TAB_ID ? this.previewFor(sessionKey)?.tab : activeId ? this.tabs.get(activeId) : undefined
+      if (activeId === PREVIEW_TAB_ID && !active) throw new Error("The selected Preview tab is no longer open for this thread. Open a tab with browser_tabs instead.")
       // With no agent tab selected, fall back to the user's Preview tab: when
       // the page is already on screen the agent should act on it rather than
       // opening a duplicate.
