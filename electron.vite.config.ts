@@ -9,7 +9,7 @@ export default defineConfig({
   main: {
     // Fully minify production code: Electron never consumes readable output,
     // and less source is faster for V8 to read, parse, and compile at startup.
-    build: { lib: { entry: 'electron/main/index.ts' }, minify: 'esbuild' },
+    build: { lib: { entry: { index: 'electron/main/index.ts', 'recurrence-worker': 'electron/main/schedules/recurrence-worker.ts' } }, minify: 'esbuild' },
   },
   preload: {
     build: {
