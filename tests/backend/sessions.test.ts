@@ -1028,8 +1028,7 @@ describe('SessionService live changes', () => {
     }, 25)
 
     try {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 350))
-      expect(events.some((event) => event.filePath === realpathSync(file))).toBe(true)
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
     } finally {
       clearInterval(writes)
       unsubscribe()

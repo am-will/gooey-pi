@@ -1,3 +1,4 @@
+import { waitUntil } from '../helpers/wait'
 import { isBucketedSessionPath, timestampFromBucketedSessionName } from '../../electron/main/sessions/bucketed'
 import { appendFileSync, createReadStream, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
@@ -432,14 +433,14 @@ describe('pi session service harness identity', () => {
       const watcherHarness = service as unknown as { queueSessionChange(filename: string): void }
       // Recursive watchers report bucket-relative names one directory deep.
       watcherHarness.queueSessionChange(`${BUCKET}/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
       expect(events).toContainEqual({ filePath: realpathSync(file), harness: 'pi' })
 
       // Deeper or hidden names cannot resolve to one session file and coalesce
       // into a catalog-wide refresh instead.
       events.splice(0)
       watcherHarness.queueSessionChange(`${BUCKET}/nested/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.length > 0, 4_000)
       expect(events).toEqual([{ harness: 'pi' }])
     } finally {
       unsubscribe()

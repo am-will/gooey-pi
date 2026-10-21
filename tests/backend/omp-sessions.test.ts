@@ -1,3 +1,4 @@
+import { waitUntil } from '../helpers/wait'
 import { isBucketedSessionPath, timestampFromBucketedSessionName } from '../../electron/main/sessions/bucketed'
 import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
@@ -298,14 +299,14 @@ describe('OMP session service harness identity', () => {
       const watcherHarness = service as unknown as { queueSessionChange(filename: string): void }
       // Recursive watchers report bucket-relative names one directory deep.
       watcherHarness.queueSessionChange(`-bucket/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.some((event) => event.filePath === realpathSync(file)), 4_000)
       expect(events).toContainEqual({ filePath: realpathSync(file), harness: 'omp' })
 
       // Deeper or hidden names cannot resolve to one session file and coalesce
       // into a catalog-wide refresh instead.
       events.splice(0)
       watcherHarness.queueSessionChange(`-bucket/nested/${NAME_A}`)
-      await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+      await waitUntil(() => events.length > 0, 4_000)
       expect(events).toEqual([{ harness: 'omp' }])
     } finally {
       unsubscribe()
