@@ -192,6 +192,22 @@ describe('AutomationService', () => {
     await service.stop()
   })
 
+  it('announces the persisted running state before a run completes', async () => {
+    let finish: () => void = () => undefined
+    const run = vi.fn(() => new Promise<Record<string, never>>((resolve) => { finish = () => resolve({}) }))
+    const service = new AutomationService(store(), {
+      validateTarget: async () => undefined, validateExecution: async () => undefined,
+      run, now: () => new Date('2030-01-01T00:00:00Z'),
+    })
+    const task = await service.create({ prompt: 'Review', target, timing: onceAt('2030-01-02T00:00:00Z'), execution })
+    const statuses: string[] = []
+    service.onDidChange(() => { statuses.push(service.get(task.id).runs[0]?.status ?? 'missing') })
+    await service.runNow(task.id)
+    await eventually(() => expect(statuses).toEqual(['queued', 'running']))
+    finish()
+    await service.stop()
+  })
+
   it('does not dispatch a queued run after its task is deleted', async () => {
     const started: string[] = []
     const releases: Array<() => void> = []

@@ -474,6 +474,7 @@ export class AutomationService {
       this.changed({ taskId: task.id, reason: 'run' })
       return
     }
+    this.changed({ taskId: task.id, reason: 'run' })
     try {
       const result = await this.options.run(task)
       await this.updateRun(task.id, runId, { status: 'succeeded', finishedAt: this.now().toISOString(), ...result })
