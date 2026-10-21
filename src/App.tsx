@@ -467,14 +467,12 @@ export default function App() {
   }, [])
   const executeCheckout = useCallback(async (action: CheckoutAction) => {
     if (!bridge || !activeProject) return
-    try {
       const result = await bridge.projects.executeCheckout(activeProject.id, action, activeProject.harness)
       if (result.kind === 'refused') throw new Error(result.message)
       if (result.kind !== 'applied') return
       addOrReplaceProject(result.project)
       newSession(result.project)
-    } catch (error) { reportError(error); throw error }
-  }, [activeProject, addOrReplaceProject, bridge, newSession, reportError])
+  }, [activeProject, addOrReplaceProject, bridge, newSession])
 
   const closeTerminal = useCallback((id: string) => {
     const projectRun = activeProjectScriptRunRef.current
