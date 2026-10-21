@@ -40,7 +40,7 @@ import { AgentBrowserBridge } from './browser/agent-bridge'
 import { AgentBrowserService } from './browser/agent-service'
 import { AgentCollaborationBridge } from './collaboration/agent-bridge'
 import { configureGooeyPiAgentMessageSigning, loadOrCreateGooeyPiAgentMessageKey } from './collaboration/message-envelope'
-import { extensionInjection, resolveExtensionPath, type ExtensionCapability } from './extension-manifest'
+import { bundledResourcePath, extensionInjection, resolveExtensionPath, type ExtensionCapability } from './extension-manifest'
 import { SessionService } from './sessions'
 import { ompSessionServiceOptions } from './sessions/omp'
 import { piSessionServiceOptions } from './sessions/pi'
@@ -110,9 +110,11 @@ installCrashGuards({
   },
 })
 
-function appIconPath(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(app.getAppPath(), 'assets', 'icon.png')
+function resourcePath(...segments: string[]): string {
+  return bundledResourcePath({ isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath }, ...segments)
 }
+
+function appIconPath(): string { return resourcePath('icon.png') }
 
 function pendingShutdownPrompt(): ShutdownPrompt | null {
   const runtimes = [...(agents?.list() ?? []), ...(ompAgents?.list() ?? []), ...(piAgents?.list() ?? [])]
@@ -338,20 +340,16 @@ async function bootstrap(): Promise<void> {
     runProcess,
   })
   const pets = new PetService({
-    builtInRoot: app.isPackaged ? join(process.resourcesPath, 'pets') : join(app.getAppPath(), 'assets', 'pets'),
+    builtInRoot: resourcePath('pets'),
     codexRoot: join(homedir(), '.codex', 'pets'),
   })
   const browserProfile = session.fromPartition(BROWSER_PARTITION)
   browserProfile.on('will-download', (event, item, owner) => downloads?.handle(event, item, owner, settings.get().browserAskForDownloads))
   const scheduleSkillPath = app.isPackaged
-    ? await mirrorBundledSkill(join(process.resourcesPath, 'skills', 'prime-work-schedules'), join(userDataPath, 'bundled-skills'))
-    : join(app.getAppPath(), 'assets', 'skills', 'prime-work-schedules')
-  const browserSkillPath = app.isPackaged
-    ? join(process.resourcesPath, 'skills', 'prime-work-browser')
-    : join(app.getAppPath(), 'assets', 'skills', 'prime-work-browser')
-  const computerUseSkillPath = app.isPackaged
-    ? join(process.resourcesPath, 'skills', 'gooeypi-computer-use', 'SKILL.md')
-    : join(app.getAppPath(), 'assets', 'skills', 'gooeypi-computer-use', 'SKILL.md')
+    ? await mirrorBundledSkill(resourcePath('skills', 'prime-work-schedules'), join(userDataPath, 'bundled-skills'))
+    : resourcePath('skills', 'prime-work-schedules')
+  const browserSkillPath = resourcePath('skills', 'prime-work-browser')
+  const computerUseSkillPath = resourcePath('skills', 'gooeypi-computer-use', 'SKILL.md')
   const extensionPathContext = {
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
