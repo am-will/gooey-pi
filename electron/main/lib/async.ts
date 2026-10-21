@@ -10,6 +10,26 @@ export function comparePaths(left: string, right: string): number {
 }
 
 /**
+ * Resolves after `ms` on an unref'd timer, so a pending wait never keeps the process alive.
+ * When `signal` aborts first, the timer is cleared and the promise rejects with `signal.reason`.
+ */
+export function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolveDelay, rejectDelay) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      rejectDelay(signal?.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolveDelay()
+    }, ms)
+    timer.unref?.()
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
  * Maps values with bounded concurrency. `null` results are filtered out;
  * results arrive in completion order, matching the previous worker pools.
  */
@@ -48,6 +68,37 @@ export function createSingleFlight<K, V>(): SingleFlight<K, V> {
     },
     get: (key) => inFlight.get(key),
     get size() { return inFlight.size },
+  }
+}
+
+export interface KeyedMutex<K> {
+  /** Runs `action` after every earlier action for `key` settles; different keys run concurrently. */
+  run<T>(key: K, action: () => Promise<T>): Promise<T>
+  readonly size: number
+}
+
+/**
+ * Per-key FIFO mutual exclusion. Each caller chains a private gate that only ever resolves, so a
+ * rejected (or synchronously throwing) action releases the next waiter and its error reaches only
+ * its own caller. The entry for a key clears once its last queued action settles.
+ */
+export function createKeyedMutex<K>(): KeyedMutex<K> {
+  const tails = new Map<K, Promise<void>>()
+  return {
+    async run<T>(key: K, action: () => Promise<T>): Promise<T> {
+      const previous = tails.get(key) ?? Promise.resolve()
+      let release!: () => void
+      const current = new Promise<void>((done) => { release = done })
+      tails.set(key, current)
+      await previous
+      try {
+        return await action()
+      } finally {
+        release()
+        if (tails.get(key) === current) tails.delete(key)
+      }
+    },
+    get size() { return tails.size },
   }
 }
 

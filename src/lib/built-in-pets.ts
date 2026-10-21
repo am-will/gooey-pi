@@ -13,14 +13,7 @@ export const BUILT_IN_PET_COPY: Record<string, { name: MessageKey; description: 
   'gooey-pi': { name: 'settings.pets.gooeyPi.name', description: 'settings.pets.gooeyPi.description' },
 }
 
-/**
- * Records shown until the main process reports the installed pet set. The
- * English copy mirrors the catalog so an unmapped pet still renders something.
- */
-export const BUILT_IN_PETS: PetDefinition[] = [
-  { id: 'orb', petId: 'orb', displayName: 'Orb', description: 'A fluid voice orb that shifts with GooeyPi activity.', source: 'built-in', kind: 'orb' },
-  { id: 'gooey-pi', petId: 'gooey-pi', displayName: 'GooeyPi', description: 'A friendly purple jelly pet shaped like the mathematical pi symbol.', source: 'built-in', kind: 'spritesheet' },
-]
+export { BUILT_IN_PETS } from './pets'
 
 /** Display name for a pet record: catalog copy for bundled pets, else its own name. */
 export function petDisplayName(pet: PetDefinition, t: (key: MessageKey) => string): string {

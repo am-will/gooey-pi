@@ -19,8 +19,11 @@ function normalizedModelText(value: string): string {
 function modelMatchScore(query: string, model: PrimeModelDescriptor): number {
   const wanted = normalizedModelText(query)
   if (!wanted) return 0
+  // A field with no ASCII letters or digits (e.g. a CJK display name) normalizes to '', and
+  // `wanted.includes('')` is always true, so empty fields would otherwise match every query.
   const fields = [model.key, model.id, model.name, `${model.provider} ${model.name}`, `${model.provider} ${model.id}`]
     .map(normalizedModelText)
+    .filter((field) => field.length > 0)
   if (fields.includes(wanted)) return 10_000
   const wantedTokens = new Set(wanted.split(' '))
   let best = 0
@@ -43,6 +46,20 @@ export function rankedModelMatches(query: string, models: readonly PrimeModelDes
     .filter(({ score }) => score > 0)
     .sort((left, right) => right.score - left.score || left.model.name.localeCompare(right.model.name) || left.model.key.localeCompare(right.model.key))
     .map(({ model }) => model)
+}
+
+const MODEL_LISTING_LIMIT = 100
+
+/** The bounded model list payload shared by the voice and agent-collaboration `models` tools. */
+export function modelListing(query: string, available: readonly PrimeModelDescriptor[]) {
+  const matches = query ? rankedModelMatches(query, available) : available
+  const models = matches.slice(0, MODEL_LISTING_LIMIT).map((model) => ({
+    key: model.key,
+    name: model.name,
+    provider: model.provider,
+    reasoning_levels: model.availableThinkingLevels,
+  }))
+  return { models, matched: matches.length, returned: models.length, truncated: matches.length > models.length }
 }
 
 export function resolveModel(query: string, models: readonly PrimeModelDescriptor[]): PrimeModelDescriptor {
