@@ -440,7 +440,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('plugins:mutate-capability', (_event, input, harness) => pluginsFor(requireHarness(harness)).mutateCapability(input))
 
   handle('settings:get', () => services.settings.get())
-  handle('settings:update', async (_event, patch) => {
+  const settingsTransitions = createKeyedMutex<'settings'>()
+  handle('settings:update', (_event, patch) => settingsTransitions.run('settings', async () => {
     const previous = services.settings.get()
     const patchRecord = requireRecord(patch, 'settings patch')
     if (patchRecord.computerUseEnabled === true && !previous.computerUseEnabled) await services.cuaDriver.requireAvailable()
@@ -456,7 +457,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       await services.omp.agents.requestRuntimeEnvironmentRefresh()
     }
     return settings
-  })
+  }))
   handle('settings:reset-browser-data', () => services.settings.resetBrowserData())
 
   handle('browser:state', () => services.browser.state())

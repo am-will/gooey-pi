@@ -19,10 +19,11 @@ function deferred() {
 
 describe('settings IPC transition ownership', () => {
   it.each([
-    ['browserEnabled', false, true],
-    ['askUserEnabled', false, true],
-    ['ompApprovalMode', 'always-ask', 'yolo'],
-  ] as const)('refreshes both committed %s transitions when requests overlap', async (key, initial, intermediate) => {
+    ['browserEnabled', false, true, false],
+    ['askUserEnabled', false, true, false],
+    ['ompApprovalMode', 'always-ask', 'yolo', false],
+    ['browserEnabled', false, true, true],
+  ] as const)('refreshes overlapping %s transitions from %j via %j (refresh rejects=%j)', async (key, initial, intermediate, refreshFails) => {
     const handlers = new Map<string, (event: unknown, patch: unknown) => Promise<AppSettings>>()
     electron.ipcMain.handle.mockImplementation((channel, handler) => { handlers.set(channel, handler) })
     let settings = { ...defaultSettings(), [key]: initial }
@@ -39,6 +40,7 @@ describe('settings IPC transition ownership', () => {
     }
     const service = new SettingsService(store as unknown as JsonStateStore, () => '/bin/sh')
     const refresh = vi.fn(async () => {})
+    if (refreshFails) refresh.mockRejectedValueOnce(new Error('Runtime retirement failed'))
     const services = ipcServiceStubs()
     services.settings = service
     services.agents = { ...services.agents as object, requestRuntimeEnvironmentRefresh: vi.fn(async () => {}) }
@@ -53,7 +55,8 @@ describe('settings IPC transition ownership', () => {
     const second = invoke(event, { [key]: initial })
     await vi.waitFor(() => expect(writes).toBe(1))
     gates[0].resolve()
-    await first
+    if (refreshFails) await expect(first).rejects.toThrow('Runtime retirement failed')
+    else await first
     expect(settings[key]).toBe(intermediate)
     // A runtime can be created under this generation while the second disk write waits.
     expect(refresh).toHaveBeenCalledTimes(1)
