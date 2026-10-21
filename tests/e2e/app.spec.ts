@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -2139,6 +2140,28 @@ test.describe('Prime Work desktop smoke', () => {
     await page.setViewportSize({ width: 720, height: 700 })
     await expect(page.locator('.inspector')).toHaveCount(0)
     await expect.poll(() => page.evaluate(async () => (await window.prime.settings.get()).inspectorOpen)).toBe(false)
+  })
+
+  test('restores the Preview URL after switching inspector tabs and full-page views', async () => {
+    const server = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>Preview retention fixture</title><p>Retained location</p>') })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Fixture server has no port')
+    const url = `http://127.0.0.1:${address.port}/nested?keep=1`
+    try {
+      await page.getByRole('tab', { name: 'Browser' }).click()
+      await page.getByRole('textbox', { name: 'Browser address', exact: true }).fill(url)
+      await page.getByRole('textbox', { name: 'Browser address', exact: true }).press('Enter')
+      const guest = page.locator('webview[partition="persist:prime-work-browser"]')
+      const guestUrl = () => guest.evaluate((node) => (node as HTMLElement & { getURL(): string }).getURL())
+      await expect.poll(guestUrl).toBe(url)
+      await page.getByRole('tab', { name: 'Files', exact: true }).click()
+      await page.getByRole('tab', { name: 'Browser', exact: true }).click()
+      await expect.poll(guestUrl).toBe(url)
+      await page.locator('.sidebar__footer button').filter({ hasText: 'Settings' }).click()
+      await page.getByRole('button', { name: 'Back to session' }).click()
+      await expect.poll(guestUrl).toBe(url)
+    } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())) }
   })
 
   test('attaches an isolated browser guest without navigation errors', async () => {
