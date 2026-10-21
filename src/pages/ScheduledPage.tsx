@@ -306,6 +306,7 @@ export function ScheduledPage({
     if (!form.projectId || !authorizedProjects.some((project) => project.id === form.projectId)) return t('schedule.error.project')
     if (form.targetKind === 'session' && !eligibleSessions.some((session) => session.id === form.sessionId)) return t('schedule.error.session')
     if (!currentTiming) {
+      if (form.timingKind === 'once') return t('schedule.error.dateTime')
       if (form.timingKind === 'recurring' && !validTimeZone(form.timeZone.trim())) return t('schedule.error.timeZone')
       if (form.frequency === 'weekly' && !form.weekdays.length) return t('schedule.error.weekday')
       return form.frequency === 'advanced' ? t('schedule.error.rrule') : t('schedule.error.dateTime')

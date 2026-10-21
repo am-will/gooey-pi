@@ -78,3 +78,20 @@ it('does not postpone preview when the parent supplies fresh callback identities
     expect(latest).toHaveBeenCalledTimes(1)
   } finally { vi.useRealTimers() }
 })
+
+
+it('reports one-time date errors independently of the hidden advanced recurrence editor', async () => {
+  renderPage({ schedules: [task], projects: [project], models: [model] })
+  act(() => host.querySelector<HTMLButtonElement>('.schedule-row')!.click())
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.trim() === 'Edit')!.click())
+  act(() => [...document.querySelectorAll<HTMLButtonElement>('.schedule-frequency button')].find((button) => button.textContent === 'Advanced')!.click())
+  act(() => document.querySelector<HTMLInputElement>('input[name="timing"]')!.click())
+  const date = document.querySelector<HTMLInputElement>('input[type="date"]')!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(date, '')
+    date.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => document.querySelector('#schedule-editor-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(document.body.textContent).toContain('Choose a valid date and time.')
+  expect(document.body.textContent).not.toContain('Enter a valid RRULE')
+})
