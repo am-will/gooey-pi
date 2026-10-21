@@ -101,6 +101,7 @@ function terminalEnvironment(commandRunner: boolean): Record<string, string> {
     COLORTERM: 'truecolor',
   })).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
   if (process.env.NO_COLOR === undefined) delete env.NO_COLOR
+  else env.NO_COLOR = process.env.NO_COLOR
   // npm injects its configured prefix into apps launched through `npm run`.
   // Login-shell nvm refuses to initialize while that npm override is present.
   if (commandRunner) {
