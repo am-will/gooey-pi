@@ -625,10 +625,19 @@ export class GitService {
   async stage(cwdValue: unknown, pathsValue: unknown): Promise<boolean> {
     const requested = this.validPaths(pathsValue)
     const { cwd, overrides } = await this.withRepositoryGuards(cwdValue, requested)
-    // `git add` records a nested repository as a gitlink (mode 160000) instead of its
-    // files, so Stage all leaves those entries untracked rather than embedding them.
+    // Avoid introducing an untracked repository as a gitlink while allowing
+    // existing submodules to stage the commit checked out inside them.
     const nested = await Promise.all(requested.map((path) => isNestedRepository(cwd, path)))
-    const paths = requested.filter((_, index) => !nested[index])
+    const trackedSubmodules = new Set<string>()
+    if (nested.some(Boolean)) {
+      const indexed = await runGit(cwd, ['ls-files', '--stage', '-z', '--', ...requested.filter((_, index) => nested[index])], { timeoutMs: 10_000, maxBytes: GIT_STATUS_OUTPUT_LIMIT }, overrides)
+      requireProcessSuccess('Git submodule index inspection', indexed)
+      for (const entry of indexed.stdout.split('\0')) {
+        const match = /^160000 [0-9a-f]+ 0\t([\s\S]+)$/.exec(entry)
+        if (match) trackedSubmodules.add(match[1])
+      }
+    }
+    const paths = requested.filter((path, index) => !nested[index] || trackedSubmodules.has(path))
     if (!paths.length) {
       const subject = requested.length === 1 ? `${requested[0]} is a nested Git repository` : 'the selected paths are nested Git repositories'
       throw new Error(`Git stage refused because ${subject}. Commit inside the nested repository, or add it as a submodule with a Git client.`)
