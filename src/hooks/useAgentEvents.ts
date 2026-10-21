@@ -10,13 +10,13 @@ interface UseAgentEventsOptions {
   bridge: PrimeWorkApi | null
   runtimeIdRef: React.RefObject<string | null>
   runtimeSessionsRef: React.RefObject<Map<string, string>>
-  runtimeOwnerRef: React.RefObject<{ runtimeId: string; generation: number } | null>
   workspaceRef: React.RefObject<WorkspaceSnapshot>
   setSessions: React.Dispatch<React.SetStateAction<SessionRecord[]>>
   setRuntime: React.Dispatch<React.SetStateAction<RuntimeInfo | null>>
   reconcileQueuedPrompts?(snapshot: SessionActionSnapshot): void
   clearQueuedPromptFlushFailures?(): void
-  clearQueuedPrompts?(): void
+  dropPendingSteers(runtimeId?: string): void
+  detachRuntime(runtimeId: string): void
   queueAgentEvent(event: Record<string, unknown>): void
   reconcileTranscriptForEvent(runtimeId: string, event: Record<string, unknown>): void
   showExtensionUi(runtimeId: string, event: Record<string, unknown>): void
@@ -30,13 +30,13 @@ export function useAgentEvents({
   bridge,
   runtimeIdRef,
   runtimeSessionsRef,
-  runtimeOwnerRef,
   workspaceRef,
   setSessions,
   setRuntime,
   reconcileQueuedPrompts = () => undefined,
   clearQueuedPromptFlushFailures = () => undefined,
-  clearQueuedPrompts = () => undefined,
+  dropPendingSteers,
+  detachRuntime,
   queueAgentEvent,
   reconcileTranscriptForEvent,
   showExtensionUi,
@@ -73,7 +73,7 @@ export function useAgentEvents({
       showExtensionUi(runtimeId, event)
       if (type === 'runtime_exit') clearExtensionUi(runtimeId)
       if (runtimeIdRef.current !== runtimeId) {
-        if (type === 'runtime_exit') runtimeSessionsRef.current.delete(runtimeId)
+        if (type === 'runtime_exit') { dropPendingSteers(runtimeId); detachRuntime(runtimeId) }
         return
       }
       if (type === 'context_usage') {
@@ -128,10 +128,8 @@ export function useAgentEvents({
       }
       if (type === 'runtime_exit') {
         clearExtensionUi(runtimeId)
-        runtimeSessionsRef.current.delete(runtimeId)
-        runtimeIdRef.current = null
-        runtimeOwnerRef.current = null
-        setRuntime((current) => current?.runtimeId === runtimeId ? null : current)
+        dropPendingSteers(runtimeId)
+        detachRuntime(runtimeId)
       } else if (type === 'agent_end' || type === 'extension_error' || type === 'error' || type === 'transport_error') {
         clearQueuedPromptFlushFailures()
         setRuntime((current) => current?.runtimeId === runtimeId ? { ...current, isStreaming: false, isCompacting: false } : current)
@@ -147,7 +145,8 @@ export function useAgentEvents({
     bridge,
     clearExtensionUi,
     clearQueuedPromptFlushFailures,
-    clearQueuedPrompts,
+    dropPendingSteers,
+    detachRuntime,
     reconcileQueuedPrompts,
     workspaceRef,
     queueAgentEvent,
@@ -155,8 +154,7 @@ export function useAgentEvents({
     refreshGit,
     refreshGitOnTerminalEvent,
     runtimeIdRef,
-    runtimeOwnerRef,
-    runtimeSessionsRef,
+      runtimeSessionsRef,
     setRuntime,
     setSessions,
     showExtensionUi,

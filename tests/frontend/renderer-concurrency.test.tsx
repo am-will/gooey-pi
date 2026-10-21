@@ -480,7 +480,9 @@ describe('agent event git refresh timer', () => {
           bridge,
           runtimeIdRef: { current: 'runtime' },
           runtimeSessionsRef: { current: new Map([['runtime', session.filePath]]) },
-          runtimeOwnerRef: { current: null },
+
+          dropPendingSteers: vi.fn(),
+          detachRuntime: vi.fn(),
           workspaceRef: { current: { generation: 0, sessionFile: session.filePath, cwd: '/project' } },
           setSessions: vi.fn(),
           setRuntime: vi.fn(),
@@ -538,7 +540,6 @@ describe('bootstrap critical path', () => {
       } as unknown as PrimeWorkApi
       const runtimeIdRef = { current: runtime.runtimeId as string | null }
       const runtimeSessionsRef = { current: new Map([[runtime.runtimeId, session.filePath]]) }
-      const runtimeOwnerRef = { current: null }
       const workspaceRef = { current: { generation: 0, project, session, cwd: project.path, sessionFile: session.filePath } }
       const setProjects = vi.fn()
       const setSchedules = vi.fn()
@@ -573,7 +574,8 @@ describe('bootstrap critical path', () => {
           bridge,
           runtimeIdRef,
           runtimeSessionsRef,
-          runtimeOwnerRef,
+          dropPendingSteers: vi.fn(),
+          detachRuntime: vi.fn(),
           workspaceRef,
           setSessions,
           setRuntime,

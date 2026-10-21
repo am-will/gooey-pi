@@ -283,10 +283,10 @@ export default function App() {
 
   useAgentEvents({
     bridge, runtimeIdRef: workspace.runtimeIdRef, runtimeSessionsRef: workspace.runtimeSessionsRef,
-    runtimeOwnerRef: workspace.runtimeOwnerRef, workspaceRef: workspace.workspaceRef,
+    workspaceRef: workspace.workspaceRef,
     setSessions, setRuntime: workspace.setRuntime, reconcileQueuedPrompts: workspace.reconcileQueuedPrompts,
     clearQueuedPromptFlushFailures: workspace.clearQueuedPromptFlushFailures,
-    clearQueuedPrompts: workspace.clearQueuedPrompts, queueAgentEvent: workspace.queueAgentEvent,
+    dropPendingSteers: workspace.dropPendingSteers, detachRuntime: workspace.detachRuntime, queueAgentEvent: workspace.queueAgentEvent,
     reconcileTranscriptForEvent: workspace.reconcileTranscriptForEvent,
     showExtensionUi: extension.showExtensionUi, clearExtensionUi: extension.clearExtensionUi,
     refreshGit, refreshGitOnTerminalEvent: Boolean(activeCwd),
