@@ -5,7 +5,6 @@ export interface ComposerDraftSnapshot {
   fast?: boolean
 }
 
-const LEGACY_COMPOSER_DRAFT_KEY = 'prime-work.composer-draft'
 const COMPOSER_DRAFT_PREFIX = 'prime-work.composer-draft.v2:'
 
 export function composerDraftStorageKey(scope: string): string {
@@ -21,7 +20,8 @@ function emptyDraft(snapshot: ComposerDraftSnapshot): boolean {
 export function saveComposerDraftFromDom(): void {
   try {
     const textarea = document.querySelector<HTMLTextAreaElement>('.composer textarea')
-    if (textarea?.value) window.sessionStorage.setItem(LEGACY_COMPOSER_DRAFT_KEY, textarea.value)
+    const scope = textarea?.closest<HTMLElement>('[data-draft-scope]')?.dataset.draftScope
+    if (scope && textarea?.value) saveComposerDraft(scope, { text: textarea.value })
   } catch { /* storage unavailable */ }
 }
 
@@ -37,11 +37,9 @@ export function saveComposerDraft(scope: string, snapshot: ComposerDraftSnapshot
     }
     if (emptyDraft(next)) {
       window.sessionStorage.removeItem(key)
-      window.sessionStorage.removeItem(LEGACY_COMPOSER_DRAFT_KEY)
       return
     }
     window.sessionStorage.setItem(key, JSON.stringify(next))
-    window.sessionStorage.setItem(LEGACY_COMPOSER_DRAFT_KEY, next.text)
   } catch { /* storage unavailable */ }
 }
 
@@ -66,8 +64,7 @@ export function readComposerDraft(scope: string): ComposerDraftSnapshot | null {
         return parsed as ComposerDraftSnapshot
       }
     }
-    const legacy = window.sessionStorage.getItem(LEGACY_COMPOSER_DRAFT_KEY)
-    return legacy ? { text: legacy } : null
+    return null
   } catch {
     return null
   }
@@ -76,15 +73,6 @@ export function readComposerDraft(scope: string): ComposerDraftSnapshot | null {
 export function clearComposerDraft(scope: string): void {
   try {
     window.sessionStorage.removeItem(composerDraftStorageKey(scope))
-    window.sessionStorage.removeItem(LEGACY_COMPOSER_DRAFT_KEY)
   } catch { /* storage unavailable */ }
 }
 
-/** Read and clear a preserved crash draft; returns '' when none exists. */
-export function takeComposerDraft(): string {
-  try {
-    const draft = window.sessionStorage.getItem(LEGACY_COMPOSER_DRAFT_KEY) ?? ''
-    if (draft) window.sessionStorage.removeItem(LEGACY_COMPOSER_DRAFT_KEY)
-    return draft
-  } catch { return '' }
-}

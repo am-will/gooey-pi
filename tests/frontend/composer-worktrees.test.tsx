@@ -54,6 +54,19 @@ describe('composer worktree picker', () => {
     window.sessionStorage.clear()
   })
 
+  it('does not restore another session draft when switching composers', async () => {
+    act(() => root.render(<Composer key="one" {...props({ draftKey: 'project:one' })} />))
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(input, 'private first draft')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => root.render(<Composer key="two" {...props({ draftKey: 'project:two' })} />))
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('')
+    act(() => root.render(<Composer key="one" {...props({ draftKey: 'project:one' })} />))
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('private first draft')
+  })
+
   it('does not expose an automatic model choice before the catalog loads', () => {
     act(() => root.render(<Composer {...props()} />))
 

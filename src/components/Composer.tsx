@@ -24,7 +24,7 @@ import type {
 } from '@/types/api'
 import { composePrompt } from '@/lib/composer-prompt'
 import { findSessionMentions } from '@/lib/session-mentions'
-import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft, takeComposerDraft } from '@/lib/composer-draft'
+import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { messageActionForKey } from '@/lib/message-shortcuts'
@@ -173,7 +173,7 @@ export const Composer = memo(function Composer({
   draftKey,
 }: ComposerProps) {
   const { t } = useI18n()
-  const [value, setValue] = useState(() => (draftKey ? readComposerDraft(draftKey)?.text : undefined) ?? takeComposerDraft())
+  const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
   const [menu, setMenu] = useState<'add' | 'mention' | 'command' | null>(null)
   const [sessionReferenceIds, setSessionReferenceIds] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [activeSuggestion, setActiveSuggestion] = useState(0)
@@ -452,7 +452,7 @@ export const Composer = memo(function Composer({
   }
 
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap" data-draft-scope={draftKey ?? 'default'}>
       {queuedMessages.length || harnessQueuedMessageCount ? (
         <section className="composer-queue" aria-label={t('composer.queue.label')} aria-live="polite">
           <div className="composer-queue__header">

@@ -7,7 +7,7 @@ import {
   readComposerDraft,
   restoreComposerDraft,
   saveComposerDraft,
-  takeComposerDraft,
+  saveComposerDraftFromDom,
 } from '../../src/lib/composer-draft'
 
 afterEach(() => {
@@ -44,10 +44,22 @@ describe('composer draft storage', () => {
     expect(readComposerDraft('project:session')?.text).toBe('typed since')
   })
 
-  it('falls back to the crash snapshot when a scoped draft is missing', () => {
+  it('preserves unowned legacy text without importing it into any scope', () => {
     window.sessionStorage.setItem('prime-work.composer-draft', 'recovered after crash')
-    expect(readComposerDraft('project:new')).toEqual({ text: 'recovered after crash' })
-    expect(takeComposerDraft()).toBe('recovered after crash')
-    expect(takeComposerDraft()).toBe('')
+    expect(readComposerDraft('project:new')).toBeNull()
+    saveComposerDraft('project:other', { text: 'other draft' })
+    clearComposerDraft('project:other')
+    expect(window.sessionStorage.getItem('prime-work.composer-draft')).toBe('recovered after crash')
+    expect(readComposerDraft('project:new')).toBeNull()
+  })
+
+  it('writes crash DOM snapshots only into their matching scope', () => {
+    const host = document.createElement('div')
+    host.innerHTML = '<div data-draft-scope="project:session" class="composer"><textarea>unsaved edit</textarea></div>'
+    document.body.append(host)
+    saveComposerDraftFromDom()
+    host.remove()
+    expect(readComposerDraft('project:session')?.text).toBe('unsaved edit')
+    expect(readComposerDraft('project:other')).toBeNull()
   })
 })
