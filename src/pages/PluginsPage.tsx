@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, BookOpen, Check, ChevronRight, FileCode2, FileText, GitFork, Globe2, Package, Palette, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Trash2, WandSparkles, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { CapabilityMutationInput, ExtensionInstallInput, HarnessId, McpConnectionInput, McpStateInput, PluginWarning, PrimeImplementation, SkillRecord } from '@/types/api'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
 import { LOCAL_MCP_STATE_UNAVAILABLE_DETAIL, NETWORK_MCP_AUTH_UNAVAILABLE, NETWORK_MCP_UNAVAILABLE_DETAIL, PI_MCP_ADAPTER_REQUIRED_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '@/lib/mcp-policy'
@@ -125,6 +125,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
   const [mcpSupportAlert, setMcpSupportAlert] = useState('')
   const [mcpSupportNotice, setMcpSupportNotice] = useState('')
   const [capabilityUpdating, setCapabilityUpdating] = useState('')
+  const capabilityPendingRef = useRef(false)
   const [confirmDisable, setConfirmDisable] = useState<SkillRecord | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<SkillRecord | null>(null)
   const [capabilityAlert, setCapabilityAlert] = useState('')
@@ -234,7 +235,8 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
   }
   const mcpServerName = (skill: SkillRecord): string => skill.id.startsWith('prime-mcp-') ? skill.id.slice('prime-mcp-'.length) : skill.name
   const setMcp = async (skill: SkillRecord, enabled: boolean) => {
-    if (capabilityUpdating) return
+    if (capabilityPendingRef.current) return
+    capabilityPendingRef.current = true
     setCapabilityUpdating(skill.id)
     setCapabilityAlert('')
     try {
@@ -246,6 +248,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
         if (!response.ok) setCapabilityAlert(describeDetail(response.output))
       }
     } finally {
+      capabilityPendingRef.current = false
       setCapabilityUpdating('')
     }
   }
@@ -259,6 +262,8 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
     else if (skill.kind === 'package') await mutate(skill, 'disable')
   }
   const mutate = async (skill: SkillRecord, action: CapabilityMutationInput['action']) => {
+    if (capabilityPendingRef.current) return
+    capabilityPendingRef.current = true
     setCapabilityUpdating(skill.id)
     setCapabilityAlert('')
     try {
@@ -273,6 +278,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
       })
       if (!response.ok) setCapabilityAlert(describeDetail(response.output))
     } finally {
+      capabilityPendingRef.current = false
       setCapabilityUpdating('')
     }
   }
@@ -312,7 +318,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
       if (skill.kind === 'package') return mutate(skill, 'enable')
       return setMcp(skill, true)
     }
-    return <button type="button" className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={skill.enabled ? t('plugins.aria.disable', { name: skill.name }) : t('plugins.aria.enable', { name: skill.name })} aria-pressed={skill.enabled} disabled={updating} title={skill.availability?.detail ? describeDetail(skill.availability.detail) : undefined} onClick={() => { if (skill.enabled) setConfirmDisable(skill); else void enable() }}>{updating ? <RefreshCw className="spin" size={14}/> : skill.enabled ? <><Check className="plugin-toggle__check" size={14}/><X className="plugin-toggle__disable" size={14}/></> : <Plus className="plugin-toggle__plus" size={14}/>}</button>
+    return <button type="button" className={skill.enabled ? 'plugin-toggle is-enabled' : 'plugin-toggle'} aria-label={skill.enabled ? t('plugins.aria.disable', { name: skill.name }) : t('plugins.aria.enable', { name: skill.name })} aria-pressed={skill.enabled} disabled={updating || Boolean(capabilityUpdating) && (skill.kind === 'package' || skill.kind === 'mcp')} title={skill.availability?.detail ? describeDetail(skill.availability.detail) : undefined} onClick={() => { if (skill.enabled) setConfirmDisable(skill); else void enable() }}>{updating ? <RefreshCw className="spin" size={14}/> : skill.enabled ? <><Check className="plugin-toggle__check" size={14}/><X className="plugin-toggle__disable" size={14}/></> : <Plus className="plugin-toggle__plus" size={14}/>}</button>
   }
 
   return (
@@ -362,7 +368,7 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
               <span className={`directory-icon directory-icon--${skill.kind}`}><SkillIcon skill={skill}/></span>
               <div><div><h3>{skill.name}</h3><span>{t(LOCATION_KEYS[skill.location])}</span></div><p id={statusDetail ? capabilityDetailId(skill) : undefined}>{skill.description}{statusDetail ? ` ${describeDetail(statusDetail)}` : ''}</p></div>
               <div className="capability-actions">
-                {skill.kind === 'package' || skill.kind === 'mcp' && skill.location !== 'bundled' && skill.location !== 'system' && skill.definitionRemovalAvailable !== false ? <button type="button" className="plugin-remove" aria-label={t('plugins.aria.remove', { name: skill.name })} disabled={capabilityUpdating === skill.id} onClick={() => setConfirmRemove(skill)}><Trash2 size={13}/></button> : null}
+                {skill.kind === 'package' || skill.kind === 'mcp' && skill.location !== 'bundled' && skill.location !== 'system' && skill.definitionRemovalAvailable !== false ? <button type="button" className="plugin-remove" aria-label={t('plugins.aria.remove', { name: skill.name })} disabled={Boolean(capabilityUpdating)} onClick={() => setConfirmRemove(skill)}><Trash2 size={13}/></button> : null}
                 {capabilityControl(skill)}
               </div>
             </article>

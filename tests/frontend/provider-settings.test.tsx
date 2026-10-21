@@ -352,3 +352,19 @@ describe('provider runtime mutations', () => {
     expect(setDisabled).toHaveBeenCalledWith([], 'pi')
   })
 })
+
+
+it('keeps every provider control busy until the admitted visibility operation settles', async () => {
+  const pending = deferred()
+  const onSetEnabled = vi.fn(() => pending.promise)
+  await render(<ProviderSettings catalog={catalog} onRefresh={noop} onSaveApiKey={noop} onLogout={noop} onSetEnabled={onSetEnabled} onSetAllEnabled={noop} onSetAllDisabled={noop} onSetModelEnabled={noop} onStartOAuth={noop} onOpenDocs={() => undefined} />)
+  const first = container.querySelector<HTMLInputElement>('input[aria-label="Show Anthropic provider"]')!
+  const second = container.querySelector<HTMLInputElement>('input[aria-label="Show ChatGPT Plus/Pro provider"]')!
+  act(() => { first.click(); second.click() })
+  expect(onSetEnabled).toHaveBeenCalledTimes(1)
+  expect(first.disabled).toBe(true)
+  expect(second.disabled).toBe(true)
+  expect(button('Disable all').disabled).toBe(true)
+  await act(async () => { pending.resolve(); await pending.promise })
+  expect(second.disabled).toBe(false)
+})

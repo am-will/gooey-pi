@@ -453,6 +453,22 @@ describe('PluginsPage bundled capability controls', () => {
     expect(setMcpEnabled).not.toHaveBeenCalled()
     expect(mutateCapability).not.toHaveBeenCalled()
   })
+
+  it('serializes package mutations so another row cannot replace the busy owner', async () => {
+    const records: SkillRecord[] = ['A', 'B'].map((name) => ({ id: name, name, description: name, kind: 'package', location: 'user', enabled: false }))
+    let finish!: (result: { ok: boolean; output: string }) => void
+    const mutate = vi.fn(() => new Promise<{ ok: boolean; output: string }>((resolve) => { finish = resolve }))
+    await act(async () => root.render(<PluginsPage harness="omp" skills={records} warnings={[]} loading={false} askUserEnabled onSetAskUserEnabled={async () => undefined} browserEnabled onSetBrowserEnabled={async () => undefined} computerUseEnabled={false} onSetComputerUseEnabled={async () => undefined} onOpenExternal={() => undefined} onRefresh={async () => undefined} onInstall={async () => ({ ok: true, output: '' })} onInstallExtension={async () => ({ ok: true, output: '' })} onSetMcpSupport={async () => ({ ok: true, output: '' })} onConnectMcp={async () => ({ ok: true, output: '' })} onSetMcpEnabled={async () => ({ ok: true, output: '' })} onMutateCapability={mutate} />))
+    const first = container.querySelector<HTMLButtonElement>('button[aria-label="Enable A"]')!
+    const second = container.querySelector<HTMLButtonElement>('button[aria-label="Enable B"]')!
+    act(() => { first.click(); second.click() })
+    expect(mutate).toHaveBeenCalledTimes(1)
+    expect(first.querySelector('.spin')).not.toBeNull()
+    expect(second.disabled).toBe(true)
+    await act(async () => { finish({ ok: true, output: '' }) })
+    expect(second.disabled).toBe(false)
+  })
+
 })
 
 describe('PluginsPage on Rust Prime', () => {
