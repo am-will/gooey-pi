@@ -1,3 +1,6 @@
+import type { ChildRoster, ChildHistoryOptions, ChildHistoryPage } from './subagents'
+export type { ChildSession, ChildRoster, ChildHistoryOptions, ChildHistoryPage } from './subagents'
+
 /**
  * Session partition shared by the in-app browser webviews. The renderer's
  * webview attribute must match the main process's will-attach-webview gate
@@ -794,6 +797,10 @@ export interface PrimeWorkApi {
     rename(filePath: string, title: string): Promise<boolean>
     archive(filePath: string, archived?: boolean): Promise<boolean>
     onChanged(callback: (event: SessionChangeEvent) => void): () => void
+  }
+  subagents: {
+    list(parentSessionFile: string, harness: HarnessId): Promise<ChildRoster>
+    history(parentSessionFile: string, childId: string, options?: ChildHistoryOptions, harness?: HarnessId): Promise<ChildHistoryPage>
   }
   agent: {
     start(options: { cwd: string; sessionPath?: string; model?: string; thinking?: string; fast?: boolean; harness?: HarnessId }): Promise<RuntimeInfo>

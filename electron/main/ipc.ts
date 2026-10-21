@@ -282,6 +282,27 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   })
   handle('agent:command', (_event, runtimeId, command) => agentsForRuntime(runtimeId).command(runtimeId, command))
   handle('agent:stop', (_event, runtimeId) => agentsForRuntime(runtimeId).stop(runtimeId))
+  let childService: Promise<import('./subagents').OmpChildService> | undefined
+  let loadedChildService: import('./subagents').OmpChildService | undefined
+  const children = (): Promise<import('./subagents').OmpChildService> => childService ??= import('./subagents').then(({ OmpChildService }) => {
+    loadedChildService = new OmpChildService({
+      authorizeParent: (path) => services.omp.sessions.requireSessionPath(path),
+      liveRoster: (path) => services.omp.agents.readOmpSubagents(path),
+    })
+    return loadedChildService
+  }).catch((error) => { childService = undefined; throw error })
+  handle('subagents:list', async (event, parent, harness) => {
+    if (requireHarness(harness) !== 'omp') return { supported: false, reason: 'Child history is currently available for OMP only.' }
+    const service = await children()
+    verify(event)
+    return service.list(event.sender.id, parent)
+  })
+  handle('subagents:history', async (event, parent, childId, options, harness) => {
+    if (requireHarness(harness) !== 'omp') throw new TypeError('Child history is currently available for OMP only.')
+    const service = await children()
+    verify(event)
+    return service.history(event.sender.id, parent, childId, options)
+  })
   handle('agent:list', () => [...services.agents.list(), ...services.omp.agents.list(), ...services.pi.agents.list()])
 
   const providerCatalog = (force = false) => services.providers.catalog(force, new Set(services.settings.get().disabledProviders), new Set(services.settings.get().disabledModels))
@@ -473,12 +494,13 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const registration: IpcRegistration = {
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
-    revoke(webContentsId) { authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
+    revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
     notifyHarnessesChanged() { broadcast('app:harnesses-changed') },
     dispose() {
       if (closed) return
       closed = true
       if (activeIpcRegistration === registration) activeIpcRegistration = null
+      for (const owner of authorized.keys()) loadedChildService?.revoke(owner)
       authorized.clear()
       unsubscribeSessionChanges()
       unsubscribeOmpSessionChanges()

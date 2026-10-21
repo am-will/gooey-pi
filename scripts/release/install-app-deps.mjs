@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url'
 import { runCommand } from './lib.mjs'
 
 /**
@@ -15,7 +14,8 @@ export function installAppDependencies(run = runCommand, sourceEnvironment = pro
   run('electron-builder', ['install-app-deps'], { env })
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Also runs where import.meta.main is missing (older Node), so the install never silently exits 0.
+if (import.meta.main !== false) {
   try {
     installAppDependencies()
   } catch (error) {

@@ -1362,4 +1362,27 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'inspector.files.truncated': '大きなプロジェクトのため、ファイル一覧は {count} 件{scope}で停止します。深い階層の一部は表示や検索の対象外になります。',
   'inspector.files.perFolder': '（プロジェクトフォルダーごと）',
 
+  'children.toolInput': '入力',
+  'children.toolOutput': '出力',
+  'children.waitingTool': 'ツールの出力を待っています。',
+  'children.assistant': '子エージェント',
+  'children.thinking': '思考の要約',
+
+  'children.ompOnly': '子チャットの履歴は OMP で利用できます。',
+  'children.loading': '子チャットの履歴を読み込んでいます…',
+  'children.unavailable': '子チャットの履歴を読み込めませんでした。',
+  'children.roster': '子エージェント',
+  'children.rosterLimited': '一覧の上限により一部の子エージェントは表示されていません。',
+  'children.history': '子チャット',
+  'children.readOnly': '閲覧専用の履歴',
+  'children.close': '子チャットの履歴を閉じる',
+  'children.earlier': '以前のメッセージを読み込む',
+  'children.task': 'タスク',
+  'children.empty': 'メッセージはまだ記録されていません。',
+  'children.historyLimited': '表示の上限により一部の履歴は省略されています。',
+
+  'children.latest': '最新のメッセージに戻る',
+
+  'children.retry': '再試行',
+
 }

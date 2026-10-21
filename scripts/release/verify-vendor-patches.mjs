@@ -2,35 +2,44 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { resolveCommandInvocation } from './lib.mjs'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const VENDOR = join(ROOT, 'vendor')
 const EMPTY_CONFIG_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null'
-const PACKAGES = [
+export const PACKAGES = [
   {
     base: 'prime-agent-0.7.0.tgz',
     output: 'prime-agent-0.7.0-gooeypi.1.tgz',
     patch: 'patches/prime-agent-0.7.0-gooeypi.1.patch',
-    baseSha256: '88b6578518c72cd51a825bc80f28e0fef9a64c67de4a7d6fd7afd7ca1b34da0b',
   },
   {
     base: 'prime-agent-ai-0.7.0.tgz',
     output: 'prime-agent-ai-0.7.0-gooeypi.1.tgz',
     patch: 'patches/prime-agent-ai-0.7.0-gooeypi.1.patch',
-    baseSha256: '7cdbb3e835f48dd103325f7a351ce540b27af4d161aeb9c7b9bdcc12fe7909af',
   },
 ]
+// Base archive digests live only in the dependency pin store, so an upgrade updates one place.
+const REFERENCE = JSON.parse(readFileSync(join(ROOT, 'scripts/release/dependency-pins.json'), 'utf8'))['reference-artifacts'] ?? {}
 
-function sha256(path) {
-  return createHash('sha256').update(readFileSync(path)).digest('hex')
+function sha512Sri(path) {
+  return `sha512-${createHash('sha512').update(readFileSync(path)).digest('base64')}`
 }
 
-function run(command, args, cwd) {
-  const invocation = resolveCommandInvocation(command, args)
-  const result = spawnSync(invocation.file, invocation.args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: invocation.shell })
+export function basePinIntegrity(base, reference = REFERENCE) {
+  const pin = Object.values(reference).find((entry) => entry.path === `vendor/${base}`)
+  if (!pin || typeof pin.integrity !== 'string' || !pin.integrity.startsWith('sha512-')) {
+    throw new Error(`Base archive is not pinned in dependency-pins.json reference-artifacts: ${base}`)
+  }
+  return pin.integrity
+}
+
+/** Commands go through the shared resolver so Windows .cmd shims such as npm spawn without a shell. */
+export function run(command, args, cwd, { platform = process.platform, env = process.env, spawn = spawnSync } = {}) {
+  const invocation = resolveCommandInvocation(command, args, platform, env)
+  const result = spawn(invocation.file, invocation.args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: invocation.shell })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim()}`)
   return result.stdout.trim()
@@ -56,34 +65,30 @@ function assertTreeMatches(actualRoot, expectedRoot) {
   }
 }
 
-for (const spec of PACKAGES) {
-  const basePath = join(VENDOR, spec.base)
-  const outputPath = join(VENDOR, spec.output)
-  const patchPath = join(VENDOR, spec.patch)
-  if (sha256(basePath) !== spec.baseSha256) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
-  // Checkouts made before .gitattributes marked the patches -text can still hold CRLF copies.
-  // This also rejects a patch that legitimately carries CR bytes; narrow the check if one ever must.
-  if (readFileSync(patchPath).includes(0x0d)) {
-    throw new Error(`Vendor patch has CRLF line endings from a converted checkout: vendor/${spec.patch}. Delete vendor/patches/*.patch and run git checkout -- vendor/patches`)
-  }
+function verifyVendorPatches() {
+  for (const spec of PACKAGES) {
+    const basePath = join(VENDOR, spec.base)
+    const outputPath = join(VENDOR, spec.output)
+    const patchPath = join(VENDOR, spec.patch)
+    if (sha512Sri(basePath) !== basePinIntegrity(spec.base)) throw new Error(`Base archive checksum mismatch: ${spec.base}`)
 
-  const work = mkdtempSync(join(tmpdir(), 'gooeypi-vendor-patch-'))
-  try {
-    const rebuilt = join(work, 'rebuilt')
-    const reviewed = join(work, 'reviewed')
-    mkdirSync(rebuilt)
-    mkdirSync(reviewed)
-    run('tar', ['-xzf', basePath, '-C', work], ROOT)
-    // A user or system core.autocrlf, or a user gitattributes file (including the default
-    // ~/.config/git/attributes), would otherwise rewrite the patched files' line endings.
-    run('git', ['-c', 'core.autocrlf=false', '-c', `core.attributesFile=${EMPTY_CONFIG_PATH}`, 'apply', patchPath], work)
-    run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
-    assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
-
-    run('npm', ['pack', join(work, 'package'), '--pack-destination', rebuilt, '--ignore-scripts'], ROOT)
-    const generated = join(rebuilt, basename(outputPath))
-    console.log(`${spec.output}: content verified; reproducible archive ${sha256(generated)}`)
-  } finally {
-    rmSync(work, { recursive: true, force: true })
+    // Older checkouts may retain converted patches despite the current -text attributes.
+    if (readFileSync(patchPath).includes(0x0d)) {
+      throw new Error(`Vendor patch has CRLF line endings from a converted checkout: vendor/${spec.patch}. Delete vendor/patches/*.patch and run git checkout -- vendor/patches`)
+    }
+    const work = mkdtempSync(join(tmpdir(), 'gooeypi-vendor-patch-'))
+    try {
+      const reviewed = join(work, 'reviewed')
+      mkdirSync(reviewed)
+      run('tar', ['-xzf', basePath, '-C', work], ROOT)
+      run('git', ['-c', 'core.autocrlf=false', '-c', `core.attributesFile=${EMPTY_CONFIG_PATH}`, 'apply', patchPath], work)
+      run('tar', ['-xzf', outputPath, '-C', reviewed], ROOT)
+      assertTreeMatches(join(work, 'package'), join(reviewed, 'package'))
+      console.log(`${spec.output}: content verified against ${spec.patch}`)
+    } finally {
+      rmSync(work, { recursive: true, force: true })
+    }
   }
 }
+
+if (import.meta.main) verifyVendorPatches()

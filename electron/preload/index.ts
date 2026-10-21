@@ -70,6 +70,10 @@ const api: PrimeWorkApi = {
     archive: (filePath, archived) => invoke('sessions:archive', filePath, archived),
     onChanged: (callback) => subscribe<SessionChangeEvent>('sessions:changed', callback),
   },
+  subagents: {
+    list: (parent, harness) => invoke('subagents:list', parent, harness),
+    history: (parent, childId, options, harness) => invoke('subagents:history', parent, childId, options, harness),
+  },
   agent: {
     start: (options) => invoke('agent:start', options),
     command: (runtimeId, command) => invoke('agent:command', runtimeId, command),

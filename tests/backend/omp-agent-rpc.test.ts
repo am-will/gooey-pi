@@ -25,6 +25,8 @@ afterEach(async () => {
 })
 
 interface FakeOmpOptions {
+  sessionFile?: string
+  subagents?: unknown[]
   /** JavaScript statements the fake runs after acknowledging a prompt. */
   promptScript?: string
   /** When false the fake rejects negotiate_protocol like an unsupported version. */
@@ -70,12 +72,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (command.type === 'get_state') {
     send({ id: command.id, type: 'response', command: 'get_state', success: true, data: {
-      sessionId: 'omp-session', isStreaming: streaming, isCompacting: false, thinkingLevel: 'medium',
+      sessionId: 'omp-session', sessionFile: ${JSON.stringify(options.sessionFile)}, isStreaming: streaming, isCompacting: false, thinkingLevel: 'medium',
       fastModeEnabled: true, model: { provider: 'openai-codex', id: 'gpt-5.6-luna', name: 'Luna GPT-5.6' },
       contextUsage: contextUsage(),
       queuedMessageCount: ${options.queuedMessageCount ?? 0},
       ...(sessionActions ? { sessionActions } : {}),
     } })
+  } else if (command.type === 'get_subagents') {
+    send({ id: command.id, type: 'response', command: 'get_subagents', success: true, data: { subagents: ${JSON.stringify(options.subagents ?? [])} } })
   } else if (command.type === 'get_session_stats') {
     send({ id: command.id, type: 'response', command: 'get_session_stats', success: true, data: { contextUsage: contextUsage(), tokens: { input: 9000, output: 3000, cacheRead: 0, cacheWrite: 0, total: 12000 } } })
   } else if (command.type === 'branch' || command.type === 'get_branch_messages') {
@@ -957,5 +961,22 @@ describe('OMP RPC chunked frames', () => {
     expect(view.chunks.sweepTimer).toBeNull()
     expect(timing.activeTimers()).toHaveLength(0)
     expect(events.some((event) => event.type === 'transport_limit')).toBe(false)
+  })
+})
+
+
+describe('main-owned OMP child metadata', () => {
+  it('queries the matching busy parent without exposing a generic renderer command', async () => {
+    const sessionFile = '/tmp/authorized-omp-parent.jsonl'
+    const subagents = [{ id: 'child', sessionFile: '/tmp/authorized-omp-parent/child.jsonl', status: 'running', agent: 'reviewer' }]
+    const fake = fakeOmpAgent({ sessionFile, subagents, promptScript: "streaming = true; send({ type: 'agent_start' })" })
+    const manager = ompManager(fake.executable)
+    const runtime = await manager.start({ cwd: fake.cwd, sessionPath: sessionFile })
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'Start' })
+    await manager.command(runtime.runtimeId, { type: 'get_state' })
+    expect(manager.getForSession(sessionFile)?.isStreaming).toBe(true)
+    expect(await manager.readOmpSubagents(sessionFile)).toEqual({ subagents })
+    expect(await manager.readOmpSubagents('/tmp/unrelated-parent.jsonl')).toBeUndefined()
+    await expect(manager.command(runtime.runtimeId, { type: 'get_subagents' })).rejects.toThrow()
   })
 })

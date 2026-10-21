@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../src/App'
 import { DEFAULT_SETTINGS } from '../../src/lib/data'
-import type { AppMeta, PrimeModelCatalog, PrimeModelDescriptor, PrimeWorkApi, ProjectRecord, RuntimeInfo, SessionRecord } from '../../src/types/api'
+import type { AppMeta, PrimeModelCatalog, PrimeModelDescriptor, PrimeWorkApi, ProjectRecord, RuntimeInfo, SessionRecord, TranscriptMessage } from '../../src/types/api'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -42,14 +42,14 @@ let container: HTMLDivElement
 let root: Root
 
 /** A desktop bridge whose harness writes the started session once its runtime runs. */
-function installBridge(projects: ProjectRecord[]) {
-  const settings = { ...DEFAULT_SETTINGS, activeHarness: 'prime' as const }
-  let catalog: SessionRecord[] = []
+function installBridge(projects: ProjectRecord[], initialCatalog: SessionRecord[] = []) {
+  const settings = { ...DEFAULT_SETTINGS, activeHarness: projects[0]?.harness ?? 'prime' }
+  let catalog: SessionRecord[] = initialCatalog
   let resolveStart!: (runtime: RuntimeInfo) => void
   const start = vi.fn(() => new Promise<RuntimeInfo>((resolve) => { resolveStart = resolve }))
   const bridge = {
     app: {
-      getMeta: vi.fn(async () => meta),
+      getMeta: vi.fn(async () => settings.activeHarness === 'omp' ? { ...meta, harnesses: { ...meta.harnesses, omp: { path: '/usr/bin/omp', version: 'test' } } } : meta),
       refreshHarnesses: vi.fn(async () => ({ meta, settings })),
       openExternal: vi.fn(async () => true),
       revealPath: vi.fn(async () => true),
@@ -76,6 +76,10 @@ function installBridge(projects: ProjectRecord[]) {
       followUp: vi.fn(async () => false),
       rename: vi.fn(async () => true),
       onChanged: vi.fn(() => () => undefined),
+    },
+    subagents: {
+      list: vi.fn().mockResolvedValue({ supported: true, children: [], truncated: false }),
+      history: vi.fn().mockResolvedValue({ messages: [] as TranscriptMessage[], newerCursor: 'tail', reset: false, truncated: false }),
     },
     agent: {
       start,
@@ -183,4 +187,36 @@ describe('new chat view in App', () => {
     expect(container.querySelector('.conversation-pane .transcript')).toBe(transcript)
     expect(transcript.textContent).toContain('Build the sidebar')
   })
+})
+
+
+it('opens an OMP child history beside the same parent transcript and composer', async () => {
+  const harness = installBridge([{ ...project, harness: 'omp' }], [{ ...started, harness: 'omp' }])
+  harness.bridge.subagents.list.mockResolvedValue({ supported: true, children: [{ id: 'child-one', title: 'Review Git', status: 'running', updatedAt: started.updatedAt, task: 'Inspect staging.' }], truncated: false })
+  harness.bridge.subagents.history.mockResolvedValue({ messages: [{ id: 'child-message', role: 'assistant', parts: [{ type: 'text', text: 'Child history result.' }] }], newerCursor: 'tail', reset: false, truncated: false })
+  await import('../../src/components/Transcript')
+  await act(async () => root.render(<App />))
+  const child = await waitFor(() => container.querySelector<HTMLButtonElement>('.child-session-row'))
+  const textarea = await waitFor(() => container.querySelector<HTMLTextAreaElement>('.conversation-pane textarea'))
+  const transcript = await waitFor(() => container.querySelector('.conversation-pane .transcript'))
+  const parent = container.querySelector('.session-row-wrap.is-selected')
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'Keep this parent draft')
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const parentReads = harness.bridge.sessions.read.mock.calls.length
+  await act(async () => child.click())
+  await waitFor(() => container.querySelector('.child-history-pane')?.textContent?.includes('Child history result.'))
+  expect(container.querySelector('.conversation-pane .transcript')).toBe(transcript)
+  expect(container.querySelector('.conversation-pane textarea')).toBe(textarea)
+  expect(textarea.value).toBe('Keep this parent draft')
+  expect(container.querySelector('.session-row-wrap.is-selected')).toBe(parent)
+  expect(container.querySelectorAll('textarea')).toHaveLength(1)
+  expect(harness.bridge.agent.start).not.toHaveBeenCalled()
+  expect(harness.bridge.agent.command).not.toHaveBeenCalled()
+  expect(harness.bridge.sessions.read).toHaveBeenCalledTimes(parentReads)
+  expect(harness.bridge.subagents.history).toHaveBeenCalledWith(started.filePath, 'child-one', undefined, 'omp')
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close child history"]')!.click())
+  expect(container.querySelector('.child-history-pane')).toBeNull()
+  expect(textarea.value).toBe('Keep this parent draft')
 })

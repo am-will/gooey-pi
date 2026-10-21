@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { TitleToolbar } from '@/components/TitleToolbar'
 import type { ProjectScriptKind } from '@/components/ProjectRunControl'
@@ -28,7 +27,8 @@ import { useAppSettings } from '@/hooks/useAppSettings'
 import { useAppUpdates } from '@/hooks/useAppUpdates'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import { useBrowserAnnotations } from '@/hooks/useBrowserAnnotations'
-import { useComposerDockHeight } from '@/hooks/useComposerDockHeight'
+import { ConversationDock, SessionWorkspace } from '@/components/SessionWorkspace'
+import { useChildWorkspace } from '@/hooks/useChildWorkspace'
 import { useExtensionUi } from '@/hooks/useExtensionUi'
 import { useHarnessRefresh } from '@/hooks/useHarnessRefresh'
 import { INSPECTOR_DEFAULT, INSPECTOR_MIN, TERMINAL_DEFAULT, TERMINAL_MIN, usePanelLayout } from '@/hooks/usePanelLayout'
@@ -88,7 +88,6 @@ type ProjectScriptRunOutcome = { cancelled: true } | { exitCode: number }
 
 
 export default function App() {
-  const composerDockRef = useComposerDockHeight()
   const bridge = hasBridge() ? window.prime : null
   const initialProject = bridge ? undefined : SAMPLE_PROJECTS[0]
   const initialSession = bridge ? undefined : SAMPLE_SESSIONS[0]
@@ -240,7 +239,8 @@ export default function App() {
     terminalOpen, view,
   })
   const sidebarVisible = settingsState.sidebarOpen && !layout.sidebarSuppressed
-  const inspectorVisible = settingsState.inspectorOpen && !layout.inspectorSuppressed
+  const childHistory = useChildWorkspace({ bridge, parent: activeSession, harness: activeHarness, visible: view === 'session', rosterVisible: sidebarVisible, compact: layout.compactLayout, setSidebarOpen: settingsState.setSidebarOpen })
+  const inspectorVisible = settingsState.inspectorOpen && !layout.inspectorSuppressed && !childHistory.isOpen
   const extension = useExtensionUi({
     bridge, askUserTimeoutMs: settingsState.settings.askUserTimeoutMs, activeRuntimeId: workspace.runtime?.runtimeId, runtimeSessionsRef: workspace.runtimeSessionsRef,
     setSessions, setRuntime: workspace.setRuntime, reportError,
@@ -342,7 +342,7 @@ export default function App() {
     settingsState.selectInspectorTab('browser')
   }, [agentBrowser.activityEvent, activeRuntimeSessionFile, activeSessionFilePath, settingsState.setInspectorOpen, settingsState.selectInspectorTab])
   useEffect(() => { if (!activeAgentTabs.length) setAgentPreviewSelected(true) }, [activeAgentTabs.length])
-  const agentTabVisible = view === 'session' && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
+  const agentTabVisible = view === 'session' && !childHistory.isOpen && settingsState.inspectorOpen && settingsState.inspectorTab === 'browser' && !agentPreviewSelected && activeAgentTabId !== null
   const pluginScope = activeProject?.primaryFolder && !activeProject.inferred ? activeProject.primaryFolder : undefined
   const pluginSkills = usePluginSkills({ bridge, harness: activeHarness, scope: pluginScope, generation: workspace.workspaceGeneration, initialSkills: bridge ? [] : SAMPLE_SKILLS, reportError })
   const refreshDetectedHarnesses = useHarnessRefresh({
@@ -715,25 +715,25 @@ export default function App() {
       }} onOpenDocs={() => openExternal(HARNESS_PROVIDER_DOCS[activeHarness])} /> : null
 
   return <I18nProvider preference={settingsState.settings.locale}><div className="app-shell" aria-busy={!initialized} data-platform={platform} data-ready={initialized ? 'true' : 'false'}>
-    {sidebarVisible && initialized ? <Sidebar projects={projects} sessions={sessions} clearedAttention={clearedAttention} activeProjectId={activeProject?.id} activeSessionId={workspace.activeSessionId} activeView={view} activeHarness={activeHarness} harnesses={meta?.harnesses ?? null} updateState={appUpdates.state} onUpdateAction={appUpdates.act} onSelectHarness={selectHarness} projectSortMode={settingsState.settings.projectSortMode} {...sidebarActions} overlay={layout.compactLayout} platform={platform} /> : null}
+    {sidebarVisible && initialized ? <Sidebar projects={projects} sessions={sessions} childRoster={childHistory.roster} clearedAttention={clearedAttention} activeProjectId={activeProject?.id} activeSessionId={workspace.activeSessionId} activeView={view} activeHarness={activeHarness} harnesses={meta?.harnesses ?? null} updateState={appUpdates.state} onUpdateAction={appUpdates.act} onSelectHarness={selectHarness} projectSortMode={settingsState.settings.projectSortMode} {...sidebarActions} overlay={layout.compactLayout} platform={platform} /> : null}
     {sidebarVisible && initialized ? <button type="button" className="panel-scrim panel-scrim--sidebar" aria-label={t('app.scrim.closeSidebar')} onClick={toggleSidebar} /> : null}
     <div className="workbench" inert={layout.compactLayout && sidebarVisible ? true : undefined}>
       <TitleToolbar project={view === 'session' ? activeProject : undefined} gitBranch={git.branch} view={view} productName={HARNESS_PRODUCT_NAMES[activeHarness]} sidebarOpen={sidebarVisible} inspectorOpen={inspectorVisible} terminalOpen={terminalOpen} voiceOpen={voiceOrbOpen} activeProjectScriptKind={activeProjectScriptKind(activeProjectScriptRun, activeProject?.id)} onRunProjectScript={startProjectScript} onStopProjectScript={stopProjectScript} onSaveProjectScripts={saveProjectScripts} onToggleSidebar={toggleSidebar} onToggleInspector={toggleInspector} onToggleTerminal={toggleTerminal} onToggleVoice={toggleVoice} onOpenBrowser={openBrowser} platform={platform} />
-      <div className="workbench__content">{view === 'session' ? <div ref={layout.workspaceRowRef} className="session-workspace" style={{ '--inspector-width': `${layout.inspectorWidth}px`, '--terminal-height': `${layout.terminalHeight}px` } as CSSProperties}>
+      <div className="workbench__content">{view === 'session' ? <SessionWorkspace layout={layout} childPane={childHistory.pane}>
         <div ref={layout.sessionWorkspaceRef} className="conversation-column">
           <main className="conversation-pane">
             <Suspense fallback={<LoadingPanel label="app.loading.conversation" />}><Transcript key={workspace.viewKey} messages={workspace.messages} git={git} harness={activeHarness} loading={workspace.loadingSession} active={busy || activeSession?.status === 'running'} showReasoning={settingsState.settings.showReasoningSummaries} showTools={settingsState.settings.showToolCalls} onOpenChanges={openChanges} onSuggestion={(prompt) => { void sendPrompt(prompt).catch(() => undefined) }} suggestionsDisabled={!activeProject || workspace.loadingSession || submitting} showPinnedChanges={false} bottomDockHasChanges={Boolean(git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed)} queuedMessageCount={queuedMessages.length + harnessQueuedMessageCount} onOpenSessionReference={(sessionId, harness) => { const session = sessions.find((candidate) => candidate.id === sessionId && candidate.harness === harness && !candidate.archived && candidate.depth === 0); if (session) void selectSession(session); else setToast('That referenced session is archived or no longer available.') }} /></Suspense>
-            <div ref={composerDockRef} className="conversation-bottom-dock">
+            <ConversationDock>
               {git.files.length && settingsState.settings.showFileChangesPopup && !changesCardDismissed ? <ChangesCard git={git} onOpenChanges={openChanges} onClose={() => setChangesCardDismissed(true)} /> : null}
               <Composer key={workspaceViewKey} draftKey={workspace.activeSessionId ? `${activeProject?.id ?? 'no-project'}:${workspace.activeSessionId}` : `${activeProject?.id ?? 'no-project'}:new`} busy={busy} submitting={submitting} loading={workspace.loadingSession} disabled={!activeProject} messageEnterAction={settingsState.settings.messageEnterAction} voice={bridge?.voice} transcriptionProvider={settingsState.settings.voiceTranscriptionProvider} model={provider.model} effort={provider.effort} modelsByProvider={provider.modelsByProvider} providers={provider.catalog?.providers ?? EMPTY_PROVIDERS} reasoningLevels={provider.reasoningLevels} fast={provider.fast} fastSupported={Boolean(provider.selectedModel?.fastModeSupported) && harnessOffersFastMode(activeHarness, meta?.harnesses.prime.implementation)} fastAvailable={workspace.runtime?.fastModeAvailable !== false} checkoutCatalog={checkoutCatalog} checkoutLabel={git.branch ?? activeProject?.gitBranch ?? activeProject?.name} checkoutsLoading={checkoutsLoading} onExecuteCheckout={bridge && activeProject && !activeProject.inferred && checkoutCatalog ? executeCheckout : undefined} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} harness={activeHarness} imageInputSupported={Boolean(provider.selectedModel?.input.includes('image'))} contextUsage={workspace.runtime?.contextUsage} sessionUsage={workspace.runtime?.sessionUsage} executingModel={workspace.runtime?.executingModel} skills={pluginSkills.skills} sessions={mentionableSessions} annotations={browserAnnotations.annotations} terminalSelection={terminalSelection} getTerminalContext={getTerminalContext} queuedMessages={queuedMessages} harnessQueuedMessageCount={harnessQueuedMessageCount} onDeleteQueuedMessage={removeQueuedMessage} onEditQueuedMessage={removeQueuedMessage} sendSignal={browserAnnotations.sendSignal} onModelChange={provider.changeModel} onEffortChange={provider.changeEffort} onFastChange={provider.changeFast} onSend={sendPrompt} onStop={stopRuntime} onRemoveAnnotation={browserAnnotations.remove} onClearAnnotations={browserAnnotations.clear} onClearTerminalSelection={clearTerminalSelection} />
-            </div>
+            </ConversationDock>
           </main>
           {terminalSessions.map((terminal) => <Suspense key={terminal.id} fallback={terminal.id === activeTerminalSession?.id ? <TerminalLoadingPanel /> : null}><TerminalDrawer ref={(handle) => { if (handle) terminalDrawerRefs.current.set(terminal.id, handle); else terminalDrawerRefs.current.delete(terminal.id) }} visible={terminal.id === activeTerminalSession?.id} cwd={terminal.cwd} sessionPath={terminal.sessionPath} shell={settingsState.settings.terminalShell} initialCommand={terminal.initialCommand} height={layout.terminalHeight} minHeight={TERMINAL_MIN} maxHeight={layout.terminalMax} defaultHeight={TERMINAL_DEFAULT} onHeightChange={layout.setTerminalHeight} onClose={() => closeTerminal(terminal.id)} onError={reportError} onInitialCommandConsumed={() => setTerminalSessions((current) => current.map((item) => item.id === terminal.id ? { ...item, initialCommand: undefined } : item))} onOpenLink={openTerminalLink} onReady={() => setTerminalDrawerRevision((revision) => revision + 1)} onSelectionChange={(selection) => { if (terminal.id === activeTerminalSession?.id) setTerminalSelection(selection) }} /></Suspense>)}
         </div>
           {inspectorVisible ? <ResizeHandle orientation="vertical" label={t('app.resize.inspector')} value={layout.inspectorWidth} min={INSPECTOR_MIN} max={layout.inspectorMax} defaultValue={INSPECTOR_DEFAULT} onChange={layout.setInspectorWidth} /> : null}
           {inspectorVisible ? <Suspense fallback={<LoadingPanel label="app.loading.inspector" />}><Inspector key={`inspector-${browserGeneration}`} activeTab={settingsState.inspectorTab} onTabChange={settingsState.selectInspectorTab} onClose={toggleInspector} agentName={HARNESS_AGENT_NAMES[activeHarness]} shortName={HARNESS_SHORT_NAMES[activeHarness]} project={activeProject} cwd={activeCwd} runtime={workspace.runtime} messages={settingsState.inspectorTab === 'summary' ? workspace.messages : EMPTY_MESSAGES} git={git} automations={inspectorAutomations} heartbeats={inspectorHeartbeats} onOpenAutomation={openAutomation} browserHome={settingsState.settings.browserHome} browserNavigationRequest={browserNavigationRequest} onBrowserNavigationRequestHandled={handleBrowserNavigationRequest} browserAnnotations={browserAnnotations} agentBrowserTabs={activeAgentTabs} activeAgentTabId={activeAgentTabId} agentPreviewSelected={agentPreviewSelected} onSelectAgentTab={selectAgentTab} onCloseAgentTab={agentBrowser.close} onShowBrowserPreview={showBrowserPreview} onAgentSlotRect={setAgentSlotRect} agentSessionKey={activeRuntimeSessionFile ?? activeSessionFilePath} onPreviewContext={previewContext} previewPointerEvent={agentBrowser.pointerEvent?.tabId === 'preview' ? agentBrowser.pointerEvent : null} onNavigateAgentTab={navigateAgentTab} onRefreshGit={refreshGit} onOpenExternal={openExternal} onRevealPath={revealInFileManager} onGrantProject={grantActiveProject} overlay={layout.compactLayout} platform={platform} /></Suspense> : null}
           {inspectorVisible ? <button type="button" className="panel-scrim panel-scrim--inspector" aria-label={t('app.scrim.closeInspector')} onClick={toggleInspector} /> : null}
-      </div> : <Suspense fallback={<LoadingPanel label={VIEW_LOADING_KEYS[view]} />}>{page}</Suspense>}</div>
+      </SessionWorkspace> : <Suspense fallback={<LoadingPanel label={VIEW_LOADING_KEYS[view]} />}>{page}</Suspense>}</div>
     </div>
     {voiceOrbOpen && bridge ? <Suspense fallback={null}><VoiceOrb voice={bridge.voice} harness={activeHarness} onClose={() => { setFocusPetVoiceControl(false); setVoiceOrbOpen(false); setRestorePetVoiceFocus(settingsState.settings.petEnabled) }} onTaskStarted={handleVoiceTaskStarted} pet={{ pets: bridge.pets, petId: settingsState.settings.petId, petSize: settingsState.settings.petSize, agentBusy: busy, reduceMotion: settingsState.settings.reduceMotion }} focusPetControl={focusPetVoiceControl} onPetControlFocused={() => setFocusPetVoiceControl(false)} /></Suspense> : null}
     {settingsState.settings.petEnabled && bridge && !voiceOrbOpen ? <Suspense fallback={null}><DesktopPet pets={bridge.pets} petId={settingsState.settings.petId} petSize={settingsState.settings.petSize} agentBusy={busy} voiceActive={false} reduceMotion={settingsState.settings.reduceMotion} focusVoiceControl={restorePetVoiceFocus} onVoiceControlFocused={() => setRestorePetVoiceFocus(false)} onDismiss={() => { setRestorePetVoiceFocus(false); void settingsState.updateSettings({ petEnabled: false }) }} onOpenVoice={() => { setRestorePetVoiceFocus(false); setFocusPetVoiceControl(true); setVoiceOrbOpen(true) }} /></Suspense> : null}

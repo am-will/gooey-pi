@@ -223,6 +223,18 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.agents.start).not.toHaveBeenCalled()
   })
 
+  it('gates child history to OMP and authorizes the parent before lazy discovery', async () => {
+    for (const harnessId of ['prime', 'pi']) {
+      await expect(harness.invoke('subagents:list', PRIME_SESSION, harnessId)).resolves.toMatchObject({ supported: false })
+      await expect(harness.invoke('subagents:history', PRIME_SESSION, 'opaque', {}, harnessId)).rejects.toThrow('OMP only')
+    }
+    await expect(harness.invoke('subagents:list', OMP_SESSION, 'OMP')).rejects.toThrow('Invalid harness')
+    await expect(harness.invoke('subagents:history', OMP_SESSION, 'opaque', {}, 'OMP')).rejects.toThrow('Invalid harness')
+    await expect(harness.invoke('subagents:list', PRIME_SESSION, 'omp')).rejects.toThrow('outside')
+    expect(harness.services.omp.sessions.requireSessionPath).toHaveBeenCalledWith(PRIME_SESSION)
+    expect(harness.services.sessions.requireSessionPath).not.toHaveBeenCalled()
+  })
+
   it('routes agent:start by harness and strips the routing field before the manager sees it', async () => {
     await expect(harness.invoke('agent:start', { cwd: '/work', harness: 'omp' })).resolves.toEqual({ started: 'omp', options: { cwd: '/work' } })
     expect(harness.services.omp.agents.start).toHaveBeenCalledWith({ cwd: '/work' })
