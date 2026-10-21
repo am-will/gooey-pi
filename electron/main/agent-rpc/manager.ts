@@ -160,16 +160,16 @@ export class AgentRpcManager {
       try { this.runtimeEndListener(runtimeEnvironment, info) } catch { /* capability cleanup must never fail runtime cleanup */ }
     }
     try {
-    workspaceUse = await this.beginWorkspaceUse(
-      cwd,
-      { kind: 'agent', harness: this.adapter.id, runtimeId: `starting-${Date.now()}` },
-      async () => {
-        if (!runtime) return false
-        const retired = await this.retireForCheckout(runtime)
-        if (retired) workspaceUse?.release()
-        return retired
-      },
-    )
+      workspaceUse = await this.beginWorkspaceUse(
+        cwd,
+        { kind: 'agent', harness: this.adapter.id, runtimeId: `starting-${Date.now()}` },
+        async () => {
+          if (!runtime) return false
+          const retired = await this.retireForCheckout(runtime)
+          if (retired) workspaceUse?.release()
+          return retired
+        },
+      )
       this.requireOpen()
       const args = adapter.buildStartArgs({
         cwd,
