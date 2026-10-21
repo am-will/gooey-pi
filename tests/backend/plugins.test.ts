@@ -106,6 +106,16 @@ describe('PluginService discovery', () => {
     expect((await service.list()).skills.find((item) => item.name === 'Example')?.description).toBe(expected)
   })
 
+  it('observes parallel discovery failures even when built-in discovery throws synchronously', async () => {
+    const service = new PluginService(null, async (path) => resolve(path), {
+      agentDir: temp(),
+      discover: async () => { throw new Error('Discovery failed') },
+      builtInSkills: () => { throw new Error('Built-in discovery failed') },
+    })
+    await expect(service.list()).rejects.toThrow(/discovery failed/i)
+    await new Promise<void>((resolveTurn) => setImmediate(resolveTurn))
+  })
+
   it('reads dynamic bundled capability state on each refreshed catalog', async () => {
     const root = temp()
     const agentDir = join(root, 'agent')
