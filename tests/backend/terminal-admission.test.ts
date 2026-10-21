@@ -172,3 +172,26 @@ describe('terminal raw input', () => {
     expect(terminal.write).toHaveBeenCalledOnce()
   })
 })
+
+
+describe('interactive terminal colors', () => {
+  it.each([undefined, '1', ''])('respects an explicit user NO_COLOR=%s without forcing piped color', async (preference) => {
+    const previous = process.env.NO_COLOR
+    try {
+      if (preference === undefined) delete process.env.NO_COLOR
+      else process.env.NO_COLOR = preference
+      const cwd = directory()
+      const service = new TerminalService(async () => cwd, () => shell)
+      services.push(service)
+      await service.create(owner(), { cwd })
+      const env = native.spawn.mock.calls[0][2].env as Record<string, string>
+      expect(env.NO_COLOR).toBe(preference)
+      expect(env.FORCE_COLOR).toBeUndefined()
+      expect(env.TERM).toBe('xterm-256color')
+      expect(env.COLORTERM).toBe('truecolor')
+    } finally {
+      if (previous === undefined) delete process.env.NO_COLOR
+      else process.env.NO_COLOR = previous
+    }
+  })
+})
