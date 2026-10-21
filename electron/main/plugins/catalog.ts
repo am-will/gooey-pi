@@ -14,8 +14,8 @@ import {
 } from '../../../src/lib/mcp-policy'
 import { HARNESSES } from '../harness'
 import { mapLimit } from '../lib/async'
-import { isPathWithin, isRecord } from '../validation'
-import { errorCode, readAtMost } from './file-io'
+import { errorCode, isPathWithin, isRecord } from '../validation'
+import { readAtMost } from './file-io'
 
 type Kind = SkillRecord['kind']
 type Location = SkillRecord['location']

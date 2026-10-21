@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -6,12 +6,30 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { PluginService, beginPluginDiscoveryShutdown } from '../../electron/main/plugins'
 import { removeMcpDefinition, updateMcpSettings, updateMcpState } from '../../electron/main/plugins/mcp'
 import { executePiPluginInstall, executePiPluginRemove } from '../../electron/main/plugins/package-execution'
+import { readAtMost } from '../../electron/main/plugins/file-io'
 import { ProjectService } from '../../electron/main/projects'
 import { JsonStateStore } from '../../electron/main/store'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'prime-work-mcp-')); dirs.push(dir); return dir }
+
+describe('bounded plugin file reads', () => {
+  it.skipIf(process.platform === 'win32')('rejects FIFOs without waiting for a writer', async () => {
+    const root = temp()
+    const fifo = join(root, 'config.json')
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+    await expect(readAtMost(fifo, 100)).rejects.toThrow('regular file')
+  })
+
+  it('rejects directories and bounds oversized ordinary files', async () => {
+    const root = temp()
+    await expect(readAtMost(root, 100)).rejects.toThrow('regular file')
+    const file = join(root, 'large.json')
+    writeFileSync(file, 'abcdef')
+    expect(await readAtMost(file, 3)).toEqual({ content: 'abc', truncated: true })
+  })
+})
 
 describe('OMP project package actions', () => {
   it.each(['enable', 'disable', 'remove'] as const)('runs %s within the authorized project', async (action) => {

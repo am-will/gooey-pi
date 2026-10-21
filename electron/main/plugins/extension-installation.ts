@@ -1,8 +1,8 @@
 import { lstatSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, extname, isAbsolute, join } from 'node:path'
 import type { ProcessOutcome } from '../../../src/types/api'
-import { isRecord, requireString } from '../validation'
-import { errorCode, readAtMost } from './file-io'
+import { errorCode, isRecord, requireString } from '../validation'
+import { readAtMost } from './file-io'
 import { prepareProjectSettingsPath } from './mcp'
 
 const EXTENSION_SUFFIXES = new Set(['.ts', '.js', '.mjs', '.cjs'])

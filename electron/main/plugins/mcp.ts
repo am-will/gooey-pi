@@ -4,8 +4,8 @@ import { lstat, mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { CapabilityMutationInput, HarnessId, McpConnectionInput, McpStateInput, ProcessOutcome } from '../../../src/types/api'
 import { isAppManageableLocalMcpKey, isNetworkMcpDefinition, MAX_MCP_DEFINITION_KEY_LENGTH, NETWORK_MCP_UNAVAILABLE_DETAIL, PRIME_MCP_MANAGEMENT_UNAVAILABLE_DETAIL } from '../../../src/lib/mcp-policy'
-import { isPathWithin, isRecord, requireString } from '../validation'
-import { errorCode, readAtMost } from './file-io'
+import { errorCode, isPathWithin, isRecord, requireString } from '../validation'
+import { readAtMost } from './file-io'
 
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
 const SETTINGS_LOCK_ATTEMPTS = 40
