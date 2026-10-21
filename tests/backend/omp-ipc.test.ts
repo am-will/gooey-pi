@@ -114,7 +114,7 @@ function buildServices() {
       requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
       list: vi.fn(() => [{ runtimeId: 'prime-runtime', harness: 'prime' }]),
     },
-    terminals: { ...serviceStub(), killForSession: vi.fn(async () => undefined) },
+    terminals: { ...serviceStub(), killOwner: vi.fn(async () => undefined), killForSession: vi.fn(async () => undefined) },
     git: serviceStub(),
     plugins: { ...serviceStub(), list: vi.fn(async () => 'prime-plugins'), install: vi.fn(async () => undefined), installExtension: vi.fn(async () => undefined), setMcpSupport: vi.fn(async () => undefined), connectMcp: vi.fn(async () => undefined), setMcpEnabled: vi.fn(async () => undefined), refresh: vi.fn(async () => 'prime-plugins') },
     providers: { ...serviceStub(), catalog: vi.fn(async (_force, disabled, disabledModels) => catalog('prime', disabled, disabledModels)), saveApiKey: vi.fn(async () => undefined) },
@@ -207,6 +207,15 @@ describe('harness-aware IPC routing', () => {
   afterEach(() => {
     harness.registration.dispose()
     for (const directory of fixtureDirs.splice(0)) rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('observes terminal cleanup rejection after revoking a renderer', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      harness.services.terminals.killOwner.mockRejectedValueOnce(new Error('PTY teardown failed'))
+      harness.registration.revoke(1)
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('PTY teardown failed')))
+    } finally { log.mockRestore() }
   })
 
   it('retires OMP runtime environments after approval mode changes', async () => {
