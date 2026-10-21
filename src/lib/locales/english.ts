@@ -331,6 +331,7 @@ export const englishCatalog = {
   'toast.compactionUnavailableExternal': 'Compaction is unavailable while this session is running outside GooeyPi.',
   'mcpPolicy.authSignIn': 'Network MCP authentication is managed outside GooeyPi. Use {name} directly to sign in to {server}.',
   'mcpPolicy.authNetwork': 'Network MCP authentication is managed outside GooeyPi. Use {name} directly to authenticate network MCP servers.',
+  'error.referencedSessionUnavailable': 'That referenced session is archived or no longer available.',
   'error.sessionNotInProject': 'This session is not contained by an available project.',
   'error.sessionRenameFailed': '{name} could not rename this session.',
   'error.projectRemoveFailed': 'This project could not be removed.',
