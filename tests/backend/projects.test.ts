@@ -65,6 +65,41 @@ function deferred<T>() {
 }
 
 describe('ProjectService list enrichment', () => {
+  it('skips discovery on an explicit cached authorization miss', async () => {
+    const { root, service } = setup()
+    const sessions = vi.fn(async () => [])
+    service.bindProviders({ sessions, branch: async () => undefined })
+    await expect(service.authorizeReadOnlyCwd(root, { refreshOnMiss: false })).rejects.toThrow(/not inside/)
+    expect(sessions).not.toHaveBeenCalled()
+  })
+
+  it('rejects coerced and relative inferred grants and file roots at the boundary', async () => {
+    const { service } = setup()
+    for (const input of [{ toString: () => '/tmp' }, 123, 'relative']) {
+      await expect(service.grantInferred(input)).rejects.toThrow()
+      await expect(service.listFiles(input)).rejects.toThrow()
+    }
+  })
+
+  it('recovers a writable root after a transient identity read failure without rebuilding unrelated roots', async () => {
+    const { root, store } = setup()
+    const other = join(root, '..', 'other'); mkdirSync(other)
+    const now = new Date().toISOString()
+    await store.update((state) => { for (const [index, path] of [root, other].entries()) state.projects.push({ id: `project-${index}`, harness: 'prime', name: 'Project', path, folders: [path], primaryFolder: path, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(path) }) })
+    let failOnce = false
+    const service = new ProjectService(store, () => null, 'prime', {
+      realpath,
+      lstat: async (path) => {
+        if (failOnce && path === realpathSync(root)) { failOnce = false; throw new Error('Transient I/O failure') }
+        return lstat(path, { bigint: true })
+      },
+    })
+    await service.list()
+    failOnce = true
+    await expect(service.authorizeCwd(root)).rejects.toThrow(/not inside/)
+    await expect(service.authorizeCwd(root, { refreshOnMiss: false })).resolves.toBe(realpathSync(root))
+  })
+
   it('coalesces concurrent denied read-only checks without branch enrichment', async () => {
     const { root, service } = setup()
     const sessionsStarted = deferred<void>()

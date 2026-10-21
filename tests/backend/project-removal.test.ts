@@ -28,6 +28,28 @@ function fixture() {
 }
 
 describe('project removal', () => {
+  it('does not republish a removed grant when another grant and list run during process teardown', async () => {
+    const { folder, service, store, session } = fixture()
+    const other = join(folder, '..', 'other-project'); mkdirSync(other)
+    const now = new Date().toISOString()
+    await store.update((state) => state.projects.push({ id: 'project-a', harness: 'prime', name: 'A', path: folder, folders: [folder], primaryFolder: folder, pinned: false, createdAt: now, lastOpenedAt: now, folderIdentities: identities(folder) }))
+    let entered!: () => void
+    let release!: () => void
+    const stopping = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    service.bindProviders({ sessions: async () => [{ ...session, projectPath: other }], branch: async () => undefined, stopProjectProcesses: async () => { entered(); await gate } })
+    await service.list()
+    const removing = service.remove('project-a')
+    try {
+      await stopping
+      await service.grantInferred(other)
+      await service.list()
+    } finally { release() }
+    expect(await removing).toBe(true)
+    await expect(service.authorizeCwd(folder)).rejects.toThrow(/not inside/)
+    await expect(service.authorizeCwd(other)).resolves.toBe(realpathSync(other))
+  })
+
   it('keeps a removed persisted project dismissed instead of immediately re-inferring it', async () => {
     const { folder, marker, store, service } = fixture()
     const now = new Date().toISOString()
