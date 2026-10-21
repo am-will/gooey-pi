@@ -391,7 +391,7 @@ export class PluginService {
         if (this.harness === 'omp') {
           const agentPath = resolveExecutable(this.agentPath)
           if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
-          return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source!, input.scope === 'project')
+          return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source!, safeProjectPath)
         }
         if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, input, (path) => this.settingsFingerprint(path), { agentName })
         const agentPath = resolveExecutable(this.agentPath)

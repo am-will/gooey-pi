@@ -13,6 +13,22 @@ const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'prime-work-mcp-')); dirs.push(dir); return dir }
 
+describe('OMP project package actions', () => {
+  it.each(['enable', 'disable', 'remove'] as const)('runs %s within the authorized project', async (action) => {
+    const root = temp()
+    const agentDir = join(root, 'agent')
+    const project = join(root, 'project')
+    const capture = join(root, 'action.json')
+    const executable = join(root, 'omp.cjs')
+    mkdirSync(agentDir); mkdirSync(project)
+    writeFileSync(executable, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }))\n`)
+    chmodSync(executable, 0o755)
+    const service = new PluginService(executable, async (path) => realpathSync(path), { agentDir, harness: 'omp' })
+    expect((await service.mutateCapability({ kind: 'package', name: 'tools', source: 'npm:tools', action, scope: 'project', projectPath: project })).ok).toBe(true)
+    expect(JSON.parse(readFileSync(capture, 'utf8'))).toEqual({ args: ['plugin', action === 'remove' ? 'uninstall' : action, 'tools', '--json', '--scope', 'project'], cwd: realpathSync(project) })
+  })
+})
+
 describe('PluginService discovery', () => {
   it('reads dynamic bundled capability state on each refreshed catalog', async () => {
     const root = temp()

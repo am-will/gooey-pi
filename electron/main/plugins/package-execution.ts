@@ -84,10 +84,10 @@ export async function executeOmpPluginInstall(ompPath: string, source: string): 
   return processOutcome(result, stripAnsi(`${result.stdout}${result.stderr}`).trim())
 }
 
-export async function executeOmpPluginAction(ompPath: string, action: 'enable' | 'disable' | 'uninstall', source: string, project = false): Promise<ProcessOutcome> {
+export async function executeOmpPluginAction(ompPath: string, action: 'enable' | 'disable' | 'uninstall', source: string, localCwd?: string): Promise<ProcessOutcome> {
   const target = ompTarget(source)
-  const args = ['plugin', action, target, '--json', ...(project ? ['--scope', 'project'] : [])]
-  const result = await runProcess(ompPath, args, { timeoutMs: 10 * 60_000, maxBytes: 8 * 1024 * 1024 })
+  const args = ['plugin', action, target, '--json', ...(localCwd ? ['--scope', 'project'] : [])]
+  const result = await runProcess(ompPath, args, { cwd: localCwd, timeoutMs: 10 * 60_000, maxBytes: 8 * 1024 * 1024 })
   return processOutcome(result, stripAnsi(`${result.stdout}${result.stderr}`).trim())
 }
 
