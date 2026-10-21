@@ -8,6 +8,8 @@ export interface SessionMention {
   session: SessionRecord
 }
 
+export const mentionLabelKey = (label: string): string => label.trim().toLocaleLowerCase()
+
 export const MENTION_QUERY = /(?:^|\s)@([^@\n]*)$/
 
 /** Only text before the caret participates in the active autocomplete query. */
@@ -36,7 +38,7 @@ export function findSessionMentions(value: string, sessions: readonly SessionRec
   const candidates = [...sessions].filter((session) => session.title.trim()).sort((left, right) => {
     const lengthDifference = right.title.length - left.title.length
     if (lengthDifference) return lengthDifference
-    const key = left.title.trim().toLocaleLowerCase()
+    const key = mentionLabelKey(left.title)
     const preferred = preferredIds.get(key)
     return preferred === left.id ? -1 : preferred === right.id ? 1 : 0
   })

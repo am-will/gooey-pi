@@ -23,7 +23,7 @@ import type {
   VoiceTranscriptionProvider,
 } from '@/types/api'
 import { composePrompt } from '@/lib/composer-prompt'
-import { activeMention, findSessionMentions } from '@/lib/session-mentions'
+import { activeMention, findSessionMentions, mentionLabelKey } from '@/lib/session-mentions'
 import { clearComposerDraft, readComposerDraft, restoreComposerDraft, saveComposerDraft } from '@/lib/composer-draft'
 import { contextDialLabel } from '@/lib/format-cost'
 import { useI18n, type MessageKey } from '@/lib/i18n'
@@ -228,7 +228,7 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     setSessionReferenceIds((current) => {
       if (!current.size) return current
-      const mentionedTitles = new Set(findSessionMentions(value, sessions, current).map(({ session }) => session.title.trim().toLocaleLowerCase()))
+      const mentionedTitles = new Set(findSessionMentions(value, sessions, current).map(({ session }) => mentionLabelKey(session.title)))
       const next = new Map([...current].filter(([title]) => mentionedTitles.has(title)))
       return next.size === current.size ? current : next
     })
@@ -390,7 +390,7 @@ export const Composer = memo(function Composer({
       setValue(`${value.slice(0, start)}${label} ${value.slice(caretPos)}`)
     }
     if (session) {
-      const key = session.title.trim().toLocaleLowerCase()
+      const key = mentionLabelKey(session.title)
       setSessionReferenceIds((current) => new Map(current).set(key, session.id))
     }
     setMenu(null)
