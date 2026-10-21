@@ -19,7 +19,8 @@ export interface AppMeta {
   harnesses: Record<HarnessId, HarnessStatus>
 }
 
-export type ApplicationMenuName = 'file' | 'edit' | 'view' | 'window' | 'help'
+export const APPLICATION_MENU_NAMES = ['file', 'edit', 'view', 'window', 'help'] as const
+export type ApplicationMenuName = (typeof APPLICATION_MENU_NAMES)[number]
 
 export type AppUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'unsupported'
 

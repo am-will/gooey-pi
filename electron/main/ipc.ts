@@ -1,5 +1,5 @@
 import { ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import type { ApplicationMenuName, AppMeta, HarnessId, SessionChangeEvent, ThemeMode } from '../../src/types/api'
+import { APPLICATION_MENU_NAMES, HARNESS_IDS, THEME_MODES, type ApplicationMenuName, type AppMeta, type HarnessId, type SessionChangeEvent, type ThemeMode } from '../../src/types/api'
 import type { AgentRpcManager } from './agent-rpc'
 import { assertRendererCommand } from './agent-rpc/command-schema'
 import type { GitService } from './git'
@@ -20,7 +20,7 @@ import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
 import { createKeyedMutex } from './lib/async'
-import { requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { boundedErrorMessage, firstAccepted, isOneOf, requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -62,12 +62,12 @@ interface HarnessServices {
 /** Strict enum gate for the untrusted optional harness argument; absence means 'prime'. */
 function requireHarness(value: unknown): HarnessId {
   if (value === undefined) return 'prime'
-  if (value === 'prime' || value === 'omp' || value === 'pi') return value
+  if (isOneOf(HARNESS_IDS, value)) return value
   throw new TypeError('Invalid harness')
 }
 
 function requireApplicationMenu(value: unknown): ApplicationMenuName {
-  if (value === 'file' || value === 'edit' || value === 'view' || value === 'window' || value === 'help') return value
+  if (isOneOf(APPLICATION_MENU_NAMES, value)) return value
   throw new TypeError('Invalid application menu')
 }
 
@@ -77,7 +77,7 @@ function requireMenuCoordinate(value: unknown): number {
 }
 
 function requireResolvedTheme(value: unknown): Exclude<ThemeMode, 'system'> {
-  if (value === 'light' || value === 'dark') return value
+  if (isOneOf(THEME_MODES, value) && value !== 'system') return value
   throw new TypeError('Invalid resolved theme')
 }
 
@@ -94,7 +94,20 @@ export function isTrustedRendererUrl(url: string, expectedRendererUrl: string): 
   } catch { return false }
 }
 
+export function isTrustedContents(contents: WebContents, expectedUrl: string): boolean {
+  if (contents.isDestroyed()) return false
+  try { return isTrustedRendererUrl(contents.getURL(), expectedUrl) && isTrustedRendererUrl(contents.mainFrame.url, expectedUrl) } catch { return false }
+}
+
+function sendToTrustedRenderer(contents: WebContents | undefined, expectedUrl: string, channel: string, ...payload: unknown[]): void {
+  if (!contents || !isTrustedContents(contents, expectedUrl)) return
+  try { contents.send(channel, ...payload) } catch (error) {
+    console.warn(`GooeyPi renderer delivery failed (${channel}): ${boundedErrorMessage(error)}`)
+  }
+}
+
 export interface IpcRegistration {
+  broadcast(channel: string, ...payload: unknown[]): void
   authorize(webContents: WebContents): void
   revoke(webContentsId: number): void
   dispose(): void
@@ -128,10 +141,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const whenRendererReady = new Promise<void>((resolve) => { announceRendererReady = resolve })
 
   const verify = (event: IpcEvent): void => {
-    const trustedFrame = event.senderFrame === event.sender.mainFrame
-      && isTrustedRendererUrl(event.senderFrame.url, expectedRendererUrl)
-      && isTrustedRendererUrl(event.sender.getURL(), expectedRendererUrl)
-    if (closed || !authorized.has(event.sender.id) || event.sender.isDestroyed() || !trustedFrame) throw new Error('IPC sender is not authorized')
+    if (closed || authorized.get(event.sender.id) !== event.sender || !isTrustedContents(event.sender, expectedRendererUrl)
+      || event.senderFrame !== event.sender.mainFrame) throw new Error('IPC sender is not authorized')
   }
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
@@ -171,18 +182,12 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
    * substring checks). Paths no root accepts rethrow the Prime error, so
    * rejection shape and text are unchanged.
    */
-  const sessionsForPath = async (filePath: unknown): Promise<{ harness: HarnessId; service: SessionService }> => {
-    try {
-      await services.sessions.requireSessionPath(filePath)
-      return { harness: 'prime', service: services.sessions }
-    } catch (primeError) {
-      for (const harness of ['omp', 'pi'] as const) {
-        try { await sessionServices[harness].requireSessionPath(filePath) } catch { continue }
-        return { harness, service: sessionServices[harness] }
-      }
-      throw primeError
-    }
-  }
+  const sessionsForPath = (filePath: unknown): Promise<{ harness: HarnessId; service: SessionService }> =>
+    firstAccepted((['prime', 'omp', 'pi'] as const).map((harness) => async () => {
+      const service = sessionServices[harness]
+      await service.requireSessionPath(filePath)
+      return { harness, service }
+    }))
   /** OMP and pi credentials stay CLI-owned; desktop-only visibility is routed separately below. */
   const cliOwnedProviderAuth: Partial<Record<HarnessId, string>> = {
     omp: 'OMP provider authentication is managed by the omp CLI',
@@ -224,19 +229,15 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       () => services.pi.sessions.requireSessionPath(requested),
       () => services.pi.plugins.authorizeReveal(requested),
     ]
-    for (const authorize of authorizations) {
-      let authorized: string
-      try { authorized = await authorize() } catch { continue /* denial here defers to the next authorization domain */ }
-      try {
-        shell.showItemInFolder(authorized)
-        return true
-      } catch (error) {
-        console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
-        return false
-      }
+    let authorized: string
+    try { authorized = await firstAccepted(authorizations) } catch {
+      console.warn('Rejected app:reveal-path: no authorization domain covers the path')
+      return false
     }
-    console.warn('Rejected app:reveal-path: no authorization domain covers the path')
-    return false
+    try { shell.showItemInFolder(authorized); return true } catch (error) {
+      console.warn('Rejected app:reveal-path:', error instanceof Error ? error.message : error)
+      return false
+    }
   })
   handle('updates:get-state', () => services.updates.getState())
   handle('updates:check', () => services.updates.check())
@@ -481,27 +482,23 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   const broadcast = (channel: string, ...payload: unknown[]): void => {
     for (const [id, contents] of authorized) {
       if (contents.isDestroyed()) { authorized.delete(id); continue }
-      if (isTrustedRendererUrl(contents.getURL(), expectedRendererUrl)
-        && isTrustedRendererUrl(contents.mainFrame.url, expectedRendererUrl)) contents.send(channel, ...payload)
+      sendToTrustedRenderer(contents, expectedRendererUrl, channel, ...payload)
     }
   }
   const forwardSessionChange = (change: SessionChangeEvent): void => broadcast('sessions:changed', change)
   const unsubscribeSessionChanges = services.sessions.onDidChange(forwardSessionChange)
   const unsubscribeOmpSessionChanges = services.omp.sessions.onDidChange(forwardSessionChange)
   const unsubscribePiSessionChanges = services.pi.sessions.onDidChange(forwardSessionChange)
-  const scheduleSubscription = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
-  const unsubscribeScheduleChanges = typeof scheduleSubscription === 'function' ? scheduleSubscription : () => undefined
-  const browserSubscription = services.browser.onDidChange((state) => broadcast('browser:changed', state))
-  const unsubscribeBrowserChanges = typeof browserSubscription === 'function' ? browserSubscription : () => undefined
-  const pointerSubscription = services.browser.onPointer((event) => broadcast('browser:pointer', event))
-  const unsubscribeBrowserPointer = typeof pointerSubscription === 'function' ? pointerSubscription : () => undefined
-  const activitySubscription = services.browser.onActivity((event) => broadcast('browser:activity', event))
-  const unsubscribeBrowserActivity = typeof activitySubscription === 'function' ? activitySubscription : () => undefined
+  const unsubscribeScheduleChanges = services.schedules.onDidChange((change) => broadcast('schedules:changed', change))
+  const unsubscribeBrowserChanges = services.browser.onDidChange((state) => broadcast('browser:changed', state))
+  const unsubscribeBrowserPointer = services.browser.onPointer((event) => broadcast('browser:pointer', event))
+  const unsubscribeBrowserActivity = services.browser.onActivity((event) => broadcast('browser:activity', event))
 
   const registration: IpcRegistration = {
+    broadcast,
     whenRendererReady,
     authorize(webContents) { if (!closed) authorized.set(webContents.id, webContents) },
-    revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId) },
+    revoke(webContentsId) { loadedChildService?.revoke(webContentsId); authorized.delete(webContentsId); void services.terminals.killOwner(webContentsId).catch((error: unknown) => console.error(`GooeyPi terminal cleanup failed: ${boundedErrorMessage(error)}`)) },
     notifyHarnessesChanged() { broadcast('app:harnesses-changed') },
     dispose() {
       if (closed) return
@@ -512,10 +509,10 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       unsubscribeSessionChanges()
       unsubscribeOmpSessionChanges()
       unsubscribePiSessionChanges()
-      if (typeof unsubscribeScheduleChanges === 'function') unsubscribeScheduleChanges()
-      if (typeof unsubscribeBrowserChanges === 'function') unsubscribeBrowserChanges()
-      if (typeof unsubscribeBrowserPointer === 'function') unsubscribeBrowserPointer()
-      if (typeof unsubscribeBrowserActivity === 'function') unsubscribeBrowserActivity()
+      unsubscribeScheduleChanges()
+      unsubscribeBrowserChanges()
+      unsubscribeBrowserPointer()
+      unsubscribeBrowserActivity()
       for (const channel of invokeChannels) ipcMain.removeHandler(channel)
       // Event listeners are removed wholesale only for our private fixed channels.
       for (const channel of eventChannels) ipcMain.removeAllListeners(channel)

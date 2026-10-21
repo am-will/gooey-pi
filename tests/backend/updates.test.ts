@@ -17,6 +17,13 @@ afterEach(() => {
 })
 
 describe('automatic update service', () => {
+  it('observes a notification failure in a manual update check', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const check = createManualUpdateCheck(async () => ({ phase: 'idle' }), async () => { throw new Error('Dialog failed') })
+    check()
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('Dialog failed')))
+  })
+
   it('can cancel installation without losing the downloaded update', async () => {
     const updater = new FakeUpdater()
     const confirmInstall = vi.fn(async () => false)

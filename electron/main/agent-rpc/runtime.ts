@@ -144,8 +144,8 @@ export class RpcRuntime {
 
   /** Frozen shallow copy: nested state is replaced wholesale on update, and the IPC boundary clones for the renderer. */
   snapshot(): RuntimeInfo {
-    const pendingExtensionUi = this.pendingUi.list()
-    return Object.freeze({ ...this.info, ...(this.continuationPending || this.retryPending ? { isStreaming: true } : {}), ...(pendingExtensionUi.length ? { pendingExtensionUi } : {}) })
+    const { pendingExtensionUi, pendingExtensionUiGroups } = this.pendingUi.snapshot()
+    return Object.freeze({ ...this.info, ...(this.continuationPending || this.retryPending ? { isStreaming: true } : {}), pendingExtensionUi, pendingExtensionUiGroups })
   }
 
   async handshake(): Promise<RuntimeInfo> {
@@ -217,7 +217,7 @@ export class RpcRuntime {
     this.lastActivityAt = Date.now()
     if (command.type === 'extension_ui_response') {
       await this.transport.enqueue(`${JSON.stringify(command)}\n`).done
-      this.pendingUi.resolve(command.id)
+      this.pendingUi.resolve(command.id, command.cancelled === true)
       return { type: 'response', command: 'extension_ui_response', success: true }
     }
     if (command.type === 'compact') return this.compact(command)
@@ -491,7 +491,7 @@ export class RpcRuntime {
       this.manualCompaction.end = value
       if (!reportsCompactionOutcome(value)) return
     }
-    this.pendingUi.track(value)
+    if (!this.pendingUi.track(value, (targetId) => this.emit({ type: 'extension_ui_request', method: 'cancel', targetId }))) return
     const contextUsageMoved = this.contextUsage.handleEvent(value)
     if (value.type === 'session_action_update') {
       const actions = parseSessionActionSnapshot(value.actions)
@@ -650,7 +650,7 @@ export class RpcRuntime {
     if (typeof raw.sessionId === 'string') {
       if (this.info.sessionId !== undefined && raw.sessionId !== this.info.sessionId) {
         this.contextUsage.reset()
-        this.pendingUi.clear()
+        this.pendingUi.reset()
         delete this.info.contextUsage
         delete this.info.sessionUsage
       }

@@ -52,7 +52,10 @@ export interface ExtensionPathContext {
   readonly resourcesPath: string
 }
 
+export function bundledResourcePath(context: ExtensionPathContext, ...segments: string[]): string {
+  return join(context.isPackaged ? context.resourcesPath : join(context.appPath, 'assets'), ...segments)
+}
+
 export function resolveExtensionPath(filename: string, context: ExtensionPathContext): string {
-  const root = context.isPackaged ? context.resourcesPath : join(context.appPath, 'assets')
-  return join(root, 'extensions', filename)
+  return bundledResourcePath(context, 'extensions', filename)
 }

@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks'
 import { constants as fsConstants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -24,6 +25,7 @@ export interface CuaDriverServiceOptions {
   home?: string
   access?: CandidateAccess
   probe?: DriverProbe
+  now?: () => number
 }
 
 export function cuaDriverExecutableCandidates(
@@ -79,6 +81,9 @@ export class CuaDriverService {
   private readonly home: string
   private readonly checkAccess: CandidateAccess
   private readonly probe: DriverProbe
+  private readonly now: () => number
+  private cached: { status: CuaDriverStatus; expiresAt: number } | undefined
+  private pending: Promise<CuaDriverStatus> | undefined
 
   constructor(options: CuaDriverServiceOptions = {}) {
     this.platform = options.platform ?? process.platform
@@ -86,9 +91,21 @@ export class CuaDriverService {
     this.home = options.home ?? homedir()
     this.checkAccess = options.access ?? access
     this.probe = options.probe ?? probeCuaDriverExecutable
+    this.now = options.now ?? (() => performance.now())
   }
 
-  async status(): Promise<CuaDriverStatus> {
+  async status(force = false): Promise<CuaDriverStatus> {
+    if (!force && this.cached && this.cached.expiresAt > this.now()) return { ...this.cached.status }
+    if (this.pending) return { ...await this.pending }
+    const pending: Promise<CuaDriverStatus> = this.discover().then((status) => {
+      this.cached = { status, expiresAt: this.now() + 5_000 }
+      return status
+    }).finally(() => { if (this.pending === pending) this.pending = undefined })
+    this.pending = pending
+    return { ...await pending }
+  }
+
+  private async discover(): Promise<CuaDriverStatus> {
     for (const candidate of cuaDriverExecutableCandidates(this.environment, this.platform, this.home)) {
       try {
         await this.checkAccess(candidate, this.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK)
@@ -117,7 +134,7 @@ export class CuaDriverService {
   executable(): string | null { return this.lastAvailablePath }
 
   async requireAvailable(): Promise<CuaDriverStatus> {
-    const status = await this.status()
+    const status = await this.status(true)
     if (!status.available || !status.path) throw new Error(`${status.detail} ${status.installUrl}`)
     return status
   }

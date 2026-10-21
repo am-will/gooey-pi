@@ -984,6 +984,30 @@ describe('main-owned OMP child metadata', () => {
 })
 
 describe('OMP pending dialog recovery', () => {
+  it('snapshots authoritative questionnaire membership across partial writes and suppresses cancelled late frames', async () => {
+    const fake = fakeOmpAgent()
+    const manager = ompManager(fake.executable)
+    const info = await manager.start({ cwd: fake.cwd })
+    const runtime = (manager as unknown as { runtimes: Map<string, RpcRuntime> }).runtimes.get(info.runtimeId)
+    if (!runtime) throw new Error('Missing runtime')
+    const access = runtime as unknown as { handleFrame(frame: unknown): void; emit(event: Record<string, unknown>): void }
+    const request = (id: string, index: number) => ({ type: 'extension_ui_request', method: 'select', id, title: 'Choose', options: [`__prime_ask_user__review:${index}:2`, 'Yes'] })
+    access.handleFrame(request('q1', 0))
+    await manager.command(info.runtimeId, { type: 'extension_ui_response', id: 'q1', value: 'Yes' })
+    expect(runtime.snapshot()).toMatchObject({ pendingExtensionUiGroups: [{ groupId: 'review', total: 2, arrived: [0], settled: [0] }] })
+    expect(runtime.snapshot().pendingExtensionUi).toEqual([])
+    access.handleFrame(request('q2', 1))
+    expect(runtime.snapshot()).toMatchObject({ pendingExtensionUi: [{ id: 'q2' }], pendingExtensionUiGroups: [{ groupId: 'review', total: 2, arrived: [0, 1], settled: [0] }] })
+    const emitted = vi.spyOn(access, 'emit')
+    access.handleFrame({ type: 'extension_ui_request', method: 'cancel', targetId: 'q1' })
+    expect(runtime.snapshot().pendingExtensionUiGroups).toEqual([])
+    expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'extension_ui_request', method: 'cancel', targetId: 'q2' }))
+    emitted.mockClear()
+    access.handleFrame(request('q1', 0)); access.handleFrame(request('q2', 1))
+    expect(runtime.snapshot().pendingExtensionUi).toEqual([])
+    expect(emitted).not.toHaveBeenCalled()
+  })
+
   it('retains unanswered dialogs across turn boundaries, resolves responses/cancels, and clears on abort/exit', async () => {
     const fake = fakeOmpAgent()
     const manager = ompManager(fake.executable)
@@ -996,16 +1020,16 @@ describe('OMP pending dialog recovery', () => {
     incoming.handleFrame({ type: 'agent_end' })
     expect(runtime.snapshot().pendingExtensionUi).toMatchObject([{ id: 'approval' }])
     await manager.command(info.runtimeId, { type: 'extension_ui_response', id: 'approval', confirmed: true })
-    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    expect(runtime.snapshot().pendingExtensionUi).toEqual([])
     incoming.handleFrame(request('cancelled'))
     incoming.handleFrame({ type: 'extension_ui_request', method: 'cancel', targetId: 'cancelled' })
-    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    expect(runtime.snapshot().pendingExtensionUi).toEqual([])
     incoming.handleFrame(request('aborted'))
     await manager.command(info.runtimeId, { type: 'abort' })
-    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    expect(runtime.snapshot().pendingExtensionUi).toEqual([])
     incoming.handleFrame(request('exit'))
     await manager.stop(info.runtimeId)
-    expect(runtime.snapshot().pendingExtensionUi).toBeUndefined()
+    expect(runtime.snapshot().pendingExtensionUi).toEqual([])
   })
 
   it('keeps the dialog if writing its response fails', async () => {

@@ -1,4 +1,4 @@
-import { Menu, protocol, type BrowserWindow, type WebContents } from 'electron'
+import { Menu, protocol, type BrowserWindow, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -59,12 +59,32 @@ export function resolveRendererUrl(options: { isPackaged: boolean; rendererRoot:
 export function hardenRenderer(window: BrowserWindow, trustedUrl: () => string, hooks: { approveGuest?(contents: WebContents): void; cancelDownloads?(ownerId: number): void } = {}): void {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('context-menu', (_event, params) => {
-    if (params.mediaType !== 'image' || !params.hasImageContents) return
     const contents = window.webContents
-    Menu.buildFromTemplate([{
-      label: 'Copy Image',
-      click: () => { if (!window.isDestroyed() && !contents.isDestroyed()) contents.copyImageAt(params.x, params.y) },
-    }]).popup({ window })
+    const template: MenuItemConstructorOptions[] = []
+    if (params.isEditable) {
+      if (params.misspelledWord) {
+        for (const suggestion of params.dictionarySuggestions.slice(0, 5)) template.push({
+          label: suggestion,
+          click: () => { if (!contents.isDestroyed()) contents.replaceMisspelling(suggestion) },
+        })
+        template.push({ label: 'Add to Dictionary', click: () => {
+          if (!contents.isDestroyed()) contents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+        } }, { type: 'separator' })
+      }
+      template.push(
+        { role: 'undo', enabled: params.editFlags.canUndo }, { role: 'redo', enabled: params.editFlags.canRedo }, { type: 'separator' },
+        { role: 'cut', enabled: params.editFlags.canCut }, { role: 'copy', enabled: params.editFlags.canCopy },
+        { role: 'paste', enabled: params.editFlags.canPaste }, { type: 'separator' }, { role: 'selectAll' },
+      )
+    } else if (params.selectionText) template.push({ role: 'copy', enabled: params.editFlags.canCopy })
+    if (params.mediaType === 'image' && params.hasImageContents) {
+      if (template.length) template.push({ type: 'separator' })
+      template.push({
+        label: 'Copy Image',
+        click: () => { if (!window.isDestroyed() && !contents.isDestroyed()) contents.copyImageAt(params.x, params.y) },
+      })
+    }
+    if (template.length) Menu.buildFromTemplate(template).popup({ window })
   })
   window.webContents.on('will-attach-webview', (event, preferences, params) => {
     delete preferences.preload
