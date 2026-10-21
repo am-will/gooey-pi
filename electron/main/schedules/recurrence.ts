@@ -319,11 +319,14 @@ function expandRruleInstants(
   const { recurrence, until, candidateLimit } = recurrenceFor(timing, after)
   const result: Date[] = []
   let candidates = 0
+  // Every IANA offset is within a day of UTC; two days safely retain boundary candidates across offset changes.
+  const earliestWall = fakeUtc(localAt(after, timing.timeZone)).getTime() - 2 * 86_400_000
   recurrence.all((candidate) => {
     candidates += 1
     if (candidates > Math.max(candidateLimit, count + MAX_PREVIEW_OCCURRENCES)) {
       throw new RangeError('recurrence search exceeded its iteration limit')
     }
+    if (candidate.getTime() < earliestWall) return true
     const instant = instantForLocal({
       year: candidate.getUTCFullYear(),
       month: candidate.getUTCMonth() + 1,
