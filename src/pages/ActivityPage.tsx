@@ -2,7 +2,7 @@ import { Bell, CheckCircle2, CircleAlert, Clock3, LoaderCircle, Search, X } from
 import { useMemo, useState } from 'react'
 import type { ProjectRecord, SessionRecord } from '@/types/api'
 import { activityNotificationSignature, signatureCleared } from '@/app/session-attention'
-import { formatRelative } from '@/lib/data'
+import { basename, formatRelative } from '@/lib/data'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { sessionTitleText } from '@/lib/session-title'
 import { EmptyState, Segmented } from '@/components/ui'
@@ -68,7 +68,7 @@ export function ActivityPage({ sessions, projects, clearedActivity, onOpen, onCl
     return statusMatches && (!normalized || `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized))
   }).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)), [clearedActivity, sessions, filter, normalized])
   const displayed = visible.slice(0, visibleLimit)
-  const projectName = (path: string) => projectNames.get(path) ?? path.split('/').at(-1)
+  const projectName = (path: string) => projectNames.get(path) ?? basename(path)
 
   return <div className="page scroll-area"><div className="page-container page-container--narrow">
     <header className="page-header"><div><h1>{t('nav.activity')}</h1><p>{t('activity.description')}</p></div></header>
