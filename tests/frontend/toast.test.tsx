@@ -25,7 +25,7 @@ afterEach(async () => {
 })
 
 describe('useToast', () => {
-  it('clears each notification after 2.5 seconds and restarts for a replacement', async () => {
+  it.each(['Session restored.', 'Session archived.'])('restarts the notification duration when the next message is %s', async (nextMessage) => {
     let setToast!: (toast: string | null) => void
     function ToastProbe() {
       const state = useToast()
@@ -40,9 +40,9 @@ describe('useToast', () => {
     await act(async () => { vi.advanceTimersByTime(TOAST_DURATION_MS - 1) })
     expect(container.textContent).toBe('Session archived.')
 
-    await act(async () => { setToast('Session restored.') })
+    await act(async () => { setToast(nextMessage) })
     await act(async () => { vi.advanceTimersByTime(1) })
-    expect(container.textContent).toBe('Session restored.')
+    expect(container.textContent).toBe(nextMessage)
 
     await act(async () => { vi.advanceTimersByTime(TOAST_DURATION_MS) })
     expect(container.textContent).toBe('')
