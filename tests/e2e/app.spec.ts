@@ -193,7 +193,7 @@ function createHermeticFixture(activeSession = false): { userData: string; home:
       pinned: false, createdAt: '2025-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
       folderIdentities: { [canonicalProject]: identity(canonicalProject), [canonicalSecondary]: identity(canonicalSecondary) },
     }],
-    settings: { activeHarness: 'prime', browserHome: 'about:blank', telemetry: true, locale: 'en' },
+    settings: { activeHarness: 'prime', browserHome: 'about:blank', locale: 'en' },
     archivedSessions: [],
     dismissedProjectPaths: [],
   }))
