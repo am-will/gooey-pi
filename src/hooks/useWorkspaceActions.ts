@@ -244,14 +244,20 @@ export function createWorkspaceActions(getDeps: () => WorkspaceActionsDeps) {
     } catch (error) { reportError(error) }
   }
   const removeProject = async (project: ProjectRecord) => {
-    const { bridge, projects, sessions, workspace, setProjects, setToast, reportError } = getDeps()
+    const { bridge, projects, sessions, workspace, setProjects, setSessions, setToast, clearSessionAttention, resetBrowserView, reportError } = getDeps()
     try {
       if (bridge && !await bridge.projects.remove(project.id, project.harness)) throw new Error(translate(formattingLocaleTag(), 'error.projectRemoveFailed'))
       setProjects((items) => items.filter((item) => item.id !== project.id))
       if (workspace.workspaceRef.current.project?.id === project.id) {
         const fallback = projects.find((item) => item.id !== project.id)
         const session = fallback ? sessions.find((candidate) => !candidate.archived && projectContainsPath(fallback, candidate.projectPath)) : undefined
-        workspace.activateWorkspace(fallback, session)
+        resetBrowserView()
+        if (session) {
+          clearSessionAttention(session)
+          setSessions((items) => items.map((item) => item.filePath === session.filePath ? { ...item, unread: false } : item))
+        }
+        const generation = workspace.activateWorkspace(fallback, session)
+        await workspace.reconcileRuntime(generation)
       }
       setToast(translate(formattingLocaleTag(), 'toast.projectRemoved'))
     } catch (error) { reportError(error) }

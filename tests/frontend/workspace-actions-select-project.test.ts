@@ -118,3 +118,27 @@ it('adopts an inferred project immediately while Git refresh remains pending', a
   expect(setGitSnapshot).toHaveBeenCalledWith({ cwd: project.path, status: { isRepo: false, files: [] } })
   expect(reportError).not.toHaveBeenCalled()
 })
+
+it.each([true, false])('only reattaches and clears the fallback when removing the active project (%s)', async (active) => {
+  const fallback = { ...session, projectPath: other.path, unread: true }
+  const activateWorkspace = vi.fn(() => 2)
+  const reconcileRuntime = vi.fn(async () => undefined)
+  const clearSessionAttention = vi.fn()
+  const resetBrowserView = vi.fn()
+  const setSessions = vi.fn()
+  const actions = createWorkspaceActions(() => ({ bridge: { projects: { remove: async () => true } }, projects: [project, other], sessions: [fallback],
+    workspace: { workspaceRef: { current: { project: active ? project : other, generation: 1 } }, activateWorkspace, reconcileRuntime },
+    setProjects: vi.fn(), setSessions, setToast: vi.fn(), reportError: vi.fn(), clearSessionAttention, resetBrowserView } as unknown as WorkspaceActionsDeps))
+  await actions.removeProject(project)
+  if (active) {
+    expect(activateWorkspace).toHaveBeenCalledWith(other, fallback)
+    expect(reconcileRuntime).toHaveBeenCalledWith(2)
+    expect(clearSessionAttention).toHaveBeenCalledWith(fallback)
+    expect(setSessions.mock.calls[0][0]([fallback])[0].unread).toBe(false)
+    expect(resetBrowserView).toHaveBeenCalledOnce()
+  } else {
+    expect(activateWorkspace).not.toHaveBeenCalled()
+    expect(reconcileRuntime).not.toHaveBeenCalled()
+    expect(resetBrowserView).not.toHaveBeenCalled()
+  }
+})
