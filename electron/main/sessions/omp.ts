@@ -1,3 +1,4 @@
+import { compactText } from '../../../src/lib/text'
 import { closeSync, openSync, readSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +18,7 @@ import {
   type SessionMetadataReader,
   type SessionMetadataReaderIo,
 } from './metadata'
-import { compactText, type TranscriptFileReader } from './transcript'
+import type { TranscriptFileReader } from './transcript'
 
 /**
  * OMP session JSONL v3 layout under `~/.omp/agent/sessions/<bucket>/`:

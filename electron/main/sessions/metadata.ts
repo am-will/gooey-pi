@@ -1,3 +1,4 @@
+import { compactText } from '../../../src/lib/text'
 import { createReadStream, type Stats } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -5,7 +6,7 @@ import type { Readable } from 'node:stream'
 import type { SessionRecord, SessionStatus } from '../../../src/types/api'
 import { SESSION_FILE_MAX_BYTES, SESSION_FILE_MAX_RECORDS, SESSION_FILE_RECORD_LIMIT_BYTES } from '../jsonl-limits'
 import { isRecord } from '../validation'
-import { compactText, textFromContent, validTimestamp } from './transcript'
+import { textFromContent, validTimestamp } from './transcript'
 
 export type JsonRecord = Record<string, unknown>
 

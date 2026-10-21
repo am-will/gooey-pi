@@ -1,3 +1,4 @@
+import { compactText } from '../../../src/lib/text'
 import { SESSION_FILE_MAX_RECORDS } from '../jsonl-limits'
 import type { Stats } from 'node:fs'
 import { lstat, readdir, realpath, stat } from 'node:fs/promises'
@@ -17,7 +18,6 @@ import {
 } from './metadata'
 import {
   boundedString,
-  compactText,
   createTranscriptReader,
   MAX_PART_TEXT_CHARS,
   textFromContent,

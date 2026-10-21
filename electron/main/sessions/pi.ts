@@ -1,3 +1,4 @@
+import { compactText } from '../../../src/lib/text'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -18,7 +19,7 @@ import {
   type SessionMetadataReader,
   type SessionMetadataReaderIo,
 } from './metadata'
-import { compactText, type TranscriptFileReader } from './transcript'
+import type { TranscriptFileReader } from './transcript'
 
 /**
  * Pi session JSONL v3 layout under `~/.pi/agent/sessions/<bucket>/`:

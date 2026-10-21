@@ -33,11 +33,6 @@ export function textFromContent(content: unknown, max = MAX_PART_TEXT_CHARS, { i
   return text
 }
 
-export function compactText(value: string, max = 160): string {
-  const oneLine = value.replace(/\s+/g, ' ').trim()
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine
-}
-
 export function validTimestamp(value: unknown, fallback: string): string {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const timestamp = new Date(value)
