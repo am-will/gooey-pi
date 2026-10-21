@@ -319,7 +319,18 @@ export function validateMcpStateInput(value: unknown, harness: HarnessId = 'prim
   return { name, scope: value.scope, projectPath, enabled: value.enabled }
 }
 
-export function validateCapabilityMutation(value: unknown, harness: HarnessId = 'prime'): CapabilityMutationInput {
+type ValidatedCapabilityMutation = Omit<CapabilityMutationInput, 'kind' | 'source'> & (
+  | { kind: 'package'; source: string }
+  | { kind: 'mcp'; source?: string }
+)
+
+function capabilitySource(value: unknown, label: string): string {
+  const source = requireString(value, label, { min: 1, max: 2_048, trim: true })
+  if (source.startsWith('-') || /[\r\n\u2028\u2029]/.test(source)) throw new TypeError('Package source is invalid')
+  return source
+}
+
+export function validateCapabilityMutation(value: unknown, harness: HarnessId = 'prime'): ValidatedCapabilityMutation {
   if (!isRecord(value)) throw new TypeError('Capability mutation must be an object')
   if (value.kind !== 'package' && value.kind !== 'mcp') throw new TypeError('Capability kind is invalid')
   if (value.action !== 'enable' && value.action !== 'disable' && value.action !== 'remove') throw new TypeError('Capability action is invalid')
@@ -327,10 +338,6 @@ export function validateCapabilityMutation(value: unknown, harness: HarnessId = 
   const scope = value.scope
   if (scope !== 'user' && scope !== 'project') throw new TypeError('Capability scope must be user or project')
   const projectPath = scope === 'project' ? requireString(value.projectPath, 'projectPath', { min: 1, max: 4096 }) : undefined
-  const source = value.kind === 'package'
-    ? requireString(value.source, 'Package source', { min: 1, max: 2_048, trim: true })
-    : value.source === undefined ? undefined : requireString(value.source, 'Associated package source', { min: 1, max: 2_048, trim: true })
-  if (source && (source.startsWith('-') || /[\r\n\u2028\u2029]/.test(source))) throw new TypeError('Package source is invalid')
   let definitionKey: string | undefined
   if (value.kind === 'mcp' && value.action === 'remove' && value.definitionKey !== undefined) {
     if (typeof value.definitionKey !== 'string' || value.definitionKey.length > MAX_MCP_DEFINITION_KEY_LENGTH) {
@@ -340,11 +347,10 @@ export function validateCapabilityMutation(value: unknown, harness: HarnessId = 
   } else if (value.kind === 'mcp') {
     validateMcpStateInput({ name, scope, projectPath, enabled: value.action === 'enable' }, harness)
   }
-  return {
-    kind: value.kind, action: value.action, name,
-    ...(definitionKey !== undefined ? { definitionKey } : {}),
-    source, scope, projectPath,
-  }
+  const common: Omit<ValidatedCapabilityMutation, 'kind' | 'source'> = { action: value.action, name, ...(definitionKey !== undefined ? { definitionKey } : {}), scope, projectPath }
+  return value.kind === 'package'
+    ? { ...common, kind: 'package', source: capabilitySource(value.source, 'Package source') }
+    : { ...common, kind: 'mcp', source: value.source === undefined ? undefined : capabilitySource(value.source, 'Associated package source') }
 }
 
 export async function prepareProjectSettingsPath(

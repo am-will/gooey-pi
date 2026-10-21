@@ -223,12 +223,13 @@ export class PluginService {
   }
 
   async installExtension(inputValue: unknown): Promise<ProcessOutcome> {
-    const input = validateExtensionInstallInput(inputValue)
+    const requested = validateExtensionInstallInput(inputValue)
+    const input = requested.scope === 'project' ? { ...requested, projectPath: await this.authorizeProject(requested.projectPath) } : requested
     const safeProjectPath = input.scope === 'project'
-      ? await this.authorizeProject(input.projectPath!)
+      ? input.projectPath
       : undefined
     if (this.harness === 'omp') {
-      try { return await installOmpExtension(input, this.agentDir, safeProjectPath) }
+      try { return await installOmpExtension(input, this.agentDir) }
       finally { this.catalogRevision += 1 }
     }
 
@@ -376,14 +377,14 @@ export class PluginService {
         if (this.harness === 'omp') {
           const agentPath = resolveExecutable(this.agentPath)
           if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
-          return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source!, safeProjectPath)
+          return await executeOmpPluginAction(agentPath, input.action === 'remove' ? 'uninstall' : input.action, input.source, safeProjectPath)
         }
-        if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, { source: input.source!, action: input.action }, (path) => this.settingsFingerprint(path), { agentName })
+        if (input.action !== 'remove') return await updatePackageState(projectSettings ?? settingsPath, { source: input.source, action: input.action }, (path) => this.settingsFingerprint(path), { agentName })
         const agentPath = resolveExecutable(this.agentPath)
         if (!agentPath) return { ok: false, reason: 'blocked', output: `${agentName} executable was not found` }
         return this.harness === 'pi'
-          ? await executePiPluginRemove(agentPath, input.source!, safeProjectPath)
-          : await executePackageRemove(agentPath, input.source!, safeProjectPath)
+          ? await executePiPluginRemove(agentPath, input.source, safeProjectPath)
+          : await executePackageRemove(agentPath, input.source, safeProjectPath)
       } finally {
         await releaseSettings()
       }
