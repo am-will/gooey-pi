@@ -1,6 +1,8 @@
-import type { AutomationScheduleRecord, HarnessId, ScheduleInput, SchedulePatch, ScheduleTarget } from '../../../src/types/api'
+import { resolve } from 'node:path'
+import type { AutomationScheduleRecord, HarnessId, ProjectRecord, SessionRecord, ScheduleInput, SchedulePatch, ScheduleTarget } from '../../../src/types/api'
 import { CapabilityBridge, type CapabilityClaim } from '../lib/capability-bridge'
-import { requireRecord, requireString } from '../validation'
+import { isPathWithin, requireRecord, requireString } from '../validation'
+import { HARNESSES } from '../harness'
 import type { AutomationService } from './service'
 
 interface AgentScheduleScope {
@@ -13,6 +15,25 @@ export interface AgentScheduleBridgeOptions {
   harness: HarnessId
   skillPath: string
   resolveScope(input: { cwd: string; sessionPath?: string }): Promise<AgentScheduleScope>
+}
+
+/** Resolve agent scope only through explicit grants, preferring the most specific granted folder. */
+export function createScheduleScopeResolver(options: {
+  harness: HarnessId
+  projects: { list(): Promise<Pick<ProjectRecord, 'id' | 'folders' | 'inferred'>[]> }
+  sessions: { list(projectPath?: unknown, includeArchived?: unknown): Promise<Pick<SessionRecord, 'id' | 'filePath' | 'projectPath'>[]> }
+}): AgentScheduleBridgeOptions['resolveScope'] {
+  return async ({ cwd, sessionPath }) => {
+    const candidates = (await options.projects.list()).filter((project) => !project.inferred)
+      .flatMap((project) => project.folders.filter((folder) => isPathWithin(folder, cwd)).map((folder) => ({ project, folder: resolve(folder) })))
+      .sort((left, right) => right.folder.length - left.folder.length)
+    const project = candidates[0]?.project
+    if (!project) throw new Error(`The agent is not running in an explicitly granted ${HARNESSES[options.harness].productName} project`)
+    if (!sessionPath) return { projectId: project.id }
+    const session = (await options.sessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath)
+      && project.folders.some((folder) => isPathWithin(folder, candidate.projectPath)))
+    return { projectId: project.id, sessionId: session?.id }
+  }
 }
 
 function taskInScope(task: AutomationScheduleRecord, scope: AgentScheduleScope, harness: HarnessId): boolean {

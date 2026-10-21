@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentScheduleBridge } from '../../electron/main/schedules/agent-bridge'
+import { AgentScheduleBridge, createScheduleScopeResolver } from '../../electron/main/schedules/agent-bridge'
 import { AutomationService } from '../../electron/main/schedules/service'
 import { JsonStateStore } from '../../electron/main/store'
 
@@ -132,5 +132,28 @@ describe('AgentScheduleBridge', () => {
       body: JSON.stringify({ method: 'create', params: { target: 'current_session', input: {} } }),
     })
     expect(response.status).toBe(400)
+  })
+})
+
+
+describe('agent schedule grant resolution', () => {
+  it('prefers the deepest explicit folder and refuses inferred, foreign-session and prefix-only grants', async () => {
+    const resolveScope = createScheduleScopeResolver({
+      harness: 'omp',
+      projects: { list: async () => [
+        { id: 'parent', folders: ['/project'], inferred: false },
+        { id: 'nested', folders: ['/other', '/project/nested'], inferred: false },
+        { id: 'inferred', folders: ['/inferred'], inferred: true },
+      ] },
+      sessions: { list: async () => [
+        { id: 'nested-session', filePath: '/sessions/nested', projectPath: '/project/nested/..cache' },
+        { id: 'foreign-session', filePath: '/sessions/foreign', projectPath: '/project/other' },
+      ] },
+    })
+    expect(await resolveScope({ cwd: '/project/nested/..cache', sessionPath: '/sessions/nested' })).toEqual({ projectId: 'nested', sessionId: 'nested-session' })
+    expect(await resolveScope({ cwd: '/project/nested', sessionPath: '/sessions/foreign' })).toEqual({ projectId: 'nested', sessionId: undefined })
+    expect(await resolveScope({ cwd: '/other' })).toEqual({ projectId: 'nested' })
+    await expect(resolveScope({ cwd: '/project-elsewhere' })).rejects.toThrow('explicitly granted')
+    await expect(resolveScope({ cwd: '/inferred' })).rejects.toThrow('explicitly granted')
   })
 })
