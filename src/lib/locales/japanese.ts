@@ -1345,4 +1345,21 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'transcript.compaction.nothingYet': 'まだ圧縮できる内容がありません',
   'transcript.state.skipped': 'スキップ',
 
+  'projects.collapseAll': 'すべてのプロジェクトを折りたたむ',
+  'projects.expandAll': 'すべてのプロジェクトを展開',
+  'sidebar.moreSessions': 'さらに {count} 件のセッション',
+  'sidebar.showLess': '表示を減らす',
+  'schedule.history.archiveConfirm': '完了した {count} 件の実行チャットをアーカイブしますか？メッセージは保存され、設定から復元できます。',
+  'schedule.history.archiving': 'アーカイブ中…',
+  'schedule.history.archiveFinished': '完了分をアーカイブ ({count})',
+  'schedule.history.archived': 'アーカイブ済み',
+  'transcript.branchSummary': 'ブランチの要約',
+
+  'plugins.askUser.timeoutLabel': '質問のタイムアウト',
+  'plugins.askUser.timeoutDescription': 'アプリの質問票が自動的に続行されるまでの表示時間。ハーネス側の期限は引き続き適用されます。',
+  'plugins.askUser.never': '無期限',
+  'plugins.askUser.minutes': '{count} 分',
+  'inspector.files.truncated': '大きなプロジェクトのため、ファイル一覧は {count} 件{scope}で停止します。深い階層の一部は表示や検索の対象外になります。',
+  'inspector.files.perFolder': '（プロジェクトフォルダーごと）',
+
 }

@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowLeft,
+  Archive,
   CalendarClock,
   Check,
   CheckCircle2,
@@ -40,6 +41,7 @@ import type {
 import { PRIME_THINKING_LEVELS } from '@/types/api'
 import { formatRelative } from '@/lib/data'
 import { HARNESS_SHORT_NAMES } from '@/lib/harness'
+import { archivableScheduleSessions } from '@/lib/schedule-archive'
 import { errorMessage } from '@/lib/errors'
 import { RUST_PRIME_HEARTBEAT_PAUSE_DETAIL } from '@/lib/prime-compat'
 import { useI18n, type MessageKey } from '@/lib/i18n'
@@ -91,6 +93,7 @@ interface ScheduledPageProps {
   onDelete(id: string): Promise<void>
   onRunNow(id: string): Promise<void>
   onPreview(timing: ScheduleTiming): Promise<SchedulePreview>
+  onArchiveSessions?(sessions: SessionRecord[]): Promise<void>
   onOpenSession(sessionFile: string): void
   onManageHeartbeat(id: string, action: 'pause' | 'resume' | 'stop'): Promise<void>
 }
@@ -350,7 +353,7 @@ function runIcon(status: ScheduleRunRecord['status']) {
 
 export function ScheduledPage({
   harness, primeImplementation, schedules, nativeHeartbeats, projects, sessions, models, lastSelectedModel, error, initialProjectId, initialSessionId, selectedScheduleId,
-  onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat,
+  onCreate, onUpdate, onPause, onResume, onDelete, onRunNow, onPreview, onOpenSession, onManageHeartbeat, onArchiveSessions,
 }: ScheduledPageProps) {
   const { t } = useI18n()
   const [filter, setFilter] = useState<ScheduleFilter>('active')
@@ -562,6 +565,7 @@ export function ScheduledPage({
   if (selected) {
     const project = projectMap.get(selected.target.projectId)
     const targetSession = selected.target.kind === 'session' ? sessionMap.get(selected.target.sessionId) : undefined
+    const finishedSessions = archivableScheduleSessions(selected, sessions)
     const recentRuns = [...selected.runs].sort((a, b) => b.queuedAt.localeCompare(a.queuedAt)).slice(0, 8)
     const busy = Boolean(action)
     return (
@@ -590,12 +594,14 @@ export function ScheduledPage({
         </div>
 
         <section className="schedule-history">
-          <header><div><History size={15} /><h2>{t('schedule.history.title')}</h2></div><span>{t('schedule.history.summary', { count: selected.runs.length })}</span></header>
+          <header><div><History size={15} /><h2>{t('schedule.history.title')}</h2></div><span>{t('schedule.history.summary', { count: selected.runs.length })}</span>{onArchiveSessions && finishedSessions.length > 0 ? <button type="button" className="button" disabled={busy} onClick={() => {
+            if (window.confirm(t('schedule.history.archiveConfirm', { count: finishedSessions.length }))) void perform(`archive:${selected.id}`, () => onArchiveSessions(finishedSessions), '')
+          }}><Archive size={13} />{action === `archive:${selected.id}` ? t('schedule.history.archiving') : t('schedule.history.archiveFinished', { count: finishedSessions.length })}</button> : null}</header>
           {recentRuns.length ? <div className="schedule-history__list">{recentRuns.map((run) => {
-            const runSession = run.sessionId ? sessionMap.get(run.sessionId) : undefined
+            const runSession = sessions.find((session) => session.filePath === run.sessionFile) ?? (run.sessionId ? sessionMap.get(run.sessionId) : undefined)
             return <article key={run.id} className={`schedule-run schedule-run--${run.status}`}>
               <div className="schedule-run__icon">{runIcon(run.status)}</div>
-              <div className="schedule-run__main"><div><strong>{t(RUN_STATUS_KEYS[run.status])}</strong><span>{t(RUN_TRIGGER_KEYS[run.trigger])}</span></div><p>{run.error ?? t('schedule.history.scheduledFor', { date: formatRunDate(t, run.scheduledFor) })}</p></div>
+              <div className="schedule-run__main"><div><strong>{t(RUN_STATUS_KEYS[run.status])}</strong><span>{t(RUN_TRIGGER_KEYS[run.trigger])}</span>{runSession?.archived ? <span>{t('schedule.history.archived')}</span> : null}</div><p>{run.error ?? t('schedule.history.scheduledFor', { date: formatRunDate(t, run.scheduledFor) })}</p></div>
               <time dateTime={run.queuedAt}>{formatRunDate(t, run.finishedAt ?? run.startedAt ?? run.queuedAt)}</time>
               {run.sessionFile ? <button type="button" className="schedule-session-link" onClick={() => onOpenSession(run.sessionFile!)}>{t('schedule.open', { title: runSession?.title ?? t('schedule.history.sessionFallback') })} <ChevronRight size={13} /></button> : <span className="schedule-run__no-session">{t('schedule.history.noSession')}</span>}
             </article>

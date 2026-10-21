@@ -6,6 +6,7 @@ import type { PrimeWorkApi, RuntimeInfo, SessionRecord } from '@/types/api'
 
 interface UseExtensionUiOptions {
   bridge: PrimeWorkApi | null
+  askUserTimeoutMs?: number
   activeRuntimeId?: string
   runtimeSessionsRef: React.RefObject<Map<string, string>>
   setSessions: React.Dispatch<React.SetStateAction<SessionRecord[]>>
@@ -22,7 +23,8 @@ export interface PendingExtensionUi {
   // GooeyPi's own Ask User timeout, as opposed to one the harness enforces.
   // It pauses while its dialog is hidden; remainingMs is what is left of it
   // when its timer next starts.
-  ownedTimeout?: { remainingMs: number }
+  ownedTimeout?: { remainingMs: number; hiddenRemainingMs?: number }
+  hiddenDeadline?: number
   // Epoch ms at which the running timer expires the dialog.
   deadline?: number
 }
@@ -42,6 +44,7 @@ function requestIds(pending: PendingExtensionUi): string[] {
 
 export function useExtensionUi({
   bridge,
+  askUserTimeoutMs = ASK_USER_TIMEOUT_MS,
   activeRuntimeId,
   runtimeSessionsRef,
   setSessions,
@@ -53,6 +56,8 @@ export function useExtensionUi({
   const pendingByRuntimeRef = useRef<Map<string, PendingExtensionUi>>(new Map())
   const timerByRuntimeRef = useRef<Map<string, number>>(new Map())
   const timedOutQuestionnairesRef = useRef<Set<string>>(new Set())
+  const askUserTimeoutRef = useRef(askUserTimeoutMs)
+  useLayoutEffect(() => { askUserTimeoutRef.current = askUserTimeoutMs })
   const activeRuntimeIdRef = useRef(activeRuntimeId)
   useLayoutEffect(() => { activeRuntimeIdRef.current = activeRuntimeId })
 
@@ -144,20 +149,21 @@ export function useExtensionUi({
     clearExtensionUi(pending.runtimeId)
   }, [cancelPending, clearExtensionUi])
 
-  const startTimer = useCallback((pending: PendingExtensionUi, delay: number): PendingExtensionUi => {
+  const startTimer = useCallback((pending: PendingExtensionUi, delay: number, hidden = false): PendingExtensionUi => {
     const { runtimeId, request } = pending
     window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
     timerByRuntimeRef.current.set(runtimeId, window.setTimeout(() => {
       const current = pendingByRuntimeRef.current.get(runtimeId)
       if (current?.request.id === request.id) expirePending(current)
     }, delay))
-    return { ...pending, deadline: Date.now() + delay }
+    return hidden ? { ...pending, hiddenDeadline: Date.now() + delay } : { ...pending, deadline: Date.now() + delay }
   }, [expirePending])
 
   // A harness timeout runs from arrival, because the harness enforces the same
   // deadline itself. GooeyPi's own Ask User timeout only runs while its dialog
   // is visible (its runtime is active and the window is not hidden), so a
-  // question in a background session waits for the user.
+  // question in a background session waits for the user. App-owned questions
+  // expire after 30 cumulative hidden minutes so abandoned questions settle.
   const syncTimer = useCallback((runtimeId: string): PendingExtensionUi | null => {
     const pending = pendingByRuntimeRef.current.get(runtimeId)
     if (!pending) return null
@@ -165,12 +171,24 @@ export function useExtensionUi({
     if (!pending.ownedTimeout) {
       const timeout = 'timeout' in pending.request ? pending.request.timeout : undefined
       if (timeout !== undefined && pending.deadline === undefined) next = startTimer(pending, timeout)
-    } else if (activeRuntimeIdRef.current === runtimeId && document.visibilityState !== 'hidden') {
-      if (pending.deadline === undefined) next = startTimer(pending, pending.ownedTimeout.remainingMs)
-    } else if (pending.deadline !== undefined) {
-      window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
-      timerByRuntimeRef.current.delete(runtimeId)
-      next = { ...pending, ownedTimeout: { remainingMs: Math.max(0, pending.deadline - Date.now()) }, deadline: undefined }
+    } else {
+      const visible = activeRuntimeIdRef.current === runtimeId && document.visibilityState !== 'hidden'
+      const ownedTimeout = { ...pending.ownedTimeout }
+      if (visible) {
+        if (pending.hiddenDeadline !== undefined) {
+          window.clearTimeout(timerByRuntimeRef.current.get(runtimeId))
+          timerByRuntimeRef.current.delete(runtimeId)
+          ownedTimeout.hiddenRemainingMs = Math.max(0, pending.hiddenDeadline - Date.now())
+          next = { ...pending, ownedTimeout, hiddenDeadline: undefined }
+        }
+        if (next.deadline === undefined && ownedTimeout.remainingMs > 0) next = startTimer(next, ownedTimeout.remainingMs)
+      } else {
+        if (pending.deadline !== undefined) {
+          ownedTimeout.remainingMs = Math.max(0, pending.deadline - Date.now())
+          next = { ...pending, ownedTimeout, deadline: undefined }
+        }
+        if (next.hiddenDeadline === undefined) next = startTimer(next, ownedTimeout.hiddenRemainingMs ?? 30 * 60_000, true)
+      }
     }
     if (next !== pending) pendingByRuntimeRef.current.set(runtimeId, next)
     return next
@@ -238,7 +256,7 @@ export function useExtensionUi({
         // Later questions of a group keep the timer the first one started.
         ...(sameQuestionnaire
           ? previous
-          : { runtimeId, ownedTimeout: request.timeout === undefined ? { remainingMs: ASK_USER_TIMEOUT_MS } : undefined }),
+          : { runtimeId, ownedTimeout: request.timeout === undefined ? { remainingMs: askUserTimeoutRef.current } : undefined }),
         request: {
           method: 'questionnaire',
           id: request.questionnaire.groupId,

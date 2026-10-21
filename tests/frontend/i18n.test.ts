@@ -45,6 +45,8 @@ const SIMPLIFIED_CHINESE_COVERED_KEYS = [
   'nav.projects',
   'nav.scheduled',
   'nav.settings',
+  'projects.collapseAll',
+  'projects.expandAll',
   'projects.pin',
   'projects.sort',
   'projects.sort.alphabetical',

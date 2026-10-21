@@ -379,3 +379,55 @@ describe('sidebar session notifications', () => {
     expect(container.querySelector('.session-status-mark--failed')?.getAttribute('title')).toBe('Failed — notification cleared')
   })
 })
+
+
+describe('sidebar session visibility', () => {
+  async function renderSessions(count: number) {
+    const sessions = Array.from({ length: count }, (_, index) => ({ ...session, id: `s-${index}`, filePath: `/sessions/s-${index}.jsonl`, title: `Thread ${index}` }))
+    await act(async () => root.render(<Sidebar projects={[project]} sessions={sessions} activeView="session"
+      onSelectProject={noop} onSelectSession={noop} onNavigate={noop} onNewSession={noop} onAddProject={noop} onRemoveProject={noop}
+      onClose={noop} onOpenPalette={noop} onRenameSession={async () => undefined} onArchiveSession={async () => undefined} />))
+  }
+
+  it('starts expanded, toggles all projects, and keeps search matches visibly expanded', async () => {
+    await renderSessions(1)
+    expect(container.querySelector('.session-row')).not.toBeNull()
+    await press(container.querySelector('[aria-label="Collapse all projects"]')!)
+    expect(container.querySelector('.session-row')).toBeNull()
+    await press(container.querySelector('[aria-label="Expand all projects"]')!)
+    expect(container.querySelector('.session-row')).not.toBeNull()
+    await press(container.querySelector('[aria-label="Collapse all projects"]')!)
+    await press(container.querySelector('button[title="Search"]')!)
+    const input = container.querySelector('input')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Thread')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('.session-row')).not.toBeNull()
+    expect(container.querySelector('.project-row__collapse')?.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector<HTMLButtonElement>('.project-row__collapse')?.disabled).toBe(true)
+  })
+
+  it('keeps session options in the viewport and dismisses their stale position on scroll', async () => {
+    await renderSessions(1)
+    const button = container.querySelector<HTMLButtonElement>('.session-row__more')!
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({ bottom: window.innerHeight - 5, right: 230 } as DOMRect)
+    await press(button)
+    const menu = container.querySelector<HTMLElement>('.session-row__menu')!
+    expect(menu.style.position).toBe('fixed')
+    expect(Number.parseFloat(menu.style.top)).toBeLessThanOrEqual(window.innerHeight - 80)
+    await act(async () => document.dispatchEvent(new Event('scroll')))
+    expect(container.querySelector('.session-row__menu')).toBeNull()
+  })
+
+  it('reveals seven more sessions at a time and can return to the initial batch', async () => {
+    await renderSessions(22)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(7)
+    await press([...container.querySelectorAll('button')].find((item) => item.textContent === '+15 more sessions')!)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(14)
+    await press([...container.querySelectorAll('button')].find((item) => item.textContent === '+8 more sessions')!)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(21)
+    await press([...container.querySelectorAll('button')].find((item) => item.textContent === 'Show less')!)
+    expect(container.querySelectorAll('.session-row-wrap')).toHaveLength(7)
+  })
+})

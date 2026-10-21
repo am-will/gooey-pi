@@ -23,7 +23,7 @@ const INVOKE_CASES: Array<[domain: string, method: string, channel: string, args
   ['updates', 'check', 'updates:check', []],
   ['updates', 'downloadAndInstall', 'updates:download-and-install', []],
   ['projects', 'list', 'projects:list', ['omp']],
-  ['projects', 'listFiles', 'projects:list-files', ['/repo', 'omp']],
+  ['projects', 'listFiles', 'projects:list-files', ['/repo', 'omp', 'children']],
   ['projects', 'listCheckouts', 'projects:list-checkouts', ['project-id', 'omp']],
   ['projects', 'executeCheckout', 'projects:execute-checkout', ['project-id', { strategy: 'branch', operation: 'switch', branch: 'feature' }, 'omp']],
   ['projects', 'add', 'projects:add', ['omp']],

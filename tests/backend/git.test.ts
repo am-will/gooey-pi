@@ -157,6 +157,23 @@ describe('GitService', () => {
     expect(spawnSync('git', ['ls-files', '--stage'], { cwd, encoding: 'utf8' }).stdout).not.toMatch(/^160000 /m)
   })
 
+  it('stages a new commit in an already tracked submodule', async () => {
+    const cwd = repository('prime-work-git-stage-submodule-')
+    const source = repository('prime-work-git-submodule-source-')
+    git(cwd, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'module')
+    git(cwd, 'commit', '-qm', 'track submodule')
+    const submodule = join(cwd, 'module')
+    writeFileSync(join(submodule, 'file.txt'), 'submodule change\n')
+    git(submodule, 'add', 'file.txt')
+    git(submodule, '-c', 'user.name=Prime Work Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'advance submodule')
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: submodule, encoding: 'utf8' }).stdout.trim()
+    const service = new GitService(async () => cwd)
+
+    expect(await service.stage(cwd, ['module'])).toBe(true)
+    expect(spawnSync('git', ['ls-files', '--stage', '--', 'module'], { cwd, encoding: 'utf8' }).stdout).toBe(`160000 ${head} 0\tmodule\n`)
+    expect(spawnSync('git', ['diff', '--cached', '--name-only'], { cwd, encoding: 'utf8' }).stdout).toBe('module\n')
+  })
+
   it('unstages files on an unborn HEAD without changing working content', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'prime-work-git-unborn-'))
     dirs.push(cwd)

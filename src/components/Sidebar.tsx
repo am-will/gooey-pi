@@ -5,6 +5,8 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   ChevronRight,
   Copy,
   Download,
@@ -182,11 +184,18 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
   const [query, setQuery] = useState('')
   const [harnessMenuOpen, setHarnessMenuOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [sessionLimits, setSessionLimits] = useState<Record<string, number>>({})
   const [searchOpen, setSearchOpen] = useState(false)
   const sidebarRef = useFocusTrap<HTMLElement>(overlay, onClose)
   const [projectMenu, setProjectMenu] = useState<string | null>(null)
   const [projectSortMenuOpen, setProjectSortMenuOpen] = useState(false)
   const [sessionMenu, setSessionMenu] = useState<string | null>(null)
+  const [sessionMenuStyle, setSessionMenuStyle] = useState<CSSProperties>({})
+  const openSessionMenu = (id: string, anchor: HTMLElement) => {
+    const bounds = anchor.getBoundingClientRect()
+    setSessionMenuStyle({ position: 'fixed', top: Math.max(8, Math.min(bounds.bottom + 3, window.innerHeight - 80)), left: Math.max(8, Math.min(bounds.right - 132, window.innerWidth - 140)), right: 'auto' })
+    setSessionMenu((current) => current === id ? null : id)
+  }
   const [renameTarget, setRenameTarget] = useState<SessionRecord | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [archiveRunningTarget, setArchiveRunningTarget] = useState<SessionRecord | null>(null)
@@ -232,8 +241,10 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
     if (!sessionMenu) return
     const dismiss = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest('.session-row-wrap')) setSessionMenu(null) }
     const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null) } }
+    const dismissOnMove = () => setSessionMenu(null)
     document.addEventListener('pointerdown', dismiss, true); document.addEventListener('keydown', dismissOnEscape, true)
-    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true) }
+    document.addEventListener('scroll', dismissOnMove, true); window.addEventListener('resize', dismissOnMove)
+    return () => { document.removeEventListener('pointerdown', dismiss, true); document.removeEventListener('keydown', dismissOnEscape, true); document.removeEventListener('scroll', dismissOnMove, true); window.removeEventListener('resize', dismissOnMove) }
   }, [sessionMenu])
   // Archiving stops a live agent, so running work confirms first. Idle chats
   // archive on a single click because Settings can restore them again.
@@ -242,6 +253,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
     else void onArchiveSession(session)
   }
   const normalized = query.trim().toLowerCase()
+  const allCollapsed = projects.length > 0 && projects.every((project) => collapsed[project.id] === true)
   const visibleProjects = useMemo(() => sortProjects(projects.filter((project) => !normalized || project.name.toLowerCase().includes(normalized) || (sessionsByProject.get(project.id) ?? []).some((session) => `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized))), projectSortMode), [projects, sessionsByProject, normalized, projectSortMode])
 
   return (
@@ -304,11 +316,12 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
       </nav>
 
       <div className="sidebar__scroll scroll-area">
-        <div className="sidebar__section-heading"><span>{t('nav.projects')}</span><span className="sidebar__section-heading-actions"><IconButton size="small" className="sidebar__sort-toggle" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label={t('projects.sort')} onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label={t('nav.addProject')} onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label={t('projects.sort.menu')}>{PROJECT_SORT_MODES.map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{t(PROJECT_SORT_LABEL_KEYS[mode])}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
+        <div className="sidebar__section-heading"><span>{t('nav.projects')}</span><span className="sidebar__section-heading-actions"><IconButton size="small" label={t(allCollapsed ? 'projects.expandAll' : 'projects.collapseAll')} disabled={Boolean(normalized) || projects.length === 0} onClick={() => { setProjectMenu(null); setSessionMenu(null); setCollapsed(Object.fromEntries(projects.map((project) => [project.id, !allCollapsed]))) }}>{allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}</IconButton><IconButton size="small" className="sidebar__sort-toggle" aria-haspopup="menu" aria-expanded={projectSortMenuOpen} label={t('projects.sort')} onClick={() => setProjectSortMenuOpen((open) => !open)}><ListFilter size={13} /></IconButton><IconButton size="small" label={t('nav.addProject')} onClick={onAddProject}><FolderPlus size={13} /></IconButton>{projectSortMenuOpen ? <div className="sidebar__sort-menu" role="menu" aria-label={t('projects.sort.menu')}>{PROJECT_SORT_MODES.map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={projectSortMode === mode} className={projectSortMode === mode ? 'is-active' : ''} onClick={() => { setProjectSortMenuOpen(false); onSetProjectSortMode(mode) }}>{t(PROJECT_SORT_LABEL_KEYS[mode])}{projectSortMode === mode ? <Check size={12} aria-hidden="true" /> : null}</button>)}</div> : null}</span></div>
         {visibleProjects.length === 0 ? <p className="sidebar__empty">{t('sidebar.noMatchingWork')}</p> : null}
         {visibleProjects.map((project) => {
           const projectSessions = (sessionsByProject.get(project.id) ?? []).filter((session) => !normalized || `${session.title} ${session.preview ?? ''}`.toLowerCase().includes(normalized) || project.name.toLowerCase().includes(normalized))
-          const isCollapsed = collapsed[project.id] ?? false
+          const isCollapsed = !normalized && (collapsed[project.id] ?? false)
+          const sessionLimit = sessionLimits[project.id] ?? SIDEBAR_SESSION_LIMIT
           const running = projectSessions.some((session) => session.status === 'running')
           return (
             <div className="project-group" key={project.id}>
@@ -316,7 +329,7 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                 className={`project-row ${activeProjectId === project.id && activeView === 'session' ? 'is-selected' : ''}`}
                 onContextMenu={(event) => { event.preventDefault(); setProjectMenu(project.id) }}
               >
-                <button className="project-row__collapse" type="button" aria-label={t(isCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { name: project.name })} title={t(isCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { name: project.name })} onClick={() => { setProjectMenu(null); setCollapsed((value) => ({ ...value, [project.id]: !isCollapsed })) }}>
+                <button className="project-row__collapse" type="button" aria-expanded={!isCollapsed} disabled={Boolean(normalized)} aria-label={t(isCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { name: project.name })} title={t(isCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { name: project.name })} onClick={() => { setProjectMenu(null); setCollapsed((value) => ({ ...value, [project.id]: !isCollapsed })) }}>
                   {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 </button>
                 <button className="project-row__main" type="button" onClick={() => { setProjectMenu(null); onSelectProject(project) }} title={project.path}>
@@ -330,9 +343,9 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
               </div>
               {!isCollapsed ? (
                 <div className="session-list">
-                  {boundedSidebarSessions(projectSessions).map((session) => (
+                  {projectSessions.slice(0, sessionLimit).map((session) => (
                     <div key={session.id} className={`session-row-wrap session-row-wrap--${session.status} ${needsAttention(session) ? 'has-attention' : ''} ${activeSessionId === session.id && activeView === 'session' ? 'is-selected' : ''}`}>
-                      <button type="button" title={displayTitle(session.title)} className="session-row" onClick={() => { setSessionMenu(null); onSelectSession(session) }} onContextMenu={(event) => { event.preventDefault(); setSessionMenu(session.id) }}>
+                      <button type="button" title={displayTitle(session.title)} className="session-row" onClick={() => { setSessionMenu(null); onSelectSession(session) }} onContextMenu={(event) => { event.preventDefault(); openSessionMenu(session.id, event.currentTarget) }}>
                         <SessionStatusMark status={session.status} attention={needsAttention(session)} />
                         <span className="session-row__text"><span className="session-row__title">{displayTitle(session.title)}</span><span className="session-row__meta">{session.status === 'running' ? t('sidebar.sessionMeta.working') : session.status === 'waiting' ? t('sidebar.sessionMeta.attention') : session.status === 'complete' ? t('sidebar.status.complete') : formatRelative(session.updatedAt)}</span></span>
                       </button>
@@ -342,11 +355,13 @@ function SidebarView({ projects, sessions, activeProjectId, activeSessionId, act
                         label={t('sidebar.archiveSession', { title: displayTitle(session.title) })}
                         onClick={() => { setSessionMenu(null); archiveSession(session) }}
                       ><Archive size={13}/></IconButton>
-                      <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><MoreHorizontal size={13}/></IconButton>
-                      {sessionMenu === session.id ? <div className="session-row__menu" aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
+                      <IconButton size="small" className="session-row__more" label={t('sidebar.sessionOptionsFor', { title: displayTitle(session.title) })} onClick={(event) => openSessionMenu(session.id, event.currentTarget)}><MoreHorizontal size={13}/></IconButton>
+                      {sessionMenu === session.id ? <div className="session-row__menu" style={sessionMenuStyle} aria-label={t('sidebar.sessionOptions')}><button type="button" onClick={() => { void writeClipboardText(session.id); setSessionMenu(null) }}><Copy size={12}/> {t('sidebar.copySessionUuid')}</button><button type="button" onClick={() => { setRenameTarget(session); setRenameValue(session.title); setSessionMenu(null) }}><SquarePen size={12}/> {t('common.rename')}</button></div> : null}
                     </div>
                   ))}
-                  {projectSessions.length === 0 ? <button type="button" title={t('nav.newSessionIn', { name: project.name })} className="session-row session-row--empty" onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={12} /> {t('nav.newSession')}</button> : null}
+                  {projectSessions.length > sessionLimit ? <button type="button" className="session-row session-row--empty" onClick={() => setSessionLimits((limits) => ({ ...limits, [project.id]: sessionLimit + SIDEBAR_SESSION_LIMIT }))}>{t('sidebar.moreSessions', { count: projectSessions.length - sessionLimit })}</button> : null}
+                  {sessionLimit > SIDEBAR_SESSION_LIMIT ? <button type="button" className="session-row session-row--empty" onClick={() => { setSessionMenu(null); setSessionLimits((limits) => ({ ...limits, [project.id]: SIDEBAR_SESSION_LIMIT })) }}>{t('sidebar.showLess')}</button> : null}
+                  {projectSessions.length === 0 ? <button type="button" title={`New session in ${project.name}`} className="session-row session-row--empty" onClick={() => { setProjectMenu(null); onNewSession(project) }}><NotebookPen size={12} /> New session</button> : null}
                 </div>
               ) : null}
             </div>

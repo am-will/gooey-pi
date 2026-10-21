@@ -64,4 +64,7 @@ export const simplifiedChineseCatalog: Partial<Record<MessageKey, Message>> = {
   'common.cancel': '取消',
   'archive.doneToast': '已归档。可在「设置 › 已归档的聊天」里找到。',
   'archive.restoredToast': '会话已恢复。',
+  'projects.collapseAll': '折叠所有项目',
+  'projects.expandAll': '展开所有项目',
+
 }

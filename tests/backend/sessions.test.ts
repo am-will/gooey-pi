@@ -72,6 +72,85 @@ describe('live session metadata', () => {
     expect(active.status).toBe('running')
     expect(legacy.status).toBe('running')
   })
+
+  it('keeps an idle parent running while its RLM children are working', () => {
+    const record = liveMetadata()
+    applyLiveMetadata(record, { lifecycle: 'live', isSessionActive: false, isStreaming: false, hasRunningRlmChildren: true })
+    expect(record.status).toBe('running')
+    applyLiveMetadata(record, { lifecycle: 'live', isSessionActive: false, isStreaming: false, hasRunningRlmChildren: false })
+    expect(record.status).toBe('idle')
+  })
+
+  it('uses Rust Prime 0.10 hasRunningSubagents when the parent itself is inactive', () => {
+    const record = liveMetadata()
+    // v0.10.0 crates/pa-types/src/daemon/agent_roster.rs, subagents-running fixture.
+    applyLiveMetadata(record, { activeSessionId: 'a1', lifecycle: 'live', activity: 'working', isSessionActive: false, hasRunningSubagents: true })
+    expect(record.status).toBe('running')
+    expect(record.hasRunningRlmChildren).toBe(true)
+    applyLiveMetadata(record, { lifecycle: 'live', activity: 'idle', isSessionActive: false, hasRunningSubagents: false })
+    expect(record.status).toBe('idle')
+  })
+
+  it('preserves the working-child status when the GooeyPi parent runtime is idle', async () => {
+    const { root, project, service } = setup(undefined, {
+      metadataReader: async (path) => ({ ...metadata(path, project, 'parent'), status: 'running', hasRunningRlmChildren: true }),
+    })
+    writeSession(join(root, 'parent.jsonl'), project, 'parent')
+    service.bindRuntimeHooks({ get: () => ({ isStreaming: false }), stop: async () => {}, rename: async () => false })
+    const [parent] = await service.list()
+    expect(parent.status).toBe('running')
+    expect(parent).not.toHaveProperty('hasRunningRlmChildren')
+  })
+})
+
+describe('Rust Prime native archives', () => {
+  it('lists and authorizes the released sessions-archive layout for explicit resume', async () => {
+    const { root, project, service } = setup(undefined, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const file = join(archive, 'archived.jsonl')
+    writeSession(file, project, 'native-archived')
+
+    expect(await service.list()).toEqual([expect.objectContaining({ id: 'native-archived', filePath: realpathSync(file), archived: false })])
+    await expect(service.requireSessionPath(file)).resolves.toBe(realpathSync(file))
+    expect(await service.read(file)).toEqual([expect.objectContaining({ role: 'user' })])
+    const outside = join(root, '..', 'unrelated.jsonl')
+    writeSession(outside, project, 'outside')
+    await expect(service.requireSessionPath(outside)).rejects.toThrow('outside')
+  })
+
+  it('keeps native disk archives separate from GooeyPi archives and respects the shared discovery limit', async () => {
+    const { root, project, service } = setup(1, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const old = join(archive, 'old.jsonl')
+    writeSession(old, project, 'old')
+    writeSession(join(root, 'new.jsonl'), project, 'new', '2026-10-21T00:00:00.000Z')
+    expect((await service.list()).map((session) => session.id)).toEqual(['new'])
+  })
+
+  it('keeps TypeScript Prime scoped to its original session directory', async () => {
+    const { root, project, service } = setup(undefined, { primeImplementation: () => 'typescript' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const file = join(archive, 'archived.jsonl')
+    writeSession(file, project, 'archived')
+    expect(await service.list()).toEqual([])
+    await expect(service.requireSessionPath(file)).rejects.toThrow('outside')
+  })
+
+  it('publishes changes to native archived transcripts and closes its watcher', async () => {
+    const { root, project, service } = setup(undefined, { primeImplementation: () => 'rust' })
+    const archive = join(root, '..', 'sessions-archive')
+    mkdirSync(archive)
+    const changed = vi.fn()
+    const unsubscribe = service.onDidChange(changed)
+    try {
+      writeSession(join(archive, 'archived.jsonl'), project, 'archived')
+      await waitUntil(() => changed.mock.calls.length > 0)
+      expect((await service.list()).map((session) => session.id)).toEqual(['archived'])
+    } finally { unsubscribe() }
+  })
 })
 
 describe('session discovery work bounds', () => {

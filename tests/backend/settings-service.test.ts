@@ -200,3 +200,14 @@ describe('SettingsService.update', () => {
     expect(next.keepRunningInBackground).toBe(true)
   })
 })
+
+
+it('keeps the existing two-minute questionnaire timeout and validates custom visible time', async () => {
+  const service = makeService()
+  expect(service.get().askUserTimeoutMs).toBe(120_000)
+  expect((await service.update({ askUserTimeoutMs: 0 })).askUserTimeoutMs).toBe(0)
+  expect((await service.update({ askUserTimeoutMs: 300_000 })).askUserTimeoutMs).toBe(300_000)
+  for (const invalid of [-1, 1.5, '120000', 1_800_001]) {
+    await expect(service.update({ askUserTimeoutMs: invalid })).rejects.toThrow()
+  }
+})

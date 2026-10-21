@@ -200,7 +200,7 @@ export function createBranchSummaryTranscriptReader(): TranscriptFileReader {
       if (entry.type !== 'branch_summary') return undefined
       const summary = typeof entry.summary === 'string' ? entry.summary : textFromContent(entry.content, MAX_PART_TEXT_CHARS)
       // A summary with no text has nothing to show; the walk still passes through its record.
-      return summary.trim() ? noticeRow(entry, safeId, summary) : undefined
+      return summary.trim() ? { ...noticeRow(entry, safeId, summary), notice: { kind: 'branch-summary' } } : undefined
     },
   })
 }

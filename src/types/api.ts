@@ -179,6 +179,7 @@ export interface TranscriptMessage {
   steerState?: 'accepted' | 'read'
   /** Neutral system row: a renderer-only steer-read boundary, or a notice (provider fallback, branch summary) that never reads as a failure. */
   kind?: 'steer-read-marker' | 'notice'
+  notice?: { kind: 'branch-summary' }
   timestamp?: string | number
   agentName?: string
   startedAt?: string | number
@@ -520,6 +521,8 @@ export interface AppSettings {
   telemetry: boolean
   /** GooeyPi-managed ask_user tool, shared by every interactive harness. */
   askUserEnabled: boolean
+  /** Visible time allowed for app-owned questionnaires; 0 waits until answered. Harness deadlines are unchanged. */
+  askUserTimeoutMs: number
   /** Expose GooeyPi's thread-scoped in-app browser controls to new sessions. */
   browserEnabled: boolean
   /** Expose the separately installed TryCUA driver to new sessions through its official CLI. */
@@ -772,7 +775,7 @@ export interface PrimeWorkApi {
   }
   projects: {
     list(harness?: HarnessId): Promise<ProjectRecord[]>
-    listFiles(root: string, harness?: HarnessId): Promise<ProjectFileListing>
+    listFiles(root: string, harness?: HarnessId, mode?: 'children'): Promise<ProjectFileListing>
     listCheckouts(projectId: string, harness?: HarnessId): Promise<CheckoutCatalog>
     executeCheckout(projectId: string, action: CheckoutAction, harness?: HarnessId): Promise<CheckoutChangeResult>
     add(harness?: HarnessId): Promise<ProjectRecord | null>

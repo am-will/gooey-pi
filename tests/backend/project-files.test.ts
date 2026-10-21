@@ -13,6 +13,16 @@ const projectRoot = () => {
 const paths = (listing: { entries: Array<{ path: string }> }) => listing.entries.map((entry) => entry.path)
 
 describe('listProjectFiles', () => {
+  it('lists only immediate children without descending until requested', async () => {
+    const root = projectRoot()
+    mkdirSync(join(root, 'src'))
+    writeFileSync(join(root, 'src', 'deep.ts'), 'export {}')
+    writeFileSync(join(root, 'README.md'), 'read me')
+    expect(paths(await listProjectFiles(root, 100, 'children'))).toEqual(['src', 'README.md'])
+    expect(paths(await listProjectFiles(join(root, 'src'), 100, 'children'))).toEqual(['deep.ts'])
+    expect(paths(await listProjectFiles(root, 100))).toContain('src/deep.ts')
+  })
+
   it('keeps root files and later sibling folders when an early folder exceeds the budget', async () => {
     const root = projectRoot()
     mkdirSync(join(root, 'aaa-big'))

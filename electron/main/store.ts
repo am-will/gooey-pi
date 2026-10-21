@@ -123,6 +123,7 @@ export function defaultSettings(): AppSettings {
     enabledHarnesses: ['omp', 'prime', 'pi'],
     telemetry: false,
     askUserEnabled: false,
+  askUserTimeoutMs: 120_000,
     browserEnabled: true,
     computerUseEnabled: false,
     disabledProviders: [],
@@ -275,6 +276,7 @@ function parseSettings(value: unknown, legacyState = false): AppSettings {
     enabledHarnesses: usableHarnesses,
     telemetry: typeof value.telemetry === 'boolean' ? value.telemetry : defaults.telemetry,
     askUserEnabled: typeof value.askUserEnabled === 'boolean' ? value.askUserEnabled : defaults.askUserEnabled,
+    askUserTimeoutMs: typeof value.askUserTimeoutMs === 'number' && Number.isInteger(value.askUserTimeoutMs) && value.askUserTimeoutMs >= 0 && value.askUserTimeoutMs <= 1_800_000 ? value.askUserTimeoutMs : defaults.askUserTimeoutMs,
     browserEnabled: typeof value.browserEnabled === 'boolean' ? value.browserEnabled : defaults.browserEnabled,
     computerUseEnabled: typeof value.computerUseEnabled === 'boolean' ? value.computerUseEnabled : defaults.computerUseEnabled,
     disabledProviders: Array.isArray(value.disabledProviders)

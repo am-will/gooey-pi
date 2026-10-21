@@ -38,6 +38,7 @@ export const SETTINGS_FIELD_SECTIONS = {
   enabledHarnesses: 'agent',
   telemetry: 'privacy',
   askUserEnabled: 'agent',
+  askUserTimeoutMs: 'agent',
   browserEnabled: 'agent',
   computerUseEnabled: 'agent',
   disabledProviders: 'providers',

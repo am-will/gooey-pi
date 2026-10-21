@@ -54,6 +54,7 @@ export class SettingsService {
       showToolCalls: (value) => requireBoolean(value, 'showToolCalls'),
       telemetry: (value) => requireBoolean(value, 'telemetry'),
       askUserEnabled: (value) => requireBoolean(value, 'askUserEnabled'),
+      askUserTimeoutMs: (value) => requireInteger(value, 'askUserTimeoutMs', 0, 1_800_000),
       browserEnabled: (value) => requireBoolean(value, 'browserEnabled'),
       computerUseEnabled: (value) => requireBoolean(value, 'computerUseEnabled'),
       defaultInspectorTab: (value) => {

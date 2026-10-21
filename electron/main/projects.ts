@@ -843,8 +843,9 @@ export class ProjectService {
     })
   }
 
-  async listFiles(rootValue: unknown): Promise<ProjectFileListing> {
-    return listProjectFiles(await this.authorizeReadOnlyCwd(rootValue as string))
+  async listFiles(rootValue: unknown, mode?: unknown): Promise<ProjectFileListing> {
+    if (mode !== undefined && mode !== 'children') throw new TypeError('Invalid project file listing mode')
+    return listProjectFiles(await this.authorizeReadOnlyCwd(rootValue as string), undefined, mode)
   }
 
   private async authorizedRootFor(path: string, options: { readOnly?: boolean } = {}): Promise<string> {

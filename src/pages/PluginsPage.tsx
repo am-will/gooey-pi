@@ -77,6 +77,8 @@ interface PluginsPageProps {
   loading: boolean
   activeProjectPath?: string
   onRefresh(): Promise<void>
+  askUserTimeoutMs?: number
+  onSetAskUserTimeoutMs?(ms: number): Promise<void>
   askUserEnabled: boolean
   onSetAskUserEnabled(enabled: boolean): Promise<void>
   browserEnabled: boolean
@@ -92,7 +94,7 @@ interface PluginsPageProps {
   onMutateCapability?(input: CapabilityMutationInput): Promise<{ ok: boolean; output: string }>
 }
 
-export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability = async () => ({ ok: false, output: 'Capability changes are unavailable.' }) }: PluginsPageProps) {
+export function PluginsPage({ harness, primeImplementation, skills, warnings, loading, activeProjectPath, askUserTimeoutMs = 120_000, onSetAskUserTimeoutMs, askUserEnabled, onSetAskUserEnabled, browserEnabled, onSetBrowserEnabled, computerUseEnabled, onSetComputerUseEnabled, onOpenExternal, onRefresh, onInstall, onInstallExtension, onSetMcpSupport, onConnectMcp, onSetMcpEnabled, onMutateCapability }: PluginsPageProps) {
   const { t } = useI18n()
   // Main-process output is either one of the fixed availability details or raw
   // command output; only the former is translated.
@@ -344,6 +346,12 @@ export function PluginsPage({ harness, primeImplementation, skills, warnings, lo
         {harness === 'pi' && mcpSupportAlert ? <p className="page-inline-error" role="alert"><AlertTriangle size={13}/> {mcpSupportAlert}</p> : null}
         {harness === 'pi' && mcpSupportNotice ? <p className="connection-warning" role="status">{mcpSupportUpdating ? <RefreshCw className="spin" size={13}/> : <ShieldCheck size={13}/>} {mcpSupportNotice}</p> : null}
         {harness === 'pi' && !piMcpAdapterInstalled ? <p className="connection-warning"><ShieldCheck size={13}/> Pi core has no MCP client. Enable Pi MCP Adapter below before adding servers.</p> : null}
+        {onSetAskUserTimeoutMs ? <label className="settings-row">
+          <span><strong>{t('plugins.askUser.timeoutLabel')}</strong><small>{t('plugins.askUser.timeoutDescription')}</small></span>
+          <select value={askUserTimeoutMs} onChange={(event) => { void onSetAskUserTimeoutMs(Number(event.target.value)) }} aria-label={t('plugins.askUser.timeoutLabel')}>
+            <option value="0">{t('plugins.askUser.never')}</option><option value="60000">{t('plugins.askUser.minutes', { count: 1 })}</option><option value="120000">{t('plugins.askUser.minutes', { count: 2 })}</option><option value="300000">{t('plugins.askUser.minutes', { count: 5 })}</option><option value="600000">{t('plugins.askUser.minutes', { count: 10 })}</option><option value="1800000">{t('plugins.askUser.minutes', { count: 30 })}</option>
+          </select>
+        </label> : null}
         {primeLimits ? <p className="connection-warning"><ShieldCheck size={13}/> {primeLimits}</p> : null}
         <p className="connection-warning"><ShieldCheck size={13}/> {t('plugins.warning.networkMcpUnavailable')}</p>
         <div className="directory-heading"><h2>{filter === 'installed' ? t('plugins.filter.installed') : tab === 'plugins' ? t('nav.capabilities') : t('plugins.tab.skills')}</h2><span>{t('plugins.shownCount', { count: visible.length })}</span></div>

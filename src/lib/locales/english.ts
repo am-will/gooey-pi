@@ -1372,4 +1372,21 @@ export const englishCatalog = {
   'transcript.compaction.nothingYet': 'Nothing to compact yet',
   'transcript.state.skipped': 'skipped',
 
+  'projects.collapseAll': 'Collapse all projects',
+  'projects.expandAll': 'Expand all projects',
+  'sidebar.moreSessions': '+{count} more sessions',
+  'sidebar.showLess': 'Show less',
+  'schedule.history.archiveConfirm': { one: 'Archive {count} finished run chat? Messages are kept and can be restored in Settings.', other: 'Archive {count} finished run chats? Messages are kept and can be restored in Settings.' },
+  'schedule.history.archiving': 'Archiving…',
+  'schedule.history.archiveFinished': 'Archive finished ({count})',
+  'schedule.history.archived': 'Archived',
+  'transcript.branchSummary': 'Branch summary',
+
+  'plugins.askUser.timeoutLabel': 'Ask-user question timeout',
+  'plugins.askUser.timeoutDescription': 'Visible time before an app questionnaire continues automatically. Harness deadlines still apply.',
+  'plugins.askUser.never': 'Never',
+  'plugins.askUser.minutes': { one: '{count} minute', other: '{count} minutes' },
+  'inspector.files.truncated': 'Large project: the file list stops after {count} entries{scope}, so some deeper paths are not shown or searchable.',
+  'inspector.files.perFolder': ' per project folder',
+
 } as const satisfies Record<string, Message>
