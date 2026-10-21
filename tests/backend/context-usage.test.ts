@@ -102,6 +102,19 @@ describe('context usage projection', () => {
     expect(projection.current()?.tokens).toBe(40_300)
   })
 
+  it('does not add output again when a stats request captures it after being sent', () => {
+    const projection = new ContextUsageProjection()
+    projection.applySnapshot(usage(40_100))
+    projection.handleEvent(userStart)
+    projection.handleEvent(assistantStart)
+    // The request was sent at the user-message boundary, but the harness only
+    // processes it after the following assistant output has been persisted.
+    const requestedAt = projection.activityTokens
+    projection.handleEvent(assistantEnd(3_000))
+    projection.applySnapshot(usage(43_100), requestedAt)
+    expect(projection.current()?.tokens).toBe(43_100)
+  })
+
   it('bakes live output at a run boundary and forgets everything on reset', () => {
     const projection = new ContextUsageProjection()
     projection.applySnapshot(usage(40_000))
