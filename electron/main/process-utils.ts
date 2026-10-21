@@ -1,8 +1,10 @@
 import { accessSync, constants as fsConstants, readdirSync, realpathSync, statSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import { delimiter, posix, win32 } from 'node:path'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions, type SpawnOptionsWithoutStdio } from 'node:child_process'
 import { homedir } from 'node:os'
+import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
+export { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 import { createAdmissionQueue } from './lib/async'
 import { HARNESSES, type HarnessDescriptor } from './harness'
 import type { ProcessFailureReason, ProcessOutcome } from '../../src/types/api'
@@ -40,7 +42,9 @@ export function processOutcome(result: ProcessResult, output: string): ProcessOu
 }
 
 export const PROCESS_CONCURRENCY_LIMIT = 8
-export const PROCESS_QUEUE_LIMIT = 64
+const PROCESS_QUEUE_LIMIT = 64
+
+const POSIX_SYSTEM_PATH_DIRS = new Set(['/opt/homebrew/bin', '/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
 
 const PROCESS_INPUT_LIMIT = 4 * 1024 * 1024
 const activeChildren = new Set<ChildProcess>()
@@ -50,12 +54,19 @@ const processAdmission = createAdmissionQueue({
   pendingLimitError: () => new Error(`Process queue limit of ${PROCESS_QUEUE_LIMIT} exceeded`),
   closedError: () => new Error('Process admission is closed during shutdown'),
 })
-let processAdmissionClosed = false
-
 export function beginProcessShutdown(): void {
-  if (processAdmissionClosed) return
-  processAdmissionClosed = true
   processAdmission.close()
+}
+
+/** Registers long-lived probes with shutdown cleanup without consuming one-shot slots. */
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptionsWithoutStdio & { stdio?: 'pipe' | ['pipe', 'pipe', 'pipe'] }): ChildProcessWithoutNullStreams
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptions): ChildProcess
+export function spawnTrackedChild(file: string, args: readonly string[], options: SpawnOptions): ChildProcess {
+  if (processAdmission.isClosed) throw new Error('Process admission is closed during shutdown')
+  const child = spawn(file, args, options)
+  activeChildren.add(child)
+  child.once('close', () => activeChildren.delete(child))
+  return child
 }
 
 export interface KillLadderRung {
@@ -203,7 +214,8 @@ export function safeChildEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.Proc
  * Makes an absolute executable's own directory available to `/usr/bin/env`
  * shebangs without evaluating a shell profile. Finder-launched macOS apps get
  * a minimal PATH, while npm-installed Pi-family CLIs commonly use
- * `#!/usr/bin/env node` with `node` beside the CLI shim.
+ * `#!/usr/bin/env node` with `node` beside the CLI shim. Fallbacks precede
+ * system directories while preserving the user's earlier PATH selections.
  */
 export function executableChildEnvironment(
   executable: string,
@@ -218,11 +230,17 @@ export function executableChildEnvironment(
   const separator = platform === 'win32' ? ';' : delimiter
   const homeValue = platform === 'win32' ? result.USERPROFILE : result.HOME
   const home = homeValue && isAbsolutePathForPlatform(homeValue, platform) ? homeValue : homedir()
+  const inherited = (result[pathKey] ?? '').split(separator)
+  const systemIndex = inherited.findIndex((directory) => POSIX_SYSTEM_PATH_DIRS.has(directory))
+  const insertAt = platform === 'win32' ? 0 : systemIndex === -1 ? inherited.length : systemIndex
+  const nvmBin = result.NVM_BIN && isAbsolutePathForPlatform(result.NVM_BIN, platform) ? [result.NVM_BIN] : []
   const directories = [
     executableDirectory,
+    ...inherited.slice(0, insertAt),
+    ...nvmBin,
     ...versionManagerRuntimeDirs(result, platform, home),
     ...sharedHarnessCandidateDirs(result, platform, home),
-    ...(result[pathKey] ?? '').split(separator),
+    ...inherited.slice(insertAt),
   ]
   const seen = new Set<string>()
   result[pathKey] = directories.filter((directory) => {
@@ -363,8 +381,8 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
   // values rather than credentials, provider tokens, signing agents, or Git's
   // many environment-based configuration injection mechanisms. HOME/XDG_CONFIG_HOME
   // are included so Git can still find the user's global excludes file
-  // (~/.config/git/ignore) — GIT_CONFIG_GLOBAL=/dev/null above already keeps it
-  // from reading ~/.gitconfig itself.
+  // (~/.config/git/ignore); GIT_CONFIG_GLOBAL below separately disables
+  // reading ~/.gitconfig itself.
   const env: NodeJS.ProcessEnv = {
     LANG: 'C',
     LC_ALL: 'C',
@@ -388,10 +406,6 @@ export function restrictedGitEnvironment(): NodeJS.ProcessEnv {
   return env
 }
 
-export function isAbsolutePathForPlatform(value: string, platform = process.platform): boolean {
-  return platform === 'win32' ? win32.isAbsolute(value) : posix.isAbsolute(value)
-}
-
 function sharedHarnessCandidateDirs(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
@@ -399,7 +413,7 @@ function sharedHarnessCandidateDirs(
 ): string[] {
   const pathApi = platform === 'win32' ? win32 : posix
   const fromRoot = (root: string | undefined, ...segments: string[]) => root ? pathApi.join(root, ...segments) : ''
-  const compact = (values: Array<string | undefined>): string[] => values.filter((value): value is string => Boolean(value))
+  const compact = (values: Array<string | undefined>): string[] => values.filter((value): value is string => Boolean(value && pathApi.isAbsolute(value)))
   const environmentDirs = [
     env.NVM_BIN,
     env.BUN_INSTALL_BIN,
@@ -421,7 +435,7 @@ function sharedHarnessCandidateDirs(
       win32.join(home, '.volta', 'bin'),
     ])
   }
-  const dataHome = env.XDG_DATA_HOME ?? posix.join(home, '.local', 'share')
+  const dataHome = env.XDG_DATA_HOME && posix.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : posix.join(home, '.local', 'share')
   return compact([
     ...environmentDirs,
     posix.join(home, '.local', 'bin'),
@@ -537,18 +551,6 @@ export function resolveExecutable(source: ExecutableSource): string | null {
   return typeof source === 'function' ? source() : source
 }
 
-export function primeAgentExecutableName(platform = process.platform): string {
-  return HARNESSES.prime.executableName(platform)
-}
-
-export function primeAgentCandidates(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string[] {
-  return harnessExecutableCandidates(HARNESSES.prime, env, platform)
-}
-
-export async function findPrimeAgent(): Promise<string | null> {
-  return findHarnessExecutable(HARNESSES.prime)
-}
-
 export function runProcess(file: string, args: readonly string[], options: {
   cwd?: string
   timeoutMs?: number
@@ -556,7 +558,6 @@ export function runProcess(file: string, args: readonly string[], options: {
   env?: NodeJS.ProcessEnv
   input?: string
 } = {}): Promise<ProcessResult> {
-  if (processAdmissionClosed) return Promise.reject(new Error('Process admission is closed during shutdown'))
   const timeoutMs = options.timeoutMs ?? 30_000
   const maxBytes = options.maxBytes ?? 16 * 1024 * 1024
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new TypeError('timeoutMs must be positive'))
@@ -567,7 +568,7 @@ export function runProcess(file: string, args: readonly string[], options: {
 
   return processAdmission.run(() => new Promise((resolve, reject) => {
     const invocation = prepareExecutableSpawn(file, args, options.env ?? safeChildEnvironment())
-    const child = spawn(invocation.file, invocation.args, {
+    const child = spawnTrackedChild(invocation.file, invocation.args, {
       cwd: options.cwd,
       env: invocation.env,
       shell: false,
@@ -575,7 +576,6 @@ export function runProcess(file: string, args: readonly string[], options: {
       windowsHide: true,
       detached: process.platform !== 'win32',
     })
-    activeChildren.add(child)
     if (options.input !== undefined) child.stdin?.on('error', () => { /* child close/error reports the process result */ })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
@@ -586,8 +586,9 @@ export function runProcess(file: string, args: readonly string[], options: {
     let outputExceeded = false
     let settled = false
     let limitKillTimer: NodeJS.Timeout | undefined
+    let drainTimer: NodeJS.Timeout | undefined
     const timer = setTimeout(() => {
-      timedOut = true
+      if (child.exitCode === null && child.signalCode === null) timedOut = true
       terminateChild(child, 'SIGTERM')
       limitKillTimer ??= setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) terminateChild(child, 'SIGKILL')
@@ -621,9 +622,9 @@ export function runProcess(file: string, args: readonly string[], options: {
     child.stderr?.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; collect(stderr, chunk) })
 
     const finish = (): void => {
-      activeChildren.delete(child)
       clearTimeout(timer)
       if (limitKillTimer) clearTimeout(limitKillTimer)
+      if (drainTimer) clearTimeout(drainTimer)
     }
     const fail = (error: Error): void => {
       if (settled) return
@@ -636,11 +637,21 @@ export function runProcess(file: string, args: readonly string[], options: {
     // uncaught 'error' events that crash the main process.
     const failPipe = (error: Error): void => {
       if (settled) return
-      terminateChild(child, 'SIGTERM')
+      terminateChild(child, 'SIGKILL')
       fail(error)
     }
     child.stdout?.on('error', failPipe)
     child.stderr?.on('error', failPipe)
+    // A descendant may retain inherited pipes after the direct child exits.
+    child.once('exit', () => {
+      drainTimer = setTimeout(() => setImmediate(() => {
+        if (settled) return
+        terminateChild(child, 'SIGTERM')
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+      }), 1_500)
+      drainTimer.unref()
+    })
     child.once('close', (code, signal) => {
       if (settled) return
       settled = true

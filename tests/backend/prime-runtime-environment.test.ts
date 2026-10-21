@@ -23,7 +23,7 @@ const ASK_USER_EXTENSION = '/app/extensions/omp-work-ask-user.ts'
 const COMPUTER_USE_SKILL = '/app/skills/gooeypi-computer-use/SKILL.md'
 
 function dependencies(settings: PrimeRuntimeEnvironmentDependencies['settings'], cuaDriverPath: string | null = '/opt/cua/cua-driver') {
-  const bridge = (environment: NodeJS.ProcessEnv) => ({ environmentFor: vi.fn((_scope: CapabilityScope) => environment) })
+  const bridge = (environment: NodeJS.ProcessEnv) => ({ environmentFor: vi.fn((_scope: CapabilityScope) => environment), revoke: vi.fn(() => true) })
   return {
     settings,
     scheduleBridge: bridge(SCHEDULE_ENVIRONMENT),
@@ -38,6 +38,15 @@ function dependencies(settings: PrimeRuntimeEnvironmentDependencies['settings'],
 const allEnabled = { browserEnabled: true, askUserEnabled: true, computerUseEnabled: true }
 
 describe('Prime runtime environment', () => {
+  it('revokes already minted claims if a later bridge fails', () => {
+    const deps = dependencies(allEnabled)
+    deps.collaborationBridge.environmentFor.mockImplementation(() => { throw new Error('Bridge unavailable') })
+    expect(() => primeRuntimeEnvironment({ cwd: '/work', interactive: true }, deps)).toThrow('Bridge unavailable')
+    expect(deps.scheduleBridge.revoke).toHaveBeenCalledWith('schedule-token')
+    expect(deps.browserBridge.revoke).toHaveBeenCalledWith('browser-token')
+    expect(deps.collaborationBridge.revoke).not.toHaveBeenCalled()
+  })
+
   it('mints every capability claim for an interactive TypeScript Prime runtime', () => {
     const deps = dependencies(allEnabled)
     const scope = { cwd: '/work', sessionPath: '/sessions/a.jsonl', interactive: true }

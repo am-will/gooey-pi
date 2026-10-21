@@ -1,9 +1,8 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, safeStorage, screen, session, shell, webContents } from 'electron'
 import type { BrowserWindowConstructorOptions, Input, WebContents } from 'electron'
-import { extname, isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path'
-import { readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { pathToFileURL } from 'node:url'
 import { isAllowedBrowserUrl } from '../../src/lib/browser-url'
 import { assertNoMcpAuthenticationCommand } from '../../src/lib/mcp-policy'
 import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
@@ -13,6 +12,7 @@ import { installApplicationMenu } from './application-menu'
 import { mainWindowBounds } from './window-bounds'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
+import { hardenRenderer, registerRendererProtocol, resolveRendererUrl, RENDERER_CONTENT_SECURITY_POLICY } from './renderer-security'
 import { installCrashGuards } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
@@ -22,17 +22,18 @@ import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-disco
 import { beginProcessShutdown, runProcess, stopChildProcesses } from './process-utils'
 import { PluginService, beginPluginDiscoveryShutdown } from './plugins'
 import { PrimeProviderService } from './providers'
+import { bindRuntimeCapabilities, extensionHarnessRuntimeEnvironment } from './capability-runtime'
 import { primeRuntimeEnvironment } from './prime-runtime-environment'
 import { OmpModelCatalogService } from './providers-omp'
 import { PiModelCatalogService } from './providers-pi'
-import { PACKAGED_RENDERER_URL, PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
+import { PACKAGED_SMOKE_READY_EVENT, packagedSmokeMarker, packagedSmokeMarkerPath, serializePackagedSmokeMarker } from './packaged-smoke'
 import { PetService } from './pets'
 import { ProjectService } from './projects'
 import { SettingsService } from './settings'
 import { ScheduledRunExecutor } from './schedules/executor'
 import { HeartbeatService } from './schedules/heartbeats'
 import { AutomationService } from './schedules/service'
-import { AgentScheduleBridge } from './schedules/agent-bridge'
+import { AgentScheduleBridge, createScheduleScopeResolver } from './schedules/agent-bridge'
 import { mirrorBundledSkill } from './lib/bundled-skill-mirror'
 import { AgentBrowserBridge } from './browser/agent-bridge'
 import { AgentBrowserService } from './browser/agent-service'
@@ -91,104 +92,6 @@ installCrashGuards({
 
 function appIconPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(app.getAppPath(), 'assets', 'icon.png')
-}
-
-// One policy for every surface that serves renderer content: the app protocol
-// response headers and the packaged browser-session header rewrite.
-const RENDERER_CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
-
-const rendererContentTypes: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
-  '.woff': 'font/woff', '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8',
-}
-
-function registerRendererProtocol(): void {
-  if (!app.isPackaged) return
-  const rendererRoot = resolve(__dirname, '../renderer')
-  protocol.handle('prime-work', async (request) => {
-    try {
-      const url = new URL(request.url)
-      if (url.hostname !== 'app' || url.username || url.password || url.search || url.hash) return new Response('Not found', { status: 404 })
-      const decoded = decodeURIComponent(url.pathname)
-      const candidate = resolveRendererAssetPath(rendererRoot, decoded)
-      if (!candidate) return new Response('Not found', { status: 404 })
-      const body = await readFile(candidate)
-      return new Response(body, { headers: {
-        'Content-Type': rendererContentTypes[extname(candidate).toLowerCase()] ?? 'application/octet-stream',
-        'Content-Security-Policy': RENDERER_CONTENT_SECURITY_POLICY,
-        'X-Content-Type-Options': 'nosniff',
-      } })
-    } catch { return new Response('Not found', { status: 404 }) }
-  })
-}
-
-/** Resolves a renderer URL path without relying on a platform-specific separator. */
-export function resolveRendererAssetPath(rendererRoot: string, decodedPath: string): string | null {
-  if (!decodedPath.startsWith('/') || decodedPath.includes('\0') || decodedPath.includes('\\')) return null
-  const pathApi = /^[A-Za-z]:[\\/]/.test(rendererRoot) ? win32Path : { resolve, relative, isAbsolute }
-  const candidate = pathApi.resolve(rendererRoot, `.${decodedPath === '/' ? '/index.html' : decodedPath}`)
-  const relativePath = pathApi.relative(rendererRoot, candidate)
-  if (!relativePath || relativePath.startsWith('..') || pathApi.isAbsolute(relativePath)) return null
-  return candidate
-}
-
-function resolveRendererUrl(): string {
-  const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
-  if (!developmentUrl) return app.isPackaged ? PACKAGED_RENDERER_URL : pathToFileURL(join(__dirname, '../renderer/index.html')).href
-  const parsed = new URL(developmentUrl)
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) {
-    throw new Error('ELECTRON_RENDERER_URL must use an uncredentialed loopback HTTP(S) origin')
-  }
-  return parsed.href
-}
-
-
-export function hardenRenderer(window: BrowserWindow, trustedUrl: () => string = () => trustedRendererUrl): void {
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  window.webContents.on('context-menu', (_event, params) => {
-    if (params.mediaType !== 'image' || !params.hasImageContents) return
-    const contents = window.webContents
-    Menu.buildFromTemplate([{
-      label: 'Copy Image',
-      click: () => { if (!window.isDestroyed() && !contents.isDestroyed()) contents.copyImageAt(params.x, params.y) },
-    }]).popup({ window })
-  })
-  window.webContents.on('will-attach-webview', (event, preferences, params) => {
-    delete preferences.preload
-    preferences.nodeIntegration = false
-    preferences.nodeIntegrationInSubFrames = false
-    preferences.contextIsolation = true
-    preferences.sandbox = true
-    preferences.webSecurity = true
-    preferences.allowRunningInsecureContent = false
-    // A guest page must never be able to attach a nested guest of its own.
-    preferences.webviewTag = false
-    const partition = typeof params.partition === 'string' ? params.partition : ''
-    if (partition !== BROWSER_PARTITION || !isAllowedBrowserUrl(params.src)) event.preventDefault()
-  })
-  window.webContents.on('did-attach-webview', (_event, contents) => {
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    contents.on('will-navigate', (event, target) => { if (!isAllowedBrowserUrl(target)) event.preventDefault() })
-    contents.on('will-redirect', (event) => { if (!isAllowedBrowserUrl(event.url)) event.preventDefault() })
-    contents.on('will-frame-navigate', (event) => { if (!isAllowedBrowserUrl(event.url)) event.preventDefault() })
-    contents.once('destroyed', () => downloads?.cancelOwner(contents.id))
-    // Guests reaching this point passed the will-attach-webview partition and
-    // URL gates above, which makes them eligible for agent control.
-    agentBrowser?.approveGuest(contents)
-  })
-  window.webContents.on('will-navigate', (event, target) => {
-    const current = window.webContents.getURL()
-    if (target !== current) event.preventDefault()
-  })
-  // Server redirects and sub-frame navigations bypass will-navigate; hold them
-  // to the same trusted-renderer predicate the IPC gate uses.
-  window.webContents.on('will-redirect', (event) => {
-    if (!isTrustedRendererUrl(event.url, trustedUrl())) event.preventDefault()
-  })
-  window.webContents.on('will-frame-navigate', (event) => {
-    if (!isTrustedRendererUrl(event.url, trustedUrl())) event.preventDefault()
-  })
 }
 
 interface InitialRendererWindow {
@@ -385,7 +288,10 @@ async function createWindow(): Promise<BrowserWindow | null> {
   mainWindow = window
   const renderer = window.webContents
   const rendererId = renderer.id
-  hardenRenderer(window)
+  hardenRenderer(window, () => trustedRendererUrl, {
+    approveGuest: (contents) => agentBrowser?.approveGuest(contents),
+    cancelDownloads: (ownerId) => downloads?.cancelOwner(ownerId),
+  })
   renderer.on('before-input-event', (event, input) => {
     if (!isMacWindowCloseShortcut(input)) return
     event.preventDefault()
@@ -470,40 +376,6 @@ export function startupFailureDialog(error: unknown): StartupFailureDialog | nul
     return { title: 'GooeyPi update required', detail: boundedErrorMessage(error, 2_048) }
   }
   return null
-}
-
-/** Filesystem locations of the three shared capability extensions injected into extension-based harnesses. */
-export interface CapabilityExtensionPaths {
-  schedule: string
-  browser: string
-  askUser: string
-}
-
-/**
- * Runtime environment for the extension-injected harnesses (OMP and pi, which
- * share pi's ancestral extension API): the capability-broker variables from
- * the schedule bridge and lazily enabled browser bridge minus the Prime-only
- * --skill paths, plus the three PRIME_WORK_*_EXTENSION_PATH variables the harness adapters turn
- * into --extension argv. Both harnesses must receive the identical surface.
- */
-export function extensionRuntimeEnvironment(
-  scheduleBridgeEnvironment: NodeJS.ProcessEnv,
-  browserBridgeEnvironment: () => NodeJS.ProcessEnv,
-  extensionPaths: CapabilityExtensionPaths,
-  askUserEnabled = true,
-  browserEnabled = true,
-): NodeJS.ProcessEnv {
-  const { PRIME_WORK_SCHEDULE_SKILL_PATH: _scheduleSkill, ...scheduleEnvironment } = scheduleBridgeEnvironment
-  const browserEnvironment = browserEnabled ? browserBridgeEnvironment() : {}
-  const { PRIME_WORK_BROWSER_SKILL_PATH: _browserSkill, ...runtimeBrowserEnvironment } = browserEnvironment
-  return {
-    ...scheduleEnvironment,
-    ...runtimeBrowserEnvironment,
-    PRIME_WORK_SCHEDULE_EXTENSION_PATH: extensionPaths.schedule,
-    PRIME_WORK_BROWSER_EXTENSION_PATH: browserEnabled ? extensionPaths.browser : undefined,
-    PRIME_WORK_ASK_USER_EXTENSION_PATH: askUserEnabled ? extensionPaths.askUser : undefined,
-    GOOEYPI_MANAGES_ASK_USER: '1',
-  }
 }
 
 export async function settleShutdown(
@@ -865,57 +737,23 @@ async function bootstrap(): Promise<void> {
     run: (task) => scheduledRuns[task.harness].run(task),
   })
   automation = schedules
-  await schedules.start()
   const scheduleBridge = new AgentScheduleBridge({
     service: schedules,
     harness: 'prime',
     skillPath: scheduleSkillPath,
-    resolveScope: async ({ cwd, sessionPath }) => {
-      const catalog = await projects.list()
-      const canonicalCwd = resolve(cwd)
-      const project = catalog.find((candidate) => !candidate.inferred && candidate.folders.some((folder) => {
-        const root = resolve(folder)
-        return canonicalCwd === root || canonicalCwd.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)
-      }))
-      if (!project) throw new Error('The agent is not running in an explicitly granted Prime Work project')
-      if (!sessionPath) return { projectId: project.id }
-      const scheduledSession = (await sessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath))
-      return { projectId: project.id, sessionId: scheduledSession?.id }
-    },
+    resolveScope: createScheduleScopeResolver({ harness: 'prime', projects: projects, sessions: sessions }),
   })
   const ompScheduleBridge = new AgentScheduleBridge({
     service: schedules,
     harness: 'omp',
     skillPath: scheduleSkillPath,
-    resolveScope: async ({ cwd, sessionPath }) => {
-      const catalog = await ompProjects.list()
-      const canonicalCwd = resolve(cwd)
-      const project = catalog.find((candidate) => !candidate.inferred && candidate.folders.some((folder) => {
-        const root = resolve(folder)
-        return canonicalCwd === root || canonicalCwd.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)
-      }))
-      if (!project) throw new Error('The agent is not running in an explicitly granted OMP Work project')
-      if (!sessionPath) return { projectId: project.id }
-      const scheduledSession = (await ompSessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath))
-      return { projectId: project.id, sessionId: scheduledSession?.id }
-    },
+    resolveScope: createScheduleScopeResolver({ harness: 'omp', projects: ompProjects, sessions: ompSessions }),
   })
   const piScheduleBridge = new AgentScheduleBridge({
     service: schedules,
     harness: 'pi',
     skillPath: scheduleSkillPath,
-    resolveScope: async ({ cwd, sessionPath }) => {
-      const catalog = await piProjects.list()
-      const canonicalCwd = resolve(cwd)
-      const project = catalog.find((candidate) => !candidate.inferred && candidate.folders.some((folder) => {
-        const root = resolve(folder)
-        return canonicalCwd === root || canonicalCwd.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)
-      }))
-      if (!project) throw new Error('The agent is not running in an explicitly granted Pi Work project')
-      if (!sessionPath) return { projectId: project.id }
-      const scheduledSession = (await piSessions.list(undefined, true)).find((candidate) => resolve(candidate.filePath) === resolve(sessionPath))
-      return { projectId: project.id, sessionId: scheduledSession?.id }
-    },
+    resolveScope: createScheduleScopeResolver({ harness: 'pi', projects: piProjects, sessions: piSessions }),
   })
   const browserService = new AgentBrowserService({
     getGuest: (webContentsId) => {
@@ -959,43 +797,36 @@ async function bootstrap(): Promise<void> {
     settings: stateStore.getSettings(), scheduleBridge, browserBridge, collaborationBridge,
     askUserExtensionPath: ompAskUserExtensionPath, cuaDriver, computerUseSkillPath,
   }))
-  agents.setRuntimeStartListener((environment, info) => {
-    browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
-    collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
-  })
+  agents.setRuntimeStartListener((environment, info) => bindRuntimeCapabilities(environment, info, {
+    scheduleBridge: scheduleBridge, browserBridge, collaborationBridge,
+  }))
   agents.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, scheduleBridge))
   // OMP runtimes get the same capability-scoped brokers through OMP-flavored
   // extensions. OMP has no --skill flag, so their tool descriptions carry the
   // app-specific usage guidance while OMP's own skills stay discovery-based.
-  const capabilityExtensionPaths: CapabilityExtensionPaths = {
+  const capabilityExtensionPaths = {
     schedule: ompScheduleExtensionPath,
     browser: ompBrowserExtensionPath,
     askUser: ompAskUserExtensionPath,
   }
-  ompManager.setRuntimeEnvironmentProvider((scope) => ({
-    ...extensionRuntimeEnvironment(ompScheduleBridge.environmentFor(scope), () => browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
-    ...collaborationBridge.environmentFor({ ...scope, harness: 'omp' }),
-    GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
-    GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
+  ompManager.setRuntimeEnvironmentProvider((scope) => extensionHarnessRuntimeEnvironment(scope, {
+    harness: 'omp', settings: stateStore.getSettings(), extensionPaths: capabilityExtensionPaths,
+    scheduleBridge: ompScheduleBridge, browserBridge, collaborationBridge, cuaDriver, computerUseSkillPath,
   }))
-  ompManager.setRuntimeStartListener((environment, info) => {
-    browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
-    collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
-  })
+  ompManager.setRuntimeStartListener((environment, info) => bindRuntimeCapabilities(environment, info, {
+    scheduleBridge: ompScheduleBridge, browserBridge, collaborationBridge,
+  }))
   ompManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, ompScheduleBridge))
   // Pi runtimes receive the identical capability surface: pi's extension API
   // is the ancestor of OMP's, so the omp-work-* files are shared by design.
-  piManager.setRuntimeEnvironmentProvider((scope) => ({
-    ...extensionRuntimeEnvironment(piScheduleBridge.environmentFor(scope), () => browserBridge.environmentFor(scope), capabilityExtensionPaths, stateStore.getSettings().askUserEnabled && scope.interactive, stateStore.getSettings().browserEnabled),
-    ...collaborationBridge.environmentFor({ ...scope, harness: 'pi' }),
-    GOOEYPI_PI_FAST_MODE_EXTENSION_PATH: piFastModeExtensionPath,
-    GOOEYPI_CUA_DRIVER_PATH: stateStore.getSettings().computerUseEnabled ? cuaDriver.executable() ?? undefined : undefined,
-    GOOEYPI_COMPUTER_USE_SKILL_PATH: stateStore.getSettings().computerUseEnabled && cuaDriver.executable() ? computerUseSkillPath : undefined,
+  piManager.setRuntimeEnvironmentProvider((scope) => extensionHarnessRuntimeEnvironment(scope, {
+    harness: 'pi', settings: stateStore.getSettings(), extensionPaths: capabilityExtensionPaths,
+    scheduleBridge: piScheduleBridge, browserBridge, collaborationBridge, cuaDriver, computerUseSkillPath,
+    piFastModeExtensionPath,
   }))
-  piManager.setRuntimeStartListener((environment, info) => {
-    browserBridge.bindSession(environment.PRIME_WORK_BROWSER_TOKEN, info.sessionFile)
-    collaborationBridge.bindSession(environment.GOOEYPI_COLLABORATION_TOKEN, info.sessionFile, info.runtimeId)
-  })
+  piManager.setRuntimeStartListener((environment, info) => bindRuntimeCapabilities(environment, info, {
+    scheduleBridge: piScheduleBridge, browserBridge, collaborationBridge,
+  }))
   piManager.setRuntimeEndListener((environment) => revokeRuntimeCapabilities(environment, piScheduleBridge))
   if (shutdownStarted) return
   const meta: AppMeta = {
@@ -1013,7 +844,7 @@ async function bootstrap(): Promise<void> {
     return { meta: structuredClone(meta), settings: currentSettings }
   }
   agents.setStartRecovery(primeStartRecovery(async () => { await refreshHarnesses(); ipc?.notifyHarnessesChanged(); return discovery.primeImplementation() }))
-  trustedRendererUrl = resolveRendererUrl()
+  trustedRendererUrl = resolveRendererUrl({ isPackaged: app.isPackaged, rendererRoot: resolve(__dirname, '../renderer'), developmentUrl: process.env.ELECTRON_RENDERER_URL })
   ipc = registerIpc({
     meta, refreshHarnesses, projects, checkouts, sessions, agents, terminals, git, plugins, providers, settings, updates, cuaDriver, heartbeats, schedules, browser: browserService, voice, pets,
     popupApplicationMenu, setTitleBarTheme,
@@ -1069,11 +900,13 @@ async function bootstrap(): Promise<void> {
   })
   backgroundMode.start()
   const window = await ensureWindow()
+  if (shutdownStarted) return
   if (packagedSmokeMarkerFile) {
     await runPackagedSmoke(window, packagedSmokeMarkerFile)
     return
   }
   updates.start()
+  await schedules.start()
 }
 
 /**
@@ -1102,7 +935,7 @@ else void app.whenReady().then(async () => {
     if (!app.isPackaged) throw new Error('Packaged smoke mode is only available in packaged builds')
     packagedSmokeMarkerFile = requestedSmokeMarker
   }
-  registerRendererProtocol()
+  if (app.isPackaged) registerRendererProtocol(resolve(__dirname, '../renderer'))
   let wasOpenedAtLogin = false
   if (process.platform === 'darwin' && app.isPackaged) {
     try { wasOpenedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin } catch { /* The explicit flag remains available if the OS lookup fails. */ }

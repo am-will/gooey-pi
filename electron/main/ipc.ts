@@ -18,7 +18,8 @@ import type { TerminalService } from './terminal'
 import type { VoiceService } from './voice'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
-import { requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
+import { createKeyedMutex } from './lib/async'
+import { requireBoolean, requireExistingPath, requireRecord, requireString, requireWebUrl } from './validation'
 
 interface Services {
   meta: AppMeta
@@ -264,6 +265,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   })
   handle('sessions:rename', async (_event, filePath, title) => (await sessionsForPath(filePath)).service.rename(filePath, title))
   handle('sessions:archive', async (_event, filePath, archived) => {
+    requireBoolean(archived, 'archived')
     const routed = await sessionsForPath(filePath)
     const result = await routed.service.archive(filePath, archived)
     if (archived === true) {
@@ -329,7 +331,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     await services.providers.logout(providerId)
     return providerCatalog(true)
   })
-  handle('providers:set-enabled', async (_event, providerId, enabled, harness) => {
+  const visibilityMutations = createKeyedMutex<'visibility'>()
+  handle('providers:set-enabled', (_event, providerId, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const id = requireString(providerId, 'providerId', { min: 1, max: 128, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
@@ -349,8 +352,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [modelSettingsKey]: [...disabledModels].sort(),
     })
     return providerCatalogs[target]()
-  })
-  handle('providers:set-disabled', async (_event, providerIds, harness) => {
+  }))
+  handle('providers:set-disabled', (_event, providerIds, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     if (!Array.isArray(providerIds) || providerIds.length > 256) throw new TypeError('providerIds must be a bounded array')
     const ids = [...new Set(providerIds.map((value, index) => requireString(value, `providerIds[${index}]`, { min: 1, max: 128, trim: true })))].sort()
@@ -362,8 +365,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
     const disabledModels = ids.length ? services.settings.get()[modelSettingsKey] : []
     await services.settings.update({ [providerSettingsKey]: ids, [modelSettingsKey]: disabledModels })
     return providerCatalogs[target]()
-  })
-  handle('providers:set-model-enabled', async (_event, modelKey, enabled, harness) => {
+  }))
+  handle('providers:set-model-enabled', (_event, modelKey, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const key = requireString(modelKey, 'modelKey', { min: 3, max: 385, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
@@ -393,7 +396,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [modelSettingsKey]: [...disabledModels].sort(),
     })
     return providerCatalogs[target]()
-  })
+  }))
   handle('providers:start-oauth', (_event, providerId, harness) => {
     requirePrimeProviderAuth(harness)
     return services.providers.startOAuth(providerId)
@@ -434,7 +437,6 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('plugins:connect-mcp', (_event, input, harness) => pluginsFor(requireHarness(harness)).connectMcp(input))
   handle('plugins:set-mcp-enabled', (_event, input, harness) => pluginsFor(requireHarness(harness)).setMcpEnabled(input))
   handle('plugins:mutate-capability', (_event, input, harness) => pluginsFor(requireHarness(harness)).mutateCapability(input))
-  handle('plugins:refresh', (_event, harness) => pluginsFor(requireHarness(harness)).refresh())
 
   handle('settings:get', () => services.settings.get())
   handle('settings:update', async (_event, patch) => {
@@ -449,6 +451,8 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
         services.omp.agents.requestRuntimeEnvironmentRefresh(),
         services.pi.agents.requestRuntimeEnvironmentRefresh(),
       ])
+    } else if (settings.ompApprovalMode !== previous.ompApprovalMode) {
+      await services.omp.agents.requestRuntimeEnvironmentRefresh()
     }
     return settings
   })
@@ -465,7 +469,6 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('heartbeats:manage', (_event, id, action) => services.heartbeats.manage(id, action))
 
   handle('schedules:list', (_event, harness) => services.schedules.list(requireHarness(harness)))
-  handle('schedules:get', (_event, id) => services.schedules.get(id))
   handle('schedules:preview', (_event, timing, count) => services.schedules.preview(timing, count))
   handle('schedules:create', (_event, input, harness) => services.schedules.create(input, 'user', requireHarness(harness)))
   handle('schedules:update', (_event, id, patch) => services.schedules.update(id, patch))

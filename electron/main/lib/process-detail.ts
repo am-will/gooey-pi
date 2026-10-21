@@ -1,5 +1,4 @@
-// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape stripping
-const ANSI_ESCAPE = /\u001b\[[0-9;?]*[ -/]*[@-~]/gu
+import { stripAnsi } from '../validation'
 
 function hasControlCharacter(value: string): boolean {
   return [...value].some((character) => {
@@ -17,7 +16,7 @@ export function lastNonEmptyLine(value: string): string | undefined {
 }
 
 export function redactedStderrTail(stderr: string): string {
-  const line = lastNonEmptyLine(stderr.replace(ANSI_ESCAPE, ''))
+  const line = lastNonEmptyLine(stripAnsi(stderr))
   if (!line) return ''
   const redacted = line
     .replace(/\b(?:sk|ghp|gho|ghu|ghs|xox[a-z]|AKIA|Bearer\s+)[A-Za-z0-9_\-.]{8,}/gu, '[redacted]')

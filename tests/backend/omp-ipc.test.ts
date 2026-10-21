@@ -59,7 +59,7 @@ interface Harness {
 }
 
 function buildServices() {
-  const settingsState = { disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
+  const settingsState = { ompApprovalMode: 'inherit', disabledProviders: ['blocked'], disabledModels: [], ompDisabledProviders: ['anthropic'], ompDisabledModels: [], piDisabledProviders: ['anthropic'], piDisabledModels: [] }
   const catalog = (from: string, disabled: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()) => {
     const models = [
       { key: 'anthropic/claude', provider: 'anthropic', id: 'claude' },
@@ -110,6 +110,7 @@ function buildServices() {
       start: vi.fn(async (options: unknown) => ({ started: 'prime', options })),
       command: vi.fn(async () => ({ ok: 'prime' })),
       stop: vi.fn(async () => true),
+      requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
       list: vi.fn(() => [{ runtimeId: 'prime-runtime', harness: 'prime' }]),
     },
     terminals: { ...serviceStub(), killForSession: vi.fn(async () => undefined) },
@@ -118,7 +119,7 @@ function buildServices() {
     providers: { ...serviceStub(), catalog: vi.fn(async (_force, disabled, disabledModels) => catalog('prime', disabled, disabledModels)), saveApiKey: vi.fn(async () => undefined) },
     settings: {
       ...serviceStub(),
-      get: vi.fn(() => settingsState),
+      get: vi.fn(() => ({ ...settingsState })),
       update: vi.fn(async (patch: Partial<typeof settingsState>) => { Object.assign(settingsState, patch); return settingsState }),
     },
     heartbeats: serviceStub(),
@@ -143,6 +144,7 @@ function buildServices() {
         start: vi.fn(async (options: unknown) => ({ started: 'omp', options })),
         command: vi.fn(async () => ({ ok: 'omp' })),
         stop: vi.fn(async () => true),
+        requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
         list: vi.fn(() => [{ runtimeId: 'omp-runtime', harness: 'omp' }]),
       },
       catalog: {
@@ -168,6 +170,7 @@ function buildServices() {
         start: vi.fn(async (options: unknown) => ({ started: 'pi', options })),
         command: vi.fn(async () => ({ ok: 'pi' })),
         stop: vi.fn(async () => true),
+        requestRuntimeEnvironmentRefresh: vi.fn(async () => undefined),
         list: vi.fn(() => [{ runtimeId: 'pi-runtime', harness: 'pi' }]),
       },
       catalog: {
@@ -203,6 +206,21 @@ describe('harness-aware IPC routing', () => {
   afterEach(() => {
     harness.registration.dispose()
     for (const directory of fixtureDirs.splice(0)) rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('retires OMP runtime environments after approval mode changes', async () => {
+    await harness.invoke('settings:update', { ompApprovalMode: 'always-ask' })
+    expect(harness.services.omp.agents.requestRuntimeEnvironmentRefresh).toHaveBeenCalledOnce()
+    expect(harness.services.agents.requestRuntimeEnvironmentRefresh).not.toHaveBeenCalled()
+    expect(harness.services.pi.agents.requestRuntimeEnvironmentRefresh).not.toHaveBeenCalled()
+  })
+
+  it('requires an explicit boolean before archiving a session', async () => {
+    for (const value of [undefined, null, 'true', 1]) {
+      await expect(harness.invoke('sessions:archive', OMP_SESSION, value)).rejects.toThrow(/boolean/)
+    }
+    expect(harness.services.omp.sessions.archive).not.toHaveBeenCalled()
+    expect(harness.services.browser.closeForSession).not.toHaveBeenCalled()
   })
 
   it('exposes harness refresh through the fixed authorized app channel', async () => {
@@ -318,16 +336,12 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.omp.plugins.connectMcp).toHaveBeenCalledWith({ name: 'docs' })
     await harness.invoke('plugins:set-mcp-enabled', { name: 'docs', scope: 'user', enabled: false }, 'omp')
     expect(harness.services.omp.plugins.setMcpEnabled).toHaveBeenCalledWith({ name: 'docs', scope: 'user', enabled: false })
-    await harness.invoke('plugins:refresh', 'omp')
-    expect(harness.services.omp.plugins.refresh).toHaveBeenCalledOnce()
     await harness.invoke('plugins:list', '/repo', 'pi')
     expect(harness.services.pi.plugins.list).toHaveBeenCalledWith('/repo')
     await harness.invoke('plugins:install', 'npm:example', 'pi')
     expect(harness.services.pi.plugins.install).toHaveBeenCalledWith('npm:example')
     await harness.invoke('plugins:connect-mcp', { name: 'docs' }, 'pi')
     expect(harness.services.pi.plugins.connectMcp).toHaveBeenCalledWith({ name: 'docs' })
-    await harness.invoke('plugins:refresh', 'pi')
-    expect(harness.services.pi.plugins.refresh).toHaveBeenCalledOnce()
 
     await expect(async () => harness.invoke('plugins:list', undefined, 'OMP')).rejects.toThrow('Invalid harness')
   })
@@ -386,9 +400,27 @@ describe('harness-aware IPC routing', () => {
     expect(harness.services.pi.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
   })
 
+  it('does not register removed preload channels', () => {
+    for (const channel of ['plugins:refresh', 'schedules:get']) expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith(channel, expect.any(Function))
+  })
+
   it('does not register MCP-specific authentication or credential cleanup channels', () => {
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:start-mcp-oauth', expect.any(Function))
     expect(electronMocks.ipcMain.handle).not.toHaveBeenCalledWith('providers:logout-mcp', expect.any(Function))
+  })
+
+  it('serializes visibility read-modify-write operations across concurrent toggles', async () => {
+    const update = harness.services.settings.update.getMockImplementation()
+    if (!update) throw new Error('Missing fixture settings update')
+    harness.services.settings.update.mockImplementation(async (patch) => {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      return update(patch)
+    })
+    await Promise.all([
+      harness.invoke('providers:set-enabled', 'anthropic', true, 'omp'),
+      harness.invoke('providers:set-enabled', 'openai', false, 'omp'),
+    ])
+    expect(harness.services.settings.get().ompDisabledProviders).toEqual(['openai'])
   })
 
   it('stores OMP provider visibility in desktop settings without mutating OMP', async () => {

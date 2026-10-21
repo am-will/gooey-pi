@@ -13,6 +13,10 @@ describe('process detail', () => {
     expect(detail.length).toBeLessThanOrEqual(200)
   })
 
+  it('removes OSC hyperlink and title payloads from diagnostics', () => {
+    expect(redactedStderrTail('\u001b]0;secret title\u0007\u001b]8;;https://secret.invalid\u001b\\readable\u001b]8;;\u001b\\')).toBe('readable')
+  })
+
   it('returns an empty string when stderr has no non-empty line', () => {
     expect(redactedStderrTail('\u001b[0m\n \n')).toBe('')
   })
