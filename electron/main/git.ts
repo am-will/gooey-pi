@@ -458,7 +458,7 @@ export async function createGitWorktree(cwd: string, targetPath: string, branchV
 
 export async function listLocalGitBranches(cwd: string): Promise<LocalGitBranch[]> {
   const repositoryRoot = await inspectRepositoryRoot(cwd)
-  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:short)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
+  const result = await runGit(repositoryRoot, ['for-each-ref', '--format=%(refname:lstrip=2)%00%(HEAD)%00', '--sort=refname', 'refs/heads'], {
     timeoutMs: 10_000,
     maxBytes: GIT_BRANCH_OUTPUT_LIMIT,
   })
