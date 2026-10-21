@@ -859,7 +859,6 @@ export interface PrimeWorkApi {
     connectMcp(input: McpConnectionInput, harness?: HarnessId): Promise<ProcessOutcome>
     setMcpEnabled(input: McpStateInput, harness?: HarnessId): Promise<ProcessOutcome>
     mutateCapability(input: CapabilityMutationInput, harness?: HarnessId): Promise<ProcessOutcome>
-    refresh(harness?: HarnessId): Promise<PluginCatalog>
   }
   settings: { get(): Promise<AppSettings>; update(patch: Partial<AppSettings>): Promise<AppSettings>; resetBrowserData(): Promise<boolean> }
   browser: {
@@ -879,7 +878,6 @@ export interface PrimeWorkApi {
   }
   schedules: {
     list(harness?: HarnessId): Promise<AutomationScheduleRecord[]>
-    get(id: string): Promise<AutomationScheduleRecord>
     preview(timing: ScheduleTiming, count?: number): Promise<SchedulePreview>
     create(input: ScheduleInput, harness?: HarnessId): Promise<AutomationScheduleRecord>
     update(id: string, patch: SchedulePatch): Promise<AutomationScheduleRecord>

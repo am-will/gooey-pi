@@ -133,7 +133,6 @@ const api: PrimeWorkApi = {
     connectMcp: (input, harness) => invoke('plugins:connect-mcp', input, harness),
     setMcpEnabled: (input, harness) => invoke('plugins:set-mcp-enabled', input, harness),
     mutateCapability: (input, harness) => invoke('plugins:mutate-capability', input, harness),
-    refresh: (harness) => invoke('plugins:refresh', harness),
   },
   settings: {
     get: () => invoke('settings:get'),
@@ -157,7 +156,6 @@ const api: PrimeWorkApi = {
   },
   schedules: {
     list: (harness) => invoke('schedules:list', harness),
-    get: (id) => invoke('schedules:get', id),
     preview: (timing, count) => invoke('schedules:preview', timing, count),
     create: (input, harness) => invoke('schedules:create', input, harness),
     update: (id, patch) => invoke('schedules:update', id, patch),
