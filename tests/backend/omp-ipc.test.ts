@@ -393,12 +393,12 @@ describe('harness-aware IPC routing', () => {
 
   it('routes providers:catalog with independent desktop visibility per harness', async () => {
     await expect(harness.invoke('providers:catalog', true)).resolves.toMatchObject({ from: 'prime' })
-    expect(harness.services.providers.catalog).toHaveBeenCalledWith(true, new Set(['blocked']), new Set())
+    expect(harness.services.providers.catalog).toHaveBeenCalledWith(true)
 
     await expect(harness.invoke('providers:catalog', true, 'omp')).resolves.toMatchObject({ from: 'omp' })
-    expect(harness.services.omp.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
+    expect(harness.services.omp.catalog.catalog).toHaveBeenCalledWith(true)
     await expect(harness.invoke('providers:catalog', true, 'pi')).resolves.toMatchObject({ from: 'pi' })
-    expect(harness.services.pi.catalog.catalog).toHaveBeenCalledWith(true, new Set(['anthropic']), new Set())
+    expect(harness.services.pi.catalog.catalog).toHaveBeenCalledWith(true)
   })
 
   it('does not register removed preload channels', () => {

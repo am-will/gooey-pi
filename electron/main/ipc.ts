@@ -4,6 +4,7 @@ import type { AgentRpcManager } from './agent-rpc'
 import { assertRendererCommand } from './agent-rpc/command-schema'
 import type { GitService } from './git'
 import type { CuaDriverService } from './cua-driver'
+import { HARNESS_VISIBILITY_KEYS, harnessVisibility, withModelVisibility } from './model-visibility'
 import type { ModelCatalogProvider } from './model-catalog'
 import type { PluginService } from './plugins'
 import type { PetService } from './pets'
@@ -311,35 +312,34 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   })
   handle('agent:list', () => [...services.agents.list(), ...services.omp.agents.list(), ...services.pi.agents.list()])
 
-  const providerCatalog = (force = false) => services.providers.catalog(force, new Set(services.settings.get().disabledProviders), new Set(services.settings.get().disabledModels))
-  const ompProviderCatalog = (force = false) => services.omp.catalog.catalog(force, new Set(services.settings.get().ompDisabledProviders), new Set(services.settings.get().ompDisabledModels))
-  const piProviderCatalog = (force = false) => services.pi.catalog.catalog(force, new Set(services.settings.get().piDisabledProviders), new Set(services.settings.get().piDisabledModels))
-  const providerCatalogs: Record<HarnessId, (force?: boolean) => ReturnType<ModelCatalogProvider['catalog']>> = {
-    prime: providerCatalog, omp: ompProviderCatalog, pi: piProviderCatalog,
+  const catalogSources: Record<HarnessId, ModelCatalogProvider> = {
+    prime: services.providers, omp: services.omp.catalog, pi: services.pi.catalog,
   }
-  /** Desktop-owned provider/model visibility settings keys per harness. */
-  const disabledProvidersKeys = { prime: 'disabledProviders', omp: 'ompDisabledProviders', pi: 'piDisabledProviders' } as const
-  const disabledModelsKeys = { prime: 'disabledModels', omp: 'ompDisabledModels', pi: 'piDisabledModels' } as const
-  handle('providers:catalog', (_event, force, harness) => providerCatalogs[requireHarness(harness)](force === true))
+  const providerCatalog = async (harness: HarnessId, force = false) => {
+    const catalog = await catalogSources[harness].catalog(force)
+    const visibility = harnessVisibility(services.settings.get(), harness)
+    return withModelVisibility(catalog, visibility.disabledProviders, visibility.disabledModels)
+  }
+  handle('providers:catalog', (_event, force, harness) => providerCatalog(requireHarness(harness), force === true))
   handle('providers:save-api-key', async (_event, providerId, apiKey, harness) => {
     requirePrimeProviderAuth(harness)
     await services.providers.saveApiKey(providerId, apiKey)
-    return providerCatalog(true)
+    return providerCatalog('prime', true)
   })
   handle('providers:logout', async (_event, providerId, harness) => {
     requirePrimeProviderAuth(harness)
     await services.providers.logout(providerId)
-    return providerCatalog(true)
+    return providerCatalog('prime', true)
   })
   const visibilityMutations = createKeyedMutex<'visibility'>()
   handle('providers:set-enabled', (_event, providerId, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const id = requireString(providerId, 'providerId', { min: 1, max: 128, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
-    const catalog = await providerCatalogs[target]()
+    const catalog = await providerCatalog(target)
     if (!catalog.providers.some((provider) => provider.id === id)) throw new Error('Provider was not found')
-    const providerSettingsKey = disabledProvidersKeys[target]
-    const modelSettingsKey = disabledModelsKeys[target]
+    const providerSettingsKey = HARNESS_VISIBILITY_KEYS[target].providers
+    const modelSettingsKey = HARNESS_VISIBILITY_KEYS[target].models
     const settings = services.settings.get()
     const disabledProviders = new Set(settings[providerSettingsKey])
     const disabledModels = new Set(settings[modelSettingsKey])
@@ -351,32 +351,32 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [providerSettingsKey]: [...disabledProviders].sort(),
       [modelSettingsKey]: [...disabledModels].sort(),
     })
-    return providerCatalogs[target]()
+    return providerCatalog(target)
   }))
   handle('providers:set-disabled', (_event, providerIds, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     if (!Array.isArray(providerIds) || providerIds.length > 256) throw new TypeError('providerIds must be a bounded array')
     const ids = [...new Set(providerIds.map((value, index) => requireString(value, `providerIds[${index}]`, { min: 1, max: 128, trim: true })))].sort()
-    const catalog = await providerCatalogs[target]()
+    const catalog = await providerCatalog(target)
     const known = new Set(catalog.providers.map((provider) => provider.id))
     if (ids.some((id) => !known.has(id))) throw new Error('Provider was not found')
-    const providerSettingsKey = disabledProvidersKeys[target]
-    const modelSettingsKey = disabledModelsKeys[target]
+    const providerSettingsKey = HARNESS_VISIBILITY_KEYS[target].providers
+    const modelSettingsKey = HARNESS_VISIBILITY_KEYS[target].models
     const disabledModels = ids.length ? services.settings.get()[modelSettingsKey] : []
     await services.settings.update({ [providerSettingsKey]: ids, [modelSettingsKey]: disabledModels })
-    return providerCatalogs[target]()
+    return providerCatalog(target)
   }))
   handle('providers:set-model-enabled', (_event, modelKey, enabled, harness) => visibilityMutations.run('visibility', async () => {
     const target = requireHarness(harness)
     const key = requireString(modelKey, 'modelKey', { min: 3, max: 385, trim: true })
     if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean')
-    const catalog = await providerCatalogs[target]()
+    const catalog = await providerCatalog(target)
     const model = catalog.models.find((candidate) => candidate.key === key)
     if (!model) throw new Error('Model was not found')
     const provider = catalog.providers.find((candidate) => candidate.id === model.provider)
     if (!provider) throw new Error('Provider was not found')
-    const providerSettingsKey = disabledProvidersKeys[target]
-    const modelSettingsKey = disabledModelsKeys[target]
+    const providerSettingsKey = HARNESS_VISIBILITY_KEYS[target].providers
+    const modelSettingsKey = HARNESS_VISIBILITY_KEYS[target].models
     const settings = services.settings.get()
     const disabledProviders = new Set(settings[providerSettingsKey])
     const disabledModels = new Set(settings[modelSettingsKey])
@@ -395,7 +395,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
       [providerSettingsKey]: [...disabledProviders].sort(),
       [modelSettingsKey]: [...disabledModels].sort(),
     })
-    return providerCatalogs[target]()
+    return providerCatalog(target)
   }))
   handle('providers:start-oauth', (_event, providerId, harness) => {
     requirePrimeProviderAuth(harness)
