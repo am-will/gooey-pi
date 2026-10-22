@@ -1032,6 +1032,20 @@ else if (JSON.stringify(args) === ${JSON.stringify(JSON.stringify(expectedInstal
     expect(scripts['release:verify:package']).toContain('npm run vendor:verify-patches')
   })
 
+  test('confines Apple ticket transport to Mac packaging and always cleans up its state', () => {
+    const steps = parseWorkflowSteps(readFileSync('.github/workflows/release.yml', 'utf8'))
+    const transport = steps.filter((step) => step.lines.join('\n').includes('apple-ticket-transport.mjs'))
+    expect(transport.map((step) => step.job)).toEqual(['package', 'package'])
+    const [setup, cleanup] = transport
+    expect(setup.lines.join('\n')).toContain('setup "$RUNNER_TEMP/gooeypi-ticket-pf.json"')
+    expect(cleanup.lines.join('\n')).toContain('cleanup "$RUNNER_TEMP/gooeypi-ticket-pf.json"')
+    expect(cleanup.lines.some((line) => line.trim() === 'if: always()')).toBe(true)
+    const build = steps.findIndex((step) => step.name === 'Build, sign, notarize, and verify release packages')
+    expect(steps.indexOf(setup)).toBeLessThan(build)
+    expect(steps.indexOf(cleanup)).toBeGreaterThan(build)
+    expect(steps.indexOf(cleanup)).toBeLessThan(steps.findIndex((step) => step.lines.some((line) => line.includes('name: gooeypi-public-macos-'))))
+  })
+
   test('ships both mac architectures as separate builds from native-arch runners', () => {
     const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf8')
     // Two matrix legs, each on a runner whose native architecture matches the

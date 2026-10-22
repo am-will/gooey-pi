@@ -15,7 +15,9 @@ Thank you to the people whose patches, investigations, reports, and proposals in
 | [@Kenmege](https://github.com/Kenmege) | Writable bundled-skill mirror preserving app signatures: [#219](https://github.com/am-will/gooey-pi/pull/219). |
 | [@lsvab](https://github.com/lsvab) | Prime child-status report and hierarchy requirements: [#212](https://github.com/am-will/gooey-pi/issues/212). |
 | [@TAKEOFF69](https://github.com/TAKEOFF69) | OMP roster proposal and protocol investigation: [#129](https://github.com/am-will/gooey-pi/pull/129). |
+| [@TalhaSheikh-dev](https://github.com/TalhaSheikh-dev) | GitHub macOS runner ticket-service connection report: [actions/runner-images#14924](https://github.com/actions/runner-images/issues/14924). |
 | [@tvarsis](https://github.com/tvarsis) | Prompt visibility, first-prompt delivery, and context/compaction reports: [#214](https://github.com/am-will/gooey-pi/issues/214), [#215](https://github.com/am-will/gooey-pi/issues/215), [#217](https://github.com/am-will/gooey-pi/issues/217). |
 | [@TuLe1686](https://github.com/TuLe1686) | Compact-command and installed-version report: [#210](https://github.com/am-will/gooey-pi/issues/210). |
+| [@v-dunjadenic](https://github.com/v-dunjadenic) | Reproduction and HTTPS/TCP workaround for Apple ticket retrieval on GitHub runners: [actions/runner-images#14924](https://github.com/actions/runner-images/issues/14924). |
 | [@yoima-jp](https://github.com/yoima-jp) | Japanese interface and renderer localization: [#229](https://github.com/am-will/gooey-pi/pull/229). |
 | [@zaskochill](https://github.com/zaskochill) | Large-project Files-panel and nested-repository Changes-panel reports: [#223](https://github.com/am-will/gooey-pi/issues/223), [#224](https://github.com/am-will/gooey-pi/issues/224). |
