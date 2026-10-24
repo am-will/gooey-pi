@@ -214,6 +214,8 @@ export interface PrimeWorkApi {
     transcribe(request: VoiceTranscriptionRequest): Promise<string>
     testSelfHosted(request: VoiceSelfHostedTestRequest): Promise<boolean>
     executeTool(request: VoiceToolRequest, harness: HarnessId): Promise<VoiceToolResult>
+    /** Starts the OS dictation in the focused field; false where no platform dictation can be started. */
+    startSystemDictation(): Promise<boolean>
   }
   pets: {
     list(): Promise<PetDefinition[]>

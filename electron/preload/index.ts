@@ -97,6 +97,7 @@ const api: PrimeWorkApi = {
     transcribe: (request) => invoke('voice:transcribe', request),
     testSelfHosted: (request) => invoke('voice:test-self-hosted', request),
     executeTool: (request, harness) => invoke('voice:execute-tool', request, harness),
+    startSystemDictation: () => invoke('voice:start-system-dictation'),
   },
   pets: {
     list: () => invoke('pets:list'),

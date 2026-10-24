@@ -17,6 +17,7 @@ import type { HeartbeatService } from './schedules/heartbeats'
 import type { SessionService } from './sessions'
 import type { TerminalService } from './terminal'
 import type { VoiceService } from './voice'
+import { startSystemDictation } from './system-dictation'
 import type { UpdateService } from './updates'
 import type { AgentBrowserService } from './browser/agent-service'
 import { createKeyedMutex } from './lib/async'
@@ -412,6 +413,7 @@ export function registerIpc(services: Services, expectedRendererUrl: string): Ip
   handle('voice:transcribe', (_event, request) => services.voice.transcribe(request))
   handle('voice:test-self-hosted', (_event, request) => services.voice.testSelfHosted(request))
   handle('voice:execute-tool', (_event, request, harness) => services.voice.executeTool(request, requireHarness(harness)))
+  handle('voice:start-system-dictation', () => startSystemDictation())
 
   handle('pets:list', () => services.pets.list())
   handle('pets:sprite', (_event, id) => services.pets.sprite(id))
