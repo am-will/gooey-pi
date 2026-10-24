@@ -301,7 +301,24 @@ describe('Composer image ingestion', () => {
     expect(attachments).toHaveLength(2)
     expect(attachments.join(' ')).toContain('submitted.png')
     expect(attachments.join(' ')).toContain('new-draft.png')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and images were restored')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and attachments were restored')
+  })
+
+  it('restores submitted text files when a send fails', async () => {
+    let rejectSend!: (reason: Error) => void
+    renderComposer(vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject })))
+    await pickFiles([textFile('plan.md', '# Plan')])
+
+    act(() => { (container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click() })
+    expect(container.querySelector('.composer-attachment')).toBeNull()
+    await act(async () => {
+      rejectSend(new Error('rejected'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.composer-attachment')?.textContent).toBe('plan.md')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and attachments were restored')
   })
 
   it('reports submitted images omitted from failed-send restoration when new images fill the limit', async () => {
@@ -320,7 +337,7 @@ describe('Composer image ingestion', () => {
     expect(container.querySelectorAll('.composer-attachment')).toHaveLength(8)
     expect(container.textContent).toContain('submitted-1.png')
     expect(container.textContent).not.toContain('submitted-2.png')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted image could not be restored because the attachment limits are full')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted attachment could not be restored because the attachment limits are full')
     expect(container.querySelector('[role="status"]')?.textContent).toContain('8 files attached')
   })
 
@@ -340,7 +357,7 @@ describe('Composer image ingestion', () => {
     expect(container.querySelectorAll('.composer-attachment')).toHaveLength(1)
     expect(container.textContent).toContain('new-large.png')
     expect(container.textContent).not.toContain('submitted-large.png')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted image could not be restored because the attachment limits are full')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted attachment could not be restored because the attachment limits are full')
   })
 
   it('opens a general file picker from the add menu and attaches its selection', async () => {

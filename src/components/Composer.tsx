@@ -234,6 +234,7 @@ export const Composer = memo(function Composer({
     submittingRef.current = true
     const submittedValue = draftValue
     const submittedComposerImages = currentImages
+    const submittedTextFiles = currentTextFiles
     setValue('')
     imageAttachments.clear()
     setAttachmentError('')
@@ -246,14 +247,14 @@ export const Composer = memo(function Composer({
     } catch {
       if (mountedRef.current) {
         setValue((current) => current || submittedValue)
-        const restoration = imageAttachments.restoreWithinLimits(submittedComposerImages)
+        const restoration = imageAttachments.restoreWithinLimits(submittedComposerImages, submittedTextFiles)
         if (restoration.omitted > 0) {
           // `restored` is a pre-translated clause so English keeps its exact
           // wording while Japanese can place it as a parenthetical.
-          const restored = restoration.restored > 0 ? t('composer.error.restoredImages', { count: restoration.restored }) : ''
+          const restored = restoration.restored > 0 ? t('composer.error.restoredAttachments', { count: restoration.restored }) : ''
           setAttachmentError(t('composer.error.restoreOmitted', { count: restoration.omitted, restored }))
-        } else if (submittedComposerImages.length > 0) {
-          setAttachmentError(t('composer.error.restoreDraftAndImages'))
+        } else if (submittedComposerImages.length + submittedTextFiles.length > 0) {
+          setAttachmentError(t('composer.error.restoreDraftAndAttachments'))
         } else {
           setAttachmentError(t('composer.error.restoreDraft'))
         }
