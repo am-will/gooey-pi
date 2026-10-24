@@ -3,7 +3,7 @@ import { memo, useMemo } from 'react'
 import { CalendarClock, Check, CircleDot, GitBranch, HeartPulse, LoaderCircle } from 'lucide-react'
 import type { AutomationScheduleRecord, GitStatus, NativeHeartbeatRecord, ProjectRecord, RuntimeInfo, TranscriptMessage } from '@/types/api'
 import { formatRelative } from '@/lib/data'
-import { formatSessionCost, formatSessionTokens } from '@/lib/format-cost'
+import { formatOutputRate, formatSessionCost, formatSessionTokens } from '@/lib/format-cost'
 import { useI18n } from '@/lib/i18n'
 import { DEFINITION_STATUS_KEYS, HEARTBEAT_STATUS_KEYS } from '@/lib/schedule-labels'
 import { transcriptText } from '@/lib/transcript-notes'
@@ -26,13 +26,21 @@ interface SummaryPanelProps {
 export interface TranscriptSummary {
   toolCount: number
   lastText?: string
+  /** Output tokens over response time across every timed turn; absent when the harness timed none. */
+  outputTokensPerSecond?: number
 }
 
-/** One pass for the tool count; one reverse walk that stops at the first text part. */
+/** One pass for the tool count and generation totals; one reverse walk that stops at the first text part. */
 export function summarizeTranscript(messages: TranscriptMessage[], t?: ReturnType<typeof useI18n>['t']): TranscriptSummary {
   let toolCount = 0
+  let outputTokens = 0
+  let durationMs = 0
   for (const message of messages) {
     for (const part of message.parts) if (part.type === 'toolCall') toolCount += 1
+    if (message.generation) {
+      outputTokens += message.generation.outputTokens
+      durationMs += message.generation.durationMs
+    }
   }
   let lastText: string | undefined
   for (let index = messages.length - 1; index >= 0 && lastText === undefined; index -= 1) {
@@ -45,15 +53,16 @@ export function summarizeTranscript(messages: TranscriptMessage[], t?: ReturnTyp
       }
     }
   }
-  return { toolCount, lastText }
+  return durationMs > 0 ? { toolCount, lastText, outputTokensPerSecond: outputTokens / (durationMs / 1_000) } : { toolCount, lastText }
 }
 
 export const SummaryPanel = memo(function SummaryPanel({ agentName = HARNESS_AGENT_NAMES.prime, shortName = HARNESS_SHORT_NAMES.prime, project, runtime, messages, git, automations, heartbeats, onOpenAutomation }: SummaryPanelProps) {
   const { t } = useI18n()
-  const { toolCount, lastText } = useMemo(() => summarizeTranscript(messages, t), [messages, t])
+  const { toolCount, lastText, outputTokensPerSecond } = useMemo(() => summarizeTranscript(messages, t), [messages, t])
   const active = Boolean(runtime?.isStreaming || runtime?.isCompacting)
   const sessionCost = formatSessionCost(runtime?.sessionUsage)
   const sessionTokens = formatSessionTokens(runtime?.sessionUsage)
+  const outputRate = formatOutputRate(outputTokensPerSecond)
   const summaryText = lastText !== undefined ? lastText.slice(0, 220) : t('inspector.summary.empty')
   return (
     <div className="inspector-scroll scroll-area summary-panel">
@@ -74,7 +83,7 @@ export const SummaryPanel = memo(function SummaryPanel({ agentName = HARNESS_AGE
         {automations.length + heartbeats.length > 2 ? <button type="button" className="summary-automation-more" onClick={() => onOpenAutomation(automations[0]?.id ?? heartbeats[0]!.id)}>{t('inspector.summary.viewAllAutomations', { count: automations.length + heartbeats.length })}</button> : null}
       </div></section> : null}
       <section className="summary-section"><h3>{t('inspector.summary.context')}</h3><div className="context-meter"><div><span>{t('inspector.summary.sessionContext')}</span><span>{t('inspector.summary.managed')}</span></div><small>{t('inspector.summary.contextNote', { name: agentName })}</small></div>
-        {sessionCost !== null ? <dl className="detail-list summary-cost"><div><dt>{t('inspector.summary.cost')}</dt><dd title={sessionTokens ?? undefined}>{sessionCost}</dd></div>{sessionTokens ? <div><dt>{t('inspector.summary.tokens')}</dt><dd className="mono truncate" title={sessionTokens}>{sessionTokens}</dd></div> : null}</dl> : null}</section>
+        {sessionCost !== null || outputRate ? <dl className="detail-list summary-cost">{sessionCost !== null ? <div><dt>{t('inspector.summary.cost')}</dt><dd title={sessionTokens ?? undefined}>{sessionCost}</dd></div> : null}{sessionCost !== null && sessionTokens ? <div><dt>{t('inspector.summary.tokens')}</dt><dd className="mono truncate" title={sessionTokens}>{sessionTokens}</dd></div> : null}{outputRate ? <div><dt>{t('inspector.summary.outputSpeed')}</dt><dd className="mono" title={t('inspector.summary.outputSpeedNote')}>{outputRate}</dd></div> : null}</dl> : null}</section>
     </div>
   )
 })

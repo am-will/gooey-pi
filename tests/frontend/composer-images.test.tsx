@@ -76,6 +76,13 @@ function pngFile(name: string, read?: () => Promise<ArrayBuffer>): File {
   return file
 }
 
+function textFile(name: string, content: string | Uint8Array<ArrayBuffer>, type = ''): File {
+  const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content
+  const file = new File([bytes], name, { type })
+  Object.defineProperty(file, 'arrayBuffer', { value: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) })
+  return file
+}
+
 function pastedPng(read?: () => Promise<ArrayBuffer>): File {
   return pngFile('pasted.png', read)
 }
@@ -294,7 +301,24 @@ describe('Composer image ingestion', () => {
     expect(attachments).toHaveLength(2)
     expect(attachments.join(' ')).toContain('submitted.png')
     expect(attachments.join(' ')).toContain('new-draft.png')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and images were restored')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and attachments were restored')
+  })
+
+  it('restores submitted text files when a send fails', async () => {
+    let rejectSend!: (reason: Error) => void
+    renderComposer(vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject })))
+    await pickFiles([textFile('plan.md', '# Plan')])
+
+    act(() => { (container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click() })
+    expect(container.querySelector('.composer-attachment')).toBeNull()
+    await act(async () => {
+      rejectSend(new Error('rejected'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.composer-attachment')?.textContent).toBe('plan.md')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('draft and attachments were restored')
   })
 
   it('reports submitted images omitted from failed-send restoration when new images fill the limit', async () => {
@@ -313,7 +337,7 @@ describe('Composer image ingestion', () => {
     expect(container.querySelectorAll('.composer-attachment')).toHaveLength(8)
     expect(container.textContent).toContain('submitted-1.png')
     expect(container.textContent).not.toContain('submitted-2.png')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted image could not be restored because the attachment limits are full')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted attachment could not be restored because the attachment limits are full')
     expect(container.querySelector('[role="status"]')?.textContent).toContain('8 files attached')
   })
 
@@ -333,7 +357,7 @@ describe('Composer image ingestion', () => {
     expect(container.querySelectorAll('.composer-attachment')).toHaveLength(1)
     expect(container.textContent).toContain('new-large.png')
     expect(container.textContent).not.toContain('submitted-large.png')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted image could not be restored because the attachment limits are full')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 submitted attachment could not be restored because the attachment limits are full')
   })
 
   it('opens a general file picker from the add menu and attaches its selection', async () => {
@@ -393,18 +417,78 @@ describe('Composer image ingestion', () => {
 
   it('stages mixed file types and rejects unsupported files when sending', async () => {
     const onSend = renderComposer()
-    const unsupported = new File(['plain text'], 'notes.txt', { type: 'text/plain' })
+    const unsupported = new File(['PK'], 'bundle.zip', { type: 'application/zip' })
 
     await pasteFiles([pastedPng(), unsupported], 'keep this text')
 
     expect(container.querySelectorAll('.composer-attachment')).toHaveLength(2)
-    expect(container.textContent).toContain('notes.txt')
+    expect(container.textContent).toContain('bundle.zip')
     await act(async () => {
       ;(container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click()
     })
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('notes.txt cannot be sent')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('bundle.zip cannot be sent')
     expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('keep this text')
     expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('sends attached markdown and text files inside the prompt', async () => {
+    const onSend = renderComposer(vi.fn(async () => undefined), true, false, 'queue', undefined, undefined, 'pi')
+    await pickFiles([textFile('plan.md', '# Plan\n\n- ship it\n'), textFile('notes.txt', 'plain notes', 'text/plain')])
+
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(Array.from(container.querySelectorAll('.composer-attachment')).map((chip) => chip.textContent)).toEqual(['plan.md', 'notes.txt'])
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('2 files attached')
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+
+    expect(onSend).toHaveBeenCalledTimes(1)
+    const [prompt, images, intent] = onSend.mock.calls[0]
+    expect(prompt.startsWith('[Attached files]\n\n===== BEGIN ATTACHED FILES =====')).toBe(true)
+    expect(prompt).toContain('--- File 1 of 2: plan.md ---\n# Plan\n\n- ship it\n--- End of file 1 ---')
+    expect(prompt).toContain('--- File 2 of 2: notes.txt ---\nplain notes\n--- End of file 2 ---')
+    expect(images).toEqual([])
+    expect(intent).toBe('queue')
+    expect(container.querySelector('.composer-attachment')).toBeNull()
+  })
+
+  it('sends text files alongside images even when the model has no image input', async () => {
+    const onSend = renderComposer(vi.fn(async () => undefined), false)
+    await dropFiles([textFile('README.md', 'hello', 'text/markdown')])
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(onSend).toHaveBeenCalledWith(expect.stringContaining('--- File 1 of 1: README.md ---\nhello\n'), [], 'queue')
+  })
+
+  it('treats binary bytes behind a text extension as unsupported', async () => {
+    const onSend = renderComposer()
+    await pickFiles([textFile('blob.txt', Uint8Array.from([0xff, 0xfe, 0x00, 0x01]))])
+    expect(container.querySelector('.composer-attachment')?.textContent).toContain('blob.txt')
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="Send message"]') as HTMLButtonElement).click()
+    })
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('blob.txt cannot be sent')
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('rejects text files over the per-file limit and keeps smaller ones', async () => {
+    renderComposer()
+    await pickFiles([textFile('huge.md', 'x'.repeat(512 * 1024 + 1)), textFile('small.md', 'ok')])
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('huge.md is too large to attach')
+    expect(Array.from(container.querySelectorAll('.composer-attachment')).map((chip) => chip.textContent)).toEqual(['small.md'])
+  })
+
+  it('counts text files toward the shared file limit and removes them', async () => {
+    renderComposer()
+    await pickFiles(Array.from({ length: 8 }, (_, index) => textFile(`n${index}.md`, 'x')))
+    await pickFiles([textFile('extra.md', 'x')])
+    expect(container.querySelectorAll('.composer-attachment')).toHaveLength(8)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('up to 8 files')
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Remove n0.md"]')?.click())
+    expect(container.querySelectorAll('.composer-attachment')).toHaveLength(7)
   })
 
   it('shares count and byte limits across picker, paste, and drop', async () => {

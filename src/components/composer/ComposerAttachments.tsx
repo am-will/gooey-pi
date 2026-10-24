@@ -1,13 +1,14 @@
-import { ChevronDown, ImageIcon, MessageCirclePlus, Paperclip, SquareTerminal, X } from 'lucide-react'
+import { ChevronDown, FileText, ImageIcon, MessageCirclePlus, Paperclip, SquareTerminal, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import type { BrowserAnnotation, TerminalSelectionContext } from '@/types/api'
-import type { ComposerImage, ComposerUnsupportedFile } from '@/hooks/useComposerImages'
+import type { ComposerImage, ComposerTextFile, ComposerUnsupportedFile } from '@/hooks/useComposerImages'
 
 interface Props {
   annotations: BrowserAnnotation[]
   terminalSelection?: TerminalSelectionContext
   images: ComposerImage[]
+  textFiles: ComposerTextFile[]
   unsupportedFiles: ComposerUnsupportedFile[]
   onRemoveAnnotation(id: string): void
   onClearAnnotations(): void
@@ -15,7 +16,7 @@ interface Props {
   onRemoveFile(id: string): void
 }
 
-export function ComposerAttachments({ annotations, terminalSelection, images, unsupportedFiles, onRemoveAnnotation, onClearAnnotations, onClearTerminalSelection, onRemoveFile }: Props) {
+export function ComposerAttachments({ annotations, terminalSelection, images, textFiles, unsupportedFiles, onRemoveAnnotation, onClearAnnotations, onClearTerminalSelection, onRemoveFile }: Props) {
   const { t } = useI18n()
   const [annotationsOpen, setAnnotationsOpen] = useState(false)
   const [terminalSelectionOpen, setTerminalSelectionOpen] = useState(false)
@@ -57,7 +58,7 @@ export function ComposerAttachments({ annotations, terminalSelection, images, un
         <pre>{terminalSelection.text}</pre>
       </div>
     ) : null}
-    {images.length || unsupportedFiles.length || annotations.length || terminalSelection?.text ? (
+    {images.length || textFiles.length || unsupportedFiles.length || annotations.length || terminalSelection?.text ? (
       <div className="composer-attachments" aria-label={t('composer.attachments.label')}>
         {annotations.length ? (
           <div className="composer-attachment composer-attachment--annotations" title={t('composer.annotations.title', { count: annotations.length })}>
@@ -112,6 +113,21 @@ export function ComposerAttachments({ annotations, terminalSelection, images, un
               type="button"
               aria-label={t('composer.attachment.remove', { name: image.name })}
               onClick={() => onRemoveFile(image.id)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
+        {textFiles.map((file) => (
+          <div className="composer-attachment" key={file.id}>
+            <span>
+              <FileText size={12} />
+              {file.name}
+            </span>
+            <button
+              type="button"
+              aria-label={t('composer.attachment.remove', { name: file.name })}
+              onClick={() => onRemoveFile(file.id)}
             >
               <X size={12} />
             </button>

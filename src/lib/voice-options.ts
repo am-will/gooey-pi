@@ -1,4 +1,4 @@
-import type { VoiceTranscriptionProvider } from '@/types/api'
+import type { VoiceCredentialProvider, VoiceTranscriptionProvider } from '@/types/api'
 
 export interface VoiceOption {
   value: string
@@ -20,6 +20,25 @@ export const VOICE_PROVIDER_OPTIONS: VoiceProviderOption[] = [
   { value: 'self-hosted', label: 'Self-hosted · Parakeet / Whisper', detail: 'Connect to your own OpenAI-compatible transcription server.' },
   { value: 'local-whisper', label: 'Local · whisper.cpp', detail: 'Runs entirely on this Mac with your own model file.' },
 ]
+
+export type NativeDictationFallback = 'system' | 'windows-voice-typing'
+
+/**
+ * Without the selected provider's key, dictation falls back to what the OS offers: macOS Dictation can be
+ * started for the user, while Windows voice typing only opens from its own Win+H shortcut. Providers that
+ * need no key, and platforms without built-in dictation, keep their normal flow.
+ */
+export function nativeDictationFallback(
+  provider: VoiceTranscriptionProvider,
+  configured: Partial<Record<VoiceCredentialProvider, boolean>>,
+  platform: NodeJS.Platform,
+): NativeDictationFallback | null {
+  const credential = VOICE_PROVIDER_OPTIONS.find((option) => option.value === provider)?.credential
+  if (!credential || configured[credential]) return null
+  if (platform === 'darwin') return 'system'
+  if (platform === 'win32') return 'windows-voice-typing'
+  return null
+}
 
 export const OPENAI_LIVE_MODELS: VoiceOption[] = [
   { value: 'gpt-live-transcribe', label: 'GPT Live Transcribe', detail: 'Lowest-latency live dictation.', recommended: true },

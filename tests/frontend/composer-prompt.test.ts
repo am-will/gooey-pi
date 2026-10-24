@@ -27,13 +27,13 @@ describe('composer prompt assembly', () => {
   })
   it('orders session, capability, annotations and terminal routing and lets session names win', () => {
     const result = composePrompt('@Review with @Search', 'omp', {
-      ...empty, sessions: [session], skills: [skill('Review'), skill('Search')], annotations: [annotation],
+      ...empty, sessions: [session], skills: [skill('Review'), skill('Search')], annotations: [annotation], files: [{ name: 'notes.md', text: '# Notes' }],
       terminalContext: { tabId: 'shell', label: 'Shell', text: 'status output', truncated: false },
     })
     expect('prompt' in result).toBe(true)
     if (!('prompt' in result)) throw new Error(result.error)
     const text = result.prompt
-    const markers = ['BEGIN GOOEYPI SESSION REFERENCES', 'BEGIN GOOEYPI CAPABILITY ROUTING', 'BEGIN BROWSER ANNOTATIONS', 'BEGIN TERMINAL SELECTION CONTEXT']
+    const markers = ['BEGIN GOOEYPI SESSION REFERENCES', 'BEGIN GOOEYPI CAPABILITY ROUTING', 'BEGIN BROWSER ANNOTATIONS', 'BEGIN ATTACHED FILES', 'BEGIN TERMINAL SELECTION CONTEXT']
     const positions = markers.map((marker) => text.indexOf(marker))
     expect(positions.every((position) => position >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((a, b) => a - b))
@@ -45,5 +45,6 @@ describe('composer prompt assembly', () => {
     expect(composePrompt('/compact custom', 'omp', { ...empty, annotations: [annotation] })).toEqual({ error: '/compact does not accept attachments or @ mentions. Remove them and try again.' })
     expect(composePrompt('/mcp', 'prime', { ...empty, annotations: [annotation] })).toHaveProperty('error')
     expect(composePrompt('/mcp', 'pi', { ...empty, annotations: [annotation] })).toHaveProperty('prompt')
+    expect(composePrompt('/compact', 'pi', { ...empty, files: [{ name: 'notes.md', text: 'x' }] })).toHaveProperty('error')
   })
 })

@@ -243,6 +243,36 @@ describe('VoiceService', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
+  it('reports provider failures in one short line without echoing the response body', async () => {
+    const openAiBody = JSON.stringify({ error: { message: 'Incorrect API key provided: sk-proj-****abcd. You can find your API key at https://platform.openai.com/account/api-keys.', type: 'invalid_request_error', code: 'invalid_api_key', param: null }, status: 401 })
+    const responses = [
+      new Response(openAiBody, { status: 401 }),
+      Response.json({ error: { message: `Rate limit reached for whisper-large-v3. Please try again in 2s. ${'x'.repeat(400)}` } }, { status: 429 }),
+      Response.json({ err_code: 'BAD_REQUEST', err_msg: 'Bad Request: failed to process audio: corrupt or unsupported data' }, { status: 400 }),
+      new Response(`<html><body>${'Bad gateway '.repeat(80)}</body></html>`, { status: 502 }),
+      new Response(`upstream unavailable ${'y'.repeat(300)}`, { status: 503 }),
+    ]
+    const settings = { ...defaultSettings(), voiceSelfHostedUrl: 'https://speech.example.test', voiceSelfHostedModel: '' }
+    const fetchMock = vi.fn(async () => responses.shift()!)
+    const { service } = makeService({ settings: () => settings, fetch: fetchMock as typeof fetch })
+    await service.saveApiKey('openai', 'sk-test')
+    await service.saveApiKey('groq', 'gsk-test')
+    await service.saveApiKey('deepgram', 'dg-test')
+    const audio = new Uint8Array(44)
+
+    const failure = async (call: Promise<unknown>) => (await call.then(() => { throw new Error('expected a rejection') }, (error: Error) => error)).message
+    await expect(failure(service.createRealtimeCall({ mode: 'transcription', sdp: 'v=0\r\no=offer-value' })))
+      .resolves.toBe('OpenAI realtime setup failed (401): the API key was rejected. Update it in Settings → Voice.')
+    await expect(failure(service.transcribe({ provider: 'groq', audio }))).resolves.toBe('groq transcription failed (429): Rate limit reached for whisper-large-v3.')
+    await expect(failure(service.transcribe({ provider: 'deepgram', audio })))
+      .resolves.toBe('Deepgram transcription failed (400): Bad Request: failed to process audio: corrupt or unsupported data')
+    await expect(failure(service.transcribe({ provider: 'self-hosted', audio }))).resolves.toBe('Self-hosted transcription failed (502).')
+    const truncated = await failure(service.transcribe({ provider: 'self-hosted', audio }))
+    expect(truncated.startsWith('Self-hosted transcription failed (503): upstream unavailable yyy')).toBe(true)
+    expect(truncated.endsWith('…')).toBe(true)
+    expect(truncated.length).toBeLessThan(220)
+  })
+
   it('uses the selected native streaming transcription model', async () => {
     const settings = { ...defaultSettings(), voiceOpenAiLiveTranscriptionModel: 'gpt-realtime-whisper' }
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

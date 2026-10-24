@@ -254,6 +254,61 @@ describe('tool result placement in assembled turns', () => {
   })
 })
 
+describe('response generation timing in assembled turns', () => {
+  const at = (seconds: number) => new Date(Date.parse('2026-10-24T10:00:00.000Z') + seconds * 1_000).toISOString()
+  const response = (startSeconds: number, output: number, stopReason = 'toolUse') => ({
+    role: 'assistant', content: [{ type: 'text', text: `${output} tokens` }], stopReason, timestamp: Date.parse(at(startSeconds)), usage: { output },
+  })
+  const write = (records: Array<[id: string, completedSeconds: number | undefined, message: Record<string, unknown>]>): string => {
+    const file = makeSessionFile()
+    let parentId: string | null = null
+    const lines = [JSON.stringify({ type: 'session', version: 3, id: 'session-1', cwd: '/project' })]
+    for (const [id, completedSeconds, message] of records) {
+      lines.push(JSON.stringify({ type: 'message', id, parentId, ...(completedSeconds === undefined ? {} : { timestamp: at(completedSeconds) }), message }))
+      parentId = id
+    }
+    writeFileSync(file, `${lines.join('\n')}\n`)
+    return file
+  }
+  const user = { role: 'user', content: [{ type: 'text', text: 'go' }] }
+  const toolResult = { role: 'toolResult', toolCallId: 'call-1', toolName: 'Read', content: 'read' }
+
+  it('sums every response in a turn, leaving tool time out', async () => {
+    const transcript = await readTranscript(write([
+      ['user-1', 0, user],
+      ['assistant-1', 4, response(1, 100)],
+      ['result-1', 60, toolResult],
+      ['assistant-2', 70, response(60, 300, 'stop')],
+      ['user-2', 80, user],
+      ['assistant-3', 85, response(81, 80, 'stop')],
+    ]), false)
+
+    expect(transcript.map(({ id, generation }) => [id, generation])).toEqual([
+      ['user-1', undefined],
+      ['assistant-1', { outputTokens: 400, durationMs: 13_000 }],
+      ['user-2', undefined],
+      ['assistant-3', { outputTokens: 80, durationMs: 4_000 }],
+    ])
+  })
+
+  it('counts only responses the harness timed and completed', async () => {
+    const transcript = await readTranscript(write([
+      ['user-1', 0, user],
+      ['assistant-1', undefined, response(1, 100)],
+      ['assistant-2', 9, { ...response(2, 50), stopReason: 'aborted' }],
+      ['user-2', 10, user],
+      ['assistant-3', undefined, response(11, 20, 'stop')],
+    ]), false)
+
+    expect(transcript.map(({ id, generation }) => [id, generation])).toEqual([
+      ['user-1', undefined],
+      ['assistant-1', undefined],
+      ['user-2', undefined],
+      ['assistant-3', undefined],
+    ])
+  })
+})
+
 describe('provider errors that end a turn', () => {
   const overloaded = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
   const write = (messages: Array<[id: string, message: Record<string, unknown>] | Record<string, unknown>>): string => {

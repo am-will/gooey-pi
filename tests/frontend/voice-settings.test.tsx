@@ -63,6 +63,7 @@ function voiceBridge(overrides: Partial<PrimeWorkApi['voice']> = {}): PrimeWorkA
     transcribe: vi.fn(),
     testSelfHosted: vi.fn().mockResolvedValue(true),
     executeTool: vi.fn(),
+    startSystemDictation: vi.fn().mockResolvedValue(false),
     ...overrides,
   }
 }

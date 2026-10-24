@@ -60,6 +60,11 @@ export type MessagePart =
       customInstructions?: string
       willRetry?: boolean
     }
+/** Output tokens and model response time summed over the harness responses in one turn. */
+export interface TranscriptGeneration {
+  outputTokens: number
+  durationMs: number
+}
 export interface TranscriptMessage {
   id: string
   role: 'user' | 'assistant' | 'agent' | 'goal' | 'tool' | 'system'
@@ -72,6 +77,8 @@ export interface TranscriptMessage {
   agentName?: string
   startedAt?: string | number
   completedAt?: string | number
+  /** Absent when the harness recorded no measurable response for this turn. */
+  generation?: TranscriptGeneration
   parts: MessagePart[]
   streaming?: boolean
 }

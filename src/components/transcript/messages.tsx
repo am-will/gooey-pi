@@ -1,9 +1,10 @@
 import { scanAtMentions } from '@/lib/at-mentions'
 import { Fragment, memo, useMemo, useId, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, ChevronRight, Copy, Target } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, FileText, Target } from 'lucide-react'
 import type { HarnessId, MessagePart, TranscriptMessage } from '@/types/api'
 import { splitAnnotationBlock } from '@/lib/browser-annotations'
 import { splitCapabilityRouting } from '@/lib/capability-mentions'
+import { splitFileAttachmentBlock, type TextFileAttachment } from '@/lib/file-attachments'
 import { routedSessionReferences, splitSessionRouting, type RoutedSessionReference } from '@/lib/session-mentions'
 import { splitTerminalContextBlock } from '@/lib/terminal-context'
 import { useCopyFeedback } from '@/hooks/useCopyFeedback'
@@ -187,11 +188,27 @@ function SessionReferenceText({ text, references, onOpen }: { text: string; refe
 }
 
 function parseUserPrompt(text: string) {
-  const terminal = splitTerminalContextBlock(text)
+  // Attached files split first: their verbatim contents may hold other blocks' markers.
+  const files = splitFileAttachmentBlock(text)
+  const terminal = splitTerminalContextBlock(files.text)
   const annotations = splitAnnotationBlock(terminal.text)
   const capability = splitCapabilityRouting(annotations.text)
   const sessions = splitSessionRouting(capability.text)
-  return { terminal, annotations, capability, sessions, references: routedSessionReferences(sessions.block) }
+  return { files, terminal, annotations, capability, sessions, references: routedSessionReferences(sessions.block) }
+}
+
+const ATTACHMENT_PLACEHOLDERS = new Set(['[Page annotations]', '[Terminal selection]', '[Attached file]', '[Attached files]'])
+
+/** Files can be large, so their contents mount only while the disclosure is open. */
+function AttachedFile({ file }: { file: TextFileAttachment }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="user-annotations user-file-attachment" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary><FileText size={11} aria-hidden="true" />{t('transcript.attachedFile', { name: file.name })}</summary>
+      {open ? <pre>{file.text}</pre> : null}
+    </details>
+  )
 }
 
 function UserText({ text, onOpenSessionReference }: { text: string; onOpenSessionReference?(sessionId: string, harness: HarnessId): void }) {
@@ -199,11 +216,12 @@ function UserText({ text, onOpenSessionReference }: { text: string; onOpenSessio
   // Sent prompts can carry verbose model-facing context blocks. Keep both
   // attachments collapsed and capability routing hidden while preserving the
   // user's own message.
-  const { terminal, annotations, capability, sessions, references } = useMemo(() => parseUserPrompt(text), [text])
-  if (!sessions.block && !capability.block && !annotations.block && !terminal.block) return <InlineText text={text} />
+  const { files, terminal, annotations, capability, sessions, references } = useMemo(() => parseUserPrompt(text), [text])
+  if (!sessions.block && !capability.block && !annotations.block && !terminal.block && !files.block) return <InlineText text={text} />
   return (
     <>
-      {sessions.text && sessions.text !== '[Page annotations]' && sessions.text !== '[Terminal selection]' ? <SessionReferenceText text={sessions.text} references={references} onOpen={onOpenSessionReference} /> : null}
+      {sessions.text && !ATTACHMENT_PLACEHOLDERS.has(sessions.text) ? <SessionReferenceText text={sessions.text} references={references} onOpen={onOpenSessionReference} /> : null}
+      {files.files.map((file, index) => <AttachedFile key={`${index}-${file.name}`} file={file} />)}
       {annotations.block ? (
         <details className="user-annotations">
           <summary>{annotations.count > 0 ? t('transcript.pageAnnotations', { count: annotations.count }) : t('transcript.pageAnnotations.title')}</summary>
