@@ -68,11 +68,11 @@ export function useChildWorkspace({ bridge, parent, harness, visible, rosterVisi
   const history = useChildHistory(api, child ? parentFile : undefined, child?.id)
   const retry = useCallback(() => setRevision((value) => value + 1), [])
   const roster = useMemo<ChildRosterView | undefined>(() => {
-    if (!parentFile) return
-    if (harness !== 'omp' || !api) return { kind: 'unavailable', parentFile }
+    // Harnesses without child history get no roster at all, so no note is shown in the sidebar.
+    if (!parentFile || harness !== 'omp' || !api) return
     if (currentRoster && 'error' in currentRoster) return { kind: 'error', parentFile, message: currentRoster.error, retry }
     if (!result) return { kind: 'loading', parentFile }
-    if (!result.supported) return { kind: 'unavailable', parentFile, reason: result.reason }
+    if (!result.supported) return
     return { kind: 'ready', parentFile, children: result.children, truncated: result.truncated, selectedId: child?.id, onSelect: open }
   }, [api, child?.id, currentRoster, harness, open, parentFile, result, retry])
   return {
