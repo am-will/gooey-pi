@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_EVENT_QUEUE_LIMIT, admitAgentEvent, contextUsageFromEvent, sessionUsageFromEvent, type PendingAgentEvent } from '../../src/app/agent-events'
 import { applyPrimeEvent, replayPrimeEvents } from '../../src/lib/events'
-import { contextDialLabel, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
+import { contextDialLabel, formatOutputRate, formatSessionCost, formatSessionTokens } from '../../src/lib/format-cost'
 import type { TranscriptMessage } from '../../src/types/api'
 
 describe('context usage events', () => {
@@ -56,6 +56,13 @@ describe('session usage events', () => {
     expect(formatSessionCost(undefined)).toBeNull()
     expect(formatSessionTokens({ cost: 1, tokens })).toBe('10,000 in / 2,000 out / 600 cached')
     expect(formatSessionTokens({ cost: 1 })).toBeNull()
+  })
+
+  it('formats mean output speed and hides an unmeasured one', () => {
+    expect(formatOutputRate(42.149)).toBe('42.1 tok/s')
+    expect(formatOutputRate(80)).toBe('80 tok/s')
+    expect(formatOutputRate(1_234.6)).toBe('1,235 tok/s')
+    for (const rate of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) expect(formatOutputRate(rate)).toBeNull()
   })
 
   it('appends the session cost to the context dial label only when known', () => {

@@ -40,6 +40,13 @@ export function contextDialLabel(contextUsage: PrimeContextUsage | undefined, se
   return translate(locale, 'cost.dialCost', { label, cost: formatUsd(sessionCost) })
 }
 
+/** Mean output speed: one decimal below 100 tok/s, where it still reads as a difference. */
+export function formatOutputRate(tokensPerSecond: number | undefined): string | null {
+  if (tokensPerSecond === undefined || !Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return null
+  const rate = tokensPerSecond.toLocaleString('en-US', { maximumFractionDigits: tokensPerSecond < 100 ? 1 : 0 })
+  return translate(formattingLocaleTag(), 'cost.outputRate', { rate })
+}
+
 export function formatSessionTokens(usage: SessionUsage | undefined): string | null {
   const tokens = usage?.tokens
   if (!tokens || tokens.total <= 0) return null
