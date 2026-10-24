@@ -126,6 +126,26 @@ function cleanText(value: unknown, label: string, max = 1_000_000): string {
   return requireString(value, label, { min: 1, max, trim: true })
 }
 
+/**
+ * Provider error bodies are verbose JSON with masked keys and help links, and the composer shows the
+ * message inline, so keep one short line: a rejected key points at Voice settings, anything else keeps
+ * the provider's first sentence.
+ */
+function providerFailureMessage(label: string, status: number, body: string): string {
+  if (status === 401) return `${label} failed (401): the API key was rejected. Update it in Settings → Voice.`
+  let detail = body
+  try {
+    const parsed: unknown = JSON.parse(body)
+    const error = isRecord(parsed) ? parsed.error ?? parsed.err_msg ?? parsed.message ?? parsed.detail : undefined
+    detail = typeof error === 'string' ? error : isRecord(error) && typeof error.message === 'string' ? error.message : ''
+  } catch { /* plain-text body */ }
+  detail = detail.replace(/\s+/g, ' ').trim()
+  if (detail.startsWith('<')) detail = '' // an HTML error page from a proxy or gateway
+  detail = detail.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? detail
+  if (detail.length > 160) detail = `${detail.slice(0, 159)}…`
+  return detail ? `${label} failed (${status}): ${detail}` : `${label} failed (${status}).`
+}
+
 function localContext(harness: HarnessId): Record<string, string> {
   const now = new Date()
   const resolved = Intl.DateTimeFormat().resolvedOptions()
@@ -402,7 +422,7 @@ export class VoiceService {
       body: form,
     }, 30_000)
     const answer = await response.text()
-    if (!response.ok) throw new Error(`OpenAI realtime setup failed (${response.status}): ${answer.slice(0, 512)}`)
+    if (!response.ok) throw new Error(providerFailureMessage('OpenAI realtime setup', response.status, answer))
     if (!answer.startsWith('v=0')) throw new Error('OpenAI realtime setup returned an invalid session description')
     return answer
   }
@@ -641,7 +661,7 @@ export class VoiceService {
 
   private async jsonResponse(response: Response, label: string): Promise<Record<string, unknown>> {
     const text = await this.boundedResponseText(response, label)
-    if (!response.ok) throw new Error(`${label} failed (${response.status}): ${text.slice(0, 512)}`)
+    if (!response.ok) throw new Error(providerFailureMessage(label, response.status, text))
     let parsed: unknown
     try { parsed = JSON.parse(text) } catch { throw new Error(`${label} returned invalid JSON`) }
     return requireRecord(parsed, `${label} response`)
