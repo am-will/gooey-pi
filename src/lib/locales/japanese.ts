@@ -300,6 +300,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'dictation.error.tooLong': '1 回の録音は 4 分までです。',
   'dictation.error.providerChanged': '録音中に文字起こしプロバイダーが変更されました。',
   'dictation.error.transcribe': '録音を文字起こしできませんでした。',
+  'dictation.windowsVoiceTyping': '音声キーが保存されていません。Win+H を押して Windows の音声入力を使うか、設定 → 音声 でキーを追加してください。',
   'executingModel.running': '{model} で実行中',
   'executingModel.fallbackTooltip': 'プロバイダーのフォールバック: 選択したモデルではなく {model} で実行しています。',
   'changesCard.filesChanged': '{count} 件のファイル変更',

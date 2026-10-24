@@ -150,8 +150,8 @@ export const Composer = memo(function Composer({
   const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
   const imageAttachments = useComposerImages({ shortName })
   const { images, imagesRef, textFiles, textFilesRef, unsupportedFiles, unsupportedFilesRef, error: attachmentError, setError: setAttachmentError, processing: processingImages } = imageAttachments
-  const dictation = useDictation(voice, transcriptionProvider, setAttachmentError)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const dictation = useDictation(voice, transcriptionProvider, setAttachmentError, () => textareaRef.current?.focus())
   const wrapRef = useRef<HTMLDivElement>(null)
   const submittingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)

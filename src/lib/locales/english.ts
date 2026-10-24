@@ -314,6 +314,7 @@ export const englishCatalog = {
   'dictation.error.tooLong': 'Dictation is limited to four minutes per recording.',
   'dictation.error.providerChanged': 'The transcription provider changed while recording.',
   'dictation.error.transcribe': 'Could not transcribe the recording.',
+  'dictation.windowsVoiceTyping': 'No voice key is saved. Press Win+H to dictate with Windows voice typing, or add a key in Settings → Voice.',
   'executingModel.running': 'Running on {model}',
   'executingModel.fallbackTooltip': 'Provider fallback: running on {model} instead of the selected model.',
   'changesCard.filesChanged': { one: '{count} file changed', other: '{count} files changed' },

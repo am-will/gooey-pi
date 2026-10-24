@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrimeWorkApi, VoiceTranscriptionProvider } from '@/types/api'
+import { useI18n } from '@/lib/i18n'
+import { detectRendererPlatform } from '@/lib/platform-shortcuts'
+import { nativeDictationFallback } from '@/lib/voice-options'
 
 export type DictationState = 'idle' | 'connecting' | 'recording' | 'transcribing'
 
@@ -77,10 +80,14 @@ function waitForChannel(channel: RTCDataChannel): Promise<void> {
   })
 }
 
-export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, provider: VoiceTranscriptionProvider, onError: (message: string) => void) {
+/** `focusInput` moves focus to the field that OS dictation should type into. */
+export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, provider: VoiceTranscriptionProvider, onError: (message: string) => void, focusInput?: () => void) {
+  const { t } = useI18n()
   const [state, setState] = useState<DictationState>('idle')
   const captureRef = useRef<Capture | null>(null)
   const generationRef = useRef(0)
+  const focusInputRef = useRef(focusInput)
+  focusInputRef.current = focusInput
 
   const cancel = useCallback(() => {
     generationRef.current += 1
@@ -100,6 +107,23 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
     onError('')
     let stream: MediaStream | null = null
     try {
+      const fallback = await voice.credentialStatus()
+        .then((status) => nativeDictationFallback(provider, status.configured, detectRendererPlatform()))
+        .catch(() => null)
+      if (generation !== generationRef.current) return
+      if (fallback === 'windows-voice-typing') {
+        focusInputRef.current?.()
+        setState('idle')
+        onError(t('dictation.windowsVoiceTyping'))
+        return
+      }
+      if (fallback === 'system') {
+        focusInputRef.current?.()
+        if (await voice.startSystemDictation()) {
+          if (generation === generationRef.current) setState('idle')
+          return
+        }
+      }
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false })
       if (generation !== generationRef.current) { stopTracks(stream); return }
       if (provider === 'openai-live') {
@@ -147,7 +171,7 @@ export function useDictation(voice: PrimeWorkApi['voice'] | null | undefined, pr
         onError(error instanceof Error ? error.message : 'Could not start microphone capture.')
       }
     }
-  }, [onError, provider, state, voice])
+  }, [onError, provider, state, t, voice])
 
   const finish = useCallback(async (): Promise<string> => {
     const capture = captureRef.current
