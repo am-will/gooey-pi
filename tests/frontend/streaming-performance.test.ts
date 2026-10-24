@@ -566,6 +566,17 @@ describe('streaming markdown parse throttling', () => {
     expect(summarizeTranscript(messages)).toEqual({ toolCount: 2, lastText: 'final answer' })
     expect(summarizeTranscript([])).toEqual({ toolCount: 0, lastText: undefined })
   })
+
+  it('weights mean output speed by tokens across every timed turn', async () => {
+    const { summarizeTranscript } = await import('../../src/components/inspector/SummaryPanel')
+    const messages: TranscriptMessage[] = [
+      { id: 'assistant-1', role: 'assistant', generation: { outputTokens: 900, durationMs: 10_000 }, parts: [{ type: 'text', text: 'long' }] },
+      { id: 'assistant-2', role: 'assistant', generation: { outputTokens: 100, durationMs: 2_500 }, parts: [{ type: 'text', text: 'short' }] },
+      { id: 'assistant-3', role: 'assistant', parts: [{ type: 'text', text: 'untimed' }] },
+    ]
+    expect(summarizeTranscript(messages).outputTokensPerSecond).toBe(80)
+    expect(summarizeTranscript(messages.slice(2))).not.toHaveProperty('outputTokensPerSecond')
+  })
 })
 
 describe('git refresh scheduling', () => {

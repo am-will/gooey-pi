@@ -26,13 +26,21 @@ interface SummaryPanelProps {
 export interface TranscriptSummary {
   toolCount: number
   lastText?: string
+  /** Output tokens over response time across every timed turn; absent when the harness timed none. */
+  outputTokensPerSecond?: number
 }
 
-/** One pass for the tool count; one reverse walk that stops at the first text part. */
+/** One pass for the tool count and generation totals; one reverse walk that stops at the first text part. */
 export function summarizeTranscript(messages: TranscriptMessage[], t?: ReturnType<typeof useI18n>['t']): TranscriptSummary {
   let toolCount = 0
+  let outputTokens = 0
+  let durationMs = 0
   for (const message of messages) {
     for (const part of message.parts) if (part.type === 'toolCall') toolCount += 1
+    if (message.generation) {
+      outputTokens += message.generation.outputTokens
+      durationMs += message.generation.durationMs
+    }
   }
   let lastText: string | undefined
   for (let index = messages.length - 1; index >= 0 && lastText === undefined; index -= 1) {
@@ -45,7 +53,7 @@ export function summarizeTranscript(messages: TranscriptMessage[], t?: ReturnTyp
       }
     }
   }
-  return { toolCount, lastText }
+  return durationMs > 0 ? { toolCount, lastText, outputTokensPerSecond: outputTokens / (durationMs / 1_000) } : { toolCount, lastText }
 }
 
 export const SummaryPanel = memo(function SummaryPanel({ agentName = HARNESS_AGENT_NAMES.prime, shortName = HARNESS_SHORT_NAMES.prime, project, runtime, messages, git, automations, heartbeats, onOpenAutomation }: SummaryPanelProps) {
