@@ -577,6 +577,19 @@ describe('streaming markdown parse throttling', () => {
     expect(summarizeTranscript(messages).outputTokensPerSecond).toBe(80)
     expect(summarizeTranscript(messages.slice(2))).not.toHaveProperty('outputTokensPerSecond')
   })
+
+  it('shows mean output speed in the summary only once the harness timed a response', async () => {
+    const { createElement } = await import('react')
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const { SummaryPanel } = await import('../../src/components/inspector/SummaryPanel')
+    const render = (messages: TranscriptMessage[]) => renderToStaticMarkup(createElement(SummaryPanel, {
+      runtime: null, messages, git: { isRepo: false, files: [] }, automations: [], heartbeats: [], onOpenAutomation: () => undefined,
+    }))
+    const timed = render([{ id: 'assistant-1', role: 'assistant', generation: { outputTokens: 425, durationMs: 10_000 }, parts: [{ type: 'text', text: 'done' }] }])
+    expect(timed).toContain('<dt>Mean output</dt><dd class="mono" title="Output tokens per second across this session’s responses, including time to first token">42.5 tok/s</dd>')
+    expect(timed).not.toContain('<dt>Cost</dt>')
+    expect(render([{ id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'done' }] }])).not.toContain('summary-cost')
+  })
 })
 
 describe('git refresh scheduling', () => {
