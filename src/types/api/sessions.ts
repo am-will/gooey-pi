@@ -77,6 +77,8 @@ export interface TranscriptMessage {
   agentName?: string
   startedAt?: string | number
   completedAt?: string | number
+  /** Absent when the harness recorded no measurable response for this turn. */
+  generation?: TranscriptGeneration
   parts: MessagePart[]
   streaming?: boolean
 }

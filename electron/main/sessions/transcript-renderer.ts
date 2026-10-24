@@ -1,5 +1,6 @@
-import type { MessagePart, TranscriptMessage } from '../../../src/types/api'
+import type { MessagePart, TranscriptGeneration, TranscriptMessage } from '../../../src/types/api'
 import { isCompactionReason } from '../../../src/lib/compaction-reason'
+import { parseResponseGeneration } from '../../../src/lib/usage'
 import { SESSION_FILE_MAX_RECORDS } from '../jsonl-limits'
 import { isRecord } from '../validation'
 import type { JsonRecord } from './metadata'
@@ -24,6 +25,13 @@ function customActivityName(value: string): string {
   return value.split(/[_-]+/).filter(Boolean).map((word) => word.toLowerCase() === 'ipython'
     ? 'IPython'
     : `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`).join(' ') || 'Activity'
+}
+
+/** A turn spans several harness responses; their output and response time add up. */
+function addGeneration(turn: TranscriptMessage, response: TranscriptGeneration | undefined): void {
+  if (!response) return
+  const total = turn.generation
+  turn.generation = total ? { outputTokens: total.outputTokens + response.outputTokens, durationMs: total.durationMs + response.durationMs } : response
 }
 
 function roleOf(message: JsonRecord): TranscriptMessage['role'] {
@@ -371,6 +379,7 @@ export async function renderTranscriptLines(lines: AsyncIterable<string>, isStre
         activeAssistant = { id: safeId, role, timestamp, startedAt: timestamp, completedAt, parts }
         transcript.push(activeAssistant)
       }
+      addGeneration(activeAssistant, parseResponseGeneration(message, entryTimestamp))
       failedTurn = providerErrorRow(message, safeId, completedAt)
       continue
     }
