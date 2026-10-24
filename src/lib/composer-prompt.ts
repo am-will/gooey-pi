@@ -1,5 +1,6 @@
 import { appendAnnotationsToPrompt } from '@/lib/browser-annotations'
 import { appendCapabilityRouting } from '@/lib/capability-mentions'
+import { appendFileAttachmentsToPrompt, type TextFileAttachment } from '@/lib/file-attachments'
 import { appendSessionRouting, findSessionMentions } from '@/lib/session-mentions'
 import { interceptedCommandName } from '@/lib/prompt-commands'
 import { appendTerminalContextToPrompt } from '@/lib/terminal-context'
@@ -11,6 +12,8 @@ export interface ComposerPromptContext {
   /** Enabled capabilities that @ mentions may route to. */
   skills: readonly SkillRecord[]
   annotations: BrowserAnnotation[]
+  /** Text files the user attached; their contents ride inside the prompt. */
+  files?: readonly TextFileAttachment[]
   terminalContext?: TerminalPromptContext
 }
 
@@ -29,7 +32,7 @@ export function composePrompt(prompt: string, harness: HarnessId, context: Compo
   return { prompt: composed }
 }
 
-function appendContext(prompt: string, { sessions, sessionReferenceIds, skills, annotations, terminalContext }: ComposerPromptContext): string {
+function appendContext(prompt: string, { sessions, sessionReferenceIds, skills, annotations, files = [], terminalContext }: ComposerPromptContext): string {
   // Recognized @ mentions carry explicit routing semantics; annotations then
   // ride along inside the prompt as their own delimited plain-text block.
   const referencedSessions = findSessionMentions(prompt, sessions, sessionReferenceIds)
@@ -39,7 +42,8 @@ function appendContext(prompt: string, { sessions, sessionReferenceIds, skills, 
   // from the combined menu wins instead of silently routing both.
   const promptWithCapabilities = appendCapabilityRouting(promptWithSessions, skills.filter((skill) => !sessionTitles.has(skill.name.trim().toLocaleLowerCase())))
   const promptWithAnnotations = appendAnnotationsToPrompt(promptWithCapabilities, annotations)
-  return appendTerminalContextToPrompt(promptWithAnnotations, terminalContext)
+  const promptWithFiles = appendFileAttachmentsToPrompt(promptWithAnnotations, files)
+  return appendTerminalContextToPrompt(promptWithFiles, terminalContext)
 }
 
 
