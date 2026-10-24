@@ -281,6 +281,8 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'composer.error.tooManyFiles': '添付できるファイルは最大 {count} 件です。',
   'composer.error.imagesTooLarge': '画像のサイズが大きすぎて送信できません。合計 1.3 MB 程度の小さい画像を添付してください。',
   'composer.error.imageRead': '{name} は画像を読み込めませんでした。',
+  'composer.error.textFileTooLarge': '{name} は大きすぎるため添付できません。テキストファイルは 512 KB まで添付できます。',
+  'composer.error.textFileRead': '{name} を読み込めませんでした。',
   'composer.attachment.unnamedFile': '添付ファイル {index}',
   'composer.attachment.unnamedImage': '添付画像 {index}',
   'dictation.cancel': '音声入力をキャンセル',

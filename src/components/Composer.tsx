@@ -149,7 +149,7 @@ export const Composer = memo(function Composer({
   const shortName = HARNESS_SHORT_NAMES[harness]
   const [value, setValue] = useState(() => readComposerDraft(draftKey ?? 'default')?.text ?? '')
   const imageAttachments = useComposerImages({ shortName })
-  const { images, imagesRef, unsupportedFiles, unsupportedFilesRef, error: attachmentError, setError: setAttachmentError, processing: processingImages } = imageAttachments
+  const { images, imagesRef, textFiles, textFilesRef, unsupportedFiles, unsupportedFilesRef, error: attachmentError, setError: setAttachmentError, processing: processingImages } = imageAttachments
   const dictation = useDictation(voice, transcriptionProvider, setAttachmentError)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -199,13 +199,14 @@ export const Composer = memo(function Composer({
 
   const submit = async (intent: PromptDeliveryIntent = 'queue', valueOverride?: string) => {
     const currentImages = imagesRef.current
+    const currentTextFiles = textFilesRef.current
     const currentUnsupportedFiles = unsupportedFilesRef.current
     const currentAnnotations = annotationsRef.current
     const currentTerminalContext = terminalSelection?.text ? getTerminalContext?.() : undefined
     const hasTerminalSelection = Boolean(currentTerminalContext?.text)
     const draftValue = valueOverride ?? value
-    const prompt = attachmentPlaceholderPrompt({ draft: draftValue, images: currentImages.length, files: currentUnsupportedFiles.length, annotations: currentAnnotations.length })
-    if ((!draftValue.trim() && currentImages.length === 0 && currentUnsupportedFiles.length === 0 && currentAnnotations.length === 0 && !hasTerminalSelection) || loading || disabled || (intent !== 'steer' && !busy && (submitting || submittingRef.current))) return
+    const prompt = attachmentPlaceholderPrompt({ draft: draftValue, images: currentImages.length, files: currentTextFiles.length + currentUnsupportedFiles.length, annotations: currentAnnotations.length })
+    if ((!draftValue.trim() && currentImages.length === 0 && currentTextFiles.length === 0 && currentUnsupportedFiles.length === 0 && currentAnnotations.length === 0 && !hasTerminalSelection) || loading || disabled || (intent !== 'steer' && !busy && (submitting || submittingRef.current))) return
     if (imageAttachments.hasPending()) {
       setAttachmentError(t('composer.error.waitForProcessing'))
       return
@@ -223,7 +224,7 @@ export const Composer = memo(function Composer({
       return
     }
     const submittedImages = currentImages.map(({ type, data, mimeType }) => ({ type, data, mimeType }))
-    const composed = composePrompt(prompt, harness, { sessions, sessionReferenceIds, skills: enabledSkills, annotations: currentAnnotations, terminalContext: currentTerminalContext })
+    const composed = composePrompt(prompt, harness, { sessions, sessionReferenceIds, skills: enabledSkills, annotations: currentAnnotations, files: currentTextFiles.map(({ name, text }) => ({ name, text })), terminalContext: currentTerminalContext })
     if ('error' in composed) { setAttachmentError(composed.error); return }
     const promptWithContext = composed.prompt
     if (rpcRequestFrameBytes({ type: intent === 'steer' ? 'steer' : 'follow_up', message: promptWithContext, ...(submittedImages.length ? { images: submittedImages } : {}) }) > RPC_WRITE_FRAME_LIMIT_BYTES) {
@@ -369,14 +370,14 @@ export const Composer = memo(function Composer({
             ))}
           </div>
         ) : null}
-        <ComposerAttachments annotations={annotations} terminalSelection={terminalSelection} images={images} unsupportedFiles={unsupportedFiles} onRemoveAnnotation={onRemoveAnnotation} onClearAnnotations={onClearAnnotations} onClearTerminalSelection={onClearTerminalSelection} onRemoveFile={imageAttachments.remove} />
+        <ComposerAttachments annotations={annotations} terminalSelection={terminalSelection} images={images} textFiles={textFiles} unsupportedFiles={unsupportedFiles} onRemoveAnnotation={onRemoveAnnotation} onClearAnnotations={onClearAnnotations} onClearTerminalSelection={onClearTerminalSelection} onRemoveFile={imageAttachments.remove} />
         {attachmentError ? (
           <p className="composer-attachment-error" role="alert">
             {attachmentError}
           </p>
         ) : null}
         <p id={imageStatusId} className="sr-only" role="status" aria-live="polite">
-          {imageAttachments.dragging ? t('composer.status.drop') : processingImages ? t('composer.status.adding') : images.length + unsupportedFiles.length ? t('composer.status.filesAttached', { count: images.length + unsupportedFiles.length }) : ''}
+          {imageAttachments.dragging ? t('composer.status.drop') : processingImages ? t('composer.status.adding') : images.length + textFiles.length + unsupportedFiles.length ? t('composer.status.filesAttached', { count: images.length + textFiles.length + unsupportedFiles.length }) : ''}
         </p>
         <div className="composer__footer">
           <div className="composer__controls">
@@ -452,7 +453,7 @@ export const Composer = memo(function Composer({
                 type="button"
                 className="send-button"
                 aria-label={t('composer.send')}
-                disabled={(!value.trim() && images.length === 0 && unsupportedFiles.length === 0 && annotations.length === 0 && !terminalSelection?.text) || processingImages || submitting || loading || disabled}
+                disabled={(!value.trim() && images.length === 0 && textFiles.length === 0 && unsupportedFiles.length === 0 && annotations.length === 0 && !terminalSelection?.text) || processingImages || submitting || loading || disabled}
                 onClick={() => void submit()}
               >
                 <ArrowUp size={17} />

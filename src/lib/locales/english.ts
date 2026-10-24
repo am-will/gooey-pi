@@ -295,6 +295,8 @@ export const englishCatalog = {
   'composer.error.tooManyFiles': 'You can attach up to {count} files.',
   'composer.error.imagesTooLarge': 'These images are too large to send. Attach smaller images (about 1.3 MB total).',
   'composer.error.imageRead': '{name} could not read the image.',
+  'composer.error.textFileTooLarge': '{name} is too large to attach. Text files can be up to 512 KB.',
+  'composer.error.textFileRead': '{name} could not be read.',
   'composer.attachment.unnamedFile': 'Attached file {index}',
   'composer.attachment.unnamedImage': 'Attached image {index}',
   'dictation.cancel': 'Cancel dictation',

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import type { PromptImage } from '@/types/api'
+import { decodeTextAttachment, isTextAttachmentFile, MAX_TEXT_ATTACHMENT_BYTES } from '@/lib/file-attachments'
 import { useI18n } from '@/lib/i18n'
 
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -11,6 +12,14 @@ export interface ComposerImage extends PromptImage {
   id: string
   name: string
   size: number
+}
+
+/** A text file read in full; it is sent inside the prompt rather than as an image part. */
+export interface ComposerTextFile {
+  id: string
+  name: string
+  size: number
+  text: string
 }
 
 export interface ComposerUnsupportedFile {
@@ -38,11 +47,13 @@ function isFileDrag(event: DragEvent<HTMLElement>): boolean {
 export function useComposerImages({ shortName }: UseComposerImagesOptions) {
   const { t } = useI18n()
   const [images, setImages] = useState<ComposerImage[]>([])
+  const [textFiles, setTextFiles] = useState<ComposerTextFile[]>([])
   const [unsupportedFiles, setUnsupportedFiles] = useState<ComposerUnsupportedFile[]>([])
   const [error, setError] = useState('')
   const [processing, setProcessing] = useState(false)
   const [dragging, setDragging] = useState(false)
   const imagesRef = useRef<ComposerImage[]>([])
+  const textFilesRef = useRef<ComposerTextFile[]>([])
   const unsupportedFilesRef = useRef<ComposerUnsupportedFile[]>([])
   const pendingBatchesRef = useRef(0)
   const errorRevisionRef = useRef(0)
@@ -63,28 +74,60 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
     setError(message)
   }, [])
 
-  const ingest = useCallback(async (files: readonly File[]) => {
-    if (files.length === 0) return
-    const startingErrorRevision = errorRevisionRef.current
-    if (imagesRef.current.length + unsupportedFilesRef.current.length + reservedCountRef.current + files.length > MAX_COMPOSER_FILE_COUNT) {
-      updateError(t('composer.error.tooManyFiles', { count: MAX_COMPOSER_FILE_COUNT }))
-      return
-    }
+  const fileName = useCallback((file: File, index: number) => file.name || t('composer.attachment.unnamedFile', { index: index + 1 }), [t])
 
-    const imageFiles = files.filter((file) => supportedImageTypes.has(file.type.toLowerCase()))
-    const otherFiles = files.filter((file) => !supportedImageTypes.has(file.type.toLowerCase()))
-    if (otherFiles.length > 0) {
-      const added = otherFiles.map((file, index): ComposerUnsupportedFile => ({
-        id: crypto.randomUUID(),
-        name: file.name || t('composer.attachment.unnamedFile', { index: index + 1 }),
-        size: file.size,
-        mimeType: file.type.toLowerCase() || 'application/octet-stream',
+  const addUnsupported = useCallback((files: readonly File[]) => {
+    const added = files.map((file, index): ComposerUnsupportedFile => ({
+      id: crypto.randomUUID(),
+      name: fileName(file, index),
+      size: file.size,
+      mimeType: file.type.toLowerCase() || 'application/octet-stream',
+    }))
+    const next = [...unsupportedFilesRef.current, ...added]
+    unsupportedFilesRef.current = next
+    setUnsupportedFiles(next)
+  }, [fileName])
+
+  const readTextFiles = useCallback(async (files: readonly File[], startingErrorRevision: number) => {
+    const oversized = files.find((file) => file.size > MAX_TEXT_ATTACHMENT_BYTES)
+    if (oversized) updateError(t('composer.error.textFileTooLarge', { name: fileName(oversized, files.indexOf(oversized)) }))
+    const readable = files.filter((file) => file.size <= MAX_TEXT_ATTACHMENT_BYTES)
+    if (readable.length === 0) return
+
+    reservedCountRef.current += readable.length
+    pendingBatchesRef.current += 1
+    setProcessing(true)
+    try {
+      // `text` is null for bytes that are not UTF-8 text and undefined when the read itself failed.
+      const results = await Promise.all(readable.map(async (file) => {
+        try {
+          return { file, text: decodeTextAttachment(await file.arrayBuffer()) }
+        } catch {
+          return { file, text: undefined }
+        }
       }))
-      const next = [...unsupportedFilesRef.current, ...added]
-      unsupportedFilesRef.current = next
-      setUnsupportedFiles(next)
-      setError('')
+      if (!mountedRef.current) return
+      const added = results.flatMap(({ file, text }, index): ComposerTextFile[] => typeof text === 'string'
+        ? [{ id: crypto.randomUUID(), name: fileName(file, index), size: file.size, text }]
+        : [])
+      if (added.length > 0) {
+        const next = [...textFilesRef.current, ...added]
+        textFilesRef.current = next
+        setTextFiles(next)
+      }
+      const binary = results.filter(({ text }) => text === null).map(({ file }) => file)
+      if (binary.length > 0) addUnsupported(binary)
+      const failed = results.findIndex(({ text }) => text === undefined)
+      if (failed !== -1) updateError(t('composer.error.textFileRead', { name: fileName(results[failed].file, failed) }))
+      else if (errorRevisionRef.current === startingErrorRevision) setError('')
+    } finally {
+      reservedCountRef.current -= readable.length
+      pendingBatchesRef.current -= 1
+      if (mountedRef.current && pendingBatchesRef.current === 0) setProcessing(false)
     }
+  }, [addUnsupported, fileName, t, updateError])
+
+  const readImages = useCallback(async (imageFiles: readonly File[], startingErrorRevision: number) => {
     if (imageFiles.length === 0) return
 
     const sourceBytes = imageFiles.reduce((sum, file) => sum + file.size, 0)
@@ -122,27 +165,51 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
     }
   }, [shortName, t, updateError])
 
+  const ingest = useCallback(async (files: readonly File[]) => {
+    if (files.length === 0) return
+    const startingErrorRevision = errorRevisionRef.current
+    if (imagesRef.current.length + textFilesRef.current.length + unsupportedFilesRef.current.length + reservedCountRef.current + files.length > MAX_COMPOSER_FILE_COUNT) {
+      updateError(t('composer.error.tooManyFiles', { count: MAX_COMPOSER_FILE_COUNT }))
+      return
+    }
+
+    const isImage = (file: File) => supportedImageTypes.has(file.type.toLowerCase())
+    const imageFiles = files.filter(isImage)
+    const textFileCandidates = files.filter((file) => !isImage(file) && isTextAttachmentFile(file))
+    const otherFiles = files.filter((file) => !isImage(file) && !isTextAttachmentFile(file))
+    if (otherFiles.length > 0) {
+      addUnsupported(otherFiles)
+      setError('')
+    }
+    await Promise.all([readTextFiles(textFileCandidates, startingErrorRevision), readImages(imageFiles, startingErrorRevision)])
+  }, [addUnsupported, readImages, readTextFiles, t, updateError])
+
   const clear = useCallback(() => {
     imagesRef.current = []
+    textFilesRef.current = []
     unsupportedFilesRef.current = []
     setImages([])
+    setTextFiles([])
     setUnsupportedFiles([])
   }, [])
 
   const remove = useCallback((id: string) => {
     const nextImages = imagesRef.current.filter((image) => image.id !== id)
+    const nextTextFiles = textFilesRef.current.filter((file) => file.id !== id)
     const nextFiles = unsupportedFilesRef.current.filter((file) => file.id !== id)
     imagesRef.current = nextImages
+    textFilesRef.current = nextTextFiles
     unsupportedFilesRef.current = nextFiles
     setImages(nextImages)
+    setTextFiles(nextTextFiles)
     setUnsupportedFiles(nextFiles)
     updateError('')
   }, [updateError])
 
-  const restoreWithinLimits = useCallback((restored: ComposerImage[]) => {
+  const restoreWithinLimits = useCallback((restored: ComposerImage[], restoredTextFiles: readonly ComposerTextFile[] = []) => {
     const current = imagesRef.current
     const currentIds = new Set(current.map((image) => image.id))
-    let count = current.length + unsupportedFilesRef.current.length + reservedCountRef.current
+    let count = current.length + textFilesRef.current.length + unsupportedFilesRef.current.length + reservedCountRef.current
     let bytes = current.reduce((sum, image) => sum + image.size, 0) + reservedBytesRef.current
     const accepted: ComposerImage[] = []
     let omitted = 0
@@ -162,7 +229,23 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
       imagesRef.current = next
       setImages(next)
     }
-    return { restored: accepted.length, omitted }
+    const currentTextFileIds = new Set(textFilesRef.current.map((file) => file.id))
+    const acceptedTextFiles: ComposerTextFile[] = []
+    for (const file of restoredTextFiles) {
+      if (currentTextFileIds.has(file.id)) continue
+      if (count >= MAX_COMPOSER_FILE_COUNT) {
+        omitted += 1
+        continue
+      }
+      acceptedTextFiles.push(file)
+      count += 1
+    }
+    if (acceptedTextFiles.length > 0) {
+      const next = [...acceptedTextFiles, ...textFilesRef.current]
+      textFilesRef.current = next
+      setTextFiles(next)
+    }
+    return { restored: accepted.length + acceptedTextFiles.length, omitted }
   }, [])
 
   const onDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
@@ -196,6 +279,8 @@ export function useComposerImages({ shortName }: UseComposerImagesOptions) {
   return {
     images,
     imagesRef,
+    textFiles,
+    textFilesRef,
     unsupportedFiles,
     unsupportedFilesRef,
     error,
