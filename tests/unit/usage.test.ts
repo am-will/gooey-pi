@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseContextUsage, parseSessionUsage } from '../../src/lib/usage'
+import { parseContextUsage, parseResponseGeneration, parseSessionUsage } from '../../src/lib/usage'
 
 const tokens = { input: 10, output: 5, cacheRead: 3, cacheWrite: 2, total: 20 }
 describe('harness context usage', () => {
@@ -31,5 +31,30 @@ describe('harness session usage', () => {
     }
     expect(parseSessionUsage({ cost: 2, tokens: [] })).toEqual({ cost: 2 })
     expect(parseSessionUsage(null)).toBeNull()
+  })
+})
+describe('harness response generation timing', () => {
+  const startedAt = Date.parse('2026-10-24T10:00:00.000Z')
+  const response = { role: 'assistant', stopReason: 'stop', timestamp: startedAt, usage: { output: 400 } }
+  it('spans the request start to the persisted completion', () => {
+    expect(parseResponseGeneration(response, '2026-10-24T10:00:08.000Z')).toEqual({ outputTokens: 400, durationMs: 8_000 })
+    expect(parseResponseGeneration({ ...response, timestamp: '2026-10-24T10:00:00.000Z' }, startedAt + 2_000)).toEqual({ outputTokens: 400, durationMs: 2_000 })
+    expect(parseResponseGeneration({ ...response, stopReason: 'toolUse' }, startedAt + 1_000)).toEqual({ outputTokens: 400, durationMs: 1_000 })
+  })
+  it.each(['error', 'aborted'])('leaves out a response that ended with %s', (stopReason) => {
+    expect(parseResponseGeneration({ ...response, stopReason }, startedAt + 1_000)).toBeUndefined()
+  })
+  it('needs a measurable span and generated output', () => {
+    const completedAt = startedAt + 1_000
+    expect(parseResponseGeneration({ ...response, role: 'user' }, completedAt)).toBeUndefined()
+    expect(parseResponseGeneration({ ...response, usage: { output: 0 } }, completedAt)).toBeUndefined()
+    expect(parseResponseGeneration({ ...response, usage: { output: -1 } }, completedAt)).toBeUndefined()
+    expect(parseResponseGeneration({ ...response, usage: undefined }, completedAt)).toBeUndefined()
+    expect(parseResponseGeneration({ ...response, timestamp: undefined }, completedAt)).toBeUndefined()
+    expect(parseResponseGeneration({ ...response, timestamp: 'not a date' }, completedAt)).toBeUndefined()
+    expect(parseResponseGeneration(response, undefined)).toBeUndefined()
+    expect(parseResponseGeneration(response, startedAt)).toBeUndefined()
+    expect(parseResponseGeneration(response, startedAt - 1)).toBeUndefined()
+    expect(parseResponseGeneration(null, completedAt)).toBeUndefined()
   })
 })

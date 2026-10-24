@@ -60,6 +60,11 @@ export type MessagePart =
       customInstructions?: string
       willRetry?: boolean
     }
+/** Output tokens and model response time summed over the harness responses in one turn. */
+export interface TranscriptGeneration {
+  outputTokens: number
+  durationMs: number
+}
 export interface TranscriptMessage {
   id: string
   role: 'user' | 'assistant' | 'agent' | 'goal' | 'tool' | 'system'

@@ -1,4 +1,4 @@
-import type { PrimeContextUsage, SessionUsage, SessionUsageTokens } from '../types/api'
+import type { PrimeContextUsage, SessionUsage, SessionUsageTokens, TranscriptGeneration } from '../types/api'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -36,4 +36,25 @@ export function parseSessionUsage(raw: unknown): SessionUsage | null {
   const tokens = parseSessionUsageTokens(raw.tokens)
   if (cost === null && tokens === undefined && raw.cost !== null) return null
   return tokens ? { cost, tokens } : { cost }
+}
+
+function epochMs(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/**
+ * One assistant response's output tokens over its wall time: from the request
+ * start the harness stamps on the message to the completion time of the record
+ * that persisted it, so the span includes time to first token. Failed and
+ * aborted responses carry partial usage and stay out.
+ */
+export function parseResponseGeneration(message: unknown, completedAt: unknown): TranscriptGeneration | undefined {
+  if (!isRecord(message) || message.role !== 'assistant') return undefined
+  if (message.stopReason === 'error' || message.stopReason === 'aborted') return undefined
+  const outputTokens = isRecord(message.usage) ? tokenCount(message.usage.output) : undefined
+  const startedAt = epochMs(message.timestamp)
+  const endedAt = epochMs(completedAt)
+  if (!outputTokens || startedAt === undefined || endedAt === undefined || endedAt <= startedAt) return undefined
+  return { outputTokens, durationMs: endedAt - startedAt }
 }
