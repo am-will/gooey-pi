@@ -1269,6 +1269,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'transcript.pageAnnotations': '{count} 件のページ注釈',
   'transcript.pageAnnotations.title': 'ページ注釈',
   'transcript.selectedTextFrom': '{source} で選択したテキスト',
+  'transcript.attachedFile': '添付ファイル: {name}',
   'transcript.terminalSource': 'ターミナル',
   'transcript.steer.accepted': '受け付けました — 次の安全なタイミングで反映します',
   'transcript.steer.read': 'エージェントが確認しました',

@@ -1295,6 +1295,7 @@ export const englishCatalog = {
   'transcript.pageAnnotations': { one: '{count} page annotation', other: '{count} page annotations' },
   'transcript.pageAnnotations.title': 'Page annotations',
   'transcript.selectedTextFrom': 'Selected text from {source}',
+  'transcript.attachedFile': 'Attached {name}',
   'transcript.terminalSource': 'terminal',
   'transcript.steer.accepted': 'Accepted — waiting for the next safe steering point',
   'transcript.steer.read': 'Read by agent',
