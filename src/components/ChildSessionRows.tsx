@@ -4,7 +4,6 @@ import type { ChildSession } from '@/types/subagents'
 
 export type ChildRosterView =
   | { kind: 'loading'; parentFile: string }
-  | { kind: 'unavailable'; parentFile: string; reason?: string }
   | { kind: 'error'; parentFile: string; message: string; retry(): void }
   | { kind: 'ready'; parentFile: string; children: ChildSession[]; truncated: boolean; selectedId?: string; onSelect(child: ChildSession, trigger: HTMLButtonElement): void }
 
@@ -24,7 +23,6 @@ export function childDepth(child: ChildSession, children: ChildSession[]): numbe
 
 export function ChildSessionRows({ roster }: { roster: ChildRosterView }) {
   const { t } = useI18n()
-  if (roster.kind === 'unavailable') return <p className="child-roster-note" title={roster.reason}>{t('children.ompOnly')}</p>
   if (roster.kind === 'loading') return <p className="child-roster-note" role="status"><LoaderCircle className="spin" size={11} />{t('children.loading')}</p>
   if (roster.kind === 'error') return <div className="child-roster-note" role="status"><p>{t('children.unavailable')}</p><button type="button" title={roster.message} onClick={roster.retry}>{t('children.retry')}</button></div>
   if (!roster.children.length) return null

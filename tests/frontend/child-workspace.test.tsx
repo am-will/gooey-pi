@@ -20,11 +20,12 @@ function Probe({ bridge, harness = 'omp', visible = true, rosterVisible = true }
   return state.roster ? <ChildSessionRows roster={state.roster} /> : null
 }
 
-it('makes unavailable harness support explicit without requesting Prime child data', async () => {
+it.each<HarnessId>(['pi', 'prime'])('shows no child roster on %s without requesting child data', async (harness) => {
   const list = vi.fn()
   const bridge = { subagents: { list, history: vi.fn() } } as unknown as PrimeWorkApi
-  await act(async () => root.render(<Probe bridge={bridge} harness="prime" />))
-  expect(host.textContent).toContain('Child chat history is available with OMP.')
+  await act(async () => root.render(<Probe bridge={bridge} harness={harness} />))
+  expect(state.roster).toBeUndefined()
+  expect(host.textContent).toBe('')
   expect(list).not.toHaveBeenCalled()
 })
 

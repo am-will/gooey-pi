@@ -1407,7 +1407,6 @@ export const englishCatalog = {
   'children.assistant': 'Child agent',
   'children.thinking': 'Thinking summary',
 
-  'children.ompOnly': 'Child chat history is available with OMP.',
   'children.loading': 'Loading child history…',
   'children.unavailable': 'Child history could not be loaded.',
   'children.roster': 'Child agents',

@@ -1380,7 +1380,6 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'children.assistant': '子エージェント',
   'children.thinking': '思考の要約',
 
-  'children.ompOnly': '子チャットの履歴は OMP で利用できます。',
   'children.loading': '子チャットの履歴を読み込んでいます…',
   'children.unavailable': '子チャットの履歴を読み込めませんでした。',
   'children.roster': '子エージェント',
