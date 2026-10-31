@@ -4,8 +4,8 @@ import type { englishCatalog } from './english'
 export type Message = string | { one: string; other: string }
 
 /**
- * Every key the English catalog defines. The Japanese catalog is typed against
- * it (a missing key is a compile error) and the Simplified Chinese catalog is a
- * deliberate `Partial` subset (see `tests/frontend/i18n.test.ts`).
+ * Every key the English catalog defines. Both the Japanese and Simplified
+ * Chinese catalogs are typed against it, so a missing translation is a compile
+ * error and the parity test in `tests/frontend/i18n.test.ts` pins the same rule.
  */
 export type MessageKey = keyof typeof englishCatalog
