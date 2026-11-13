@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import type { DownloadItem, Event, WebContents } from 'electron'
+import { mt } from './localization'
 
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 const MAX_CONCURRENT_DOWNLOADS = 3
@@ -45,7 +46,7 @@ export class BrowserDownloadGuard {
     const active: ActiveDownload = { item, ownerId: owner!.id, receivedBytes: 0, outstandingDeclaredBytes: Math.max(0, declared) }
     this.active.set(item, active)
     this.windowBytes += active.outstandingDeclaredBytes
-    if (askForDownloads) item.setSaveDialogOptions({ title: 'Save browser download', defaultPath: item.getFilename() })
+    if (askForDownloads) item.setSaveDialogOptions({ title: mt('dialog.saveBrowserDownload'), defaultPath: item.getFilename() })
     else item.setSavePath(automaticDownloadPath(this.downloadDirectory, item.getFilename()))
     item.on('updated', () => {
       this.refreshWindow()

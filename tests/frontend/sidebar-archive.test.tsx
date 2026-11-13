@@ -338,10 +338,10 @@ describe('sidebar archive', () => {
       )
     })
 
-    await press(container.querySelector('[aria-label="Archive Session"]')!)
+    await press(container.querySelector('[aria-label="归档 Session"]')!)
     const dialog = document.body.querySelector('[role="dialog"]')
     expect(dialog?.textContent).toContain('归档进行中的聊天')
-    expect(dialog?.textContent).toContain('「Session」还在工作中')
+    expect(dialog?.textContent).toContain('“Session”仍在工作')
     expect(dialog?.textContent).toContain('设置 › 已归档的聊天')
 
     const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('.modal__footer button')].find((button) => button.textContent === '归档')!

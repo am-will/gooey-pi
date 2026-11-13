@@ -1,4 +1,5 @@
 import { app, Menu, type MenuItemConstructorOptions } from 'electron'
+import { mt } from './localization'
 
 interface ApplicationMenuOptions {
   checkForUpdates(): void
@@ -11,7 +12,7 @@ interface ApplicationMenuOptions {
 
 function updateMenuItem(checkForUpdates: () => void, enabled: boolean): MenuItemConstructorOptions {
   return {
-    label: 'Check for Updates…',
+    label: mt('menu.checkForUpdates'),
     enabled,
     click: () => checkForUpdates(),
   }
@@ -41,7 +42,7 @@ export function buildApplicationMenuTemplate(options: ApplicationMenuOptions): M
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { label: `Quit ${appName}`, accelerator: 'CommandOrControl+Q', click: () => options.closeWindow() },
+        { label: mt('menu.quit', { appName }), accelerator: 'CommandOrControl+Q', click: () => options.closeWindow() },
       ],
     }, ...standardMenus]
   }

@@ -1,6 +1,7 @@
 import { dialog, type BrowserWindow } from 'electron'
 import type { RuntimeInfo } from '../../src/types/api'
 import type { MacBackgroundController } from './background'
+import { mt } from './localization'
 import { StateCompatibilityError, StateMigrationError } from './store'
 import { boundedErrorMessage } from './validation'
 
@@ -26,15 +27,11 @@ export function activeShutdownWork(runtimes: readonly RuntimeInfo[], hasActiveSc
 /** Null when nothing is active, which is the signal to close without a prompt. */
 export function shutdownPrompt(work: ActiveShutdownWork): ShutdownPrompt | null {
   const details: string[] = []
-  if (work.runningAgents > 0) {
-    details.push(work.runningAgents === 1
-      ? 'An agent run is still in progress and will be stopped.'
-      : `${work.runningAgents} agent runs are still in progress and will be stopped.`)
-  }
-  if (work.activeSchedules) details.push('Scheduled automations will not run while GooeyPi is closed.')
+  if (work.runningAgents > 0) details.push(mt('shutdown.agentRuns', { count: work.runningAgents }))
+  if (work.activeSchedules) details.push(mt('shutdown.schedules'))
   if (details.length === 0) return null
   return {
-    message: work.runningAgents > 0 ? 'Close GooeyPi while an agent is running?' : 'Close GooeyPi?',
+    message: work.runningAgents > 0 ? mt('shutdown.message.running') : mt('shutdown.message.idle'),
     detail: details.join(' '),
   }
 }
@@ -42,7 +39,7 @@ export function shutdownPrompt(work: ActiveShutdownWork): ShutdownPrompt | null 
 export async function confirmAppClose(window: BrowserWindow | null, prompt: ShutdownPrompt): Promise<boolean> {
   const options = {
     type: 'warning' as const,
-    buttons: ['Cancel', 'Close GooeyPi'],
+    buttons: [mt('common.cancel'), mt('dialog.closeApp')],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
@@ -62,12 +59,12 @@ export interface StartupFailureDialog {
 
 export function startupFailureDialog(error: unknown): StartupFailureDialog | null {
   if (error instanceof StateMigrationError) {
-    return { title: 'GooeyPi state migration failed', detail: boundedErrorMessage(error, 2_048) }
+    return { title: mt('dialog.startupMigration'), detail: boundedErrorMessage(error, 2_048) }
   }
   if (error instanceof StateCompatibilityError) {
-    return { title: 'GooeyPi update required', detail: boundedErrorMessage(error, 2_048) }
+    return { title: mt('dialog.startupUpdateRequired'), detail: boundedErrorMessage(error, 2_048) }
   }
-  return { title: 'GooeyPi could not start', detail: boundedErrorMessage(error, 2_048) }
+  return { title: mt('dialog.startupFailed'), detail: boundedErrorMessage(error, 2_048) }
 }
 
 export async function settleShutdown(

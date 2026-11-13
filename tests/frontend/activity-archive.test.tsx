@@ -159,7 +159,7 @@ describe('archived activity cleanup', () => {
     } as unknown as WorkspaceActionsDeps))
 
     await actions.setSessionArchived(activeSession, true)
-    expect(setToast).toHaveBeenCalledWith('已归档。可在「设置 › 已归档的聊天」里找到。')
+    expect(setToast).toHaveBeenCalledWith('已归档。可在“设置 › 已归档的聊天”中找到。')
 
     await actions.setSessionArchived(activeSession, false)
     expect(setToast).toHaveBeenLastCalledWith('会话已恢复。')

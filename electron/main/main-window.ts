@@ -1,5 +1,6 @@
 import { BrowserWindow, dialog, Menu, nativeTheme, screen, type Rectangle, type BrowserWindowConstructorOptions, type Input, type WebContents } from 'electron'
 import { rendererRecovery } from './renderer-recovery'
+import { mt } from './localization'
 import { mainWindowBounds } from './window-bounds'
 import { bindRendererNavigation } from './renderer-navigation'
 import { hardenRenderer } from './renderer-security'
@@ -177,7 +178,7 @@ export class MainWindowController {
       if (recovery.kind === 'reload') alreadyRecovered = true
       void Promise.resolve().then(() => dialog.showMessageBox(window, {
         type: 'warning', message: recovery.message, detail: recovery.detail,
-        buttons: [recovery.kind === 'reload' ? 'Reload window' : 'OK'], noLink: true,
+        buttons: [recovery.kind === 'reload' ? mt('dialog.reloadWindow') : mt('dialog.ok')], noLink: true,
       })).then(async () => {
         if (recovery.kind !== 'reload' || this.context.shuttingDown || window.isDestroyed() || this.window !== window) return
         await loadInitialRenderer(window, this.context.rendererUrl)

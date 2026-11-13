@@ -141,6 +141,19 @@
    target to bring it back. `clip` is not scrollable, so that state is unreachable. */
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: clip; }
 body { color: var(--text); background: var(--canvas); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+
+/* CJK glyphs need an explicit family so Windows/Linux do not fall back to a
+   locale-mismatched Han face, and Chinese needs more leading than Latin at this
+   size. Both are scoped by document language so English keeps its metrics and
+   Japanese keeps Japanese glyph variants. */
+:root:lang(zh-CN) {
+  font-family: Vazirmatn, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+}
+:root:lang(ja) {
+  font-family: Vazirmatn, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+}
+:lang(zh-CN) body { line-height: 1.6; }
+:lang(zh-CN) kbd { font-size: 11px; }
 button, input, textarea, select { color: inherit; font: inherit; }
 /* Chromium's Linux native select popup does not reliably inherit the page's
    scheme or transparent control background. Keep every native menu surface

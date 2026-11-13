@@ -1,18 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { LocalePreference } from '@/types/api'
+import { formatMessage, resolveLocale, type MessageValues, type ResolvedLocale } from './i18n-core'
 import { englishCatalog } from './locales/english'
 import type { Message, MessageKey } from './locales/types'
-
-type MessageValues = Record<string, string | number>
 
 // The catalogs are data modules under `src/lib/locales`; they are re-exported
 // here so every consumer keeps one import site for interface copy and only this
 // module needs React.
-export { englishCatalog }
-export type { Message, MessageKey }
-
-/** Locales this build can render; `en` is the base and the fallback for all. */
-export type ResolvedLocale = 'en' | 'zh-CN' | 'ja'
+export { englishCatalog, resolveLocale }
+export type { Message, MessageKey, MessageValues, ResolvedLocale }
 
 /** Localised catalogs keyed by resolved locale; English is the base and fallback. */
 const catalogs: Partial<Record<ResolvedLocale, Partial<Record<MessageKey, Message>>>> = {}
@@ -31,36 +27,9 @@ export function loadLocale(locale: ResolvedLocale): Promise<void> {
   return result
 }
 
-/** Every locale this build can render; `englishCatalog` is the fallback for all. */
-const RESOLVED_LOCALES = ['en', 'zh-CN', 'ja'] as const satisfies readonly ResolvedLocale[]
-
-function browserLanguages(): readonly string[] {
-  if (typeof navigator === 'undefined') return []
-  return navigator.languages.length ? navigator.languages : [navigator.language]
-}
-
-export function resolveLocale(preference: LocalePreference, languages: readonly string[] = browserLanguages()): ResolvedLocale {
-  // The preference type already restricts this to the locales below, but the
-  // value can still arrive from a newer build's state file or a hand-edited one.
-  // Falling back to English keeps `Intl` formatters and `document.lang` valid
-  // instead of propagating an unknown tag through the whole renderer.
-  if (preference !== 'system') return RESOLVED_LOCALES.includes(preference) ? preference : 'en'
-  for (const language of languages) {
-    const normalized = language.toLowerCase()
-    if (normalized === 'en' || normalized.startsWith('en-')) return 'en'
-    if (normalized === 'zh' || normalized === 'zh-cn' || normalized === 'zh-sg' || normalized === 'zh-hans' || normalized.startsWith('zh-hans-')) return 'zh-CN'
-    if (normalized === 'ja' || normalized.startsWith('ja-')) return 'ja'
-  }
-  return 'en'
-}
-
 export function translate(locale: ResolvedLocale, key: MessageKey, values: MessageValues = {}): string {
-  const translated = catalogs[locale]?.[key]
-  const message = translated ?? englishCatalog[key]
-  const template = typeof message === 'string'
-    ? message
-    : message[new Intl.PluralRules(locale).select(Number(values.count)) === 'one' ? 'one' : 'other']
-  return Object.entries(values).reduce((result, [name, value]) => result.split(`{${name}}`).join(String(value)), template)
+  const message = catalogs[locale]?.[key] ?? englishCatalog[key]
+  return formatMessage(locale, message, values)
 }
 
 interface I18nContextValue {
