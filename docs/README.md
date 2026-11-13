@@ -1,5 +1,7 @@
 # Documentation
 
+English | [简体中文](zh-CN/README.md)
+
 ## Setup and verification
 
 - [Run from source](../README.md#run-from-source)
