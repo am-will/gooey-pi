@@ -1,5 +1,7 @@
 # GooeyPi
 
+English | [简体中文](README.zh-CN.md)
+
 GooeyPi is a desktop workspace for [Pi](https://pi.dev/), [OMP](https://github.com/can1357/oh-my-pi), and [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent). It gives all three coding agents the same friendly interface on macOS, Linux, and Windows while leaving each harness in charge of its own models, logins, and saved sessions.
 
 <img width="2234" height="1332" alt="GooeyPi desktop workspace" src="https://github.com/user-attachments/assets/864ff0e1-71cc-49da-955f-f226710ef890" />
