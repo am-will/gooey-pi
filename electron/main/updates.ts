@@ -1,5 +1,6 @@
 import electronUpdater, { type AppUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 import type { AppUpdateState } from '../../src/types/api'
+import { mt } from './localization'
 
 export const DEFAULT_CHECK_INTERVAL_MS = 3 * 60 * 60 * 1000
 const INITIAL_CHECK_DELAY_MS = 8_000
@@ -30,7 +31,7 @@ export interface UpdateServiceOptions {
 
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replace(/[\r\n\t]+/g, ' ').slice(0, 240) || 'Update check failed'
+  return message.replace(/[\r\n\t]+/g, ' ').slice(0, 240) || mt('update.checkFailedMessage')
 }
 
 export interface ManualUpdateNotification {
@@ -42,18 +43,18 @@ export interface ManualUpdateNotification {
 export function manualUpdateNotification(state: AppUpdateState): ManualUpdateNotification {
   if (state.phase === 'error') return {
     type: 'error',
-    message: 'GooeyPi Update Check Failed',
+    message: mt('update.checkFailedTitle'),
     detail: state.message,
   }
   if (state.phase === 'unsupported') return {
     type: 'info',
-    message: 'GooeyPi Updates Unavailable',
-    detail: state.message ?? 'Automatic updates are available in installed builds.',
+    message: mt('update.unavailableTitle'),
+    detail: state.message ?? mt('update.automaticMessage'),
   }
   const available = state.phase === 'available' || state.phase === 'downloading' || state.phase === 'downloaded'
   return {
     type: 'info',
-    message: available ? 'GooeyPi Update Available' : 'No GooeyPi Update Available',
+    message: available ? mt('update.availableTitle') : mt('update.noneTitle'),
   }
 }
 
@@ -68,7 +69,7 @@ export function createManualUpdateCheck(
     inFlight = true
     void check()
       .then((state) => notify(manualUpdateNotification(state)))
-      .catch((error) => notify({ type: 'error', message: 'GooeyPi Update Check Failed', detail: errorMessage(error) }))
+      .catch((error) => notify({ type: 'error', message: mt('update.checkFailedTitle'), detail: errorMessage(error) }))
       .finally(() => { inFlight = false })
       .catch((error: unknown) => console.error(`GooeyPi update notification failed: ${errorMessage(error)}`))
   }
@@ -99,7 +100,7 @@ export class UpdateService {
   private readonly setTimeoutFn: typeof globalThis.setTimeout
 
   constructor(private readonly updater: UpdateAdapter, private readonly options: UpdateServiceOptions) {
-    this.state = options.enabled ? { phase: 'idle' } : { phase: 'unsupported', message: 'Automatic updates are available in installed builds.' }
+    this.state = options.enabled ? { phase: 'idle' } : { phase: 'unsupported', message: mt('update.automaticMessage') }
     this.setIntervalFn = options.setInterval ?? globalThis.setInterval
     this.clearIntervalFn = options.clearInterval ?? globalThis.clearInterval
     this.setTimeoutFn = options.setTimeout ?? globalThis.setTimeout

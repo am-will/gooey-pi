@@ -10,6 +10,7 @@ import { primeCapabilityRecordAvailability } from '../../src/lib/prime-compat'
 import { BROWSER_PARTITION, type AppMeta, type AppUpdateState, type HarnessId, type PrimeEventEnvelope, type ProviderAuthEvent } from '../../src/types/api'
 import { AgentRpcManager, OMP_RPC_ADAPTER, PI_RPC_ADAPTER, primeRpcAdapter, primeStartRecovery } from './agent-rpc'
 import { installApplicationMenu } from './application-menu'
+import { setMainLocale } from './localization'
 import { MainWindowController, popupApplicationMenu, setTitleBarTheme } from './main-window'
 import { MacBackgroundController, shouldStartInBackground } from './background'
 import { BrowserDownloadGuard } from './browser-downloads'
@@ -180,6 +181,9 @@ async function bootstrap(): Promise<void> {
   configureGooeyPiAgentMessageSigning(loadOrCreateGooeyPiAgentMessageKey(join(userDataPath, 'agent-message-signing.key')))
   const stateStore = await openDesktopStateStore(userDataPath)
   store = stateStore
+  // Resolve the native locale before the first dialog or menu can be built:
+  // state-store migration/compatibility failures surface from here on.
+  setMainLocale(stateStore.getSettings().locale, app.getPreferredSystemLanguages())
   backgroundMode = new MacBackgroundController({
     iconPath: appIconPath(),
     getSettings: () => stateStore.getSettings(),
@@ -321,11 +325,18 @@ async function bootstrap(): Promise<void> {
     },
   })
   downloads = new BrowserDownloadGuard(isAllowedBrowserUrl, app.getPath('downloads'))
+  let refreshApplicationMenu: () => void = () => undefined
   const settings = new SettingsService(
     stateStore,
     (shell) => terminals!.validateShell(shell),
     () => downloads?.cancelAll(true),
-    (previous, next) => backgroundMode?.applySettings(previous, next),
+    (previous, next) => {
+      if (previous.locale !== next.locale) {
+        setMainLocale(next.locale, app.getPreferredSystemLanguages())
+        refreshApplicationMenu()
+      }
+      return backgroundMode?.applySettings(previous, next)
+    },
   )
   const cuaDriver = new CuaDriverService()
   // The disabled-by-default integration probes PATH and may spawn a version
@@ -568,7 +579,7 @@ async function bootstrap(): Promise<void> {
   updates.setEventSink((state: AppUpdateState) => {
     if (!shutdownStarted) ipc?.broadcast('updates:changed', state)
   })
-  installApplicationMenu({
+  const installMenu = () => installApplicationMenu({
     appName: 'GooeyPi',
     updatesEnabled: updates.isEnabled(),
     closeWindow: () => {
@@ -585,6 +596,8 @@ async function bootstrap(): Promise<void> {
       })
     }),
   })
+  refreshApplicationMenu = installMenu
+  installMenu()
   backgroundMode.start()
   const window = await windows.ensure()
   if (shutdownStarted) return

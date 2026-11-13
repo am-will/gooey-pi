@@ -5,6 +5,7 @@ import { sortProjects } from '../../src/lib/project-order'
 import type { GitWorktree, HarnessId, ProjectFileListing, ProjectRecord, ProjectScripts, SessionRecord } from '../../src/types/api'
 import { authorizedRepositoryRoot, listGitWorktrees } from './git'
 import { HARNESSES } from './harness'
+import { mt } from './localization'
 import { mapLimit } from './lib/async'
 import { absorbLinkedWorktreeProjects } from './projects/worktrees'
 import { canonicalizeSessionPaths, discoverValidSessionRoots, resolveDismissedProjectPaths } from './projects/session-roots'
@@ -319,7 +320,7 @@ export class ProjectService {
     const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+|\.+$/g, '').slice(0, 120) || 'worktree'
     const defaultPath = join(dirname(current.path), `${basename(current.path)}-${safeBranch}`)
     const parent = this.windowProvider()
-    const options = { title: 'Create Git worktree', buttonLabel: 'Create Worktree', defaultPath }
+    const options = { title: mt('dialog.createWorktree'), buttonLabel: mt('dialog.createWorktreeAction'), defaultPath }
     const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return undefined
     const targetPath = resolve(requireString(result.filePath, 'worktree path', { min: 1, max: 4096 }))
@@ -420,8 +421,8 @@ export class ProjectService {
   async add(): Promise<ProjectRecord | null> {
     const parent = this.windowProvider()
     const result = parent
-      ? await dialog.showOpenDialog(parent, { title: 'Add project folder', properties: ['openDirectory', 'createDirectory'] })
-      : await dialog.showOpenDialog({ title: 'Add project folder', properties: ['openDirectory', 'createDirectory'] })
+      ? await dialog.showOpenDialog(parent, { title: mt('dialog.addProjectFolder'), properties: ['openDirectory', 'createDirectory'] })
+      : await dialog.showOpenDialog({ title: mt('dialog.addProjectFolder'), properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || result.filePaths.length !== 1) return null
     const { path, identity } = await this.folderIdentity.capture(result.filePaths[0])
     return this.grantProjectFolder(path, identity)

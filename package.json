@@ -237,6 +237,12 @@
       "zh-CN",
       "ja"
     ],
+    "nsis": {
+      "installerLanguages": [
+        "en_US",
+        "zh_CN"
+      ]
+    },
     "appx": {
       "applicationId": "GooeyPi",
       "identityName": "GooeyPi",
@@ -244,7 +250,8 @@
       "displayName": "GooeyPi",
       "backgroundColor": "#171716",
       "languages": [
-        "en-US"
+        "en-US",
+        "zh-CN"
       ]
     }
   },

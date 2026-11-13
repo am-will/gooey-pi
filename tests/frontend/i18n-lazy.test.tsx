@@ -23,8 +23,9 @@ it('renders the English fallback immediately and updates after the real Japanese
     await act(async () => { await pending })
     expect(container.textContent).toBe('外観')
     expect(translate('ja', 'appearance.title')).toBe('外観')
-    await loadLocale('zh-CN')
     expect(translate('zh-CN', 'common.reload')).toBe('Reload GooeyPi')
+    await loadLocale('zh-CN')
+    expect(translate('zh-CN', 'common.reload')).toBe('重新加载 GooeyPi')
   } finally {
     act(() => root.unmount())
   }

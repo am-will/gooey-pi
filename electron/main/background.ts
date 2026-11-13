@@ -1,6 +1,7 @@
 import { app, Menu, nativeImage, Tray } from 'electron'
 import type { BrowserWindow, NativeImage } from 'electron'
 import type { AppSettings } from '../../src/types/api'
+import { mt } from './localization'
 
 export const BACKGROUND_START_ARG = '--background'
 
@@ -108,6 +109,7 @@ export class MacBackgroundController {
         this.destroyTray()
       }
     }
+    if (previous.locale !== next.locale) this.refreshTrayMenu()
     // Last, so a refused login item never skips the tray change in the same patch.
     if (previous.launchAtLogin !== next.launchAtLogin) this.syncLoginItem(next.launchAtLogin)
   }
@@ -126,13 +128,18 @@ export class MacBackgroundController {
     icon.setTemplateImage(true)
     const tray = new Tray(icon)
     tray.setToolTip('GooeyPi')
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open GooeyPi', icon: menuIcon('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>'), click: () => this.open() },
-      { type: 'separator' },
-      { label: 'Settings...', icon: menuIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'), click: () => this.openSettings() },
-      { label: 'Quit', icon: menuIcon('<path d="m18 6-12 12M6 6l12 12"/>'), click: () => this.options.onQuit() },
-    ]))
     this.tray = tray
+    this.refreshTrayMenu()
+  }
+
+  private refreshTrayMenu(): void {
+    if (!this.tray) return
+    this.tray.setContextMenu(Menu.buildFromTemplate([
+      { label: mt('tray.open'), icon: menuIcon('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>'), click: () => this.open() },
+      { type: 'separator' },
+      { label: mt('tray.settings'), icon: menuIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'), click: () => this.openSettings() },
+      { label: mt('tray.quit'), icon: menuIcon('<path d="m18 6-12 12M6 6l12 12"/>'), click: () => this.options.onQuit() },
+    ]))
   }
 
   private enterBackgroundPresentation(): void {
@@ -147,8 +154,8 @@ export class MacBackgroundController {
     const actual = app.getLoginItemSettings()
     if (actual.openAtLogin === openAtLogin) return
     throw new Error(openAtLogin && actual.status === 'requires-approval'
-      ? 'macOS needs your approval to open GooeyPi at login. Allow GooeyPi in System Settings > General > Login Items, then try again.'
-      : `macOS did not ${openAtLogin ? 'add' : 'remove'} GooeyPi's login item.`)
+      ? mt('settings.general.launchAtLogin.approval')
+      : mt(openAtLogin ? 'settings.general.launchAtLogin.failedAdd' : 'settings.general.launchAtLogin.failedRemove'))
   }
 
   private destroyTray(): void {
