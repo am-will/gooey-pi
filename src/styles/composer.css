@@ -134,6 +134,15 @@
 .model-picker__identity { flex: 1; }
 .model-picker__availability { flex: 0 0 auto; color: var(--text-tertiary); font-size: 9.5px; }
 .model-picker__empty { padding: 22px 10px; text-align: center; }
+/* A catalog that failed to load is not "no models": the reason and the retry
+   belong in the popover so the composer never looks silently broken. */
+.model-picker__failure { display: grid; gap: 6px; padding: 18px 10px; text-align: center; }
+.model-picker__failure strong { color: var(--text); font-size: 11.5px; font-weight: 580; }
+.model-picker__failure p { margin: 0; color: var(--text-tertiary); font-size: 10.5px; line-height: 1.45; }
+.model-picker__unavailable-reason { overflow-wrap: anywhere; color: var(--text-tertiary); font-family: "SFMono-Regular", Menlo, monospace; font-size: 9.5px; }
+.model-picker__retry { height: 26px; justify-self: center; margin-top: 2px; padding: 0 11px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-subtle); font-size: 10.5px; font-weight: 600; }
+.model-picker__retry:hover:not(:disabled) { border-color: var(--focus); }
+.model-picker__retry:disabled { opacity: .55; }
 .worktree-picker__create { display: grid; gap: 5px; margin-top: 5px; padding: 8px 7px 3px; border-top: 1px solid var(--border); }
 .worktree-picker__create label { color: var(--text-secondary); font-size: 10.5px; font-weight: 600; }
 .worktree-picker__create > div { display: flex; gap: 5px; }

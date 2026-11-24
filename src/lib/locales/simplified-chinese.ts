@@ -66,5 +66,9 @@ export const simplifiedChineseCatalog: Partial<Record<MessageKey, Message>> = {
   'archive.restoredToast': '会话已恢复。',
   'projects.collapseAll': '折叠所有项目',
   'projects.expandAll': '展开所有项目',
+  'modelPicker.unavailableTitle': '模型列表不可用',
+  'modelPicker.unavailableBody': 'GooeyPi 暂时没能从这个 harness 读取模型列表。可以重试，或到设置里检查 harness。',
+  'modelPicker.retry': '重试',
+  'modelPicker.retrying': '重试中…',
 
 }

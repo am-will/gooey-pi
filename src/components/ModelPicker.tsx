@@ -9,6 +9,15 @@ interface ModelPickerProps {
   modelsByProvider: ReadonlyMap<string, PrimeModelDescriptor[]>
   providers: PrimeProviderDescriptor[]
   onChange(value: string): void
+  /**
+   * The last catalog read failed rather than coming back genuinely empty, so an
+   * empty list is a problem to recover from instead of a harness with no models.
+   */
+  catalogFailed?: boolean
+  /** Why the read failed, shown verbatim; the main process words these for users. */
+  catalogError?: string | null
+  catalogRetrying?: boolean
+  onRetryCatalog?(): void
 }
 
 interface ModelGroup {
@@ -16,7 +25,16 @@ interface ModelGroup {
   models: PrimeModelDescriptor[]
 }
 
-export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, providers, onChange }: ModelPickerProps) {
+export const ModelPicker = memo(function ModelPicker({
+  value,
+  modelsByProvider,
+  providers,
+  onChange,
+  catalogFailed = false,
+  catalogError = null,
+  catalogRetrying = false,
+  onRetryCatalog,
+}: ModelPickerProps) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -116,7 +134,9 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        disabled={!groups.length}
+        // A failed catalog leaves the button clickable on purpose: the only cue
+        // that the list is missing because of an error is inside this popover.
+        disabled={!groups.length && !catalogFailed}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
@@ -212,7 +232,27 @@ export const ModelPicker = memo(function ModelPicker({ value, modelsByProvider, 
                 })}
               </div>
             ))}
-            {!resultCount ? <div className="model-picker__empty">{query.trim() ? t('modelPicker.noMatch') : t('modelPicker.noModelsForProvider')}</div> : null}
+            {!resultCount ? (
+              catalogFailed && !groups.length ? (
+                <div className="model-picker__failure">
+                  <strong>{t('modelPicker.unavailableTitle')}</strong>
+                  <p>{t('modelPicker.unavailableBody')}</p>
+                  {catalogError ? <p className="model-picker__unavailable-reason" role="status">{catalogError}</p> : null}
+                  {onRetryCatalog ? (
+                    <button
+                      type="button"
+                      className="model-picker__retry"
+                      disabled={catalogRetrying}
+                      onClick={() => onRetryCatalog()}
+                    >
+                      {catalogRetrying ? t('modelPicker.retrying') : t('modelPicker.retry')}
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="model-picker__empty">{query.trim() ? t('modelPicker.noMatch') : t('modelPicker.noModelsForProvider')}</div>
+              )
+            ) : null}
           </div>
         </div>
       ) : null}
