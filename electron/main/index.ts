@@ -18,6 +18,7 @@ import { installCrashGuards, writeCrashLog } from './crash-guard'
 import { CuaDriverService } from './cua-driver'
 import { GitService } from './git'
 import { harnessVisibility } from './model-visibility'
+import { JsonModelCatalogCache } from './model-catalog-cache'
 import { CheckoutService } from './checkouts'
 import { registerIpc, type IpcRegistration } from './ipc'
 import { HarnessDiscoveryService, reconcileActiveHarness } from './harness-discovery'
@@ -237,8 +238,17 @@ async function bootstrap(): Promise<void> {
   const ompDisabledModels = () => visibility('omp').disabledModels
   const piDisabledProviders = () => visibility('pi').disabledProviders
   const piDisabledModels = () => visibility('pi').disabledModels
-  const ompCatalog = new OmpModelCatalogService(ompExecutable)
-  const piCatalog = new PiModelCatalogService(piExecutable)
+  // The last catalog each harness managed to load, kept on disk so a cold start has a model list even
+  // when its first probe dies: both harnesses answer through a CLI process, so both can fail the same
+  // way. Reading and writing this file is best effort and can never fail a catalog.
+  const modelCatalogCache = new JsonModelCatalogCache(userDataPath)
+  const ompCatalog = new OmpModelCatalogService(ompExecutable, { diskCache: modelCatalogCache, cacheKey: 'omp' })
+  const piCatalog = new PiModelCatalogService(piExecutable, { diskCache: modelCatalogCache, cacheKey: 'pi' })
+  // Pay the CLI's startup cost while the window is still coming up rather than in front of the composer.
+  // Only the harness in use is warmed: two CLI probes at once measured ~25.9s each, so warming both
+  // would be slower than warming the one that matters.
+  if (stateStore.getSettings().activeHarness === 'omp') ompCatalog.prewarm()
+  else piCatalog.prewarm()
   agents = new AgentRpcManager(
     primeExecutable,
     (cwd) => projects.authorizeCwd(cwd),
