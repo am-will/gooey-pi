@@ -92,6 +92,15 @@ interface ComposerProps {
   /** Called after a send that included the annotations, and by the attachment's remove control. */
   onClearAnnotations?(): void
   onClearTerminalSelection?(): void
+  /**
+   * Catalog diagnostics for the model picker. A harness that failed to answer
+   * leaves the list empty, which otherwise looks identical to "no models
+   * exist", so the picker needs the failure to explain itself and offer retry.
+   */
+  catalogFailed?: boolean
+  catalogError?: string | null
+  catalogRetrying?: boolean
+  onRetryCatalog?(): void
   /** Stable per-workspace key; without it the composer keeps no draft of its own. */
   draftKey?: string
 }
@@ -131,6 +140,10 @@ export const Composer = memo(function Composer({
   onEditQueuedMessage,
   sendSignal = 0,
   onModelChange,
+  catalogFailed,
+  catalogError,
+  catalogRetrying,
+  onRetryCatalog,
   onEffortChange,
   onFastChange,
   checkoutCatalog,
@@ -409,7 +422,16 @@ export const Composer = memo(function Composer({
                 void imageAttachments.ingest(files)
               }}
             />
-            <ModelPicker value={model} modelsByProvider={modelsByProvider} providers={providers} onChange={onModelChange} />
+            <ModelPicker
+              value={model}
+              modelsByProvider={modelsByProvider}
+              providers={providers}
+              onChange={onModelChange}
+              catalogFailed={catalogFailed}
+              catalogError={catalogError}
+              catalogRetrying={catalogRetrying}
+              onRetryCatalog={onRetryCatalog}
+            />
             <ExecutingModelChip executingModel={executingModel} />
             <SelectControl label={t('composer.effort.label')} compact icon={<Gauge size={12} />} value={effort} onChange={(event) => onEffortChange(event.target.value as PrimeThinkingLevel)}>
               {reasoningLevels.map((level) => (

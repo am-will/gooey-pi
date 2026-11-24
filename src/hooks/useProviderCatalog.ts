@@ -17,6 +17,35 @@ type ActiveProviderAuthEvent = Exclude<ProviderAuthEvent, { type: 'cancelled' }>
 /** Stable fallback identities so consumers can memoize on prop equality. */
 const DEFAULT_REASONING_LEVELS = PRIME_THINKING_LEVELS
 
+/**
+ * How long to wait between automatic re-reads of a catalog that came back empty.
+ *
+ * A failed read used to be terminal for the session: nothing but a harness switch or an OAuth flow
+ * asked for the list again, so a harness that was slow to boot left the model picker unusable until
+ * relaunch. Retrying is what fixes that; bounding the schedule is what keeps a harness that is not
+ * installed -- which answers instantly and forever -- from becoming a poll loop. Only a forced read
+ * counts as an attempt, and the schedule restarts when the user asks again from the picker.
+ */
+export const CATALOG_RETRY_DELAYS_MS = [2_000, 8_000, 20_000]
+
+interface CatalogFailure {
+  /** Why the list is missing, in the harness's own words; null when the read itself failed. */
+  reason: string | null
+}
+
+/**
+ * Distinguish a failed read from a harness that legitimately has nothing to show.
+ *
+ * The main process degrades a failed probe to an empty list plus a `warning` saying what happened, so
+ * an empty list carrying a warning is a failure the user can act on. An empty list with no warning
+ * means no provider is configured, which the picker already words correctly on its own.
+ */
+function emptyCatalogFailureReason(catalog: PrimeModelCatalog): string | null {
+  if (catalog.models.length > 0) return null
+  const warning = catalog.warning?.trim()
+  return warning ? warning : null
+}
+
 /** Resolve a session's persisted model against the catalog, matching either the model id or the full key. */
 function findSessionModel(catalog: PrimeModelCatalog, session: Pick<SessionRecord, 'model' | 'provider'> | undefined): PrimeModelDescriptor | undefined {
   if (!session?.provider || !session.model) return undefined
@@ -64,6 +93,15 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   const setCatalogFor = useCallback((target: HarnessId, next: PrimeModelCatalog) => {
     setCatalogs((current) => ({ ...current, [target]: next }))
   }, [])
+  // Kept beside the catalogs rather than derived from them: the first read of a run can reject, in
+  // which case there is no catalog to inspect at all and the reason lives only here.
+  const [catalogFailures, setCatalogFailures] = useState<Partial<Record<HarnessId, CatalogFailure>>>({})
+  const catalogFailure = catalogFailures[harness] ?? null
+  const [refreshing, setRefreshing] = useState(false)
+  const retryAttemptRef = useRef(0)
+  const clearCatalogRetry = useCallback(() => {
+    retryAttemptRef.current = 0
+  }, [])
   const [authEvent, setAuthEvent] = useState<ActiveProviderAuthEvent | null>(null)
   const modelRef = useRef(model)
   const effortRef = useRef(effort)
@@ -108,8 +146,26 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
   const refresh = useCallback(async (force = false) => {
     if (!bridge || !ready) return
     const target = harness
-    setCatalogFor(target, await bridge.providers.catalog(force, target))
+    setRefreshing(true)
+    try {
+      const next = await bridge.providers.catalog(force, target)
+      setCatalogFor(target, next)
+      const reason = emptyCatalogFailureReason(next)
+      setCatalogFailures((current) => ({ ...current, [target]: reason === null ? undefined : { reason } }))
+    } catch (error) {
+      // The read rejecting means nothing was ever served for this harness, so the picker would have
+      // no warning to show and would look like an empty account. Keep the reason here instead.
+      setCatalogFailures((current) => ({ ...current, [target]: { reason: error instanceof Error ? error.message : String(error) } }))
+      throw error
+    } finally {
+      setRefreshing(false)
+    }
   }, [bridge, harness, ready, setCatalogFor])
+
+  const retryCatalog = useCallback(() => {
+    clearCatalogRetry()
+    return refresh(true).catch(() => {})
+  }, [clearCatalogRetry, refresh])
 
   const rememberSelection = useCallback((value: string) => {
     if (value && value !== lastSelectedModel) rememberModel?.(value)
@@ -139,11 +195,27 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
 
   useEffect(() => {
     if (!bridge || !ready) return
-    let cancelled = false
-    const target = harness
-    void bridge.providers.catalog(false, target).then((next) => { if (!cancelled) setCatalogFor(target, next) }).catch(reportError)
-    return () => { cancelled = true }
-  }, [bridge, harness, ready, reportError, setCatalogFor])
+    void refresh().catch(reportError)
+  }, [bridge, harness, ready, reportError, refresh])
+
+  // One failed read used to be the last word for the whole session: only a harness switch or an OAuth
+  // callback asked for the list again, so a harness that was slow to boot left the picker empty until
+  // relaunch. Retry on a bounded schedule instead -- the harness is often ready seconds later -- and
+  // stop rather than turn "not installed", which fails instantly forever, into a poll loop.
+  useEffect(() => {
+    if (!bridge || !ready || !catalogFailure) {
+      retryAttemptRef.current = 0
+      return
+    }
+    if (refreshing) return
+    const attempt = retryAttemptRef.current
+    if (attempt >= CATALOG_RETRY_DELAYS_MS.length) return
+    const timer = setTimeout(() => {
+      retryAttemptRef.current = attempt + 1
+      void refresh(true).catch(() => {})
+    }, CATALOG_RETRY_DELAYS_MS[attempt])
+    return () => clearTimeout(timer)
+  }, [bridge, catalogFailure, harness, ready, refresh, refreshing])
 
   // The composer's selection belongs to one harness's catalog. Clear the old
   // harness before resolving the new harness's remembered or first model.
@@ -357,7 +429,14 @@ export function useProviderCatalog({ bridge, ready = true, harness = 'prime', ru
 
   return {
     model, effort, fast, catalog, authEvent, selectedModel, reasoningLevels, modelsByProvider,
+    catalogFailed: catalogFailure !== null,
+    catalogError: catalogFailure?.reason ?? null,
+    catalogRetrying: refreshing && catalogFailure !== null,
+    retryCatalog,
     refresh, changeModel, changeEffort, changeFast,
     saveApiKey, logout, setEnabled, setAllEnabled, setAllDisabled, setModelEnabled, startOAuth, respondOAuth, cancelOAuth,
   }
 }
+
+/** What the provider hook gives the composer and the settings pages; exported so a caller can type its own prop. */
+export type ProviderCatalog = ReturnType<typeof useProviderCatalog>
