@@ -2,6 +2,7 @@ import { supportsFastMode } from 'prime-agent-ai'
 import type { PrimeModelCatalog, PrimeModelDescriptor, PrimeProviderDescriptor } from '../../src/types/api'
 import { harnessVersion } from './lib/harness-version'
 import { boundedInteger, CATALOG_TTL_MS, catalogLimitWarnings, limitCatalogRelations, modelKey, requireCatalogModel, type ModelCatalogProvider } from './model-catalog'
+import type { ModelCatalogCache } from './model-catalog-cache'
 import { withModelVisibility } from './model-visibility'
 import { resolveExecutable, runProcess, type ExecutableSource } from './process-utils'
 import { isModelId, isProviderId, requireString } from './validation'
@@ -80,22 +81,41 @@ export interface CliModelCatalogOptions {
   timeoutMs?: number
   /** Combined stdout/stderr byte cap for one catalog fetch. */
   maxOutputBytes?: number
+  /** Where the last good catalog survives a restart. Read and written on a best-effort basis. */
+  diskCache?: ModelCatalogCache
+  /** Identifies this harness inside the shared disk cache. Defaults to the harness label. */
+  cacheKey?: string
+  /** Injectable clock, so TTL behaviour is testable without sleeping. */
+  now?: () => number
 }
 
 export abstract class CliModelCatalogService implements ModelCatalogProvider {
   protected readonly timeoutMs: number
   protected readonly maxOutputBytes: number
+  private readonly now: () => number
+  private readonly diskCache: ModelCatalogCache | undefined
+  private readonly cacheKey: string | undefined
   private cachedCatalog: PrimeModelCatalog | null = null
   private cachedAt = 0
   private cachedExecutable: string | null = null
   private catalogRefresh: { executable: string; promise: Promise<PrimeModelCatalog> } | null = null
   private cachedVersion: { executable: string; value: string } | null = null
+  /** Executable whose persisted catalog has already been read (or attempted) this run. */
+  private diskHydratedFor: string | null = null
+  private hydration: { executable: string; promise: Promise<void> } | null = null
+  /** True once a probe has settled this run, which is what makes serving a stale list safe. */
+  private refreshedThisRun = false
+  /** Why the last background probe failed, so a stale list can say so instead of looking current. */
+  private refreshFailure: string | null = null
   /** Bumped by invalidate(); a refresh that began under an older generation never fills the cache. */
   private generation = 0
 
   constructor(private readonly executable: ExecutableSource, options: CliModelCatalogOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CATALOG_TIMEOUT_MS
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_CATALOG_MAX_OUTPUT_BYTES
+    this.now = options.now ?? Date.now
+    this.diskCache = options.diskCache
+    this.cacheKey = options.cacheKey
   }
 
   /** Harness name as it appears in user-facing warnings and errors ('OMP', 'Pi'). */
@@ -117,30 +137,103 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     if (!executable) {
       return { primeVersion: 'unknown', refreshedAt: new Date().toISOString(), models: [], providers: [], warning: this.notInstalledWarning }
     }
-    if (!force && this.cachedCatalog && Date.now() - this.cachedAt < CATALOG_TTL_MS) {
+    // Hydration and refreshing both read from disk, so this is awaited before anything decides
+    // whether a catalog already exists.
+    await this.hydrateFromDisk(executable)
+    if (!force && this.cachedCatalog && this.now() - this.cachedAt < CATALOG_TTL_MS) {
       return withModelVisibility(this.cachedCatalog, disabledProviders, disabledModels)
     }
-    // Single-flight: concurrent callers share one CLI run instead of spawning
-    // duplicate subprocesses; the in-flight promise is cleared in finally.
-    if (!this.catalogRefresh || this.catalogRefresh.executable !== executable) {
-      const promise = this.refreshCatalog(executable, this.generation).finally(() => {
-        if (this.catalogRefresh?.promise === promise) this.catalogRefresh = null
-      })
-      this.catalogRefresh = { executable, promise }
+    // Past the TTL, a list the user has already been served this run is replaced in the background
+    // rather than in front of them: the 30s TTL used to put a 13-24s CLI probe in front of every later
+    // interaction. `refreshedThisRun` is what makes this safe -- a catalog merely hydrated from disk is
+    // not "already served", so the first fetch of a run still waits and still reports a failure. Placed
+    // after the fresh check on purpose: a refresh already running is joined rather than dodged, so the
+    // caller that started this run's first fetch ends with a fresh list and the UI cannot stick on a
+    // week-old one.
+    if (!force && this.cachedCatalog && !this.catalogRefresh && this.refreshedThisRun) {
+      const served = this.cachedCatalog
+      const failure = this.refreshFailure
+      void this.startRefresh(executable).catch(() => {})
+      return withModelVisibility(failure ? this.withStaleWarning(served, failure) : served, disabledProviders, disabledModels)
     }
     try {
-      return withModelVisibility(await this.catalogRefresh.promise, disabledProviders, disabledModels)
+      // Each caller is answered with the catalog its own refresh produced, while the cache keeps the
+      // newest one: an older in-flight refresh still answers its own caller instead of picking up a
+      // newer result that landed meanwhile.
+      const catalog = await this.startRefresh(executable)
+      return withModelVisibility(catalog, disabledProviders, disabledModels)
     } catch (error) {
       // A failed refresh degrades to the last good catalog instead of an
       // error; first-ever loads still surface the failure.
       if (!this.cachedCatalog) throw error
-      const reason = error instanceof Error ? error.message : String(error)
-      const staleWarning = `The ${this.harnessLabel} model catalog could not be refreshed (${reason}); showing the last loaded catalog.`
-      return withModelVisibility({
-        ...this.cachedCatalog,
-        warning: this.cachedCatalog.warning ? `${this.cachedCatalog.warning} ${staleWarning}` : staleWarning,
-      }, disabledProviders, disabledModels)
+      return withModelVisibility(this.withStaleWarning(this.cachedCatalog, error instanceof Error ? error.message : String(error)), disabledProviders, disabledModels)
     }
+  }
+
+  /**
+   * Warm the catalog without making anyone wait for it.
+   *
+   * The CLI probe costs what a CLI process costs, and the answer is needed the moment the composer
+   * opens, so the wait belongs at startup rather than on a user-visible path. Deliberately not async:
+   * a caller that could await this would be putting the probe back in front of the interface.
+   */
+  prewarm(): void {
+    void (async () => {
+      const executable = resolveExecutable(this.executable)
+      if (!executable) return
+      this.prepareExecutable(executable)
+      await this.hydrateFromDisk(executable)
+      if (this.cachedCatalog && this.now() - this.cachedAt < CATALOG_TTL_MS) return
+      await this.startRefresh(executable).catch(() => {})
+    })()
+  }
+
+  /** Start, or join, the one refresh allowed for this executable. Cleared when it settles. */
+  private startRefresh(executable: string): Promise<PrimeModelCatalog> {
+    // Single-flight: concurrent callers share one CLI run instead of spawning
+    // duplicate subprocesses; the in-flight promise is cleared in finally.
+    if (!this.catalogRefresh || this.catalogRefresh.executable !== executable) {
+      const generation = this.generation
+      const promise = this.refreshCatalog(executable, generation)
+        .then((catalog) => { this.refreshFailure = null; return catalog })
+        .catch((error: unknown) => {
+          this.refreshFailure = error instanceof Error ? error.message : String(error)
+          throw error
+        })
+        .finally(() => {
+          if (this.catalogRefresh?.promise === promise) this.catalogRefresh = null
+          this.refreshedThisRun = true
+        })
+      this.catalogRefresh = { executable, promise }
+    }
+    return this.catalogRefresh.promise
+  }
+
+  /** Keep the existing warning and append why the list may be out of date. */
+  private withStaleWarning(catalog: PrimeModelCatalog, reason: string): PrimeModelCatalog {
+    const staleWarning = `The ${this.harnessLabel} model catalog could not be refreshed (${reason}); showing the last loaded catalog.`
+    return { ...catalog, warning: catalog.warning ? `${catalog.warning} ${staleWarning}` : staleWarning }
+  }
+
+  /**
+   * Load the catalog this service persisted on an earlier run, once per executable.
+   *
+   * Concurrent callers join the same read. A catalog already held in memory always wins: it is
+   * fresher, and `setHarnessEnabled` may have edited model visibility in it.
+   */
+  private async hydrateFromDisk(executable: string): Promise<void> {
+    if (this.diskHydratedFor === executable) return
+    if (this.hydration?.executable === executable) return this.hydration.promise
+    const promise = (async () => {
+      const persisted = await this.diskCache?.load(this.cacheKey ?? this.harnessLabel, executable)
+      if (persisted && !this.cachedCatalog) {
+        this.cachedCatalog = persisted.catalog
+        this.cachedAt = persisted.cachedAt
+      }
+      this.diskHydratedFor = executable
+    })()
+    this.hydration = { executable, promise }
+    await promise
   }
 
   async requireAvailableModel(rawKey: unknown, disabledProviders: ReadonlySet<string> = new Set(), disabledModels: ReadonlySet<string> = new Set()): Promise<PrimeModelDescriptor> {
@@ -164,6 +257,9 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     this.generation += 1
     this.cachedAt = 0
     this.catalogRefresh = null
+    // The next read is supposed to run the CLI again and report what it gets, so it may not be served
+    // from the background-refresh path.
+    this.refreshedThisRun = false
   }
 
   /** Provider rows for the providers a refresh returned models for; by default each one's credentials belong to the CLI. */
@@ -189,10 +285,10 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
   }
 
   private async refreshCatalog(executable: string, generation: number): Promise<PrimeModelCatalog> {
-    const [rawModels, version] = await Promise.all([
-      this.fetchModelEntries(executable),
-      this.resolveVersion(executable),
-    ])
+    // One CLI process at a time. The model probe and the version probe each start a CLI process, and
+    // running them together measured ~25.9s for what costs ~13s on its own.
+    const rawModels = await this.fetchModelEntries(executable)
+    const version = await this.resolveVersion(executable)
 
     const validModels: PrimeModelDescriptor[] = []
     const seenKeys = new Set<string>()
@@ -223,7 +319,12 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     }
     if (this.cachedExecutable === executable && this.generation === generation) {
       this.cachedCatalog = catalog
-      this.cachedAt = Date.now()
+      this.cachedAt = this.now()
+this.diskHydratedFor = executable
+      // Awaiting the write is what makes "the last good catalog is on disk" true by the time we hand
+      // back a catalog, so a crash one second later cannot lose what the 13-24s probe just cost.
+      // save() swallows every fs error itself, so persistence still cannot fail the catalog.
+      await this.diskCache?.save(this.cacheKey ?? this.harnessLabel, { executable, cachedAt: this.cachedAt, catalog })
     }
     return catalog
   }
@@ -256,5 +357,9 @@ export abstract class CliModelCatalogService implements ModelCatalogProvider {
     this.cachedCatalog = null
     this.cachedAt = 0
     this.cachedVersion = null
+    this.diskHydratedFor = null
+    this.hydration = null
+    this.refreshedThisRun = false
+    this.refreshFailure = null
   }
 }
