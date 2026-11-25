@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -88,7 +88,7 @@ const fixtureFactories = {
 
 const expectedRegistrations: Record<string, Registration[]> = {
   'omp-work-browser.ts': [
-    ...['terminal_read', 'browser_tabs', 'browser_navigate', 'browser_screenshot', 'browser_read_page', 'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll', 'browser_evaluate'].map((name) => ({ kind: 'tool' as const, name })),
+    ...['terminal_read', 'gooeypi_browser_tabs', 'gooeypi_browser_navigate', 'gooeypi_browser_screenshot', 'gooeypi_browser_read_page', 'gooeypi_browser_click', 'gooeypi_browser_type', 'gooeypi_browser_press_key', 'gooeypi_browser_scroll', 'gooeypi_browser_evaluate'].map((name) => ({ kind: 'tool' as const, name })),
   ],
   'omp-work-ask-user.ts': [{ kind: 'tool', name: 'ask_user' }],
   'omp-work-collaboration.ts': [
@@ -110,8 +110,7 @@ const brokerVariables: Partial<Record<ExtensionInjection['capability'], readonly
 }
 
 const LEGACY_UNPREFIXED_TOOLS = [
-  'ask_user', 'terminal_read', 'browser_tabs', 'browser_navigate', 'browser_screenshot', 'browser_read_page',
-  'browser_click', 'browser_type', 'browser_press_key', 'browser_scroll', 'browser_evaluate',
+  'ask_user', 'terminal_read',
   'scheduled_tasks_list', 'scheduled_task_create_once', 'scheduled_task_create_recurring',
   'scheduled_task_update', 'scheduled_task_manage',
 ]
@@ -163,13 +162,25 @@ describe('shipped extension contracts', () => {
   })
 
   it('keeps tool registrations namespaced', () => {
-    // The allow-list only shrinks as legacy tools are renamed. See #192.
+    // The allow-list only shrinks as legacy tools are renamed. See #192 and #243.
     for (const registrations of Object.values(expectedRegistrations)) {
       for (const registration of registrations) {
         if (registration.kind !== 'tool') continue
         expect(registration.name.startsWith('gooeypi_') || LEGACY_UNPREFIXED_TOOLS.includes(registration.name)).toBe(true)
       }
     }
+  })
+
+  it('keeps Prime browser skill guidance aligned with namespaced browser tool registrations', () => {
+    const skillMarkdown = readFileSync(join(process.cwd(), 'assets', 'skills', 'prime-work-browser', 'SKILL.md'), 'utf8')
+    const browserTools = expectedRegistrations['omp-work-browser.ts']
+      .map((registration) => registration.name)
+      .filter((name) => name.startsWith('gooeypi_browser_'))
+    expect(browserTools).toHaveLength(9)
+    for (const name of browserTools) {
+      expect(skillMarkdown).toContain(name)
+    }
+    expect(skillMarkdown).not.toMatch(/(?<![a-z0-9_])browser_(?:tabs|navigate|screenshot|read_page|click|type|press_key|scroll|evaluate|\*)/)
   })
 
   it('rejects properties outside each host fixture from the proxy trap', () => {

@@ -58,6 +58,50 @@ async function loadScheduleExtension() {
   return (await import('../../assets/extensions/omp-work-schedules')).default
 }
 
+const GOOEYPI_BROWSER_TOOLS = [
+  'gooeypi_browser_tabs',
+  'gooeypi_browser_navigate',
+  'gooeypi_browser_screenshot',
+  'gooeypi_browser_read_page',
+  'gooeypi_browser_click',
+  'gooeypi_browser_type',
+  'gooeypi_browser_press_key',
+  'gooeypi_browser_scroll',
+  'gooeypi_browser_evaluate',
+] as const
+
+const GENERIC_BROWSER_TOOLS = [
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_press_key',
+  'browser_tabs',
+  'browser_evaluate',
+  'browser_screenshot',
+  'browser_read_page',
+  'browser_scroll',
+] as const
+
+const UNPREFIXED_BROWSER_TOOL_PATTERN = /(?<![a-z0-9_])browser_(?:tabs|navigate|screenshot|read_page|click|type|press_key|scroll|evaluate|\*)/
+
+function duplicateRejectingRegistry() {
+  const entries = new Map<string, { source: string; tool: RegisteredTool }>()
+  return {
+    entries,
+    hostFor(source: string) {
+      return {
+        registerTool: (tool: RegisteredTool) => {
+          const existing = entries.get(tool.name)
+          if (existing) {
+            throw new Error(`Tool "${tool.name}" conflicts with ${existing.source}`)
+          }
+          entries.set(tool.name, { source, tool })
+        },
+      }
+    },
+  }
+}
+
 describe('extensions on a base pi host (no injected pi.typebox)', () => {
   it('browser extension registers the full tool surface with host-resolved schemas', async () => {
     const factory = await loadBrowserExtension()
@@ -65,30 +109,51 @@ describe('extensions on a base pi host (no injected pi.typebox)', () => {
     await factory(pi as unknown as BrowserExtensionApi)
     expect(tools.map((tool) => tool.name)).toEqual([
       'terminal_read',
-      'browser_tabs',
-      'browser_navigate',
-      'browser_screenshot',
-      'browser_read_page',
-      'browser_click',
-      'browser_type',
-      'browser_press_key',
-      'browser_scroll',
-      'browser_evaluate',
+      ...GOOEYPI_BROWSER_TOOLS,
     ])
-    const tabs = schemaOf(tools.find((tool) => tool.name === 'browser_tabs')!)
+    const tabs = schemaOf(tools.find((tool) => tool.name === 'gooeypi_browser_tabs')!)
     expect(tabs.type).toBe('object')
     expect(tabs.required).toEqual(['action'])
     expect(tabs.properties.action.enum).toEqual(['list', 'open', 'close', 'select'])
     expect(tabs.properties.action.type).toBe('string')
-    const click = schemaOf(tools.find((tool) => tool.name === 'browser_click')!)
+    const click = schemaOf(tools.find((tool) => tool.name === 'gooeypi_browser_click')!)
     expect(click.required ?? []).toEqual([])
     expect(click.properties.ref.type).toBe('number')
     expect(click.properties.double.type).toBe('boolean')
-    const type = schemaOf(tools.find((tool) => tool.name === 'browser_type')!)
+    const type = schemaOf(tools.find((tool) => tool.name === 'gooeypi_browser_type')!)
     expect(type.required).toEqual(['text'])
-    const pressKey = schemaOf(tools.find((tool) => tool.name === 'browser_press_key')!)
+    const pressKey = schemaOf(tools.find((tool) => tool.name === 'gooeypi_browser_press_key')!)
     expect(pressKey.properties.modifiers.type).toBe('array')
     expect(pressKey.properties.modifiers.items.enum).toEqual(['shift', 'control', 'alt', 'meta'])
+  })
+
+  it('coexists in a duplicate-rejecting fake registry with generic browser_* tools from pi-browser', async () => {
+    const registry = duplicateRejectingRegistry()
+    const thirdParty = registry.hostFor('pi-browser')
+    for (const name of GENERIC_BROWSER_TOOLS) {
+      thirdParty.registerTool({ name, label: name, description: `Third-party ${name}`, parameters: { type: 'object', properties: {}, items: { properties: {}, items: {} as TestSchema } } })
+    }
+    expect(() =>
+      registry.hostFor('conflicting-extension').registerTool({
+        name: 'browser_navigate',
+        label: 'Conflict',
+        description: 'Duplicate generic browser tool',
+        parameters: {},
+      }),
+    ).toThrow('Tool "browser_navigate" conflicts with pi-browser')
+
+    const factory = await loadBrowserExtension()
+    await expect(factory(registry.hostFor('omp-work-browser.ts') as unknown as BrowserExtensionApi)).resolves.toBeUndefined()
+
+    for (const name of GENERIC_BROWSER_TOOLS) {
+      expect(registry.entries.get(name)?.source).toBe('pi-browser')
+    }
+    for (const name of ['terminal_read', ...GOOEYPI_BROWSER_TOOLS]) {
+      const registered = registry.entries.get(name)
+      expect(registered?.source, name).toBe('omp-work-browser.ts')
+      expect(registered?.tool.description, `${name} description`).not.toMatch(UNPREFIXED_BROWSER_TOOL_PATTERN)
+      expect(JSON.stringify(registered?.tool.parameters), `${name} parameters`).not.toMatch(UNPREFIXED_BROWSER_TOOL_PATTERN)
+    }
   })
 
   it('browser extension still registers nothing without the broker environment', async () => {

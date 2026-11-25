@@ -92,9 +92,9 @@ export function refPointScript(ref: number, focus: boolean): string {
   const index = boundedInt(ref, 0, 999, 'ref')
   return `(() => {
     const refs = window.__primeWorkAgentRefs
-    if (!Array.isArray(refs) || window.__primeWorkAgentRefsUrl !== location.href) return JSON.stringify({ error: 'Element refs are stale. Call browser_read_page again to refresh them.' })
+    if (!Array.isArray(refs) || window.__primeWorkAgentRefsUrl !== location.href) return JSON.stringify({ error: 'Element refs are stale. Call gooeypi_browser_read_page again to refresh them.' })
     const el = refs[${index}]
-    if (!el || !el.isConnected) return JSON.stringify({ error: 'That element ref no longer exists on the page. Call browser_read_page again.' })
+    if (!el || !el.isConnected) return JSON.stringify({ error: 'That element ref no longer exists on the page. Call gooeypi_browser_read_page again.' })
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
     ${focus ? 'if (typeof el.focus === "function") el.focus()' : ''}
     const rect = el.getBoundingClientRect()

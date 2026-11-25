@@ -310,7 +310,7 @@ export class AgentBrowserService {
     const url = params.url === undefined ? 'about:blank' : requireString(params.url, 'url', { min: 1, max: 2048, trim: true })
     if (!isAllowedBrowserUrl(url)) throw new Error('Only credential-free http(s) URLs can be opened in the GooeyPi browser')
     const sessionTabs = [...this.tabs.values()].filter((tab) => tab.sessionKey === sessionKey)
-    if (sessionTabs.length >= MAX_TABS_PER_SESSION) throw new Error(`This thread already has ${MAX_TABS_PER_SESSION} browser tabs. Close one with browser_tabs before opening another.`)
+    if (sessionTabs.length >= MAX_TABS_PER_SESSION) throw new Error(`This thread already has ${MAX_TABS_PER_SESSION} browser tabs. Close one with gooeypi_browser_tabs before opening another.`)
     if (this.tabs.size >= MAX_TABS_TOTAL) throw new Error('GooeyPi has too many open agent browser tabs. Close unused tabs first.')
     const tab: TabState = {
       tabId: `bt-${randomBytes(6).toString('hex')}`,
@@ -567,18 +567,18 @@ export class AgentBrowserService {
       const tabId = requireString(params.tabId, 'tabId', { min: 1, max: 64 })
       if (tabId === PREVIEW_TAB_ID) {
         const preview = this.previewFor(sessionKey)
-        if (!preview) throw new Error("The user's Preview tab is not open for this thread right now. Open a tab with browser_tabs instead.")
+        if (!preview) throw new Error("The user's Preview tab is not open for this thread right now. Open a tab with gooeypi_browser_tabs instead.")
         tab = preview.tab
       } else tab = this.requireSessionTab(sessionKey, tabId)
     } else {
       const activeId = this.activeBySession.get(sessionKey)
       const active = activeId === PREVIEW_TAB_ID ? this.previewFor(sessionKey)?.tab : activeId ? this.tabs.get(activeId) : undefined
-      if (activeId === PREVIEW_TAB_ID && !active) throw new Error("The selected Preview tab is no longer open for this thread. Open a tab with browser_tabs instead.")
+      if (activeId === PREVIEW_TAB_ID && !active) throw new Error("The selected Preview tab is no longer open for this thread. Open a tab with gooeypi_browser_tabs instead.")
       // With no agent tab selected, fall back to the user's Preview tab: when
       // the page is already on screen the agent should act on it rather than
       // opening a duplicate.
       const fallback = active ?? this.previewFor(sessionKey)?.tab
-      if (!fallback) throw new Error('This thread has no browser tab yet. Open one with browser_tabs {"action":"open"} first.')
+      if (!fallback) throw new Error('This thread has no browser tab yet. Open one with gooeypi_browser_tabs {"action":"open"} first.')
       tab = fallback
     }
     // Every agent action announces itself so the UI can bring the Browser
@@ -624,7 +624,7 @@ export class AgentBrowserService {
     if (existing && !existing.isDestroyed()) return existing
     // The Preview guest is renderer-owned and never re-attaches under the same
     // tab record; fail fast instead of waiting.
-    if (tab.tabId === PREVIEW_TAB_ID) throw new Error("The user's Preview tab closed. Open a tab with browser_tabs instead.")
+    if (tab.tabId === PREVIEW_TAB_ID) throw new Error("The user's Preview tab closed. Open a tab with gooeypi_browser_tabs instead.")
     await new Promise<void>((resolveAttach, reject) => {
       const waiter = {
         resolve: resolveAttach,

@@ -18,7 +18,7 @@ export const QUEUE_RELEASE_GRACE_MS = 5_000
  * discards the old execution context together with any promise it owns, so the
  * call can never settle and has to be reported instead of awaited forever.
  */
-const NAVIGATION_ABORTED_MESSAGE = 'The page navigated while this action was running, so it was cancelled. Retry once the page settles, or use browser_navigate to go there first.'
+const NAVIGATION_ABORTED_MESSAGE = 'The page navigated while this action was running, so it was cancelled. Retry once the page settles, or use gooeypi_browser_navigate to go there first.'
 const ACTION_TIMED_OUT_MESSAGE = 'The page did not answer this action in time and it was cancelled.'
 
 /**

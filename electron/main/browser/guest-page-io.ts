@@ -54,13 +54,13 @@ export class GuestPageIO {
     let x: unknown = params.x
     let y: unknown = params.y
     if (params.ref !== undefined) {
-      if (typeof params.ref !== 'number' || !Number.isSafeInteger(params.ref) || params.ref < 0 || params.ref > 999) throw new TypeError('ref must be an element number from browser_read_page')
+      if (typeof params.ref !== 'number' || !Number.isSafeInteger(params.ref) || params.ref < 0 || params.ref > 999) throw new TypeError('ref must be an element number from gooeypi_browser_read_page')
       const payload = await this.runPageScript(guest, refPointScript(params.ref, focus), 'element ref')
       if (typeof payload.error === 'string') throw new Error(payload.error.slice(0, 300))
       x = payload.x
       y = payload.y
     }
-    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw new TypeError('Provide either ref (from browser_read_page) or x and y coordinates with finite values')
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) throw new TypeError('Provide either ref (from gooeypi_browser_read_page) or x and y coordinates with finite values')
     const point = { x: Math.round(x), y: Math.round(y) }
     const viewport = await this.pageInfo(guest)
     if (point.x < 0 || point.y < 0 || point.x >= viewport.innerWidth || point.y >= viewport.innerHeight) throw new TypeError('x and y must be within the page viewport')

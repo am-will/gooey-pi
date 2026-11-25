@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events'
+import { runInNewContext } from 'node:vm'
 import type { WebContents } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 import { AgentBrowserService } from '../../electron/main/browser/agent-service'
+import { canonicalSessionPath } from '../../electron/main/session-paths'
 import type { AgentBrowserPointerEvent, AgentBrowserState } from '../../src/types/api'
 
 let nextGuestId = 1000
@@ -306,7 +308,7 @@ describe('AgentBrowserService', () => {
   it('enforces the per-session tab cap', async () => {
     const { service, openAttached } = fixture()
     for (let index = 0; index < 6; index += 1) await openAttached('/sessions/a.jsonl')
-    await expect(service.openTab('/sessions/a.jsonl', {})).rejects.toThrow(/already has 6 browser tabs/)
+    await expect(service.openTab('/sessions/a.jsonl', {})).rejects.toThrow(/already has 6 browser tabs.*gooeypi_browser_tabs/)
   })
 
   it('refuses non-http(s) navigation targets', async () => {
@@ -673,12 +675,60 @@ describe('AgentBrowserService', () => {
   })
 
   it('rejects malformed keys, scroll directions, and coordinates', async () => {
-    const { service, openAttached } = fixture()
-    await openAttached('/sessions/a.jsonl')
+    const { service, newGuest, openAttached } = fixture()
+    const { guest } = await openAttached('/sessions/a.jsonl')
     await expect(service.pressKey('/sessions/a.jsonl', { key: 'definitely-not-a-key' })).rejects.toThrow(/key must be/)
     await expect(service.scroll('/sessions/a.jsonl', { direction: 'sideways' })).rejects.toThrow(/direction must be/)
-    await expect(service.click('/sessions/a.jsonl', {})).rejects.toThrow(/ref .*or x and y/)
+    await expect(service.click('/sessions/a.jsonl', {})).rejects.toThrow(/ref \(from gooeypi_browser_read_page\) or x and y/)
+    await expect(service.click('/sessions/a.jsonl', { x: 10 })).rejects.toThrow(/ref \(from gooeypi_browser_read_page\) or x and y/)
+    await expect(service.click('/sessions/a.jsonl', { x: 10, y: Number.NaN })).rejects.toThrow(/ref \(from gooeypi_browser_read_page\) or x and y/)
+    for (const badRef of ['0', 1.5, -1, 1000]) {
+      await expect(service.click('/sessions/a.jsonl', { ref: badRef })).rejects.toThrow(/element number from gooeypi_browser_read_page/)
+    }
     await expect(service.click('/sessions/a.jsonl', { x: -5, y: 10 })).rejects.toThrow(/within the page viewport/)
+    await expect(service.click('/sessions/no-tab.jsonl', { x: 1, y: 1 })).rejects.toThrow(/Open one with gooeypi_browser_tabs/)
+    await expect(service.click('/sessions/no-tab.jsonl', { tabId: 'preview', x: 1, y: 1 })).rejects.toThrow(/Open a tab with gooeypi_browser_tabs instead/)
+
+    const previewSession = canonicalSessionPath('/sessions/preview-remediation.jsonl')
+    const preview = newGuest()
+    service.setPreviewContext(preview.id, previewSession)
+    await service.selectTabScoped(previewSession, { tabId: 'preview' })
+    service.setPreviewContext(null, null)
+    await expect(service.click(previewSession, { x: 1, y: 1 })).rejects.toThrow(/selected Preview tab is no longer open.*gooeypi_browser_tabs/)
+
+    const closingPreview = newGuest()
+    const holdStarted = deferred<void>()
+    const holdRelease = deferred<string>()
+    closingPreview.scriptResult = (code) => {
+      if (code.includes('hold-preview-queue')) {
+        holdStarted.resolve()
+        return holdRelease.promise
+      }
+      return JSON.stringify({})
+    }
+    service.setPreviewContext(closingPreview.id, previewSession)
+    const held = service.evaluate(previewSession, { code: "'hold-preview-queue'" })
+    await holdStarted.promise
+    const afterClose = service.click(previewSession, { x: 1, y: 1 })
+    const afterCloseRejected = expect(afterClose).rejects.toThrow(/Preview tab closed.*gooeypi_browser_tabs/)
+    closingPreview.destroyed = true
+    holdRelease.resolve(JSON.stringify({ ok: true }))
+    await expect(held).resolves.toEqual({ ok: true })
+    await afterCloseRejected
+    service.setPreviewContext(null, null)
+
+    const original = guest.scriptResult
+    let evalWindow: Record<string, unknown> = { __primeWorkAgentRefs: [], __primeWorkAgentRefsUrl: 'https://stale.example/' }
+    guest.scriptResult = (code) => {
+      if (code.includes('__primeWorkAgentRefs')) {
+        return String(runInNewContext(code, { window: evalWindow, location: { href: 'https://example.com/' } }))
+      }
+      return original(code)
+    }
+    await expect(service.click('/sessions/a.jsonl', { ref: 0 })).rejects.toThrow(/Element refs are stale\. Call gooeypi_browser_read_page again/)
+    evalWindow = { __primeWorkAgentRefs: [{ isConnected: false }], __primeWorkAgentRefsUrl: 'https://example.com/' }
+    await expect(service.click('/sessions/a.jsonl', { ref: 0 })).rejects.toThrow(/no longer exists on the page\. Call gooeypi_browser_read_page again/)
+    await expect(service.click('/sessions/a.jsonl', { ref: 999 })).rejects.toThrow(/no longer exists on the page\. Call gooeypi_browser_read_page again/)
   })
 
   it('rejects an in-flight page script when the document is replaced', async () => {
@@ -699,7 +749,7 @@ describe('AgentBrowserService', () => {
     await started.promise
     guest.startNavigation({ url: 'https://example.org/', isSameDocument: false, isMainFrame: true })
 
-    await expect(stranded).rejects.toThrow(/page navigated while this action was running/i)
+    await expect(stranded).rejects.toThrow(/page navigated while this action was running.*gooeypi_browser_navigate/i)
   })
 
   it('keeps the tab usable after a navigation strands a page script', async () => {
