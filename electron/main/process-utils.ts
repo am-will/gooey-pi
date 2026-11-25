@@ -270,6 +270,14 @@ export interface PrepareExecutableSpawnOptions {
   managedInstallFs?: PiManagedInstallFs
 }
 
+function withoutPiManagedInstallRoot(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() !== 'pi_managed_install_root') result[key] = value
+  }
+  return result
+}
+
 function canAccessPath(candidate: string, mode: number): boolean {
   try { accessSync(candidate, mode); return true } catch { return false }
 }
@@ -329,7 +337,7 @@ export function prepareExecutableSpawn(
   const canAccess = options.canAccess ?? canAccessPath
   const npmEntrypoint = win32.join(win32.dirname(file), 'node_modules', ...descriptor.windowsNpmShim.entrypoint)
   let entrypoint = npmEntrypoint
-  let spawnEnvironment = childEnvironment
+  let spawnEnvironment = descriptor.id === 'pi' ? withoutPiManagedInstallRoot(childEnvironment) : childEnvironment
   let installationLabel = `${descriptor.agentName} npm command shim`
   if (!canAccess(npmEntrypoint, fsConstants.F_OK)) {
     const managed = descriptor.id === 'pi'
@@ -342,7 +350,7 @@ export function prepareExecutableSpawn(
       )
     }
     entrypoint = managed.entrypoint
-    spawnEnvironment = { ...childEnvironment, PI_MANAGED_INSTALL_ROOT: managed.installRoot }
+    spawnEnvironment = { ...spawnEnvironment, PI_MANAGED_INSTALL_ROOT: managed.installRoot }
     installationLabel = 'Pi managed installation'
   }
   const homeValue = options.home ?? spawnEnvironment.USERPROFILE
