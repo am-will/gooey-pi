@@ -844,6 +844,7 @@ describe('harness settings surfaces', () => {
     const piCard = [...container.querySelectorAll('.runtime-card')].find((card) => card.textContent?.includes('Pi not detected'))
     expect(piCard?.querySelector('small')?.getAttribute('title')).toBe('/Users/you/.local/bin/pi: exited with code 1: Node.js is too old')
     expect(container.textContent).toContain('/Users/you/.local/bin/pi: exited with code 1: Node.js is too old')
+    expect(container.textContent).toContain('on Windows, a native .exe or recognized official .cmd shim')
   })
 
   it.each([

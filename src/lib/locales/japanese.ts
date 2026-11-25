@@ -945,7 +945,7 @@ export const japaneseCatalog: Record<MessageKey, Message> = {
   'settings.agent.runtime.install': '{name} をインストールしてから、ハーネスを更新してください。',
   'settings.agent.runtime.description': '検出時は、保存された指定、ハーネスの環境変数、同梱ファイル、PATH、標準のインストール先の順に確認します。更新すると GooeyPi を再起動せずに今後のセッションへ反映されます。',
   'settings.agent.runtime.pathLabel': '{name} の実行ファイル指定',
-  'settings.agent.runtime.pathDescription': '省略可能な絶対パス。空欄のままにすると自動検出を使用します。',
+  'settings.agent.runtime.pathDescription': '省略可能な絶対パス（Windows ではネイティブの .exe または認識される公式 .cmd シム）。空欄のままにすると自動検出を使用します。',
   'settings.agent.runtime.pathError': '{name} のパスは絶対パスで指定してください（自動検出を使う場合は空欄）。',
   'settings.agent.transcript.title': 'トランスクリプト',
   'settings.agent.transcript.reasoning.label': '推論の要約を表示',

@@ -971,7 +971,7 @@ export const englishCatalog = {
   'settings.agent.runtime.install': 'Install {name}, then refresh harnesses.',
   'settings.agent.runtime.description': 'Discovery checks a saved override first, then the harness environment variable, bundled files, PATH, and standard install directories. Refreshing updates future sessions without restarting GooeyPi.',
   'settings.agent.runtime.pathLabel': '{name} executable override',
-  'settings.agent.runtime.pathDescription': 'Optional absolute path. Leave blank to keep automatic discovery.',
+  'settings.agent.runtime.pathDescription': 'Optional absolute path (on Windows, a native .exe or recognized official .cmd shim). Leave blank to keep automatic discovery.',
   'settings.agent.runtime.pathError': '{name} path must be absolute (or blank for automatic discovery)',
   'settings.agent.transcript.title': 'Transcript',
   'settings.agent.transcript.reasoning.label': 'Show reasoning summaries',

@@ -7,6 +7,7 @@ import { HARNESS_IDS, type AppSettings, type HarnessId, type HarnessStatus, type
 import { HARNESSES, type HarnessDescriptor } from './harness'
 import { harnessVersion } from './lib/harness-version'
 import { lastNonEmptyLine, sanitizedDetail } from './lib/process-detail'
+import { isExecutableValidationError } from './pi-managed-install'
 import { inspectPrimeNpmBridge, PRIME_NPM_BRIDGE_UNMIGRATED_DETAIL } from './prime-npm-bridge'
 import { findHarnessExecutable, processFailureReason, runProcess, type ExecutableCandidateFailure } from './process-utils'
 import type { JsonStateStore } from './store'
@@ -56,8 +57,21 @@ function probeFailureDetail(failure: HarnessProbeFailure): string {
   return `could not start${suffix}`
 }
 
-function spawnFailure(error: unknown): HarnessProbeFailure {
-  const code = errorCode(error) || 'UNKNOWN'
+function sanitizedErrnoCode(error: unknown): string {
+  const raw = errorCode(error)
+  if (!raw) return ''
+  const cleaned = sanitizedDetail(raw)
+  return /^[A-Za-z0-9_.-]{1,64}$/.test(cleaned) ? cleaned : ''
+}
+
+export function spawnFailure(error: unknown): HarnessProbeFailure {
+  if (isExecutableValidationError(error)) {
+    return {
+      kind: 'spawn',
+      detail: sanitizedDetail(error.message) || `spawn error ${error.code}`,
+    }
+  }
+  const code = sanitizedErrnoCode(error) || 'UNKNOWN'
   const detail = code === 'ENOENT'
     ? 'path does not exist'
     : code === 'EACCES' || code === 'EPERM'

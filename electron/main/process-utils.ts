@@ -7,6 +7,7 @@ import { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 export { isAbsolutePathForPlatform } from '../../src/lib/platform-paths'
 import { createAdmissionQueue } from './lib/async'
 import { HARNESSES, type HarnessDescriptor } from './harness'
+import { ExecutableValidationError, isDriveOrUncWin32Path, resolvePiManagedInstall, type PiManagedInstallFs } from './pi-managed-install'
 import type { ProcessFailureReason, ProcessOutcome } from '../../src/types/api'
 
 export interface ProcessResult {
@@ -262,10 +263,11 @@ export interface ExecutableSpawnInvocation {
   env: NodeJS.ProcessEnv
 }
 
-interface PrepareExecutableSpawnOptions {
+export interface PrepareExecutableSpawnOptions {
   platform?: NodeJS.Platform
   home?: string
   canAccess?: (candidate: string, mode: number) => boolean
+  managedInstallFs?: PiManagedInstallFs
 }
 
 function canAccessPath(candidate: string, mode: number): boolean {
@@ -325,25 +327,42 @@ export function prepareExecutableSpawn(
   }
 
   const canAccess = options.canAccess ?? canAccessPath
-  const entrypoint = win32.join(win32.dirname(file), 'node_modules', ...descriptor.windowsNpmShim.entrypoint)
-  if (!canAccess(entrypoint, fsConstants.F_OK)) throw new Error(`The ${descriptor.agentName} npm command shim does not point to an official ${descriptor.agentName} installation`)
-  const homeValue = options.home ?? childEnvironment.USERPROFILE
+  const npmEntrypoint = win32.join(win32.dirname(file), 'node_modules', ...descriptor.windowsNpmShim.entrypoint)
+  let entrypoint = npmEntrypoint
+  let spawnEnvironment = childEnvironment
+  let installationLabel = `${descriptor.agentName} npm command shim`
+  if (!canAccess(npmEntrypoint, fsConstants.F_OK)) {
+    const managed = descriptor.id === 'pi'
+      ? resolvePiManagedInstall(file, { canAccess: options.canAccess, fs: options.managedInstallFs })
+      : null
+    if (!managed) {
+      throw new ExecutableValidationError(
+        'SHIM_MISMATCH',
+        `The ${descriptor.agentName} npm command shim does not point to an official ${descriptor.agentName} installation`,
+      )
+    }
+    entrypoint = managed.entrypoint
+    spawnEnvironment = { ...childEnvironment, PI_MANAGED_INSTALL_ROOT: managed.installRoot }
+    installationLabel = 'Pi managed installation'
+  }
+  const homeValue = options.home ?? spawnEnvironment.USERPROFILE
   const home = homeValue && win32.isAbsolute(homeValue) ? homeValue : homedir()
-  const pathDirectories = [childEnvironment.Path, childEnvironment.PATH]
+  const pathDirectories = [spawnEnvironment.Path, spawnEnvironment.PATH]
     .flatMap((value) => (value ?? '').split(';'))
+    .map((directory) => directory.trim().replace(/^"(.*)"$/, '$1'))
     .filter((directory) => Boolean(directory && win32.isAbsolute(directory)))
   const nodeDirectories = [
     win32.dirname(file),
-    ...versionManagerRuntimeDirs(childEnvironment, platform, home),
+    ...versionManagerRuntimeDirs(spawnEnvironment, platform, home),
     ...pathDirectories,
-    childEnvironment.ProgramFiles ? win32.join(childEnvironment.ProgramFiles, 'nodejs') : '',
-    childEnvironment.LOCALAPPDATA ? win32.join(childEnvironment.LOCALAPPDATA, 'Programs', 'nodejs') : '',
+    spawnEnvironment.ProgramFiles ? win32.join(spawnEnvironment.ProgramFiles, 'nodejs') : '',
+    spawnEnvironment.LOCALAPPDATA ? win32.join(spawnEnvironment.LOCALAPPDATA, 'Programs', 'nodejs') : '',
   ]
-  const node = uniquePaths(nodeDirectories.filter((directory) => isAbsolutePathForPlatform(directory, platform)), platform)
+  const node = uniquePaths(nodeDirectories.filter(isDriveOrUncWin32Path), platform)
     .map((directory) => win32.join(directory, 'node.exe'))
     .find((candidate) => canAccess(candidate, fsConstants.X_OK))
-  if (!node) throw new Error(`Node.js was not found for the ${descriptor.agentName} npm command shim`)
-  return { file: node, args: [entrypoint, ...args], env: childEnvironment }
+  if (!node) throw new ExecutableValidationError('NODE_MISSING', `Node.js was not found for the ${installationLabel}`)
+  return { file: node, args: [entrypoint, ...args], env: spawnEnvironment }
 }
 
 /**
