@@ -1,7 +1,8 @@
-import { join, win32 } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 
 import { HARNESS_AGENT_NAMES, HARNESS_PRODUCT_NAMES } from '../../src/lib/harness'
 import type { HarnessId } from '../../src/types/api'
+import { isDriveOrUncWin32Path } from './pi-managed-install'
 
 /**
  * Static description of one agent harness: how its executable is discovered
@@ -68,9 +69,9 @@ export const HARNESSES: Record<HarnessId, HarnessDescriptor> = {
     executableName: (platform) => platform === 'win32' ? 'pi.exe' : 'pi',
     binaryEnvVar: 'PI_BINARY',
     bundledResourceDirs: [],
-    candidateDirs: (platform, home, env) => platform === 'win32' ? [] : [
-      join(env.XDG_DATA_HOME ?? join(home, '.local', 'share'), 'pi-node', 'current', 'bin'),
-    ],
+    candidateDirs: (platform, home, env) => platform === 'win32'
+      ? (isDriveOrUncWin32Path(home) ? [win32.join(home, '.pi', 'agent', 'bin')] : [])
+      : [posix.join(env.XDG_DATA_HOME ?? posix.join(home, '.local', 'share'), 'pi-node', 'current', 'bin')],
     windowsNpmShim: { shim: 'pi.cmd', entrypoint: ['@earendil-works', 'pi-coding-agent', 'dist', 'cli.js'] },
     agentDir: (home) => join(home, '.pi', 'agent'),
     sessionRoot: (home) => join(home, '.pi', 'agent', 'sessions'),

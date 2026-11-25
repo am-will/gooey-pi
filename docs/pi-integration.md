@@ -9,9 +9,11 @@ This reference covers Pi's protocol differences.
 
 [`HARNESSES.pi`](../electron/main/harness.ts) defines executable discovery and
 Pi's data roots. Discovery checks the configured path, `PI_BINARY`, inherited
-`PATH`, and bounded shared locations in the order implemented by
-[`process-utils.ts`](../electron/main/process-utils.ts). On Windows, the known
-`pi.cmd` shim resolves to its Node entry point without shell execution.
+`PATH`, Pi's Windows managed-install `bin` directory, and bounded shared
+locations in the order implemented by [`process-utils.ts`](../electron/main/process-utils.ts).
+On Windows, the recognized `pi.cmd` shim resolves either to its official npm
+prefix entry point or, via [`pi-managed-install.ts`](../electron/main/pi-managed-install.ts),
+to the validated `releases-v1` managed-install bundle without shell execution.
 
 [`PI_RPC_ADAPTER`](../electron/main/agent-rpc/harness-adapter.ts) starts Pi in
 RPC mode. The runtime sets the child process working directory to the authorized
