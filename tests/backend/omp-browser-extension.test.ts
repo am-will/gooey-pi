@@ -113,7 +113,7 @@ describe('omp-work-browser extension', () => {
       return new Promise<Response>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
     })
     const controller = new AbortController()
-    const pending = tool('browser_read_page').execute('cancelled-call', {}, controller.signal)
+    const pending = tool('gooeypi_browser_read_page').execute('cancelled-call', {}, controller.signal)
     const assertion = expect(pending).rejects.toThrow(/cancelled/)
     controller.abort(new Error('cancelled'))
     await assertion
@@ -131,15 +131,15 @@ describe('omp-work-browser extension', () => {
     const { tools } = await fixture()
     expect(tools.map((candidate) => candidate.name)).toEqual([
       'terminal_read',
-      'browser_tabs',
-      'browser_navigate',
-      'browser_screenshot',
-      'browser_read_page',
-      'browser_click',
-      'browser_type',
-      'browser_press_key',
-      'browser_scroll',
-      'browser_evaluate',
+      'gooeypi_browser_tabs',
+      'gooeypi_browser_navigate',
+      'gooeypi_browser_screenshot',
+      'gooeypi_browser_read_page',
+      'gooeypi_browser_click',
+      'gooeypi_browser_type',
+      'gooeypi_browser_press_key',
+      'gooeypi_browser_scroll',
+      'gooeypi_browser_evaluate',
     ])
     for (const candidate of tools) {
       expect(candidate.label.length).toBeGreaterThan(0)
@@ -150,17 +150,17 @@ describe('omp-work-browser extension', () => {
 
   it('forwards calls to the broker with the bearer token and cleaned params', async () => {
     const { calls, tool } = await fixture()
-    const result = await tool('browser_navigate').execute('call-1', { url: 'https://example.test/next' })
+    const result = await tool('gooeypi_browser_navigate').execute('call-1', { url: 'https://example.test/next' })
     expect(calls).toEqual([{ method: 'navigate', params: { url: 'https://example.test/next' } }])
     expect(result.content[0].text).toContain('<untrusted-page-content>')
     expect(result.content[0].text).toContain('https://example.test/next')
-    await tool('browser_click').execute('call-2', { ref: 3, tab_id: 'tab-1' })
+    await tool('gooeypi_browser_click').execute('call-2', { ref: 3, tab_id: 'tab-1' })
     expect(calls[1]).toEqual({ method: 'click', params: { ref: 3, tabId: 'tab-1' } })
   })
 
-  it('requires url or action for browser_navigate', async () => {
+  it('requires url or action for gooeypi_browser_navigate', async () => {
     const { calls, tool } = await fixture()
-    await expect(tool('browser_navigate').execute('call-1', {})).rejects.toThrow('Provide url or action')
+    await expect(tool('gooeypi_browser_navigate').execute('call-1', {})).rejects.toThrow('Provide url or action')
     expect(calls).toHaveLength(0)
   })
 
@@ -174,7 +174,7 @@ describe('omp-work-browser extension', () => {
 
   it('returns screenshots as image content with fenced page metadata', async () => {
     const { tool } = await fixture()
-    const result = await tool('browser_screenshot').execute('call-1', {})
+    const result = await tool('gooeypi_browser_screenshot').execute('call-1', {})
     expect(result.content[0]).toEqual({ type: 'image', data: 'aGVsbG8=', mimeType: 'image/jpeg' })
     expect(result.content[1].type).toBe('text')
     expect(result.content[1].text).toContain('<untrusted-page-content>')
@@ -182,7 +182,7 @@ describe('omp-work-browser extension', () => {
 
   it('opens tabs and reports the new tab id', async () => {
     const { calls, tool } = await fixture()
-    const result = await tool('browser_tabs').execute('call-1', { action: 'open', url: 'https://example.test/' })
+    const result = await tool('gooeypi_browser_tabs').execute('call-1', { action: 'open', url: 'https://example.test/' })
     expect(calls[0]).toEqual({ method: 'tabs.open', params: { url: 'https://example.test/' } })
     expect(result.content[0].text).toContain('Opened tab tab-1')
   })
@@ -192,10 +192,10 @@ describe('omp-work-browser extension', () => {
     const denied = await loadExtension({ ...environment, PRIME_WORK_BROWSER_TOKEN: 'not-the-real-token' })
     const { tools: deniedTools, pi } = fakePi()
     denied(pi)
-    const deniedTabs = deniedTools.find((candidate) => candidate.name === 'browser_tabs')!
+    const deniedTabs = deniedTools.find((candidate) => candidate.name === 'gooeypi_browser_tabs')!
     await expect(deniedTabs.execute('call-1', { action: 'list' })).rejects.toThrow(/Unauthorized|expired/)
     await bridge.stop()
-    await expect(tool('browser_tabs').execute('call-2', { action: 'list' })).rejects.toSatisfy((error: unknown) => {
+    await expect(tool('gooeypi_browser_tabs').execute('call-2', { action: 'list' })).rejects.toSatisfy((error: unknown) => {
       const message = String((error as Error).message)
       expect(message).toContain('GooeyPi is not reachable')
       expect(message).not.toContain(environment.PRIME_WORK_BROWSER_TOKEN)
