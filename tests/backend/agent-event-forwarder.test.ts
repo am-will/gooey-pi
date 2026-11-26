@@ -54,4 +54,45 @@ describe('forwarded stream payloads', () => {
     const complete = { type: 'message_end', message: { content: 'complete response' } }
     expect(slimForwardedEvent(complete)).toBe(complete)
   })
+
+  it('strips bulk message histories from agent_end and turn_end without mutating the source frame', () => {
+    const messages = [{ role: 'toolResult', content: [{ type: 'image', data: 'A'.repeat(1_024) }] }]
+    const agentEnd = { type: 'agent_end', isTerminal: true, messages }
+    expect(slimForwardedEvent(agentEnd)).toEqual({ type: 'agent_end', isTerminal: true })
+    expect(agentEnd.messages).toBe(messages)
+
+    const turnEnd = { type: 'turn_end', message: { role: 'assistant', content: 'done' }, toolResults: messages }
+    expect(slimForwardedEvent(turnEnd)).toEqual({ type: 'turn_end' })
+    expect(turnEnd.toolResults).toBe(messages)
+  })
+
+  it('preserves a minimal critical lifecycle event when an oversized frame exceeds maxEnvelopeBytes', () => {
+    const { events, delivered } = forwarder({ maxEnvelopeBytes: 256, maxWindowBytes: 1_024 })
+    events.emit({ type: 'agent_end', isTerminal: true, extra: 'x'.repeat(2_048) })
+
+    expect(delivered.some(({ event }) => event.type === 'transport_limit' && event.kind === 'envelope')).toBe(true)
+    expect(delivered.find(({ event }) => event.type === 'agent_end')?.event).toEqual({
+      type: 'agent_end',
+      isTerminal: true,
+    })
+
+    const { events: compactionEvents, delivered: compactionDelivered } = forwarder({ maxEnvelopeBytes: 256, maxWindowBytes: 1_024 })
+    compactionEvents.emit({
+      type: 'compaction_end',
+      reason: 'overflow',
+      aborted: false,
+      willRetry: false,
+      completed: true,
+      result: { summary: 'y'.repeat(2_048) },
+    })
+
+    expect(compactionDelivered.some(({ event }) => event.type === 'transport_limit' && event.kind === 'envelope')).toBe(true)
+    expect(compactionDelivered.find(({ event }) => event.type === 'compaction_end')?.event).toEqual({
+      type: 'compaction_end',
+      reason: 'overflow',
+      aborted: false,
+      willRetry: false,
+      completed: true,
+    })
+  })
 })

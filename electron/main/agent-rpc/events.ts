@@ -25,17 +25,83 @@ const DEFAULT_AGENT_EVENT_LIMITS: AgentEventLimits = {
   windowMs: 1_000,
 }
 
-/** The renderer consumes deltas; full partial snapshots are retained only until main has read usage. */
+/**
+ * The renderer consumes deltas and lifecycle signals; full snapshots and bulk
+ * turn histories (which can carry multi-megabyte base64 tool images) are
+ * retained only until main has inspected them.
+ */
 export function slimForwardedEvent(event: RpcObject): RpcObject {
-  if (event.type !== 'message_update') return event
-  const slim = { ...event }
-  if (isRecord(event.message)) slim.message = { role: event.message.role, ...(isRecord(event.message.usage) ? { usage: event.message.usage } : {}) }
-  if (isRecord(event.assistantMessageEvent) && 'partial' in event.assistantMessageEvent) {
-    const delta = { ...event.assistantMessageEvent }
-    delete delta.partial
-    slim.assistantMessageEvent = delta
+  if (event.type === 'message_update') {
+    const slim = { ...event }
+    if (isRecord(event.message)) slim.message = { role: event.message.role, ...(isRecord(event.message.usage) ? { usage: event.message.usage } : {}) }
+    if (isRecord(event.assistantMessageEvent) && 'partial' in event.assistantMessageEvent) {
+      const delta = { ...event.assistantMessageEvent }
+      delete delta.partial
+      slim.assistantMessageEvent = delta
+    }
+    return slim
   }
-  return slim
+  if (event.type === 'agent_end' && 'messages' in event) {
+    const slim = { ...event }
+    delete slim.messages
+    return slim
+  }
+  if (event.type === 'turn_end' && ('message' in event || 'toolResults' in event)) {
+    const slim = { ...event }
+    delete slim.message
+    delete slim.toolResults
+    return slim
+  }
+  return event
+}
+
+function boundedScalar(value: unknown, maxChars = 256): string | undefined {
+  return typeof value === 'string' && value.length <= maxChars ? value : undefined
+}
+
+/**
+ * Minimal lifecycle stub used only if a critical lifecycle event still exceeds
+ * maxEnvelopeBytes, so the renderer never stays stuck in a streaming/compacting
+ * state while still reconciling the transcript via transport_limit.
+ */
+function minimalCriticalEvent(event: RpcObject): RpcObject {
+  const type = typeof event.type === 'string' ? event.type : ''
+  if (type === 'agent_end') {
+    return {
+      type,
+      ...(typeof event.isTerminal === 'boolean' ? { isTerminal: event.isTerminal } : {}),
+      ...(typeof event.willRetry === 'boolean' ? { willRetry: event.willRetry } : {}),
+    }
+  }
+  if (type === 'compaction_start') {
+    const reason = boundedScalar(event.reason)
+    const action = boundedScalar(event.action)
+    return { type, ...(reason !== undefined ? { reason } : {}), ...(action !== undefined ? { action } : {}) }
+  }
+  if (type === 'compaction_end') {
+    const reason = boundedScalar(event.reason)
+    const action = boundedScalar(event.action)
+    const errorSeverity = boundedScalar(event.errorSeverity)
+    return {
+      type,
+      ...(reason !== undefined ? { reason } : {}),
+      ...(action !== undefined ? { action } : {}),
+      ...(typeof event.aborted === 'boolean' ? { aborted: event.aborted } : {}),
+      ...(typeof event.willRetry === 'boolean' ? { willRetry: event.willRetry } : {}),
+      ...(typeof event.completed === 'boolean' ? { completed: event.completed } : {}),
+      ...(errorSeverity !== undefined ? { errorSeverity } : {}),
+    }
+  }
+  if (type === 'runtime_exit') {
+    const signal = boundedScalar(event.signal)
+    return {
+      type,
+      ...(typeof event.expected === 'boolean' ? { expected: event.expected } : {}),
+      ...(typeof event.code === 'number' || event.code === null ? { code: event.code } : {}),
+      ...(signal !== undefined ? { signal } : {}),
+    }
+  }
+  return { type }
 }
 
 /** Applies the same byte accounting to real and synthetic events before they reach Electron IPC. */
@@ -78,11 +144,14 @@ export class AgentEventForwarder {
       if (this.eventCount > this.limits.maxEvents) { this.reportLimit('count', 'Agent event rate exceeded the desktop limit'); return }
     }
 
-    const envelope: PrimeEventEnvelope = { runtimeId: this.runtimeId, event }
-    const bytes = this.serializedBytes(envelope)
+    let envelope: PrimeEventEnvelope = { runtimeId: this.runtimeId, event }
+    let bytes = this.serializedBytes(envelope)
     if (bytes === null || bytes > this.limits.maxEnvelopeBytes) {
       this.reportLimit('envelope', 'Agent event exceeded the desktop envelope byte limit')
-      return
+      if (!critical) return
+      envelope = { runtimeId: this.runtimeId, event: minimalCriticalEvent(event) }
+      bytes = this.serializedBytes(envelope)
+      if (bytes === null || bytes > this.limits.maxEnvelopeBytes) return
     }
     if (!isRuntimeExit) {
       const reserve = Math.min(64 * 1024, Math.floor(this.limits.maxWindowBytes / 4))
