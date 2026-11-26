@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AgentEventForwarder, slimForwardedEvent } from '../../electron/main/agent-rpc/events'
+import { applyCompactionEvent } from '../../src/lib/events/compaction'
 import type { PrimeEventEnvelope } from '../../src/types/api'
 
 function forwarder(limits: Partial<{ maxEvents: number; maxEnvelopeBytes: number; maxWindowBytes: number; windowMs: number }> = {}) {
@@ -70,29 +71,104 @@ describe('forwarded stream payloads', () => {
     const { events, delivered } = forwarder({ maxEnvelopeBytes: 256, maxWindowBytes: 1_024 })
     events.emit({ type: 'agent_end', isTerminal: true, extra: 'x'.repeat(2_048) })
 
-    expect(delivered.some(({ event }) => event.type === 'transport_limit' && event.kind === 'envelope')).toBe(true)
-    expect(delivered.find(({ event }) => event.type === 'agent_end')?.event).toEqual({
+    expect(delivered.map(({ event }) => event.type)).toEqual(['transport_limit', 'agent_end'])
+    expect(delivered[0]?.event).toMatchObject({ type: 'transport_limit', kind: 'envelope' })
+    expect(delivered[1]?.event).toEqual({
       type: 'agent_end',
       isTerminal: true,
     })
+  })
 
-    const { events: compactionEvents, delivered: compactionDelivered } = forwarder({ maxEnvelopeBytes: 256, maxWindowBytes: 1_024 })
-    compactionEvents.emit({
+  it('prioritizes the critical fallback stub over transport_limit when windowBytes is nearly full', () => {
+    const { events, delivered } = forwarder({ maxEnvelopeBytes: 256, maxWindowBytes: 512 })
+    // Fill the window so ~152 bytes remain: enough for the agent_end stub, not
+    // enough for both the transport_limit notice and the stub.
+    events.emit({ type: 'message_update', pad: 'a'.repeat(180) })
+    events.emit({ type: 'message_update', pad: 'b'.repeat(70) })
+    const beforeCount = delivered.length
+
+    events.emit({ type: 'agent_end', isTerminal: true, extra: 'x'.repeat(2_048) })
+
+    const emitted = delivered.slice(beforeCount).map(({ event }) => event)
+    expect(emitted).toEqual([{ type: 'agent_end', isTerminal: true }])
+  })
+
+  it('preserves compaction_end success outcome and bounded error/instruction metadata on fallback', () => {
+    // Result-only success (no explicit completed flag), matching normal Pi compaction_end frames.
+    const { events: resultOnlyEvents, delivered: resultOnlyDelivered } = forwarder({ maxEnvelopeBytes: 512, maxWindowBytes: 2_048 })
+    resultOnlyEvents.emit({
       type: 'compaction_end',
       reason: 'overflow',
       aborted: false,
       willRetry: false,
-      completed: true,
-      result: { summary: 'y'.repeat(2_048) },
+      result: { summary: 'y'.repeat(2_048), tokensBefore: 120_000, firstKeptEntryId: 'entry-42' },
     })
 
-    expect(compactionDelivered.some(({ event }) => event.type === 'transport_limit' && event.kind === 'envelope')).toBe(true)
-    expect(compactionDelivered.find(({ event }) => event.type === 'compaction_end')?.event).toEqual({
+    const resultOnlyStub = resultOnlyDelivered.find(({ event }) => event.type === 'compaction_end')?.event
+    expect(resultOnlyStub).toEqual({
       type: 'compaction_end',
       reason: 'overflow',
       aborted: false,
       willRetry: false,
       completed: true,
+      result: { tokensBefore: 120_000, firstKeptEntryId: 'entry-42' },
+    })
+    const resultOnlyTranscript = applyCompactionEvent([], resultOnlyStub!)
+    expect(resultOnlyTranscript?.[0]?.parts[0]).toMatchObject({
+      type: 'compaction',
+      status: 'done',
+      tokensBefore: 120_000,
+      firstKeptEntryId: 'entry-42',
+    })
+
+    // Summary-only success (no tokensBefore/firstKeptEntryId/completed).
+    const { events: summaryOnlyEvents, delivered: summaryOnlyDelivered } = forwarder({ maxEnvelopeBytes: 256, maxWindowBytes: 1_024 })
+    summaryOnlyEvents.emit({
+      type: 'compaction_end',
+      reason: 'overflow',
+      aborted: false,
+      willRetry: false,
+      result: { summary: 'z'.repeat(2_048) },
+    })
+    const summaryOnlyStub = summaryOnlyDelivered.find(({ event }) => event.type === 'compaction_end')?.event
+    expect(summaryOnlyStub).toEqual({
+      type: 'compaction_end',
+      reason: 'overflow',
+      aborted: false,
+      willRetry: false,
+      completed: true,
+    })
+    expect(applyCompactionEvent([], summaryOnlyStub!)?.[0]?.parts[0]).toMatchObject({
+      type: 'compaction',
+      status: 'done',
+    })
+
+    // Failed compaction preserves bounded errorMessage and customInstructions.
+    const { events: failedEvents, delivered: failedDelivered } = forwarder({ maxEnvelopeBytes: 512, maxWindowBytes: 2_048 })
+    failedEvents.emit({
+      type: 'compaction_end',
+      reason: 'manual',
+      aborted: false,
+      willRetry: false,
+      errorMessage: 'Provider rejected compaction request',
+      customInstructions: 'Preserve API contracts',
+      extra: 'w'.repeat(2_048),
+    })
+    const failedStub = failedDelivered.find(({ event }) => event.type === 'compaction_end')?.event
+    expect(failedStub).toEqual({
+      type: 'compaction_end',
+      reason: 'manual',
+      aborted: false,
+      willRetry: false,
+      errorMessage: 'Provider rejected compaction request',
+      customInstructions: 'Preserve API contracts',
+    })
+    expect(applyCompactionEvent([], failedStub!)?.[0]?.parts[0]).toMatchObject({
+      type: 'compaction',
+      status: 'failed',
+      outcome: 'failed',
+      error: 'Provider rejected compaction request',
+      customInstructions: 'Preserve API contracts',
     })
   })
 })

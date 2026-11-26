@@ -59,12 +59,16 @@ function boundedScalar(value: unknown, maxChars = 256): string | undefined {
   return typeof value === 'string' && value.length <= maxChars ? value : undefined
 }
 
+function boundedText(value: unknown, maxChars = 512): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value.slice(0, maxChars) : undefined
+}
+
 /**
  * Minimal lifecycle stub used only if a critical lifecycle event still exceeds
  * maxEnvelopeBytes, so the renderer never stays stuck in a streaming/compacting
  * state while still reconciling the transcript via transport_limit.
  */
-function minimalCriticalEvent(event: RpcObject): RpcObject {
+function minimalCriticalEvent(event: RpcObject, includeDisplayText = true): RpcObject {
   const type = typeof event.type === 'string' ? event.type : ''
   if (type === 'agent_end') {
     return {
@@ -76,20 +80,54 @@ function minimalCriticalEvent(event: RpcObject): RpcObject {
   if (type === 'compaction_start') {
     const reason = boundedScalar(event.reason)
     const action = boundedScalar(event.action)
-    return { type, ...(reason !== undefined ? { reason } : {}), ...(action !== undefined ? { action } : {}) }
+    const customInstructions = includeDisplayText ? boundedText(event.customInstructions) : undefined
+    return {
+      type,
+      ...(reason !== undefined ? { reason } : {}),
+      ...(action !== undefined ? { action } : {}),
+      ...(customInstructions !== undefined ? { customInstructions } : {}),
+    }
   }
   if (type === 'compaction_end') {
     const reason = boundedScalar(event.reason)
     const action = boundedScalar(event.action)
     const errorSeverity = boundedScalar(event.errorSeverity)
+    const errorMessage = includeDisplayText ? boundedText(event.errorMessage) : undefined
+    const customInstructions = includeDisplayText ? boundedText(event.customInstructions) : undefined
+    const rawResult = isRecord(event.result) ? event.result : undefined
+    const tokensBefore = typeof rawResult?.tokensBefore === 'number'
+      && Number.isFinite(rawResult.tokensBefore)
+      && rawResult.tokensBefore >= 0
+      ? rawResult.tokensBefore
+      : undefined
+    const firstKeptEntryId = boundedScalar(rawResult?.firstKeptEntryId)
+    const hasResult = Boolean(
+      (typeof rawResult?.summary === 'string' && rawResult.summary.length > 0)
+      || tokensBefore !== undefined
+      || (typeof rawResult?.firstKeptEntryId === 'string' && rawResult.firstKeptEntryId.length > 0),
+    )
+    const result = tokensBefore !== undefined || firstKeptEntryId !== undefined
+      ? {
+        ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+        ...(firstKeptEntryId !== undefined ? { firstKeptEntryId } : {}),
+      }
+      : undefined
+    const completed = event.completed === true || hasResult
+      ? true
+      : typeof event.completed === 'boolean'
+        ? event.completed
+        : undefined
     return {
       type,
       ...(reason !== undefined ? { reason } : {}),
       ...(action !== undefined ? { action } : {}),
       ...(typeof event.aborted === 'boolean' ? { aborted: event.aborted } : {}),
       ...(typeof event.willRetry === 'boolean' ? { willRetry: event.willRetry } : {}),
-      ...(typeof event.completed === 'boolean' ? { completed: event.completed } : {}),
+      ...(completed !== undefined ? { completed } : {}),
+      ...(result !== undefined ? { result } : {}),
       ...(errorSeverity !== undefined ? { errorSeverity } : {}),
+      ...(errorMessage !== undefined ? { errorMessage } : {}),
+      ...(customInstructions !== undefined ? { customInstructions } : {}),
     }
   }
   if (type === 'runtime_exit') {
@@ -147,11 +185,31 @@ export class AgentEventForwarder {
     let envelope: PrimeEventEnvelope = { runtimeId: this.runtimeId, event }
     let bytes = this.serializedBytes(envelope)
     if (bytes === null || bytes > this.limits.maxEnvelopeBytes) {
-      this.reportLimit('envelope', 'Agent event exceeded the desktop envelope byte limit')
-      if (!critical) return
+      if (!critical) {
+        this.reportLimit('envelope', 'Agent event exceeded the desktop envelope byte limit')
+        return
+      }
+      const stubFits = (size: number | null): size is number => size !== null
+        && size <= this.limits.maxEnvelopeBytes
+        && (isRuntimeExit || this.windowBytes + size <= this.limits.maxWindowBytes)
       envelope = { runtimeId: this.runtimeId, event: minimalCriticalEvent(event) }
       bytes = this.serializedBytes(envelope)
-      if (bytes === null || bytes > this.limits.maxEnvelopeBytes) return
+      if (!stubFits(bytes)) {
+        const bare: PrimeEventEnvelope = { runtimeId: this.runtimeId, event: minimalCriticalEvent(event, false) }
+        const bareBytes = this.serializedBytes(bare)
+        if (bytes === null || bytes > this.limits.maxEnvelopeBytes || stubFits(bareBytes)) {
+          envelope = bare
+          bytes = bareBytes
+        }
+      }
+      if (bytes === null || bytes > this.limits.maxEnvelopeBytes) {
+        this.reportLimit('envelope', 'Agent event exceeded the desktop envelope byte limit')
+        return
+      }
+      // Reserve space for the lifecycle stub so the transport_limit notice never
+      // crowds out a deliverable terminal signal when the window is nearly full.
+      const reservedBytes = !isRuntimeExit && this.windowBytes + bytes <= this.limits.maxWindowBytes ? bytes : 0
+      this.reportLimit('envelope', 'Agent event exceeded the desktop envelope byte limit', reservedBytes)
     }
     if (!isRuntimeExit) {
       const reserve = Math.min(64 * 1024, Math.floor(this.limits.maxWindowBytes / 4))
@@ -176,7 +234,7 @@ export class AgentEventForwarder {
     this.reportedLimits.clear()
   }
 
-  private reportLimit(kind: string, error: string): void {
+  private reportLimit(kind: string, error: string, reservedBytes = 0): void {
     if (this.reportedLimits.has(kind)) return
     this.reportedLimits.add(kind)
     // transport_limit, not transport_error: the desktop dropped events but the
@@ -184,7 +242,7 @@ export class AgentEventForwarder {
     // from disk rather than treat the turn as failed or finished.
     const envelope: PrimeEventEnvelope = { runtimeId: this.runtimeId, event: { type: 'transport_limit', kind, error } }
     const bytes = this.serializedBytes(envelope)
-    if (bytes === null || bytes > this.limits.maxEnvelopeBytes || this.windowBytes + bytes > this.limits.maxWindowBytes) return
+    if (bytes === null || bytes > this.limits.maxEnvelopeBytes || this.windowBytes + bytes + reservedBytes > this.limits.maxWindowBytes) return
     this.windowBytes += bytes
     this.onEvent(envelope)
   }
