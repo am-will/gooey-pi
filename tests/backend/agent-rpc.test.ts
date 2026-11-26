@@ -1827,7 +1827,7 @@ describe('session actions without harness session_action_update events', () => {
 
       expect(runtime.snapshot().sessionActions).toEqual({ queuedCount: 0, steering: [], followUps: [] })
       expect(events.slice(-2)).toEqual([
-        { type: 'agent_end', messages: [] },
+        { type: 'agent_end' },
         { type: 'session_action_update', synthetic: true, actions: { queuedCount: 0, steering: [], followUps: [] } },
       ])
     } finally {

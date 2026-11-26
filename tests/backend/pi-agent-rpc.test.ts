@@ -303,6 +303,37 @@ describe('pi RPC event normalization', () => {
     expect(manager.list()[0]?.isStreaming).toBe(false)
   })
 
+  it('forwards agent_end cleanly when a run accumulates >8 MiB of tool-result image data', async () => {
+    const fake = fakePiAgent({ promptScript: `
+    send({ type: 'agent_start' })
+    const bigImage = 'A'.repeat(3 * 1024 * 1024)
+    send({
+      type: 'turn_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+      toolResults: [{ role: 'toolResult', content: [{ type: 'image', data: bigImage }] }],
+    })
+    send({
+      type: 'agent_end',
+      messages: [
+        { role: 'toolResult', content: [{ type: 'image', data: bigImage }] },
+        { role: 'toolResult', content: [{ type: 'image', data: bigImage }] },
+        { role: 'toolResult', content: [{ type: 'image', data: bigImage }] },
+      ],
+    })` })
+    const manager = piManager(fake.executable)
+    const events: Array<Record<string, unknown>> = []
+    manager.setEventSink(({ event }) => events.push(event))
+    const runtime = await manager.start({ cwd: fake.cwd })
+
+    await manager.command(runtime.runtimeId, { type: 'prompt', message: 'inspect screenshots' })
+
+    await waitUntil(() => events.some((event) => event.type === 'agent_end'))
+    const agentEnd = events.find((event) => event.type === 'agent_end')
+    expect(agentEnd).toEqual({ type: 'agent_end' })
+    expect(events.some((event) => event.type === 'transport_limit')).toBe(false)
+    expect(manager.list()[0]?.isStreaming).toBe(false)
+  })
+
   it('reads {} from get_state for harness fields', () => {
     expect(PI_RPC_ADAPTER.readState({
       serviceTier: 'priority',
